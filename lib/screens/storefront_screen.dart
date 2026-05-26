@@ -693,8 +693,7 @@ class _CategoryTile extends StatelessWidget {
     final style = category == 'All'
         ? const CategoryStyle(Brand.mint, Brand.green, Icons.grid_view_rounded)
         : categoryStyle(category);
-    final iconBox = compact ? 40.0 : 52.0;
-    final iconSz  = compact ? 20.0 : 26.0;
+    final iconSz  = compact ? 26.0 : 32.0;
     final nameFs  = compact ? 10.0 : 11.0;
     final countFs = compact ?  9.0 : 10.0;
 
@@ -702,30 +701,24 @@ class _CategoryTile extends StatelessWidget {
       scale: 0.92,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(14),
         child: Container(
+          // The colored background fills the entire card.
           decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(10),
+            color: style.bg,
+            borderRadius: BorderRadius.circular(14),
             border: Border.all(
-              color: selected ? Brand.green : Brand.border,
-              width: selected ? 1.5 : 1,
+              color: selected ? style.fg : Colors.transparent,
+              width: selected ? 2 : 0,
             ),
           ),
-          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+          padding: EdgeInsets.symmetric(vertical: compact ? 8 : 10, horizontal: 6),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Container(
-                width: iconBox,
-                height: iconBox,
-                decoration: BoxDecoration(
-                  color: style.bg,
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Icon(style.icon, size: iconSz, color: style.fg),
-              ),
-              SizedBox(height: compact ? 4 : 6),
+              // Icon centered on the colored card.
+              Icon(style.icon, size: iconSz, color: style.fg),
+              SizedBox(height: compact ? 5 : 7),
               Text(
                 category == 'All' ? 'All' : prettyCategory(category),
                 textAlign: TextAlign.center,
@@ -733,19 +726,19 @@ class _CategoryTile extends StatelessWidget {
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
                   fontSize: nameFs,
-                  fontWeight: FontWeight.w600,
-                  color: selected ? Brand.green : Brand.ink,
+                  fontWeight: FontWeight.w700,
+                  color: style.fg,
                   height: 1.15,
                 ),
               ),
-              SizedBox(height: compact ? 2 : 3),
+              SizedBox(height: compact ? 3 : 4),
               Container(
                 padding: EdgeInsets.symmetric(
-                  horizontal: compact ? 5.0 : 7.0,
-                  vertical: 1,
+                  horizontal: compact ? 6.0 : 8.0,
+                  vertical: 1.5,
                 ),
                 decoration: BoxDecoration(
-                  color: selected ? Brand.green : Brand.mint,
+                  color: style.fg,
                   borderRadius: BorderRadius.circular(20),
                 ),
                 child: Text(
@@ -753,7 +746,7 @@ class _CategoryTile extends StatelessWidget {
                   style: TextStyle(
                     fontSize: countFs,
                     fontWeight: FontWeight.w700,
-                    color: selected ? Colors.white : Brand.greenDark,
+                    color: Colors.white,
                   ),
                 ),
               ),

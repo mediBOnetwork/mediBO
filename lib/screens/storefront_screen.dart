@@ -10,7 +10,7 @@ import '../widgets/product_card.dart';
 
 const double _kMaxContent = 1200;
 
-/// The MediCare storefront: hero, dynamic category tiles, an infinite-scroll
+/// The mediBO storefront: hero, dynamic category tiles, an infinite-scroll
 /// product grid, trust badges and footer.
 ///
 /// Categories + counts come live from [MedicineRepository.fetchCatalogMeta];
@@ -1189,7 +1189,7 @@ class _Footer extends StatelessWidget {
                               Icon(Icons.local_pharmacy,
                                   color: Brand.green, size: 26),
                               SizedBox(width: 8),
-                              Text('MediCare',
+                              Text('mediBO',
                                   style: TextStyle(
                                       color: Colors.white,
                                       fontSize: 20,
@@ -1209,7 +1209,7 @@ class _Footer extends StatelessWidget {
                           const _FooterContact(
                               icon: Icons.call, text: '1800-123-4567 (Toll Free)'),
                           const _FooterContact(
-                              icon: Icons.mail, text: 'care@medicare.in'),
+                              icon: Icons.mail, text: 'care@medibo.in'),
                         ],
                       ),
                     ),
@@ -1248,7 +1248,7 @@ class _Footer extends StatelessWidget {
                   runSpacing: 12,
                   children: [
                     Text(
-                      '© 2026 MediCare Pharmacy Pvt. Ltd. · Lic. No: PH/MH/2024/001234',
+                      '© 2026 mediBO Pharmacy Pvt. Ltd. · Lic. No: PH/MH/2024/001234',
                       style: TextStyle(
                           color: Colors.white.withValues(alpha: 0.6),
                           fontSize: 12),

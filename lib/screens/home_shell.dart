@@ -12,7 +12,7 @@ import 'cart_screen.dart';
 import 'orders_screen.dart';
 import 'storefront_screen.dart';
 
-/// App shell: promo bar + MediCare header over the active page
+/// App shell: promo bar + mediBO header over the active page
 /// (storefront / orders), with the cart as a right slide-in panel.
 class HomeShell extends StatefulWidget {
   const HomeShell({super.key});

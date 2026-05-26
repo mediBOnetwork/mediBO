@@ -38,7 +38,7 @@ class _PharmaB2BAppState extends State<PharmaB2BApp> {
     return AppState(
       cart: _cart,
       child: MaterialApp(
-        title: 'MediCare',
+        title: 'mediBO',
         debugShowCheckedModeBanner: false,
         theme: buildTheme(),
         scrollBehavior: const SmoothScrollBehavior(),

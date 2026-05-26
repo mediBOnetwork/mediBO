@@ -1,7 +1,7 @@
 import 'package:flutter/cupertino.dart' show CupertinoPageTransitionsBuilder;
 import 'package:flutter/material.dart';
 
-/// Brand palette mirroring the MediCare reference storefront
+/// Brand palette mirroring the mediBO reference storefront
 /// (emerald primary, dark-green hero/footer, mint tints).
 class Brand {
   static const Color green = Color(0xFF16A34A); // primary action / logo

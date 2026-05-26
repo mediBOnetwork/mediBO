@@ -46,6 +46,9 @@ class _HomeShellState extends State<HomeShell> {
 
   @override
   Widget build(BuildContext context) {
+    final isMobile = MediaQuery.sizeOf(context).width < 600;
+    final cart = AppState.of(context);
+
     final pages = [
       StorefrontScreen(
         query: _query,
@@ -63,8 +66,81 @@ class _HomeShellState extends State<HomeShell> {
       const BulkUploadScreen(),
     ];
 
+    final bottomNavIndex =
+        _cartOpen ? 2 : _index == 1 ? 3 : _index == 2 ? 4 : 0;
+
     return Scaffold(
       backgroundColor: Colors.white,
+      bottomNavigationBar: isMobile
+          ? BottomNavigationBar(
+              currentIndex: bottomNavIndex,
+              type: BottomNavigationBarType.fixed,
+              selectedItemColor: Brand.green,
+              unselectedItemColor: Brand.inkMuted,
+              selectedFontSize: 10,
+              unselectedFontSize: 10,
+              elevation: 8,
+              onTap: (i) => setState(() {
+                switch (i) {
+                  case 0:
+                  case 1:
+                    _index = 0;
+                    _cartOpen = false;
+                  case 2:
+                    _cartOpen = true;
+                  case 3:
+                    _index = 1;
+                    _cartOpen = false;
+                  case 4:
+                    _index = 2;
+                    _cartOpen = false;
+                }
+              }),
+              items: [
+                const BottomNavigationBarItem(
+                  icon: Icon(Icons.home_outlined),
+                  activeIcon: Icon(Icons.home),
+                  label: 'Home',
+                ),
+                const BottomNavigationBarItem(
+                  icon: Icon(Icons.grid_view_outlined),
+                  activeIcon: Icon(Icons.grid_view),
+                  label: 'Catalogue',
+                ),
+                BottomNavigationBarItem(
+                  icon: Badge(
+                    isLabelVisible: cart.totalUnits > 0,
+                    label: Text('${cart.totalUnits}'),
+                    child: const Icon(Icons.shopping_cart_outlined),
+                  ),
+                  activeIcon: Badge(
+                    isLabelVisible: cart.totalUnits > 0,
+                    label: Text('${cart.totalUnits}'),
+                    child: const Icon(Icons.shopping_cart),
+                  ),
+                  label: 'Cart',
+                ),
+                BottomNavigationBarItem(
+                  icon: Badge(
+                    isLabelVisible: cart.orders.isNotEmpty,
+                    label: Text('${cart.orders.length}'),
+                    child: const Icon(Icons.receipt_long_outlined),
+                  ),
+                  activeIcon: Badge(
+                    isLabelVisible: cart.orders.isNotEmpty,
+                    label: Text('${cart.orders.length}'),
+                    child: const Icon(Icons.receipt_long),
+                  ),
+                  label: 'Orders',
+                ),
+                const BottomNavigationBarItem(
+                  icon: Icon(Icons.upload_file_outlined),
+                  activeIcon: Icon(Icons.upload_file),
+                  label: 'Bulk',
+                ),
+              ],
+            )
+          : null,
       body: Stack(
         children: [
           Column(
@@ -73,6 +149,7 @@ class _HomeShellState extends State<HomeShell> {
               _Header(
                 controller: _searchCtrl,
                 index: _index,
+                isMobile: isMobile,
                 onSearch: (v) => setState(() {
                   _query = v;
                   _category = 'All';
@@ -170,6 +247,7 @@ class _PromoBar extends StatelessWidget {
 class _Header extends StatelessWidget {
   final TextEditingController controller;
   final int index;
+  final bool isMobile;
   final ValueChanged<String> onSearch;
   final VoidCallback onLogo;
   final VoidCallback onCart;
@@ -179,6 +257,7 @@ class _Header extends StatelessWidget {
   const _Header({
     required this.controller,
     required this.index,
+    required this.isMobile,
     required this.onSearch,
     required this.onLogo,
     required this.onCart,
@@ -228,7 +307,7 @@ class _Header extends StatelessWidget {
                 }
                 return Column(
                   children: [
-                    Row(children: [logo, const Spacer(), actions]),
+                    Row(children: [logo, const Spacer(), if (!isMobile) actions]),
                     const SizedBox(height: 10),
                     search,
                   ],

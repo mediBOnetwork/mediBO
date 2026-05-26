@@ -126,9 +126,20 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       // Step 1: extract raw text / bytes from file
       final rawContent = await _getRawFileContent(file);
 
-      // Step 2: Gemini AI intelligently identifies and extracts medicines
+      // Step 2: Try AI; silently fall back to header-column matching on failure
       setState(() => _step = _LoadStep.aiAnalyzing);
-      final extracted = await _extractWithGeminiAI(rawContent, file.name);
+      final isBinary = rawContent.startsWith('PDF_BYTES:') ||
+          rawContent.startsWith('IMAGE_BYTES:');
+      List<Map<String, dynamic>> extracted;
+      try {
+        extracted = await _extractWithGeminiAI(rawContent, file.name);
+      } catch (_) {
+        if (isBinary) {
+          throw Exception(
+              'Could not read this file automatically. Please try a CSV or Excel file instead.');
+        }
+        extracted = _extractWithFallback(rawContent);
+      }
 
       if (extracted.isEmpty) throw Exception('No medicine rows found in file');
 
@@ -356,13 +367,27 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
   // ── Gemini AI extraction ──────────────────────────────────────────────────
 
+  // Retries up to 3 times before propagating the error to the caller.
   Future<List<Map<String, dynamic>>> _extractWithGeminiAI(
       String rawContent, String fileName) async {
     if (geminiApiKey.isEmpty || geminiApiKey.startsWith('YOUR_')) {
-      throw Exception('Gemini API key not configured. '
-          'Add your key to lib/config/api_keys.dart');
+      throw Exception('no_api_key');
     }
+    Object? lastError;
+    for (int attempt = 0; attempt < 3; attempt++) {
+      try {
+        return await _callGeminiOnce(rawContent);
+      } catch (e) {
+        lastError = e;
+        if (attempt < 2) {
+          await Future.delayed(Duration(milliseconds: 600 * (attempt + 1)));
+        }
+      }
+    }
+    throw lastError!;
+  }
 
+  Future<List<Map<String, dynamic>>> _callGeminiOnce(String rawContent) async {
     final isPdf = rawContent.startsWith('PDF_BYTES:');
     final isImage = rawContent.startsWith('IMAGE_BYTES:');
 
@@ -374,10 +399,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       final base64Data = withoutPrefix.substring(colonIdx + 1);
       parts = [
         {
-          'inline_data': {
-            'mime_type': mimeType,
-            'data': base64Data,
-          },
+          'inline_data': {'mime_type': mimeType, 'data': base64Data},
         },
         {
           'text':
@@ -388,10 +410,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       final base64Pdf = rawContent.substring('PDF_BYTES:'.length);
       parts = [
         {
-          'inline_data': {
-            'mime_type': 'application/pdf',
-            'data': base64Pdf,
-          },
+          'inline_data': {'mime_type': 'application/pdf', 'data': base64Pdf},
         },
         {'text': _geminiPrompt},
       ];
@@ -406,34 +425,97 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
     final response = await http.post(
       Uri.parse(
-          'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$geminiApiKey'),
+          'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$geminiApiKey'),
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({
         'contents': [
           {'parts': parts}
         ],
-        'generationConfig': {
-          'temperature': 0.1,
-          'maxOutputTokens': 3000,
-        },
+        'generationConfig': {'temperature': 0.1, 'maxOutputTokens': 3000},
       }),
     );
 
     if (response.statusCode != 200) {
-      throw Exception(
-          'AI analysis failed (HTTP ${response.statusCode}). Check API key or try again.');
+      throw Exception('HTTP ${response.statusCode}');
     }
 
     final data = jsonDecode(response.body) as Map<String, dynamic>;
     final text =
         data['candidates'][0]['content']['parts'][0]['text'] as String;
-
     final match = RegExp(r'\[[\s\S]*\]').firstMatch(text);
-    if (match == null) {
-      throw Exception('AI could not identify medicine columns in this file.');
-    }
+    if (match == null) throw Exception('no_json_in_response');
 
     return (jsonDecode(match.group(0)!) as List).cast<Map<String, dynamic>>();
+  }
+
+  // Header-name fallback: works on any CSV / TSV / tab-separated XLSX dump
+  // when AI is unavailable. Detects name + qty columns by common header words.
+  List<Map<String, dynamic>> _extractWithFallback(String rawContent) {
+    final lines =
+        rawContent.split('\n').where((l) => l.trim().isNotEmpty).toList();
+    if (lines.isEmpty) return [];
+
+    final sep = lines.first.contains('\t') ? '\t' : ',';
+    final rows = lines
+        .map((l) => l
+            .split(sep)
+            .map((c) => c.trim().replaceAll(RegExp(r'''^["']+|["']+$'''), ''))
+            .toList())
+        .toList();
+    if (rows.isEmpty) return [];
+
+    const namePatterns = [
+      'medicine', 'product', 'name', 'drug', 'item', 'description',
+      'salt', 'brand', 'particular', 'detail', 'dawa',
+    ];
+    const qtyPatterns = [
+      'qty', 'quantity', 'count', 'units', 'pack', 'no.', 'nos',
+      'pieces', 'strips', 'boxes', 'tablet',
+    ];
+    const skipWords = ['total', 'subtotal', 'grand', 's.no', 'sl.', 'serial'];
+
+    int nameCol = 0;
+    int qtyCol = -1;
+    int headerRow = -1;
+
+    for (int r = 0; r < rows.length.clamp(0, 3); r++) {
+      int foundName = -1, foundQty = -1;
+      for (int c = 0; c < rows[r].length; c++) {
+        final cell = rows[r][c].toLowerCase();
+        if (foundName == -1 && namePatterns.any((p) => cell.contains(p))) {
+          foundName = c;
+        }
+        if (foundQty == -1 && qtyPatterns.any((p) => cell.contains(p))) {
+          foundQty = c;
+        }
+      }
+      if (foundName != -1) {
+        nameCol = foundName;
+        qtyCol = foundQty;
+        headerRow = r;
+        break;
+      }
+    }
+
+    final result = <Map<String, dynamic>>[];
+    final startRow = headerRow >= 0 ? headerRow + 1 : 0;
+
+    for (int r = startRow; r < rows.length; r++) {
+      final row = rows[r];
+      if (row.length <= nameCol) continue;
+      final name = row[nameCol].trim();
+      if (name.isEmpty || name.length < 2) continue;
+      if (skipWords.any((s) => name.toLowerCase().contains(s))) continue;
+      if (RegExp(r'^\d+\.?$').hasMatch(name)) continue;
+
+      int qty = 1;
+      if (qtyCol >= 0 && qtyCol < row.length) {
+        final raw = row[qtyCol].replaceAll(RegExp(r'[^\d]'), '');
+        qty = int.tryParse(raw) ?? 1;
+      }
+      result.add({'name': name, 'qty': qty.clamp(1, 99999)});
+    }
+    return result;
   }
 
   static const _geminiPrompt =
@@ -499,17 +581,12 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
   String _friendlyError(Object e) {
     final msg = e.toString().toLowerCase();
-    if (msg.contains('api key not configured')) {
-      return 'Gemini API key missing — add your key to lib/config/api_keys.dart.';
-    }
-    if (msg.contains('ai analysis failed') || msg.contains('http 4')) {
-      return 'AI analysis failed — check your Gemini API key and try again.';
-    }
-    if (msg.contains('ai could not identify')) {
-      return 'AI could not find medicine names in this file. Ensure it contains medicine/product data.';
+    if (msg.contains('could not read this file') ||
+        msg.contains('could not process this file')) {
+      return e.toString().replaceFirst('Exception: ', '');
     }
     if (msg.contains('no medicine rows')) {
-      return 'No medicine rows found in the file.';
+      return 'No medicine rows found in the file. Make sure the file contains medicine names.';
     }
     if (msg.contains('unsupported format')) {
       return e.toString().replaceFirst('Exception: ', '');

@@ -341,30 +341,34 @@ class _Hero extends StatelessWidget {
       child: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: _kMaxContent),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 44),
-            child: LayoutBuilder(
-              builder: (context, c) {
-                final wide = c.maxWidth >= 820;
-                final text = _heroText(context);
-                if (!wide) return text;
-                return Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    Expanded(flex: 6, child: text),
-                    const SizedBox(width: 32),
-                    const Expanded(flex: 5, child: _HeroArt()),
-                  ],
-                );
-              },
-            ),
+          child: LayoutBuilder(
+            builder: (context, c) {
+              final wide = c.maxWidth >= 820;
+              final text = _heroText(context, wide: wide);
+              return Padding(
+                padding: EdgeInsets.symmetric(
+                  horizontal: 20,
+                  vertical: wide ? 44 : 28,
+                ),
+                child: wide
+                    ? Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          Expanded(flex: 6, child: text),
+                          const SizedBox(width: 32),
+                          const Expanded(flex: 5, child: _HeroArt()),
+                        ],
+                      )
+                    : text,
+              );
+            },
           ),
         ),
       ),
     );
   }
 
-  Widget _heroText(BuildContext context) {
+  Widget _heroText(BuildContext context, {bool wide = true}) {
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -380,11 +384,11 @@ class _Hero extends StatelessWidget {
                   color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
         ),
         const SizedBox(height: 18),
-        const Text(
+        Text(
           'Health, Delivered\nwith Care',
           style: TextStyle(
               color: Colors.white,
-              fontSize: 44,
+              fontSize: wide ? 44 : 30,
               height: 1.1,
               fontWeight: FontWeight.w800),
         ),
@@ -394,7 +398,7 @@ class _Hero extends StatelessWidget {
           'doorstep in hours.',
           style: TextStyle(
               color: Colors.white.withValues(alpha: 0.85),
-              fontSize: 15,
+              fontSize: wide ? 15 : 13,
               height: 1.4),
         ),
         const SizedBox(height: 24),
@@ -580,58 +584,91 @@ class _CategoryTiles extends StatelessWidget {
             subtitle: 'Browse by therapeutic class',
             trailing: 'View All'),
         const SizedBox(height: 20),
-        if (meta == null && metaError == null)
-          Shimmer(
-            child: Wrap(
-              spacing: 16,
-              runSpacing: 16,
-              children: [for (int i = 0; i < 10; i++) const _SkeletonTile()],
-            ),
-          )
-        else if (metaError != null)
-          Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.wifi_off_rounded, size: 56, color: Colors.grey),
-              const SizedBox(height: 16),
-              const Text("It seems you're offline",
-                  style:
-                      TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-              const SizedBox(height: 8),
-              const Text(
-                'Please check your internet connection and try again',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: Brand.inkMuted, fontSize: 13),
-              ),
-              const SizedBox(height: 20),
-              FilledButton(
-                onPressed: onRetry,
-                style:
-                    FilledButton.styleFrom(backgroundColor: Brand.green),
-                child: const Text('Retry'),
-              ),
-            ],
-          )
-        else
-          Wrap(
-            spacing: 16,
-            runSpacing: 16,
-            children: [
-              _CategoryTile(
-                category: 'All',
-                count: meta!.total,
-                selected: selected == 'All',
-                onTap: () => onSelected('All'),
-              ),
-              for (final c in meta!.categories)
-                _CategoryTile(
-                  category: c.name,
-                  count: c.count,
-                  selected: selected == c.name,
-                  onTap: () => onSelected(c.name),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final cols = constraints.maxWidth >= 800
+                ? 6
+                : constraints.maxWidth >= 500
+                    ? 4
+                    : 3;
+            final compact = constraints.maxWidth < 600;
+            final extent = compact ? 100.0 : 120.0;
+
+            if (meta == null && metaError == null) {
+              return Shimmer(
+                child: GridView.builder(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: cols,
+                    mainAxisSpacing: 8,
+                    crossAxisSpacing: 8,
+                    mainAxisExtent: extent,
+                  ),
+                  itemCount: 10,
+                  itemBuilder: (_, __) => const _SkeletonTile(),
                 ),
-            ],
-          ),
+              );
+            }
+
+            if (metaError != null) {
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.wifi_off_rounded, size: 56, color: Colors.grey),
+                  const SizedBox(height: 16),
+                  const Text("It seems you're offline",
+                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Please check your internet connection and try again',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: Brand.inkMuted, fontSize: 13),
+                  ),
+                  const SizedBox(height: 20),
+                  FilledButton(
+                    onPressed: onRetry,
+                    style: FilledButton.styleFrom(backgroundColor: Brand.green),
+                    child: const Text('Retry'),
+                  ),
+                ],
+              );
+            }
+
+            final categories = meta!.categories;
+            return GridView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              padding: EdgeInsets.zero,
+              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: cols,
+                mainAxisSpacing: 8,
+                crossAxisSpacing: 8,
+                mainAxisExtent: extent,
+              ),
+              itemCount: 1 + categories.length,
+              itemBuilder: (context, idx) {
+                if (idx == 0) {
+                  return _CategoryTile(
+                    category: 'All',
+                    count: meta!.total,
+                    selected: selected == 'All',
+                    compact: compact,
+                    onTap: () => onSelected('All'),
+                  );
+                }
+                final cat = categories[idx - 1];
+                return _CategoryTile(
+                  category: cat.name,
+                  count: cat.count,
+                  selected: selected == cat.name,
+                  compact: compact,
+                  onTap: () => onSelected(cat.name),
+                );
+              },
+            );
+          },
+        ),
       ],
     );
   }
@@ -641,11 +678,13 @@ class _CategoryTile extends StatelessWidget {
   final String category;
   final int count;
   final bool selected;
+  final bool compact;
   final VoidCallback onTap;
   const _CategoryTile({
     required this.category,
     required this.count,
     required this.selected,
+    this.compact = false,
     required this.onTap,
   });
 
@@ -654,53 +693,69 @@ class _CategoryTile extends StatelessWidget {
     final style = category == 'All'
         ? const CategoryStyle(Brand.mint, Brand.green, Icons.grid_view_rounded)
         : categoryStyle(category);
+    final iconBox = compact ? 40.0 : 52.0;
+    final iconSz  = compact ? 20.0 : 26.0;
+    final nameFs  = compact ? 10.0 : 11.0;
+    final countFs = compact ?  9.0 : 10.0;
+
     return PressEffect(
       scale: 0.92,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(16),
-        child: SizedBox(
-          width: 104,
+        borderRadius: BorderRadius.circular(10),
+        child: Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: selected ? Brand.green : Brand.border,
+              width: selected ? 1.5 : 1,
+            ),
+          ),
+          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
           child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Container(
-                width: 72,
-                height: 72,
+                width: iconBox,
+                height: iconBox,
                 decoration: BoxDecoration(
                   color: style.bg,
-                  borderRadius: BorderRadius.circular(18),
-                  border: Border.all(
-                    color: selected ? Brand.green : Colors.transparent,
-                    width: 2,
-                  ),
+                  borderRadius: BorderRadius.circular(10),
                 ),
-                child: Icon(style.icon, size: 30, color: style.fg),
+                child: Icon(style.icon, size: iconSz, color: style.fg),
               ),
-              const SizedBox(height: 8),
+              SizedBox(height: compact ? 4 : 6),
               Text(
                 category == 'All' ? 'All' : prettyCategory(category),
                 textAlign: TextAlign.center,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
-                  fontSize: 12,
+                  fontSize: nameFs,
                   fontWeight: FontWeight.w600,
                   color: selected ? Brand.green : Brand.ink,
+                  height: 1.15,
                 ),
               ),
-              const SizedBox(height: 2),
-              // Count badge for the category.
+              SizedBox(height: compact ? 2 : 3),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                padding: EdgeInsets.symmetric(
+                  horizontal: compact ? 5.0 : 7.0,
+                  vertical: 1,
+                ),
                 decoration: BoxDecoration(
                   color: selected ? Brand.green : Brand.mint,
                   borderRadius: BorderRadius.circular(20),
                 ),
-                child: Text('$count',
-                    style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700,
-                        color: selected ? Colors.white : Brand.greenDark)),
+                child: Text(
+                  '$count',
+                  style: TextStyle(
+                    fontSize: countFs,
+                    fontWeight: FontWeight.w700,
+                    color: selected ? Colors.white : Brand.greenDark,
+                  ),
+                ),
               ),
             ],
           ),
@@ -1331,15 +1386,21 @@ class _SkeletonTile extends StatelessWidget {
   const _SkeletonTile();
   @override
   Widget build(BuildContext context) {
-    return const SizedBox(
-      width: 104,
-      child: Column(
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Brand.border),
+      ),
+      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+      child: const Column(
+        mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          SkeletonBox(width: 72, height: 72, radius: 18),
-          SizedBox(height: 8),
-          SkeletonBox(width: 64, height: 10),
-          SizedBox(height: 4),
-          SkeletonBox(width: 32, height: 9),
+          SkeletonBox(width: 40, height: 40, radius: 10),
+          SizedBox(height: 6),
+          SkeletonBox(width: 50, height: 9),
+          SizedBox(height: 3),
+          SkeletonBox(width: 28, height: 8),
         ],
       ),
     );

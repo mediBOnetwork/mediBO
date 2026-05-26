@@ -1,6 +1,6 @@
 {
-    "name": "MediCare B2B — Pharmacy Ordering",
-    "short_name": "MediCare B2B",
+    "name": "mediBO",
+    "short_name": "mediBO",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0E7C66",

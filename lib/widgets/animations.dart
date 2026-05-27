@@ -330,32 +330,34 @@ class _ShimmerState extends State<Shimmer> with SingleTickerProviderStateMixin {
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _c,
-      child: widget.child,
-      builder: (context, child) {
-        final t = _c.value;
-        return ShaderMask(
-          blendMode: BlendMode.srcATop,
-          shaderCallback: (bounds) {
-            return LinearGradient(
-              begin: Alignment.centerLeft,
-              end: Alignment.centerRight,
-              colors: const [
-                Color(0xFFE8EBEE),
-                Color(0xFFF4F6F8),
-                Color(0xFFE8EBEE),
-              ],
-              stops: [
-                (t - 0.3).clamp(0.0, 1.0),
-                t.clamp(0.0, 1.0),
-                (t + 0.3).clamp(0.0, 1.0),
-              ],
-            ).createShader(bounds);
-          },
-          child: child,
-        );
-      },
+    return RepaintBoundary(
+      child: AnimatedBuilder(
+        animation: _c,
+        child: widget.child,
+        builder: (context, child) {
+          final t = _c.value;
+          return ShaderMask(
+            blendMode: BlendMode.srcATop,
+            shaderCallback: (bounds) {
+              return LinearGradient(
+                begin: Alignment.centerLeft,
+                end: Alignment.centerRight,
+                colors: const [
+                  Color(0xFFE8EBEE),
+                  Color(0xFFF4F6F8),
+                  Color(0xFFE8EBEE),
+                ],
+                stops: [
+                  (t - 0.3).clamp(0.0, 1.0),
+                  t.clamp(0.0, 1.0),
+                  (t + 0.3).clamp(0.0, 1.0),
+                ],
+              ).createShader(bounds);
+            },
+            child: child,
+          );
+        },
+      ),
     );
   }
 }

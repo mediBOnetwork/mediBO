@@ -172,8 +172,10 @@ class _HomeShellState extends State<HomeShell> {
                   : const SizedBox.shrink(key: ValueKey('3pct-empty')),
             ),
           if (isMobile && cart.distinctItems > 0)
-            _StickyCartBar(
-              onTap: () => setState(() => _cartOpen = true),
+            RepaintBoundary(
+              child: _StickyCartBar(
+                onTap: () => setState(() => _cartOpen = true),
+              ),
             ),
           if (isMobile)
             BottomNavigationBar(
@@ -275,36 +277,24 @@ class _HomeShellState extends State<HomeShell> {
                   _cartOpen = false;
                 }),
               ),
+              // IndexedStack keeps all screen States alive — no re-fetch on tab switch.
               Expanded(
-                child: AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 300),
-                  switchInCurve: Curves.easeOutCubic,
-                  switchOutCurve: Curves.easeIn,
-                  transitionBuilder: (child, anim) => FadeTransition(
-                    opacity: anim,
-                    child: SlideTransition(
-                      position: Tween(
-                        begin: const Offset(0.03, 0),
-                        end: Offset.zero,
-                      ).animate(anim),
-                      child: child,
-                    ),
-                  ),
-                  child: KeyedSubtree(
-                    key: ValueKey(_index),
-                    child: pages[_index],
-                  ),
+                child: IndexedStack(
+                  index: _index,
+                  children: pages,
                 ),
               ),
             ],
           ),
-          CartPanel(
-            open: _cartOpen,
-            onClose: () => setState(() => _cartOpen = false),
-            onOrderPlaced: () => setState(() {
-              _cartOpen = false;
-              _index = 1;
-            }),
+          RepaintBoundary(
+            child: CartPanel(
+              open: _cartOpen,
+              onClose: () => setState(() => _cartOpen = false),
+              onOrderPlaced: () => setState(() {
+                _cartOpen = false;
+                _index = 1;
+              }),
+            ),
           ),
         ],
       ),

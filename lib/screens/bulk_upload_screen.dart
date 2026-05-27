@@ -107,7 +107,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
   Future<void> _pickAndProcess() async {
     final input = html.FileUploadInputElement()
-      ..accept = '.csv,.xlsx,.xls,.pdf,.ods,.tsv,.txt,.docx,.doc,.html,.htm,.jpg,.jpeg,.png,.webp,.gif'
+      ..accept = '.csv,.xlsx,.xls,.pdf,.ods,.tsv,.txt,.docx,.doc,.html,.htm,.jpg,.jpeg,.png,.webp,.heic,.heif,.gif'
       ..multiple = false;
     input.click();
 
@@ -221,6 +221,9 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         return 'IMAGE_BYTES:image/png:${base64Encode(await _readBinaryBytes(file))}';
       case 'webp':
         return 'IMAGE_BYTES:image/webp:${base64Encode(await _readBinaryBytes(file))}';
+      case 'heic':
+      case 'heif':
+        return 'IMAGE_BYTES:image/heic:${base64Encode(await _readBinaryBytes(file))}';
       case 'gif':
         return 'IMAGE_BYTES:image/gif:${base64Encode(await _readBinaryBytes(file))}';
       default:
@@ -484,16 +487,29 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
   // ── Gemini AI extraction ──────────────────────────────────────────────────
 
-  // Retries up to 3 times before propagating the error to the caller.
+  // Retries up to 3 times; images also retry on empty result with a broader prompt.
   Future<List<Map<String, dynamic>>> _extractWithGeminiAI(
       String rawContent, String fileName) async {
     if (geminiApiKey.isEmpty || geminiApiKey.startsWith('YOUR_')) {
-      throw Exception('no_api_key');
+      debugPrint('[Gemini] API key not configured');
+      throw Exception(
+          'Gemini API key is not configured. Contact support to enable AI image processing.');
     }
+    debugPrint('[Gemini] Key prefix: ${geminiApiKey.substring(0, geminiApiKey.length.clamp(0, 10))}…');
+
+    final isImage = rawContent.startsWith('IMAGE_BYTES:');
     Object? lastError;
+
     for (int attempt = 0; attempt < 3; attempt++) {
       try {
-        return await _callGeminiOnce(rawContent);
+        final result = await _callGeminiOnce(rawContent, attempt: attempt);
+        if (result.isNotEmpty) return result;
+        // Empty response — retry images with the fallback prompt once
+        if (isImage && attempt < 2) {
+          await Future.delayed(const Duration(milliseconds: 800));
+          continue;
+        }
+        throw Exception('empty_response');
       } catch (e) {
         lastError = e;
         if (attempt < 2) {
@@ -501,10 +517,16 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         }
       }
     }
+
+    if (isImage) {
+      throw Exception(
+          'Image unclear or no medicines detected. Please ensure good lighting, clear handwriting, and that the full list is visible in the photo.');
+    }
     throw lastError!;
   }
 
-  Future<List<Map<String, dynamic>>> _callGeminiOnce(String rawContent) async {
+  Future<List<Map<String, dynamic>>> _callGeminiOnce(
+      String rawContent, {int attempt = 0}) async {
     final isPdf = rawContent.startsWith('PDF_BYTES:');
     final isImage = rawContent.startsWith('IMAGE_BYTES:');
 
@@ -514,21 +536,18 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       final colonIdx = withoutPrefix.indexOf(':');
       final mimeType = withoutPrefix.substring(0, colonIdx);
       final base64Data = withoutPrefix.substring(colonIdx + 1);
+      // Second attempt uses a broader, simpler prompt to catch cases where the
+      // detailed prompt confuses the model on low-quality handwriting
+      final imagePromptText =
+          attempt == 0 ? _geminiImagePrompt : _geminiImageFallbackPrompt;
       parts = [
-        {
-          'inline_data': {'mime_type': mimeType, 'data': base64Data},
-        },
-        {
-          'text':
-              'Extract all medicine names and quantities from this handwritten order list. Return ONLY JSON: [{"name":"medicine name","qty":5,"original":"what was written"}]',
-        },
+        {'inline_data': {'mime_type': mimeType, 'data': base64Data}},
+        {'text': imagePromptText},
       ];
     } else if (isPdf) {
       final base64Pdf = rawContent.substring('PDF_BYTES:'.length);
       parts = [
-        {
-          'inline_data': {'mime_type': 'application/pdf', 'data': base64Pdf},
-        },
+        {'inline_data': {'mime_type': 'application/pdf', 'data': base64Pdf}},
         {'text': _geminiPrompt},
       ];
     } else {
@@ -542,18 +561,22 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
     final response = await http.post(
       Uri.parse(
-          'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$geminiApiKey'),
+          'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=$geminiApiKey'),
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({
         'contents': [
           {'parts': parts}
         ],
-        'generationConfig': {'temperature': 0.1, 'maxOutputTokens': 3000},
+        'generationConfig': {
+          'temperature': isImage ? 0.2 : 0.1,
+          'maxOutputTokens': isImage ? 4096 : 3000,
+        },
       }),
     );
 
     if (response.statusCode != 200) {
-      throw Exception('HTTP ${response.statusCode}');
+      debugPrint('[Gemini] HTTP ${response.statusCode}: ${response.body}');
+      throw Exception('Gemini API error (HTTP ${response.statusCode}). Check API key or quota.');
     }
 
     final data = jsonDecode(response.body) as Map<String, dynamic>;
@@ -708,6 +731,24 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       'Keep medicine names with dosage (e.g. "Paracetamol 500mg"). '
       'Use 1 if quantity is missing. Return EVERY medicine found.';
 
+  static const _geminiImagePrompt =
+      'This is a handwritten medicine order list from a pharmacy. '
+      'Please extract ALL medicine names and quantities from this handwritten image. '
+      'The handwriting may not be perfect. Look for:\n'
+      '- Medicine/drug names (may include brand names, generic names, tablet/capsule/gel suffixes)\n'
+      '- Quantities (numbers next to medicine names)\n'
+      '- Units (Box, B, Piece, P, Strip, Tab, etc.)\n'
+      'Return ONLY a JSON array like: [{"name": "medicine name", "qty": 5, "unit": "Box"}]\n'
+      'Do not return anything else. Extract every medicine you can see even if handwriting is unclear.';
+
+  static const _geminiImageFallbackPrompt =
+      'Look at this image carefully. It contains a list of medicines/drugs written by hand. '
+      'List every item you can read, even partially. '
+      'For each item write the medicine name and the number next to it. '
+      'If no number is visible use 1. '
+      'Respond with ONLY this JSON — nothing else:\n'
+      '[{"name": "drug name", "qty": 1}]';
+
   // ── Supabase matching ──────────────────────────────────────────────────────
 
   Future<_MatchRow> _matchOne(String name, int qty) async {
@@ -766,7 +807,13 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       return 'No medicine rows found in the file. Make sure the file contains medicine names.';
     }
     if (msg.contains('empty file')) return 'The file appears to be empty.';
-    // Return the exception message directly — all throw sites use clear messages
+    if (msg.contains('not configured') || msg.contains('no_api_key')) {
+      return 'AI image processing is not configured. Please upload a CSV or Excel file instead.';
+    }
+    if (msg.contains('image unclear') || msg.contains('no medicines detected')) {
+      return e.toString().replaceFirst('Exception: ', '');
+    }
+    // All other throw sites use clear messages — pass them through directly
     final clean = e.toString().replaceFirst('Exception: ', '');
     if (clean.isNotEmpty) return clean;
     return 'Failed to process the file. Please try a different format (CSV, Excel, or text).';

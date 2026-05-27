@@ -16,6 +16,13 @@
   -->
   <base href="$FLUTTER_BASE_HREF">
 
+  <!-- Early connection to back-end services so the first Supabase query
+       doesn't pay a full DNS + TLS round-trip after Flutter boots. -->
+  <link rel="preconnect" href="https://qkcuoaqrpnmdnejzahdv.supabase.co">
+  <link rel="dns-prefetch" href="https://qkcuoaqrpnmdnejzahdv.supabase.co">
+  <link rel="preconnect" href="https://generativelanguage.googleapis.com">
+  <link rel="dns-prefetch" href="https://generativelanguage.googleapis.com">
+
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">

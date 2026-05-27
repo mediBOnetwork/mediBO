@@ -165,16 +165,44 @@ class _PriceRow extends StatelessWidget {
 
 // ─── Add-to-cart / stepper ───────────────────────────────────────────────────
 
-class _CartControl extends StatelessWidget {
+class _CartControl extends StatefulWidget {
   final Product product;
-  // Key on product.id so AnimatedSwitcher state resets if a different product
-  // ends up at the same grid position (e.g. after a category/search change).
+  // Key on product.id so state resets if a different product ends up at the
+  // same grid position (e.g. after a category/search change).
   _CartControl({required this.product}) : super(key: ValueKey('ctrl-${product.id}'));
+
+  @override
+  State<_CartControl> createState() => _CartControlState();
+}
+
+class _CartControlState extends State<_CartControl>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _popCtrl = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 320),
+  );
+  late final Animation<double> _popAnim = TweenSequence([
+    TweenSequenceItem(tween: Tween(begin: 1.0, end: 1.18), weight: 35),
+    TweenSequenceItem(
+        tween: Tween(begin: 1.18, end: 0.92)
+            .chain(CurveTween(curve: Curves.easeIn)),
+        weight: 30),
+    TweenSequenceItem(
+        tween: Tween(begin: 0.92, end: 1.0)
+            .chain(CurveTween(curve: Curves.elasticOut)),
+        weight: 35),
+  ]).animate(_popCtrl);
+
+  @override
+  void dispose() {
+    _popCtrl.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     final cart = AppState.of(context);
-    final qty = cart.quantityOf(product.id);
+    final qty = cart.quantityOf(widget.product.id);
 
     return SizedBox(
       width: double.infinity,
@@ -185,44 +213,50 @@ class _CartControl extends StatelessWidget {
         switchOutCurve: Curves.easeIn,
         transitionBuilder: (child, anim) => FadeTransition(
           opacity: anim,
-          child: child,
+          child: ScaleTransition(scale: anim, child: child),
         ),
         child: qty > 0
             ? SizedBox.expand(
                 key: const ValueKey('stepper'),
                 child: _QuantityStepper(
-                  product: product,
+                  product: widget.product,
                   quantity: qty,
                 ),
               )
-            : PressEffect(
-                key: const ValueKey('add'),
-                child: SizedBox.expand(
-                  child: FilledButton.icon(
-                    style: FilledButton.styleFrom(
-                      backgroundColor: const Color(0xFF0d0d1a),
-                      foregroundColor: Colors.white,
-                      disabledBackgroundColor: const Color(0xFFD1D5DB),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(6)),
-                      padding:
-                          const EdgeInsets.symmetric(horizontal: 12),
-                      textStyle: const TextStyle(
-                          fontWeight: FontWeight.w500, fontSize: 14),
-                      elevation: 0,
-                      splashFactory: NoSplash.splashFactory,
-                      shadowColor: Colors.transparent,
-                    ).copyWith(
-                      overlayColor: const WidgetStatePropertyAll(Colors.transparent),
+            : ScaleTransition(
+                scale: _popAnim,
+                child: PressEffect(
+                  key: const ValueKey('add'),
+                  child: SizedBox.expand(
+                    child: FilledButton.icon(
+                      style: FilledButton.styleFrom(
+                        backgroundColor: const Color(0xFF0d0d1a),
+                        foregroundColor: Colors.white,
+                        disabledBackgroundColor: const Color(0xFFD1D5DB),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(6)),
+                        padding:
+                            const EdgeInsets.symmetric(horizontal: 12),
+                        textStyle: const TextStyle(
+                            fontWeight: FontWeight.w500, fontSize: 14),
+                        elevation: 0,
+                        splashFactory: NoSplash.splashFactory,
+                        shadowColor: Colors.transparent,
+                      ).copyWith(
+                        overlayColor:
+                            const WidgetStatePropertyAll(Colors.transparent),
+                      ),
+                      onPressed: widget.product.inStock
+                          ? () {
+                              _popCtrl.forward(from: 0);
+                              cart.add(widget.product);
+                              MedicineRepository()
+                                  .incrementSalesCount(widget.product.id);
+                            }
+                          : null,
+                      icon: const Icon(Icons.add, size: 16),
+                      label: const Text('Add to cart'),
                     ),
-                    onPressed: product.inStock
-                        ? () {
-                            cart.add(product);
-                            MedicineRepository().incrementSalesCount(product.id);
-                          }
-                        : null,
-                    icon: const Icon(Icons.add, size: 16),
-                    label: const Text('Add to cart'),
                   ),
                 ),
               ),

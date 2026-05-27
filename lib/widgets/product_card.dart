@@ -295,6 +295,8 @@ class _ImageBlock extends StatelessWidget {
                   product.imageUrl,
                   fit: BoxFit.cover,
                   gaplessPlayback: true,
+                  cacheWidth: 400,
+                  cacheHeight: 360,
                   loadingBuilder: (context, child, progress) => progress == null
                       ? child
                       : Container(color: style.bg.withValues(alpha: 0.4)),

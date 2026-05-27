@@ -392,6 +392,8 @@ class _ProductImage extends StatelessWidget {
           height: 80,
           fit: BoxFit.contain,
           gaplessPlayback: true,
+          cacheWidth: 160,
+          cacheHeight: 160,
           loadingBuilder: (_, child, progress) =>
               progress == null ? child : fallback,
           errorBuilder: (_, __, ___) => fallback,

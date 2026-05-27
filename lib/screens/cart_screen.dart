@@ -38,13 +38,15 @@ class CartScreen extends StatelessWidget {
                     children: [
                       Expanded(
                         flex: 3,
-                        child: _ItemList(cart: cart, scrollable: true),
+                        child: _ItemList(cart: cart),
                       ),
                       const SizedBox(width: 16),
                       Expanded(
                         flex: 2,
-                        child: _OrderSummary(
-                            cart: cart, onOrderPlaced: onOrderPlaced),
+                        child: _OrderSummaryPanel(
+                          cart: cart,
+                          onOrderPlaced: onOrderPlaced,
+                        ),
                       ),
                     ],
                   ),
@@ -56,26 +58,12 @@ class CartScreen extends StatelessWidget {
       );
     }
 
-    // Narrow: items + summary scroll together; Place Order pinned at bottom.
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         if (banner != null) banner,
-        Expanded(
-          child: SingleChildScrollView(
-            physics: const ClampingScrollPhysics(),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                const SizedBox(height: 8),
-                _ItemList(cart: cart, scrollable: false),
-                _SummaryCard(cart: cart),
-                const SizedBox(height: 100),
-              ],
-            ),
-          ),
-        ),
-        _PlaceOrderBar(cart: cart, onOrderPlaced: onOrderPlaced),
+        Expanded(child: _ItemList(cart: cart)),
+        _CheckoutBar(cart: cart, onOrderPlaced: onOrderPlaced),
       ],
     );
   }
@@ -120,29 +108,35 @@ class _SampleBanner extends StatelessWidget {
   }
 }
 
-// ─── Item list wrapper ────────────────────────────────────────────────────────
+// ─── Item list ────────────────────────────────────────────────────────────────
 
 class _ItemList extends StatelessWidget {
   final CartModel cart;
-  final bool scrollable;
-  const _ItemList({required this.cart, required this.scrollable});
+  const _ItemList({required this.cart});
 
   @override
   Widget build(BuildContext context) {
     final lines = cart.lines;
-    if (scrollable) {
-      return ListView.builder(
-        physics: platformScrollPhysics(),
-        itemCount: lines.length,
-        itemBuilder: (_, i) => _CartItemCard(line: lines[i], cart: cart),
-      );
-    }
-    // Non-scrollable: render as Column inside parent SingleChildScrollView
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        for (final line in lines) _CartItemCard(line: line, cart: cart),
-      ],
+    return ListView.builder(
+      physics: platformScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+      itemCount: lines.length + 1,
+      itemBuilder: (_, i) {
+        if (i == 0) {
+          return Padding(
+            padding: const EdgeInsets.fromLTRB(4, 0, 4, 12),
+            child: Text(
+              '${cart.distinctItems} item${cart.distinctItems == 1 ? '' : 's'} in your cart',
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFF374151),
+              ),
+            ),
+          );
+        }
+        return _CartItemCard(line: lines[i - 1], cart: cart);
+      },
     );
   }
 }
@@ -157,126 +151,200 @@ class _CartItemCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = line.product;
+    final discountPct =
+        p.mrp > 0 ? ((p.mrp - p.b2bPrice) / p.mrp * 100).round() : 0;
 
     return Container(
-      width: double.infinity,
-      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-      padding: const EdgeInsets.all(12),
+      margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(color: const Color(0xFFE5E7EB)),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x0A000000),
+            blurRadius: 8,
+            offset: Offset(0, 2),
+          ),
+        ],
       ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Product image / fallback — 64×64
-          ClipRRect(
-            borderRadius: BorderRadius.circular(8),
-            child: SizedBox(
-              width: 64,
-              height: 64,
-              child: p.imageUrl.isNotEmpty
-                  ? Image.network(
-                      p.imageUrl,
-                      fit: BoxFit.cover,
-                      gaplessPlayback: true,
-                      loadingBuilder: (_, child, progress) =>
-                          progress == null ? child : _imgFallback(p),
-                      errorBuilder: (_, _, _) => _imgFallback(p),
-                    )
-                  : _imgFallback(p),
+          // ── Top: image + name + remove ──
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 10, 12),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _ProductImage(product: p),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const SizedBox(height: 2),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            child: Text(
+                              p.name,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w700,
+                                fontSize: 14,
+                                color: Color(0xFF111827),
+                                height: 1.3,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          GestureDetector(
+                            onTap: () => cart.remove(p),
+                            child: Container(
+                              width: 26,
+                              height: 26,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                    color: const Color(0xFFD1D5DB)),
+                                color: const Color(0xFFF9FAFB),
+                              ),
+                              child: const Center(
+                                child: Icon(Icons.close,
+                                    size: 13, color: Color(0xFF6B7280)),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 5),
+                      Text(
+                        p.manufacturer,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Color(0xFF6B7280),
+                        ),
+                      ),
+                      if (line.isSample) ...[
+                        const SizedBox(height: 4),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFFFF7ED),
+                            borderRadius: BorderRadius.circular(4),
+                            border:
+                                Border.all(color: const Color(0xFFFED7AA)),
+                          ),
+                          child: const Text('sample',
+                              style: TextStyle(
+                                  fontSize: 10, color: Color(0xFFEA580C))),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
             ),
           ),
-          const SizedBox(width: 12),
 
-          // Content — takes all remaining width
-          Expanded(
+          const Divider(height: 1, thickness: 1, color: Color(0xFFF3F4F6)),
+
+          // ── Bottom: pricing + qty selector ──
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Product name + optional sample badge
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      child: Text(
-                        p.name,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w700,
-                          fontSize: 14,
-                          color: Color(0xFF111827),
+                // MRP + discount %
+                if (p.mrp > 0 && discountPct > 0)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 4),
+                    child: Row(
+                      children: [
+                        Text(
+                          'MRP ${rupees(p.mrp)}',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Color(0xFF9CA3AF),
+                            decoration: TextDecoration.lineThrough,
+                            decorationColor: Color(0xFF9CA3AF),
+                          ),
                         ),
+                        const SizedBox(width: 6),
+                        Text(
+                          '$discountPct% OFF',
+                          style: const TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            color: Color(0xFF16A34A),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                // Sale price + /pack
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.baseline,
+                  textBaseline: TextBaseline.alphabetic,
+                  children: [
+                    Text(
+                      rupees(p.b2bPrice),
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800,
+                        color: Color(0xFF111827),
+                        height: 1.1,
                       ),
                     ),
-                    if (line.isSample) ...[
-                      const SizedBox(width: 6),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFFFF7ED),
-                          borderRadius: BorderRadius.circular(4),
-                          border: Border.all(color: const Color(0xFFFED7AA)),
-                        ),
-                        child: const Text('sample',
-                            style: TextStyle(
-                                fontSize: 10, color: Color(0xFFEA580C))),
+                    const SizedBox(width: 5),
+                    const Text(
+                      '/pack',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: Color(0xFF9CA3AF),
                       ),
-                    ],
+                    ),
                   ],
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  p.manufacturer,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                      fontSize: 11,
-                      color: Color(0xFF6B7280),
-                      fontWeight: FontWeight.w500),
-                ),
-                if (p.packSize.isNotEmpty)
-                  Text(
-                    p.packSize,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                        fontSize: 11, color: Color(0xFF9CA3AF)),
-                  ),
-                const SizedBox(height: 10),
+                const SizedBox(height: 8),
 
-                // Bottom row: stepper | price | delete
+                // Pack size pill + qty dropdown
                 Row(
                   children: [
-                    _CartStepper(
-                      qty: line.quantity,
-                      onDecrement: () => cart.decrement(p),
-                      onIncrement: () => cart.increment(p),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        rupees(line.lineTotal),
-                        textAlign: TextAlign.right,
-                        maxLines: 1,
-                        style: const TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700,
-                          color: Color(0xFF111827),
+                    if (p.packSize.isNotEmpty)
+                      Flexible(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 10, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF3F4F6),
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Text(
+                            p.packSize,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 11,
+                              color: Color(0xFF6B7280),
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
                         ),
-                      ),
-                    ),
-                    const SizedBox(width: 4),
-                    GestureDetector(
-                      onTap: () => cart.remove(p),
-                      child: const Padding(
-                        padding: EdgeInsets.all(4),
-                        child: Icon(Icons.delete_outline,
-                            size: 20, color: Color(0xFF9CA3AF)),
-                      ),
+                      )
+                    else
+                      const SizedBox(),
+                    const Spacer(),
+                    _QtyDropdown(
+                      qty: line.quantity,
+                      onChanged: (v) => cart.setQuantity(p, v),
                     ),
                   ],
                 ),
@@ -287,196 +355,213 @@ class _CartItemCard extends StatelessWidget {
       ),
     );
   }
+}
 
-  Widget _imgFallback(Product p) {
-    final style = categoryStyle(p.therapeuticClass);
-    return Container(
-      color: style.bg,
+// ─── Product image with category-icon fallback ────────────────────────────────
+
+class _ProductImage extends StatelessWidget {
+  final Product product;
+  const _ProductImage({required this.product});
+
+  @override
+  Widget build(BuildContext context) {
+    final style = categoryStyle(product.therapeuticClass);
+    final Widget fallback = Container(
+      width: 80,
+      height: 80,
+      decoration: BoxDecoration(
+        color: style.bg,
+        borderRadius: BorderRadius.circular(10),
+      ),
       alignment: Alignment.center,
-      child: Icon(style.icon, size: 28, color: style.fg.withValues(alpha: 0.5)),
+      child: Icon(style.icon, size: 36,
+          color: style.fg.withValues(alpha: 0.6)),
+    );
+
+    if (product.imageUrl.isEmpty) return fallback;
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        width: 80,
+        height: 80,
+        color: const Color(0xFFF9FAFB),
+        child: Image.network(
+          product.imageUrl,
+          width: 80,
+          height: 80,
+          fit: BoxFit.contain,
+          gaplessPlayback: true,
+          loadingBuilder: (_, child, progress) =>
+              progress == null ? child : fallback,
+          errorBuilder: (_, __, ___) => fallback,
+        ),
+      ),
     );
   }
 }
 
-// ─── Compact cart stepper ─────────────────────────────────────────────────────
+// ─── Quantity dropdown pill ───────────────────────────────────────────────────
 
-class _CartStepper extends StatelessWidget {
+class _QtyDropdown extends StatelessWidget {
   final int qty;
-  final VoidCallback onDecrement;
-  final VoidCallback onIncrement;
-  const _CartStepper({
-    required this.qty,
-    required this.onDecrement,
-    required this.onIncrement,
-  });
+  final ValueChanged<int> onChanged;
+  const _QtyDropdown({required this.qty, required this.onChanged});
+
+  static const _blue = Color(0xFF1D4ED8);
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      height: 32,
-      decoration: BoxDecoration(
-        border: Border.all(color: const Color(0xFFE5E7EB)),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Minus
-          MouseRegion(
-            cursor: SystemMouseCursors.click,
-            child: GestureDetector(
-              onTap: onDecrement,
-              child: const SizedBox(
-                width: 32,
-                height: 32,
-                child: Center(
-                  child: Icon(Icons.remove, size: 16, color: Color(0xFF374151)),
-                ),
+    return PopupMenuButton<int>(
+      initialValue: qty,
+      onSelected: onChanged,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      color: Colors.white,
+      elevation: 8,
+      offset: const Offset(0, -8),
+      constraints: const BoxConstraints(minWidth: 100),
+      itemBuilder: (_) => [
+        for (int i = 1; i <= 12; i++)
+          PopupMenuItem<int>(
+            value: i,
+            height: 40,
+            child: Text(
+              'Qty: $i',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: i == qty ? FontWeight.w700 : FontWeight.w400,
+                color: i == qty ? _blue : const Color(0xFF111827),
               ),
             ),
           ),
-          // Divider
-          Container(width: 1, height: 32, color: const Color(0xFFE5E7EB)),
-          // Quantity
-          SizedBox(
-            width: 38,
-            height: 32,
-            child: Center(
-              child: Text(
-                '$qty',
-                style: const TextStyle(
-                  fontWeight: FontWeight.w700,
-                  fontSize: 14,
-                  color: Color(0xFF111827),
-                ),
+      ],
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: _blue,
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              'Qty: $qty',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
               ),
             ),
-          ),
-          // Divider
-          Container(width: 1, height: 32, color: const Color(0xFFE5E7EB)),
-          // Plus
-          MouseRegion(
-            cursor: SystemMouseCursors.click,
-            child: GestureDetector(
-              onTap: onIncrement,
-              child: const SizedBox(
-                width: 32,
-                height: 32,
-                child: Center(
-                  child: Icon(Icons.add, size: 16, color: Color(0xFF374151)),
-                ),
-              ),
-            ),
-          ),
-        ],
+            const SizedBox(width: 4),
+            const Icon(Icons.keyboard_arrow_down,
+                color: Colors.white, size: 16),
+          ],
+        ),
       ),
     );
   }
 }
 
-// ─── Order summary card — rows only (narrow layout) ───────────────────────────
+// ─── Fixed checkout bar (narrow layout) ──────────────────────────────────────
 
-class _SummaryCard extends StatelessWidget {
-  final CartModel cart;
-  const _SummaryCard({required this.cart});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text('Order summary',
-              style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 12),
-          _row('Items', '${cart.distinctItems} SKUs · ${cart.totalUnits} packs'),
-          _row('Subtotal', rupees(cart.subtotal)),
-          _row('GST (12%)', rupees(cart.totalGst)),
-          const Divider(height: 20),
-          _row('Grand total', rupees(cart.grandTotal), bold: true),
-          const SizedBox(height: 6),
-          Text(
-            'Net 30 credit terms · Free delivery above ₹5,000',
-            style: Theme.of(context)
-                .textTheme
-                .bodySmall
-                ?.copyWith(color: Theme.of(context).hintColor),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _row(String label, String value, {bool bold = false}) {
-    final style = TextStyle(
-      fontWeight: bold ? FontWeight.w700 : FontWeight.normal,
-      fontSize: bold ? 15 : 13,
-      color: bold ? const Color(0xFF111827) : const Color(0xFF374151),
-    );
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(label, style: style),
-          Text(value, style: style),
-        ],
-      ),
-    );
-  }
-}
-
-// ─── Fixed bottom Place Order bar (narrow layout) ─────────────────────────────
-
-class _PlaceOrderBar extends StatelessWidget {
+class _CheckoutBar extends StatelessWidget {
   final CartModel cart;
   final VoidCallback? onOrderPlaced;
-  const _PlaceOrderBar({required this.cart, this.onOrderPlaced});
+  const _CheckoutBar({required this.cart, this.onOrderPlaced});
+
+  static const _navy = Color(0xFF1E3A5F);
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 28),
       decoration: BoxDecoration(
         color: Colors.white,
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.08),
-            blurRadius: 12,
+            blurRadius: 14,
             offset: const Offset(0, -4),
           ),
         ],
       ),
-      child: SizedBox(
-        width: double.infinity,
-        child: FilledButton.icon(
-          onPressed: () => _checkout(context),
-          style: FilledButton.styleFrom(
-            backgroundColor: const Color(0xFF16A34A),
-            padding: const EdgeInsets.symmetric(vertical: 15),
-            shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(10)),
-            elevation: 0,
+      child: Row(
+        children: [
+          // Total + "View bill" link
+          GestureDetector(
+            onTap: () => _showBill(context),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  rupees(cart.grandTotal),
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w800,
+                    color: Color(0xFF111827),
+                  ),
+                ),
+                const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      'View bill',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Color(0xFF1D4ED8),
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    SizedBox(width: 2),
+                    Icon(Icons.keyboard_arrow_up,
+                        size: 14, color: Color(0xFF1D4ED8)),
+                  ],
+                ),
+              ],
+            ),
           ),
-          icon: const Icon(Icons.local_shipping_outlined, size: 18),
-          label: Text(
-            'Place Order · ${rupees(cart.grandTotal)}',
-            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+          const SizedBox(width: 14),
+          // "Add delivery details" button
+          Expanded(
+            child: GestureDetector(
+              onTap: () => _checkout(context),
+              child: Container(
+                padding: const EdgeInsets.symmetric(vertical: 15),
+                decoration: BoxDecoration(
+                  color: _navy,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Text(
+                  'Add delivery details',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.2,
+                  ),
+                ),
+              ),
+            ),
           ),
-        ),
+        ],
       ),
     );
   }
 
+  void _showBill(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      backgroundColor: Colors.white,
+      builder: (_) => _BillSheet(cart: cart),
+    );
+  }
+
   void _checkout(BuildContext context) {
-    final cart = AppState.of(context);
     final order = cart.checkout();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -489,38 +574,151 @@ class _PlaceOrderBar extends StatelessWidget {
   }
 }
 
-// ─── Order summary with button (wide layout sidebar) ─────────────────────────
+// ─── Bill bottom sheet ────────────────────────────────────────────────────────
 
-class _OrderSummary extends StatelessWidget {
+class _BillSheet extends StatelessWidget {
   final CartModel cart;
-  final VoidCallback? onOrderPlaced;
-  const _OrderSummary({required this.cart, this.onOrderPlaced});
+  const _BillSheet({required this.cart});
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 36),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Center(
+            child: Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: const Color(0xFFD1D5DB),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+          const SizedBox(height: 20),
+          const Text(
+            'Bill details',
+            style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w800,
+                color: Color(0xFF111827)),
+          ),
+          const SizedBox(height: 16),
+          _billRow('Subtotal', rupees(cart.subtotal)),
+          _billRow('GST (12%)', rupees(cart.totalGst)),
+          const Divider(height: 24),
+          _billRow('Grand total', rupees(cart.grandTotal), bold: true),
+          const SizedBox(height: 10),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF0FDF4),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0xFFBBF7D0)),
+            ),
+            child: Row(
+              children: const [
+                Icon(Icons.local_shipping_outlined,
+                    size: 16, color: Color(0xFF16A34A)),
+                SizedBox(width: 8),
+                Text(
+                  'Free delivery on this order',
+                  style: TextStyle(
+                      fontSize: 12,
+                      color: Color(0xFF15803D),
+                      fontWeight: FontWeight.w600),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
+          const Text(
+            'Net 30 credit terms apply',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 11, color: Color(0xFF9CA3AF)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _billRow(String label, String value, {bool bold = false}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 5),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label,
+              style: TextStyle(
+                fontSize: bold ? 15 : 13,
+                fontWeight: bold ? FontWeight.w700 : FontWeight.w400,
+                color: bold
+                    ? const Color(0xFF111827)
+                    : const Color(0xFF374151),
+              )),
+          Text(value,
+              style: TextStyle(
+                fontSize: bold ? 15 : 13,
+                fontWeight: bold ? FontWeight.w700 : FontWeight.w400,
+                color: bold
+                    ? const Color(0xFF111827)
+                    : const Color(0xFF374151),
+              )),
+        ],
+      ),
+    );
+  }
+}
+
+// ─── Order summary sidebar (wide layout) ─────────────────────────────────────
+
+class _OrderSummaryPanel extends StatelessWidget {
+  final CartModel cart;
+  final VoidCallback? onOrderPlaced;
+  const _OrderSummaryPanel({required this.cart, this.onOrderPlaced});
+
+  static const _navy = Color(0xFF1E3A5F);
+
+  @override
+  Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: const Color(0xFFE5E7EB)),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x08000000),
+            blurRadius: 8,
+            offset: Offset(0, 2),
+          ),
+        ],
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text('Order summary', style: theme.textTheme.titleMedium),
-          const SizedBox(height: 14),
+          const Text(
+            'Bill details',
+            style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w800,
+                color: Color(0xFF111827)),
+          ),
+          const SizedBox(height: 16),
           _row('Items',
-              '${cart.distinctItems} SKUs · ${cart.totalUnits} packs'),
+              '${cart.distinctItems} SKU${cart.distinctItems == 1 ? '' : 's'} · ${cart.totalUnits} packs'),
           _row('Subtotal', rupees(cart.subtotal)),
           _row('GST (12%)', rupees(cart.totalGst)),
           const Divider(height: 24),
           _row('Grand total', rupees(cart.grandTotal), bold: true),
-          const SizedBox(height: 16),
-          FilledButton.icon(
-            onPressed: () {
+          const SizedBox(height: 20),
+          GestureDetector(
+            onTap: () {
               final order = cart.checkout();
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
@@ -531,23 +729,53 @@ class _OrderSummary extends StatelessWidget {
               );
               onOrderPlaced?.call();
             },
-            style: FilledButton.styleFrom(
-              backgroundColor: const Color(0xFF16A34A),
-              padding: const EdgeInsets.symmetric(vertical: 14),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10)),
-              elevation: 0,
+            child: Container(
+              padding: const EdgeInsets.symmetric(vertical: 15),
+              decoration: BoxDecoration(
+                color: _navy,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Text(
+                'Add delivery details',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.2,
+                ),
+              ),
             ),
-            icon: const Icon(Icons.local_shipping_outlined, size: 18),
-            label: const Text('Place purchase order',
-                style: TextStyle(fontWeight: FontWeight.w600)),
           ),
-          const SizedBox(height: 10),
-          Text(
-            'Net 30 credit terms · Free delivery above ₹5,000',
+          const SizedBox(height: 12),
+          Container(
+            padding:
+                const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF0FDF4),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0xFFBBF7D0)),
+            ),
+            child: Row(
+              children: const [
+                Icon(Icons.local_shipping_outlined,
+                    size: 15, color: Color(0xFF16A34A)),
+                SizedBox(width: 7),
+                Text(
+                  'Free delivery on this order',
+                  style: TextStyle(
+                      fontSize: 12,
+                      color: Color(0xFF15803D),
+                      fontWeight: FontWeight.w600),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Net 30 credit terms apply',
             textAlign: TextAlign.center,
-            style: theme.textTheme.bodySmall
-                ?.copyWith(color: theme.hintColor),
+            style: TextStyle(fontSize: 11, color: Color(0xFF9CA3AF)),
           ),
         ],
       ),
@@ -555,25 +783,34 @@ class _OrderSummary extends StatelessWidget {
   }
 
   Widget _row(String label, String value, {bool bold = false}) {
-    final style = TextStyle(
-      fontWeight: bold ? FontWeight.w700 : FontWeight.normal,
-      fontSize: bold ? 15 : 13,
-      color: bold ? const Color(0xFF111827) : const Color(0xFF374151),
-    );
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(label, style: style),
-          Text(value, style: style),
+          Text(label,
+              style: TextStyle(
+                fontSize: bold ? 15 : 13,
+                fontWeight: bold ? FontWeight.w700 : FontWeight.w400,
+                color: bold
+                    ? const Color(0xFF111827)
+                    : const Color(0xFF374151),
+              )),
+          Text(value,
+              style: TextStyle(
+                fontSize: bold ? 15 : 13,
+                fontWeight: bold ? FontWeight.w700 : FontWeight.w400,
+                color: bold
+                    ? const Color(0xFF111827)
+                    : const Color(0xFF374151),
+              )),
         ],
       ),
     );
   }
 }
 
-// ─── Empty state ──────────────────────────────────────────────────────────────
+// ─── Empty cart ───────────────────────────────────────────────────────────────
 
 class _EmptyCart extends StatelessWidget {
   const _EmptyCart();
@@ -584,21 +821,28 @@ class _EmptyCart extends StatelessWidget {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.shopping_cart_outlined,
-              size: 80, color: Theme.of(context).hintColor),
-          const SizedBox(height: 16),
+          Container(
+            width: 96,
+            height: 96,
+            decoration: BoxDecoration(
+              color: const Color(0xFFF3F4F6),
+              borderRadius: BorderRadius.circular(48),
+            ),
+            child: const Icon(Icons.shopping_cart_outlined,
+                size: 48, color: Color(0xFF9CA3AF)),
+          ),
+          const SizedBox(height: 20),
           const Text(
             'Your cart is empty',
             style: TextStyle(
                 fontSize: 18,
-                fontWeight: FontWeight.w600,
-                color: Color(0xFF374151)),
+                fontWeight: FontWeight.w700,
+                color: Color(0xFF111827)),
           ),
-          const SizedBox(height: 6),
-          Text(
+          const SizedBox(height: 8),
+          const Text(
             'Add products from the catalog to start an order.',
-            style: TextStyle(
-                fontSize: 13, color: Theme.of(context).hintColor),
+            style: TextStyle(fontSize: 13, color: Color(0xFF6B7280)),
           ),
         ],
       ),

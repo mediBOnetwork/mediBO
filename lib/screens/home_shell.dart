@@ -846,25 +846,42 @@ class _CartPanelContent extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 16, 8, 8),
+          // Cart panel header: ← Cart · search icon
+          Container(
+            decoration: const BoxDecoration(
+              color: Colors.white,
+              border: Border(bottom: BorderSide(color: Color(0xFFF3F4F6))),
+            ),
+            padding: const EdgeInsets.fromLTRB(4, 8, 8, 8),
             child: Row(
               children: [
-                const Icon(Icons.shopping_cart, color: Brand.green, size: 22),
-                const SizedBox(width: 10),
-                const Text('Your Order',
-                    style:
-                        TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
-                const SizedBox(width: 8),
-                Text('${cart.totalUnits} packs',
-                    style: const TextStyle(
-                        fontSize: 13, color: Brand.inkMuted)),
-                const Spacer(),
                 IconButton(
                   onPressed: onClose,
-                  icon: const Icon(Icons.close),
-                  tooltip: 'Close',
+                  icon: const Icon(Icons.arrow_back_ios_new,
+                      size: 18, color: Color(0xFF111827)),
+                  tooltip: 'Close cart',
                 ),
+                const Expanded(
+                  child: Text(
+                    'Cart',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                      color: Color(0xFF111827),
+                    ),
+                  ),
+                ),
+                Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(color: const Color(0xFFE5E7EB)),
+                  ),
+                  child: const Icon(Icons.search,
+                      size: 18, color: Color(0xFF374151)),
+                ),
+                const SizedBox(width: 4),
               ],
             ),
           ),

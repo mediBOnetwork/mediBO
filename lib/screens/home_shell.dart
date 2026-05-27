@@ -29,6 +29,8 @@ class _HomeShellState extends State<HomeShell> {
   String _category = 'All';
   bool _cartOpen = false;
   int _scrollTrigger = 0;
+  int _scrollToTopTrigger = 0;
+  bool _searchLoading = false;
 
   @override
   void dispose() {
@@ -62,6 +64,12 @@ class _HomeShellState extends State<HomeShell> {
         }),
         repo: _repo,
         scrollTrigger: _scrollTrigger,
+        scrollToTopTrigger: _scrollToTopTrigger,
+        onLoadingChanged: (loading) {
+          if (mounted) {
+            setState(() => _searchLoading = loading && _query.trim().isNotEmpty);
+          }
+        },
       ),
       const OrdersScreen(),
       const BulkUploadScreen(),
@@ -157,10 +165,19 @@ class _HomeShellState extends State<HomeShell> {
               ),
               _SearchBarRow(
                 controller: _searchCtrl,
+                isLoading: _searchLoading,
                 onSearch: (v) => setState(() {
-                  _query = v;
+                  final q = v.trim();
                   _category = 'All';
                   _index = 0;
+                  if (q.length >= 2) {
+                    _query = v;
+                    // scroll to results is handled by StorefrontScreen after
+                    // data loads (_resetAndLoad calls _scrollToProducts)
+                  } else {
+                    _query = '';
+                    _scrollToTopTrigger++;
+                  }
                 }),
                 onScrollToResults: () => setState(() => _scrollTrigger++),
               ),
@@ -316,17 +333,23 @@ class _LocationHeader extends StatelessWidget {
 
 // ─────────────────────── Full-width search bar ───────────────────────
 
-/// Full-width search bar: single rounded container holding a search icon,
-/// the text field, and an integrated green "Search" button.
-/// Fires [onSearch] for every debounced keystroke; fires [onScrollToResults]
-/// only on explicit submit (button tap or Enter key).
+/// Full-width search bar: white container with gray border, search icon left,
+/// optional X-clear + loading indicator, and green Search button right.
+///
+/// - [onSearch] fires on every debounced keystroke (300 ms).
+/// - [onScrollToResults] fires only on explicit submit (button / Enter),
+///   but only when the text has ≥ 2 non-space characters.
+/// - When text length drops below 2 chars, [onSearch] clears the query and
+///   the parent increments [scrollToTopTrigger] to scroll back to the top.
 class _SearchBarRow extends StatefulWidget {
   final TextEditingController controller;
+  final bool isLoading;
   final ValueChanged<String> onSearch;
   final VoidCallback onScrollToResults;
 
   const _SearchBarRow({
     required this.controller,
+    required this.isLoading,
     required this.onSearch,
     required this.onScrollToResults,
   });
@@ -336,23 +359,26 @@ class _SearchBarRow extends StatefulWidget {
 }
 
 class _SearchBarRowState extends State<_SearchBarRow> {
-  final FocusNode _focus = FocusNode();
-  bool _focused = false;
   Timer? _debounce;
+  bool _hasText = false;
 
   @override
   void initState() {
     super.initState();
-    _focus.addListener(() {
-      if (mounted) setState(() => _focused = _focus.hasFocus);
-    });
+    widget.controller.addListener(_onControllerChange);
+    _hasText = widget.controller.text.isNotEmpty;
   }
 
   @override
   void dispose() {
+    widget.controller.removeListener(_onControllerChange);
     _debounce?.cancel();
-    _focus.dispose();
     super.dispose();
+  }
+
+  void _onControllerChange() {
+    final hasText = widget.controller.text.isNotEmpty;
+    if (hasText != _hasText) setState(() => _hasText = hasText);
   }
 
   void _onChanged(String v) {
@@ -364,9 +390,17 @@ class _SearchBarRowState extends State<_SearchBarRow> {
 
   void _submitNow() {
     _debounce?.cancel();
-    widget.onSearch(widget.controller.text);
-    widget.onScrollToResults();
-    _focus.unfocus();
+    final text = widget.controller.text;
+    widget.onSearch(text);
+    if (text.trim().length >= 2) widget.onScrollToResults();
+    FocusManager.instance.primaryFocus?.unfocus();
+  }
+
+  void _clearSearch() {
+    _debounce?.cancel();
+    widget.controller.clear();
+    widget.onSearch('');
+    FocusManager.instance.primaryFocus?.unfocus();
   }
 
   @override
@@ -374,33 +408,28 @@ class _SearchBarRowState extends State<_SearchBarRow> {
     return Container(
       color: Colors.white,
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
+      child: Container(
         decoration: BoxDecoration(
-          color: Brand.field,
+          color: Colors.white,
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: _focused ? Brand.green : Colors.transparent,
-            width: 1.5,
-          ),
+          border: Border.all(color: const Color(0xFFE5E7EB)),
         ),
         child: Row(
           children: [
             const Padding(
               padding: EdgeInsets.symmetric(horizontal: 12),
-              child: Icon(Icons.search, color: Brand.inkMuted, size: 20),
+              child: Icon(Icons.search, color: Color(0xFF9CA3AF), size: 20),
             ),
             Expanded(
               child: TextField(
                 controller: widget.controller,
-                focusNode: _focus,
                 onChanged: _onChanged,
                 onSubmitted: (_) => _submitNow(),
                 textInputAction: TextInputAction.search,
                 style: const TextStyle(fontSize: 14, color: Brand.ink),
                 decoration: const InputDecoration(
                   border: InputBorder.none,
-                  hintText: 'Search for medicines, brands & manufacturers…',
+                  hintText: 'Search for medicines',
                   hintStyle: TextStyle(color: Brand.inkMuted, fontSize: 14),
                   isDense: true,
                   contentPadding: EdgeInsets.symmetric(vertical: 13),
@@ -408,6 +437,28 @@ class _SearchBarRowState extends State<_SearchBarRow> {
                 ),
               ),
             ),
+            // Loading spinner OR clear (X) button — never both
+            if (widget.isLoading)
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 10),
+                child: SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Brand.green,
+                  ),
+                ),
+              )
+            else if (_hasText)
+              IconButton(
+                onPressed: _clearSearch,
+                icon: const Icon(Icons.close,
+                    size: 20, color: Color(0xFF6B7280)),
+                visualDensity: VisualDensity.compact,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+              ),
             GestureDetector(
               onTap: _submitNow,
               child: Container(

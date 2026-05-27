@@ -26,6 +26,11 @@ class StorefrontScreen extends StatefulWidget {
   // Incremented by the parent on explicit search submit (button / Enter).
   // StorefrontScreen scrolls to the results section whenever this changes.
   final int scrollTrigger;
+  // Incremented when the search is cleared or drops below 2 chars.
+  // StorefrontScreen smoothly scrolls back to the top whenever this changes.
+  final int scrollToTopTrigger;
+  // Called with true when a load starts, false when it completes or errors.
+  final ValueChanged<bool>? onLoadingChanged;
 
   const StorefrontScreen({
     super.key,
@@ -35,6 +40,8 @@ class StorefrontScreen extends StatefulWidget {
     required this.onSuggestionTap,
     required this.repo,
     this.scrollTrigger = 0,
+    this.scrollToTopTrigger = 0,
+    this.onLoadingChanged,
   });
 
   @override
@@ -79,6 +86,10 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
       WidgetsBinding.instance
           .addPostFrameCallback((_) => _scrollToProducts());
     }
+    if (old.scrollToTopTrigger != widget.scrollToTopTrigger) {
+      WidgetsBinding.instance
+          .addPostFrameCallback((_) => _scrollToTop());
+    }
   }
 
   @override
@@ -104,6 +115,7 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
 
   Future<void> _resetAndLoad() async {
     final token = ++_loadToken;
+    widget.onLoadingChanged?.call(true);
     setState(() {
       _items.clear();
       _loadingFirst = true;
@@ -119,6 +131,7 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
         offset: 0,
       );
       if (token != _loadToken || !mounted) return;
+      widget.onLoadingChanged?.call(false);
       setState(() {
         _items
           ..clear()
@@ -127,11 +140,17 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
         _reachedEnd = page.length < MedicineRepository.pageSize;
       });
       _maybeAutoFill();
+      // After results arrive for a real search query, scroll to the grid.
+      if (widget.query.trim().length >= 2) {
+        WidgetsBinding.instance
+            .addPostFrameCallback((_) { if (mounted) _scrollToProducts(); });
+      }
       if (page.isEmpty && widget.query.trim().isNotEmpty) {
         _loadSuggestions();
       }
     } catch (e) {
       if (token != _loadToken || !mounted) return;
+      widget.onLoadingChanged?.call(false);
       setState(() {
         _loadingFirst = false;
         _pageError = e;
@@ -195,6 +214,12 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
       Scrollable.ensureVisible(ctx,
           duration: const Duration(milliseconds: 450), curve: Curves.easeOut);
     }
+  }
+
+  void _scrollToTop() {
+    if (!_scroll.hasClients) return;
+    _scroll.animateTo(0,
+        duration: const Duration(milliseconds: 400), curve: Curves.easeOut);
   }
 
   int _categoryTotal() {
@@ -992,7 +1017,7 @@ class _EmptyResults extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final label = query.trim().isNotEmpty
-        ? 'No results for "${query.trim()}"'
+        ? 'No medicines found for "${query.trim()}"'
         : 'No products match your search.';
     return Container(
       width: double.infinity,

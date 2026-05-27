@@ -84,6 +84,10 @@ class _HomeShellState extends State<HomeShell> {
         mainAxisSize: MainAxisSize.min,
         children: [
           const _BottomPromoBar(),
+          if (isMobile && cart.distinctItems > 0)
+            _StickyCartBar(
+              onTap: () => setState(() => _cartOpen = true),
+            ),
           if (isMobile)
             BottomNavigationBar(
               currentIndex: bottomNavIndex,
@@ -800,6 +804,195 @@ class _CartPanelContent extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+// ─────────────────────── Sticky cart bar (mobile) ───────────────────────
+
+/// Blinkit-style dark-navy bar that sits above the bottom nav on mobile.
+/// Shows discount progress toward the next tier and a cart item count chip.
+/// Visible only when the cart has at least one unique item.
+class _StickyCartBar extends StatelessWidget {
+  final VoidCallback onTap;
+  const _StickyCartBar({required this.onTap});
+
+  static const _navy = Color(0xFF1B2B8C);
+  static const _amber = Color(0xFFFBBF24);
+  static const _tier1 = 2999.0;
+  static const _tier2 = 6999.0;
+
+  @override
+  Widget build(BuildContext context) {
+    final cart = AppState.of(context);
+    final total = cart.subtotal;
+    final uniqueItems = cart.distinctItems;
+
+    final bool unlocked = total >= _tier2;
+
+    final double progress;
+    final Widget leftContent;
+
+    if (total >= _tier2) {
+      progress = 1.0;
+      leftContent = const Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text('🎉', style: TextStyle(fontSize: 13)),
+          SizedBox(width: 5),
+          Flexible(
+            child: Text(
+              "You've unlocked 5% discount!",
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      );
+    } else if (total >= _tier1) {
+      progress = (total - _tier1) / (_tier2 - _tier1);
+      final remaining = (_tier2 - total).ceil();
+      leftContent = _DiscountText(
+          amount: '₹$remaining', suffix: ' more to get 5% off');
+    } else {
+      progress = (total > 0 ? total / _tier1 : 0.0);
+      final remaining = (_tier1 - total).ceil();
+      leftContent = _DiscountText(
+          amount: '₹$remaining', suffix: ' more to get 3% off');
+    }
+
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        height: 64,
+        decoration: BoxDecoration(
+          color: unlocked ? const Color(0xFF15803D) : _navy,
+          borderRadius: const BorderRadius.only(
+            topLeft: Radius.circular(14),
+            topRight: Radius.circular(14),
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(14, 10, 10, 0),
+                child: Row(
+                  children: [
+                    Expanded(child: leftContent),
+                    _CartChip(uniqueItems: uniqueItems),
+                  ],
+                ),
+              ),
+            ),
+            // Animated progress bar
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 4, 14, 8),
+              child: LayoutBuilder(
+                builder: (_, constraints) => Stack(
+                  children: [
+                    Container(
+                      height: 4,
+                      width: constraints.maxWidth,
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.20),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                    ),
+                    AnimatedContainer(
+                      duration: const Duration(milliseconds: 500),
+                      curve: Curves.easeOut,
+                      height: 4,
+                      width: constraints.maxWidth * progress.clamp(0.0, 1.0),
+                      decoration: BoxDecoration(
+                        color: unlocked ? Colors.white : _amber,
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _DiscountText extends StatelessWidget {
+  final String amount;
+  final String suffix;
+  const _DiscountText({required this.amount, required this.suffix});
+
+  @override
+  Widget build(BuildContext context) {
+    return RichText(
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      text: TextSpan(
+        style: const TextStyle(
+            fontSize: 12, fontWeight: FontWeight.w500, color: Colors.white),
+        children: [
+          const TextSpan(text: 'Add '),
+          TextSpan(
+            text: amount,
+            style: const TextStyle(
+              color: Color(0xFFFBBF24),
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          TextSpan(text: suffix),
+        ],
+      ),
+    );
+  }
+}
+
+class _CartChip extends StatelessWidget {
+  final int uniqueItems;
+  const _CartChip({required this.uniqueItems});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.15),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+                color: Colors.white.withValues(alpha: 0.25), width: 1),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.shopping_cart,
+                  color: Colors.white, size: 13),
+              const SizedBox(width: 5),
+              Text(
+                '$uniqueItems item${uniqueItems == 1 ? '' : 's'}',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.2,
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 2),
+        const Icon(Icons.chevron_right, color: Colors.white, size: 20),
+      ],
     );
   }
 }

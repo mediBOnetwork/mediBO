@@ -23,6 +23,9 @@ class StorefrontScreen extends StatefulWidget {
   final ValueChanged<String> onCategorySelected;
   final ValueChanged<String> onSuggestionTap;
   final MedicineRepository repo;
+  // Incremented by the parent on explicit search submit (button / Enter).
+  // StorefrontScreen scrolls to the results section whenever this changes.
+  final int scrollTrigger;
 
   const StorefrontScreen({
     super.key,
@@ -31,6 +34,7 @@ class StorefrontScreen extends StatefulWidget {
     required this.onCategorySelected,
     required this.onSuggestionTap,
     required this.repo,
+    this.scrollTrigger = 0,
   });
 
   @override
@@ -70,6 +74,10 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
     super.didUpdateWidget(old);
     if (old.category != widget.category || old.query != widget.query) {
       _resetAndLoad();
+    }
+    if (old.scrollTrigger != widget.scrollTrigger) {
+      WidgetsBinding.instance
+          .addPostFrameCallback((_) => _scrollToProducts());
     }
   }
 

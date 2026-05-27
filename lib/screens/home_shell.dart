@@ -29,6 +29,7 @@ class _HomeShellState extends State<HomeShell> {
   String _query = '';
   String _category = 'All';
   bool _cartOpen = false;
+  int _scrollTrigger = 0;
 
   @override
   void dispose() {
@@ -61,6 +62,7 @@ class _HomeShellState extends State<HomeShell> {
           _index = 0;
         }),
         repo: _repo,
+        scrollTrigger: _scrollTrigger,
       ),
       const OrdersScreen(),
       const BulkUploadScreen(),
@@ -154,6 +156,7 @@ class _HomeShellState extends State<HomeShell> {
                   _query = v;
                   _category = 'All';
                   _index = 0;
+                  _scrollTrigger++;
                 }),
                 onLogo: () => setState(() {
                   _index = 0;
@@ -337,15 +340,16 @@ class _Logo extends StatelessWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
+              // Circular app logo: green circle with a white cross/plus
               Container(
-                width: 38,
-                height: 38,
-                decoration: BoxDecoration(
+                width: 40,
+                height: 40,
+                decoration: const BoxDecoration(
                   color: Brand.green,
-                  borderRadius: BorderRadius.circular(10),
+                  shape: BoxShape.circle,
                 ),
-                child: const Icon(Icons.local_pharmacy,
-                    color: Colors.white, size: 22),
+                child: const Icon(Icons.add,
+                    color: Colors.white, size: 26, weight: 700),
               ),
               const SizedBox(width: 10),
               // mediBO logo: "medi" regular dark + "BO" bold green

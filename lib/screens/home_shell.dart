@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../app_state.dart';
 import '../data/medicine_repository.dart';
+import '../models/cart_model.dart';
 import '../theme.dart';
 import '../widgets/animations.dart';
 import 'bulk_upload_screen.dart';
@@ -32,9 +33,51 @@ class _HomeShellState extends State<HomeShell> {
   int _scrollToTopTrigger = 0;
   bool _searchLoading = false;
 
+  // Cart milestone celebrations
+  CartModel? _cartModel;
+  double _prevSubtotal = 0;
+  bool _celebrateDelivery = false;
+  bool _celebrate3pct = false;
+  Timer? _deliveryTimer;
+  Timer? _discountTimer;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final cart = AppState.of(context);
+    if (_cartModel != cart) {
+      _cartModel?.removeListener(_onCartChanged);
+      _cartModel = cart;
+      cart.addListener(_onCartChanged);
+    }
+  }
+
+  void _onCartChanged() {
+    if (!mounted) return;
+    final sub = _cartModel!.subtotal;
+    if (_prevSubtotal < 999 && sub >= 999) {
+      setState(() => _celebrateDelivery = true);
+      _deliveryTimer?.cancel();
+      _deliveryTimer = Timer(const Duration(seconds: 10), () {
+        if (mounted) setState(() => _celebrateDelivery = false);
+      });
+    }
+    if (_prevSubtotal < 2999 && sub >= 2999) {
+      setState(() => _celebrate3pct = true);
+      _discountTimer?.cancel();
+      _discountTimer = Timer(const Duration(seconds: 10), () {
+        if (mounted) setState(() => _celebrate3pct = false);
+      });
+    }
+    _prevSubtotal = sub;
+  }
+
   @override
   void dispose() {
     _searchCtrl.dispose();
+    _cartModel?.removeListener(_onCartChanged);
+    _deliveryTimer?.cancel();
+    _discountTimer?.cancel();
     super.dispose();
   }
 
@@ -75,8 +118,8 @@ class _HomeShellState extends State<HomeShell> {
       const BulkUploadScreen(),
     ];
 
-    final bottomNavIndex =
-        _cartOpen ? 2 : _index == 1 ? 3 : _index == 2 ? 4 : 0;
+    // 4-item nav: 0=Home, 1=Catalogue, 2=Orders, 3=Bulk
+    final bottomNavIndex = _index == 1 ? 2 : _index == 2 ? 3 : 0;
 
     return Scaffold(
       backgroundColor: Colors.white,
@@ -84,6 +127,50 @@ class _HomeShellState extends State<HomeShell> {
         mainAxisSize: MainAxisSize.min,
         children: [
           const _BottomPromoBar(),
+          if (isMobile)
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 550),
+              reverseDuration: const Duration(milliseconds: 300),
+              transitionBuilder: (child, anim) => SizeTransition(
+                sizeFactor: CurvedAnimation(
+                  parent: anim,
+                  curve: Curves.easeOutBack,
+                  reverseCurve: Curves.easeIn,
+                ),
+                axisAlignment: 1.0,
+                child: child,
+              ),
+              child: _celebrateDelivery
+                  ? _CelebrationBanner(
+                      key: const ValueKey('delivery'),
+                      message: '🎉 Awesome! You unlocked FREE delivery!',
+                      bgColor: const Color(0xFF15803D),
+                      textColor: Colors.white,
+                    )
+                  : const SizedBox.shrink(key: ValueKey('delivery-empty')),
+            ),
+          if (isMobile)
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 550),
+              reverseDuration: const Duration(milliseconds: 300),
+              transitionBuilder: (child, anim) => SizeTransition(
+                sizeFactor: CurvedAnimation(
+                  parent: anim,
+                  curve: Curves.easeOutBack,
+                  reverseCurve: Curves.easeIn,
+                ),
+                axisAlignment: 1.0,
+                child: child,
+              ),
+              child: _celebrate3pct
+                  ? _CelebrationBanner(
+                      key: const ValueKey('3pct'),
+                      message: '🎉 Congratulations! You unlocked 3% discount!',
+                      bgColor: const Color(0xFFF59E0B),
+                      textColor: const Color(0xFF1C1917),
+                    )
+                  : const SizedBox.shrink(key: ValueKey('3pct-empty')),
+            ),
           if (isMobile && cart.distinctItems > 0)
             _StickyCartBar(
               onTap: () => setState(() => _cartOpen = true),
@@ -104,11 +191,9 @@ class _HomeShellState extends State<HomeShell> {
                     _index = 0;
                     _cartOpen = false;
                   case 2:
-                    _cartOpen = true;
-                  case 3:
                     _index = 1;
                     _cartOpen = false;
-                  case 4:
+                  case 3:
                     _index = 2;
                     _cartOpen = false;
                 }
@@ -123,19 +208,6 @@ class _HomeShellState extends State<HomeShell> {
                   icon: Icon(Icons.grid_view_outlined),
                   activeIcon: Icon(Icons.grid_view),
                   label: 'Catalogue',
-                ),
-                BottomNavigationBarItem(
-                  icon: Badge(
-                    isLabelVisible: cart.totalUnits > 0,
-                    label: Text('${cart.totalUnits}'),
-                    child: const Icon(Icons.shopping_cart_outlined),
-                  ),
-                  activeIcon: Badge(
-                    isLabelVisible: cart.totalUnits > 0,
-                    label: Text('${cart.totalUnits}'),
-                    child: const Icon(Icons.shopping_cart),
-                  ),
-                  label: 'Cart',
                 ),
                 BottomNavigationBarItem(
                   icon: Badge(
@@ -164,7 +236,7 @@ class _HomeShellState extends State<HomeShell> {
           Column(
             children: [
               _LocationHeader(
-                cartUnits: cart.totalUnits,
+                cartItems: cart.distinctItems,
                 onCart: () => setState(() => _cartOpen = true),
               ),
               _SearchBarRow(
@@ -176,8 +248,6 @@ class _HomeShellState extends State<HomeShell> {
                   _index = 0;
                   if (q.length >= 2) {
                     _query = v;
-                    // scroll to results is handled by StorefrontScreen after
-                    // data loads (_resetAndLoad calls _scrollToProducts)
                   } else {
                     _query = '';
                     _scrollToTopTrigger++;
@@ -244,12 +314,10 @@ class _HomeShellState extends State<HomeShell> {
 
 // ─────────────────────── Location header ───────────────────────
 
-/// Top row: location pin + "Raipur" + dropdown (left) ·
-/// mediBO wordmark (centre) · cart icon with badge (right).
 class _LocationHeader extends StatelessWidget {
-  final int cartUnits;
+  final int cartItems;
   final VoidCallback onCart;
-  const _LocationHeader({required this.cartUnits, required this.onCart});
+  const _LocationHeader({required this.cartItems, required this.onCart});
 
   @override
   Widget build(BuildContext context) {
@@ -262,7 +330,6 @@ class _LocationHeader extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
       child: Row(
         children: [
-          // Location selector (visual only — location picker is out of scope)
           Row(
             mainAxisSize: MainAxisSize.min,
             children: const [
@@ -281,7 +348,6 @@ class _LocationHeader extends StatelessWidget {
             ],
           ),
           const Spacer(),
-          // mediBO wordmark
           RichText(
             text: const TextSpan(
               children: [
@@ -307,7 +373,6 @@ class _LocationHeader extends StatelessWidget {
             ),
           ),
           const Spacer(),
-          // Cart icon with item count badge
           PressEffect(
             child: InkWell(
               onTap: onCart,
@@ -315,9 +380,9 @@ class _LocationHeader extends StatelessWidget {
               child: Padding(
                 padding: const EdgeInsets.all(4),
                 child: Badge(
-                  isLabelVisible: cartUnits > 0,
+                  isLabelVisible: cartItems > 0,
                   label: Text(
-                    '$cartUnits',
+                    '$cartItems',
                     style: const TextStyle(fontSize: 10),
                   ),
                   child: const Icon(
@@ -337,14 +402,6 @@ class _LocationHeader extends StatelessWidget {
 
 // ─────────────────────── Full-width search bar ───────────────────────
 
-/// Full-width search bar: white container with gray border, search icon left,
-/// optional X-clear + loading indicator, and green Search button right.
-///
-/// - [onSearch] fires on every debounced keystroke (300 ms).
-/// - [onScrollToResults] fires only on explicit submit (button / Enter),
-///   but only when the text has ≥ 2 non-space characters.
-/// - When text length drops below 2 chars, [onSearch] clears the query and
-///   the parent increments [scrollToTopTrigger] to scroll back to the top.
 class _SearchBarRow extends StatefulWidget {
   final TextEditingController controller;
   final bool isLoading;
@@ -443,7 +500,6 @@ class _SearchBarRowState extends State<_SearchBarRow> {
                 ),
               ),
             ),
-            // Loading spinner OR clear (X) button — never both
             if (widget.isLoading)
               const Padding(
                 padding: EdgeInsets.symmetric(horizontal: 10),
@@ -494,8 +550,6 @@ class _SearchBarRowState extends State<_SearchBarRow> {
 
 // ─────────────────────── Quick-nav chips ───────────────────────
 
-/// Horizontally scrollable row of coloured nav cards:
-/// Pharmacy · Catalogue · Bulk Order · Orders.
 class _QuickNavRow extends StatelessWidget {
   final int index;
   final bool cartOpen;
@@ -630,7 +684,6 @@ class _NavChip extends StatelessWidget {
 
 // ─────────────────────── Bottom promo bar ───────────────────────
 
-/// Persistent green strip shown above the bottom navigation bar on all sizes.
 class _BottomPromoBar extends StatelessWidget {
   const _BottomPromoBar();
 
@@ -664,10 +717,40 @@ class _BottomPromoBar extends StatelessWidget {
   }
 }
 
+// ─────────────────────── Celebration banner ───────────────────────
+
+class _CelebrationBanner extends StatelessWidget {
+  final String message;
+  final Color bgColor;
+  final Color textColor;
+  const _CelebrationBanner({
+    super.key,
+    required this.message,
+    required this.bgColor,
+    required this.textColor,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      color: bgColor,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      child: Text(
+        message,
+        textAlign: TextAlign.center,
+        style: TextStyle(
+          color: textColor,
+          fontSize: 13,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+}
+
 // ─────────────────────── Cart panel ───────────────────────
 
-/// Right-edge slide-in cart sheet with a fading scrim. Driven by an explicit
-/// AnimationController so the panel + scrim move together.
 class CartPanel extends StatefulWidget {
   final bool open;
   final VoidCallback onClose;
@@ -810,17 +893,82 @@ class _CartPanelContent extends StatelessWidget {
 
 // ─────────────────────── Sticky cart bar (mobile) ───────────────────────
 
-/// Blinkit-style dark-navy bar that sits above the bottom nav on mobile.
-/// Shows discount progress toward the next tier and a cart item count chip.
-/// Visible only when the cart has at least one unique item.
-class _StickyCartBar extends StatelessWidget {
+/// Blinkit-style dark-navy bar above the bottom nav on mobile.
+/// Slides up on first appearance; cart chip pulses when item count changes.
+/// Progress tiers: <₹999 free delivery (blue), ₹999–₹2999 3% (amber),
+/// ₹2999–₹6999 5% (amber), ₹6999+ max unlocked (green).
+class _StickyCartBar extends StatefulWidget {
   final VoidCallback onTap;
   const _StickyCartBar({required this.onTap});
 
+  @override
+  State<_StickyCartBar> createState() => _StickyCartBarState();
+}
+
+class _StickyCartBarState extends State<_StickyCartBar>
+    with TickerProviderStateMixin {
   static const _navy = Color(0xFF1B2B8C);
+  static const _blue = Color(0xFF2563EB);
   static const _amber = Color(0xFFFBBF24);
-  static const _tier1 = 2999.0;
-  static const _tier2 = 6999.0;
+  static const _freeThreshold = 999.0;
+  static const _tier3pct = 2999.0;
+  static const _tier5pct = 6999.0;
+
+  late final AnimationController _slideCtrl;
+  late final Animation<Offset> _slideAnim;
+  late final AnimationController _pulseCtrl;
+  late final Animation<double> _pulseAnim;
+  int _prevUniqueItems = 0;
+
+  @override
+  void initState() {
+    super.initState();
+
+    _slideCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 550),
+    );
+    _slideAnim = Tween<Offset>(
+      begin: const Offset(0, 1),
+      end: Offset.zero,
+    ).animate(CurvedAnimation(
+      parent: _slideCtrl,
+      curve: Curves.elasticOut,
+    ));
+    _slideCtrl.forward();
+
+    _pulseCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 380),
+    );
+    _pulseAnim = TweenSequence<double>([
+      TweenSequenceItem(
+          tween: Tween(begin: 1.0, end: 1.35), weight: 30),
+      TweenSequenceItem(
+          tween: Tween(begin: 1.35, end: 0.88), weight: 30),
+      TweenSequenceItem(
+          tween: Tween(begin: 0.88, end: 1.0)
+              .chain(CurveTween(curve: Curves.elasticOut)),
+          weight: 40),
+    ]).animate(_pulseCtrl);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final uniqueItems = AppState.of(context).distinctItems;
+    if (uniqueItems != _prevUniqueItems && _prevUniqueItems > 0) {
+      _pulseCtrl.forward(from: 0);
+    }
+    _prevUniqueItems = uniqueItems;
+  }
+
+  @override
+  void dispose() {
+    _slideCtrl.dispose();
+    _pulseCtrl.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -828,13 +976,15 @@ class _StickyCartBar extends StatelessWidget {
     final total = cart.subtotal;
     final uniqueItems = cart.distinctItems;
 
-    final bool unlocked = total >= _tier2;
+    final bool unlocked = total >= _tier5pct;
 
     final double progress;
+    final Color barColor;
     final Widget leftContent;
 
-    if (total >= _tier2) {
+    if (total >= _tier5pct) {
       progress = 1.0;
+      barColor = Colors.white;
       leftContent = const Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -842,7 +992,7 @@ class _StickyCartBar extends StatelessWidget {
           SizedBox(width: 5),
           Flexible(
             child: Text(
-              "You've unlocked 5% discount!",
+              'Max discount unlocked!',
               style: TextStyle(
                 color: Colors.white,
                 fontSize: 12,
@@ -854,72 +1004,86 @@ class _StickyCartBar extends StatelessWidget {
           ),
         ],
       );
-    } else if (total >= _tier1) {
-      progress = (total - _tier1) / (_tier2 - _tier1);
-      final remaining = (_tier2 - total).ceil();
+    } else if (total >= _tier3pct) {
+      progress = (total - _tier3pct) / (_tier5pct - _tier3pct);
+      barColor = _amber;
+      final remaining = (_tier5pct - total).ceil();
       leftContent = _DiscountText(
           amount: '₹$remaining', suffix: ' more to get 5% off');
-    } else {
-      progress = (total > 0 ? total / _tier1 : 0.0);
-      final remaining = (_tier1 - total).ceil();
+    } else if (total >= _freeThreshold) {
+      progress = (total - _freeThreshold) / (_tier3pct - _freeThreshold);
+      barColor = _amber;
+      final remaining = (_tier3pct - total).ceil();
       leftContent = _DiscountText(
           amount: '₹$remaining', suffix: ' more to get 3% off');
+    } else {
+      progress = total > 0 ? total / _freeThreshold : 0.0;
+      barColor = _blue;
+      final remaining = (_freeThreshold - total).ceil();
+      leftContent = _DiscountText(
+          amount: '₹$remaining', suffix: ' more for FREE delivery');
     }
 
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        height: 64,
-        decoration: BoxDecoration(
-          color: unlocked ? const Color(0xFF15803D) : _navy,
-          borderRadius: const BorderRadius.only(
-            topLeft: Radius.circular(14),
-            topRight: Radius.circular(14),
+    return SlideTransition(
+      position: _slideAnim,
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: Container(
+          height: 64,
+          decoration: BoxDecoration(
+            color: unlocked ? const Color(0xFF15803D) : _navy,
+            borderRadius: const BorderRadius.only(
+              topLeft: Radius.circular(14),
+              topRight: Radius.circular(14),
+            ),
           ),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(14, 10, 10, 0),
-                child: Row(
-                  children: [
-                    Expanded(child: leftContent),
-                    _CartChip(uniqueItems: uniqueItems),
-                  ],
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(14, 10, 10, 0),
+                  child: Row(
+                    children: [
+                      Expanded(child: leftContent),
+                      ScaleTransition(
+                        scale: _pulseAnim,
+                        child: _CartChip(uniqueItems: uniqueItems),
+                      ),
+                    ],
+                  ),
                 ),
               ),
-            ),
-            // Animated progress bar
-            Padding(
-              padding: const EdgeInsets.fromLTRB(14, 4, 14, 8),
-              child: LayoutBuilder(
-                builder: (_, constraints) => Stack(
-                  children: [
-                    Container(
-                      height: 4,
-                      width: constraints.maxWidth,
-                      decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.20),
-                        borderRadius: BorderRadius.circular(4),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(14, 4, 14, 8),
+                child: LayoutBuilder(
+                  builder: (_, constraints) => Stack(
+                    children: [
+                      Container(
+                        height: 4,
+                        width: constraints.maxWidth,
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.20),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
                       ),
-                    ),
-                    AnimatedContainer(
-                      duration: const Duration(milliseconds: 500),
-                      curve: Curves.easeOut,
-                      height: 4,
-                      width: constraints.maxWidth * progress.clamp(0.0, 1.0),
-                      decoration: BoxDecoration(
-                        color: unlocked ? Colors.white : _amber,
-                        borderRadius: BorderRadius.circular(4),
+                      AnimatedContainer(
+                        duration: const Duration(milliseconds: 500),
+                        curve: Curves.easeOut,
+                        height: 4,
+                        width: constraints.maxWidth *
+                            progress.clamp(0.0, 1.0),
+                        decoration: BoxDecoration(
+                          color: barColor,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

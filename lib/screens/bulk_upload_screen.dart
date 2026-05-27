@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:syncfusion_flutter_pdf/pdf.dart';
 import 'package:xml/xml.dart' as xmlp;
 
 import '../app_state.dart';
@@ -106,7 +107,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
   Future<void> _pickAndProcess() async {
     final input = html.FileUploadInputElement()
-      ..accept = '.csv,.xlsx,.xls,.pdf,.ods,.tsv,.html,.jpg,.jpeg,.png,.webp,.gif'
+      ..accept = '.csv,.xlsx,.xls,.pdf,.ods,.tsv,.txt,.docx,.doc,.html,.htm,.jpg,.jpeg,.png,.webp,.gif'
       ..multiple = false;
     input.click();
 
@@ -136,7 +137,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       } catch (_) {
         if (isBinary) {
           throw Exception(
-              'Could not read this file automatically. Please try a CSV or Excel file instead.');
+              'Could not extract medicines from this file. For image-based PDFs or photos, ensure the content is clear and legible, or use a typed CSV/Excel/text file instead.');
         }
         extracted = _extractWithFallback(rawContent);
       }
@@ -187,23 +188,32 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
   // ── Raw content extraction ─────────────────────────────────────────────────
 
   /// Converts any supported file to either a plain-text string (spreadsheets,
-  /// CSV, TSV) or a base64-prefixed string for PDFs/images sent to Gemini.
+  /// CSV, TSV, TXT, DOCX) or a base64-prefixed string for images sent to Gemini.
   Future<String> _getRawFileContent(html.File file) async {
     final ext = file.name.toLowerCase().split('.').last;
     switch (ext) {
       case 'csv':
       case 'tsv':
+      case 'txt':
       case 'html':
       case 'htm':
         return _readAsText(file);
       case 'pdf':
         final bytes = await _readBinaryBytes(file);
+        // Try local text extraction first (works for typed PDFs)
+        final localText = await _extractPdfText(bytes);
+        if (localText.trim().length > 20) return localText;
+        // Scanned/image PDF — send to Gemini
         return 'PDF_BYTES:${base64Encode(bytes)}';
       case 'xlsx':
       case 'xls':
         return _xlsxToRawText(file);
       case 'ods':
         return _odsToRawText(file);
+      case 'docx':
+        return _docxToRawText(file);
+      case 'doc':
+        return _docToRawText(file);
       case 'jpg':
       case 'jpeg':
         return 'IMAGE_BYTES:image/jpeg:${base64Encode(await _readBinaryBytes(file))}';
@@ -214,7 +224,13 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       case 'gif':
         return 'IMAGE_BYTES:image/gif:${base64Encode(await _readBinaryBytes(file))}';
       default:
-        throw Exception('Unsupported format: .$ext');
+        // Try unknown format as plain text before giving up
+        try {
+          return await _readAsText(file);
+        } catch (_) {
+          throw Exception(
+              'Format .$ext is not supported. Please use CSV, Excel, PDF, TXT, or DOCX.');
+        }
     }
   }
 
@@ -233,6 +249,107 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     await reader.onLoad.first;
     final dataUrl = reader.result as String;
     return base64Decode(dataUrl.split(',').last);
+  }
+
+  /// Extracts plain text from a typed PDF using syncfusion. Returns empty string
+  /// for scanned/image-only PDFs so caller can fall back to Gemini.
+  Future<String> _extractPdfText(Uint8List bytes) async {
+    try {
+      final doc = PdfDocument(inputBytes: bytes);
+      final extractor = PdfTextExtractor(doc);
+      final text = extractor.extractText();
+      doc.dispose();
+      return text;
+    } catch (_) {
+      return '';
+    }
+  }
+
+  /// Parses DOCX ZIP+XML structure and returns paragraph text as plain lines.
+  Future<String> _docxToRawText(html.File file) async {
+    final bytes = await _readBinaryBytes(file);
+
+    Archive archive;
+    try {
+      archive = ZipDecoder().decodeBytes(bytes);
+    } catch (_) {
+      throw Exception('Could not open DOCX file. Make sure it is a valid Word document.');
+    }
+
+    ArchiveFile? docFile;
+    for (final f in archive) {
+      if (f.name.toLowerCase() == 'word/document.xml') {
+        docFile = f;
+        break;
+      }
+    }
+    if (docFile == null) throw Exception('Not a valid DOCX file — document.xml missing.');
+
+    final xmlStr = utf8.decode(docFile.content as List<int>);
+    final doc = xmlp.XmlDocument.parse(xmlStr);
+
+    final sb = StringBuffer();
+    for (final para in doc.descendants
+        .whereType<xmlp.XmlElement>()
+        .where((e) => e.localName == 'p')) {
+      final text = para.descendants
+          .whereType<xmlp.XmlElement>()
+          .where((e) => e.localName == 't')
+          .map((e) => e.innerText)
+          .join();
+      if (text.trim().isNotEmpty) sb.writeln(text);
+    }
+    return sb.toString();
+  }
+
+  /// Extracts readable text from legacy binary .doc files.
+  /// Tries plain-text read first (works for RTF-based .doc), then ASCII runs.
+  Future<String> _docToRawText(html.File file) async {
+    try {
+      final text = await _readAsText(file);
+      if (text.isNotEmpty) {
+        final printable = text.codeUnits
+            .where((c) => c >= 32 && c < 127 || c == 9 || c == 10 || c == 13)
+            .length;
+        final ratio = printable / text.length.clamp(1, 1 << 30);
+        if (ratio > 0.70) {
+          // RTF: strip control words and return plain text
+          if (text.startsWith('{\\rtf')) {
+            return text
+                .replaceAll(RegExp(r'\\[a-z]+\d* ?'), '')
+                .replaceAll(RegExp(r'\{[^{}]{0,200}\}'), '')
+                .replaceAll(RegExp(r'[^\x20-\x7E\n\t]'), ' ')
+                .trim();
+          }
+          return text;
+        }
+      }
+    } catch (_) {}
+
+    // Binary DOC: extract printable ASCII runs of ≥6 chars
+    final bytes = await _readBinaryBytes(file);
+    final sb = StringBuffer();
+    int runStart = -1;
+    for (int i = 0; i < bytes.length; i++) {
+      final b = bytes[i];
+      if (b >= 32 && b < 127) {
+        if (runStart == -1) runStart = i;
+      } else {
+        if (runStart != -1 && i - runStart >= 6) {
+          sb.writeln(String.fromCharCodes(bytes.sublist(runStart, i)));
+        }
+        runStart = -1;
+      }
+    }
+    if (runStart != -1 && bytes.length - runStart >= 6) {
+      sb.writeln(String.fromCharCodes(bytes.sublist(runStart)));
+    }
+    final result = sb.toString().trim();
+    if (result.isEmpty) {
+      throw Exception(
+          'Could not read DOC file content. Please save as DOCX or CSV format.');
+    }
+    return result;
   }
 
   /// Parses XLSX ZIP+XML structure and returns all sheet data as tab-separated rows.
@@ -497,6 +614,11 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       }
     }
 
+    // No structured header — treat as plain text / WhatsApp export
+    if (headerRow == -1) {
+      return _extractFromPlainTextLines(lines);
+    }
+
     final result = <Map<String, dynamic>>[];
     final startRow = headerRow >= 0 ? headerRow + 1 : 0;
 
@@ -514,6 +636,65 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         qty = int.tryParse(raw) ?? 1;
       }
       result.add({'name': name, 'qty': qty.clamp(1, 99999)});
+    }
+    return result;
+  }
+
+  /// Parses plain-text order lists and WhatsApp exports line-by-line.
+  /// Handles formats like "Medicine - 5", "Medicine x5", "5 Medicine", and
+  /// "[date time] Name: Medicine x 5" (WhatsApp).
+  List<Map<String, dynamic>> _extractFromPlainTextLines(List<String> lines) {
+    final result = <Map<String, dynamic>>[];
+
+    // Matches WhatsApp timestamp prefixes in both bracket and dash styles
+    final whatsAppPattern = RegExp(
+      r'(?:\[\d{1,2}[/\-]\d{1,2}[/\-]\d{2,4},?\s+\d{1,2}:\d{2}(?::\d{2})?(?:\s*[AP]M)?\s*\]'
+      r'|\d{1,2}[/\-]\d{1,2}[/\-]\d{2,4},?\s+\d{1,2}:\d{2}(?::\d{2})?\s*[-–])'
+      r'\s*[^:]+:\s*(.+)',
+    );
+
+    // "Medicine Name - 5" / "Medicine x 10" / "Medicine : 3"
+    final qtyAtEnd = RegExp(r'^(.+?)(?:\s+[-–x×:]\s*|\s+)(\d{1,4})\s*$', caseSensitive: false);
+
+    const skipPrefixes = [
+      'total', 'subtotal', 'grand', 'date:', 'time:', 'regards', 'thanks',
+      'hello', 'hi,', 'dear ', 'note:', 's.no', 'serial', 'sr.', 'from:', 'to:',
+    ];
+
+    for (var line in lines) {
+      line = line.trim();
+      if (line.length < 3) continue;
+
+      // Strip WhatsApp timestamp and sender prefix
+      final waMatch = whatsAppPattern.firstMatch(line);
+      String work = waMatch != null ? waMatch.group(1)!.trim() : line;
+      if (work.length < 2) continue;
+
+      // Skip system/metadata lines
+      if (skipPrefixes.any((s) => work.toLowerCase().startsWith(s))) continue;
+      if (work.contains('end-to-end encrypted')) continue;
+      if (RegExp(r'^\d+\.?\s*$').hasMatch(work)) continue; // bare number
+
+      String name = work;
+      int qty = 1;
+
+      final endMatch = qtyAtEnd.firstMatch(work);
+      if (endMatch != null) {
+        final potentialName = endMatch.group(1)!.trim();
+        final potentialQty = int.tryParse(endMatch.group(2)!);
+        if (potentialQty != null &&
+            potentialQty >= 1 &&
+            potentialQty <= 9999 &&
+            potentialName.length >= 2) {
+          name = potentialName;
+          qty = potentialQty;
+        }
+      }
+
+      name = name.replaceAll(RegExp(r'[.,;:]+$'), '').trim();
+      if (name.length >= 2) {
+        result.add({'name': name, 'qty': qty.clamp(1, 99999)});
+      }
     }
     return result;
   }
@@ -581,18 +762,14 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
   String _friendlyError(Object e) {
     final msg = e.toString().toLowerCase();
-    if (msg.contains('could not read this file') ||
-        msg.contains('could not process this file')) {
-      return e.toString().replaceFirst('Exception: ', '');
-    }
     if (msg.contains('no medicine rows')) {
       return 'No medicine rows found in the file. Make sure the file contains medicine names.';
     }
-    if (msg.contains('unsupported format')) {
-      return e.toString().replaceFirst('Exception: ', '');
-    }
     if (msg.contains('empty file')) return 'The file appears to be empty.';
-    return 'Could not process file: ${e.toString().replaceFirst('Exception: ', '')}';
+    // Return the exception message directly — all throw sites use clear messages
+    final clean = e.toString().replaceFirst('Exception: ', '');
+    if (clean.isNotEmpty) return clean;
+    return 'Failed to process the file. Please try a different format (CSV, Excel, or text).';
   }
 
   // ── Cart ───────────────────────────────────────────────────────────────────

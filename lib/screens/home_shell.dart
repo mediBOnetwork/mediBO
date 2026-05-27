@@ -429,6 +429,8 @@ class _SearchBarRowState extends State<_SearchBarRow> {
                 style: const TextStyle(fontSize: 14, color: Brand.ink),
                 decoration: const InputDecoration(
                   border: InputBorder.none,
+                  enabledBorder: InputBorder.none,
+                  focusedBorder: InputBorder.none,
                   hintText: 'Search for medicines',
                   hintStyle: TextStyle(color: Brand.inkMuted, fontSize: 14),
                   isDense: true,

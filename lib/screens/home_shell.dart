@@ -5,15 +5,14 @@ import 'package:flutter/material.dart';
 import '../app_state.dart';
 import '../data/medicine_repository.dart';
 import '../theme.dart';
-import '../util.dart';
 import '../widgets/animations.dart';
 import 'bulk_upload_screen.dart';
 import 'cart_screen.dart';
 import 'orders_screen.dart';
 import 'storefront_screen.dart';
 
-/// App shell: promo bar + mediBO header over the active page
-/// (storefront / orders), with the cart as a right slide-in panel.
+/// App shell: 1mg-style header (location + logo + cart), full-width search bar,
+/// horizontal quick-nav chips, the active page, and a persistent bottom promo bar.
 class HomeShell extends StatefulWidget {
   const HomeShell({super.key});
 
@@ -73,8 +72,12 @@ class _HomeShellState extends State<HomeShell> {
 
     return Scaffold(
       backgroundColor: Colors.white,
-      bottomNavigationBar: isMobile
-          ? BottomNavigationBar(
+      bottomNavigationBar: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const _BottomPromoBar(),
+          if (isMobile)
+            BottomNavigationBar(
               currentIndex: bottomNavIndex,
               type: BottomNavigationBarType.fixed,
               selectedItemColor: Brand.green,
@@ -141,30 +144,45 @@ class _HomeShellState extends State<HomeShell> {
                   label: 'Bulk',
                 ),
               ],
-            )
-          : null,
+            ),
+        ],
+      ),
       body: Stack(
         children: [
           Column(
             children: [
-              const _PromoBar(),
-              _Header(
+              _LocationHeader(
+                cartUnits: cart.totalUnits,
+                onCart: () => setState(() => _cartOpen = true),
+              ),
+              _SearchBarRow(
                 controller: _searchCtrl,
-                index: _index,
-                isMobile: isMobile,
                 onSearch: (v) => setState(() {
                   _query = v;
                   _category = 'All';
                   _index = 0;
-                  _scrollTrigger++;
                 }),
-                onLogo: () => setState(() {
+                onScrollToResults: () => setState(() => _scrollTrigger++),
+              ),
+              _QuickNavRow(
+                index: _index,
+                cartOpen: _cartOpen,
+                onPharmacy: () => setState(() {
                   _index = 0;
                   _cartOpen = false;
                 }),
-                onCart: () => setState(() => _cartOpen = true),
-                onOrders: () => setState(() => _index = 1),
-                onBulk: () => setState(() => _index = 2),
+                onCatalogue: () => setState(() {
+                  _index = 0;
+                  _cartOpen = false;
+                }),
+                onOrders: () => setState(() {
+                  _index = 1;
+                  _cartOpen = false;
+                }),
+                onBulk: () => setState(() {
+                  _index = 2;
+                  _cartOpen = false;
+                }),
               ),
               Expanded(
                 child: AnimatedSwitcher(
@@ -203,205 +221,137 @@ class _HomeShellState extends State<HomeShell> {
   }
 }
 
-class _PromoBar extends StatelessWidget {
-  const _PromoBar();
+// ─────────────────────── Location header ───────────────────────
 
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      color: Brand.greenDark,
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 7),
-      child: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 1200),
-          child: Row(
-            children: [
-              const Icon(Icons.local_shipping, color: Colors.white70, size: 14),
-              const SizedBox(width: 6),
-              const Flexible(
-                child: Text(
-                  'Free delivery on orders above ₹500  ·  24/7 customer support',
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(color: Colors.white70, fontSize: 12),
-                ),
-              ),
-              const Spacer(),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: const Text('Use code HEALTH10 for 10% off',
-                    style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600)),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _Header extends StatelessWidget {
-  final TextEditingController controller;
-  final int index;
-  final bool isMobile;
-  final ValueChanged<String> onSearch;
-  final VoidCallback onLogo;
+/// Top row: location pin + "Raipur" + dropdown (left) ·
+/// mediBO wordmark (centre) · cart icon with badge (right).
+class _LocationHeader extends StatelessWidget {
+  final int cartUnits;
   final VoidCallback onCart;
-  final VoidCallback onOrders;
-  final VoidCallback onBulk;
-
-  const _Header({
-    required this.controller,
-    required this.index,
-    required this.isMobile,
-    required this.onSearch,
-    required this.onLogo,
-    required this.onCart,
-    required this.onOrders,
-    required this.onBulk,
-  });
+  const _LocationHeader({required this.cartUnits, required this.onCart});
 
   @override
   Widget build(BuildContext context) {
-    final cart = AppState.of(context);
     return Container(
       width: double.infinity,
       decoration: const BoxDecoration(
         color: Colors.white,
         border: Border(bottom: BorderSide(color: Brand.border)),
       ),
-      child: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 1200),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-            child: LayoutBuilder(
-              builder: (context, c) {
-                final wide = c.maxWidth >= 860;
-                final logo = _Logo(onTap: onLogo);
-                final search =
-                    _SearchField(controller: controller, onSearch: onSearch);
-                final actions = _Actions(
-                  cartUnits: cart.totalUnits,
-                  cartTotal: cart.grandTotal,
-                  ordersCount: cart.orders.length,
-                  index: index,
-                  onCart: onCart,
-                  onOrders: onOrders,
-                  onBulk: onBulk,
-                );
-                if (wide) {
-                  return Row(
-                    children: [
-                      logo,
-                      const SizedBox(width: 28),
-                      Expanded(child: search),
-                      const SizedBox(width: 20),
-                      actions,
-                    ],
-                  );
-                }
-                return Column(
-                  children: [
-                    Row(children: [logo, const Spacer(), if (!isMobile) actions]),
-                    const SizedBox(height: 10),
-                    search,
-                  ],
-                );
-              },
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _Logo extends StatelessWidget {
-  final VoidCallback onTap;
-  const _Logo({required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    return PressEffect(
-      scale: 0.95,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(10),
-        child: Padding(
-          padding: const EdgeInsets.all(4),
-          child: Row(
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+      child: Row(
+        children: [
+          // Location selector (visual only — location picker is out of scope)
+          Row(
             mainAxisSize: MainAxisSize.min,
-            children: [
-              // Circular app logo: green circle with a white cross/plus
-              Container(
-                width: 40,
-                height: 40,
-                decoration: const BoxDecoration(
-                  color: Brand.green,
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(Icons.add,
-                    color: Colors.white, size: 26, weight: 700),
-              ),
-              const SizedBox(width: 10),
-              // mediBO logo: "medi" regular dark + "BO" bold green
-              RichText(
-                text: const TextSpan(
-                  children: [
-                    TextSpan(
-                      text: 'medi',
-                      style: TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.w500,
-                        color: Brand.ink,
-                        letterSpacing: -0.3,
-                      ),
-                    ),
-                    TextSpan(
-                      text: 'BO',
-                      style: TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.w800,
-                        color: Brand.green,
-                        letterSpacing: -0.3,
-                      ),
-                    ),
-                  ],
+            children: const [
+              Icon(Icons.location_on, color: Brand.green, size: 20),
+              SizedBox(width: 4),
+              Text(
+                'Raipur',
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                  color: Brand.ink,
                 ),
               ),
+              Icon(Icons.keyboard_arrow_down,
+                  color: Brand.inkMuted, size: 18),
             ],
           ),
-        ),
+          const Spacer(),
+          // mediBO wordmark
+          RichText(
+            text: const TextSpan(
+              children: [
+                TextSpan(
+                  text: 'medi',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w500,
+                    color: Brand.ink,
+                    letterSpacing: -0.3,
+                  ),
+                ),
+                TextSpan(
+                  text: 'BO',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w800,
+                    color: Brand.green,
+                    letterSpacing: -0.3,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const Spacer(),
+          // Cart icon with item count badge
+          PressEffect(
+            child: InkWell(
+              onTap: onCart,
+              borderRadius: BorderRadius.circular(20),
+              child: Padding(
+                padding: const EdgeInsets.all(4),
+                child: Badge(
+                  isLabelVisible: cartUnits > 0,
+                  label: Text(
+                    '$cartUnits',
+                    style: const TextStyle(fontSize: 10),
+                  ),
+                  child: const Icon(
+                    Icons.shopping_cart_outlined,
+                    size: 26,
+                    color: Brand.ink,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
 }
 
-/// Search field with a debounce so filtering only fires ~260ms after the user
-/// stops typing. The Search button fires immediately.
-class _SearchField extends StatefulWidget {
+// ─────────────────────── Full-width search bar ───────────────────────
+
+/// Full-width search bar: single rounded container holding a search icon,
+/// the text field, and an integrated green "Search" button.
+/// Fires [onSearch] for every debounced keystroke; fires [onScrollToResults]
+/// only on explicit submit (button tap or Enter key).
+class _SearchBarRow extends StatefulWidget {
   final TextEditingController controller;
   final ValueChanged<String> onSearch;
-  const _SearchField({required this.controller, required this.onSearch});
+  final VoidCallback onScrollToResults;
+
+  const _SearchBarRow({
+    required this.controller,
+    required this.onSearch,
+    required this.onScrollToResults,
+  });
 
   @override
-  State<_SearchField> createState() => _SearchFieldState();
+  State<_SearchBarRow> createState() => _SearchBarRowState();
 }
 
-class _SearchFieldState extends State<_SearchField> {
+class _SearchBarRowState extends State<_SearchBarRow> {
+  final FocusNode _focus = FocusNode();
+  bool _focused = false;
   Timer? _debounce;
+
+  @override
+  void initState() {
+    super.initState();
+    _focus.addListener(() {
+      if (mounted) setState(() => _focused = _focus.hasFocus);
+    });
+  }
 
   @override
   void dispose() {
     _debounce?.cancel();
+    _focus.dispose();
     super.dispose();
   }
 
@@ -415,151 +365,249 @@ class _SearchFieldState extends State<_SearchField> {
   void _submitNow() {
     _debounce?.cancel();
     widget.onSearch(widget.controller.text);
+    widget.onScrollToResults();
+    _focus.unfocus();
   }
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Expanded(
-          child: TextField(
-            controller: widget.controller,
-            onChanged: _onChanged,
-            onSubmitted: (_) => _submitNow(),
-            textInputAction: TextInputAction.search,
-            decoration: const InputDecoration(
-              isDense: true,
-              hintText: 'Search for medicines, brands & manufacturers…',
-              prefixIcon: Icon(Icons.search, color: Brand.inkMuted),
+    return Container(
+      color: Colors.white,
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        decoration: BoxDecoration(
+          color: Brand.field,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: _focused ? Brand.green : Colors.transparent,
+            width: 1.5,
+          ),
+        ),
+        child: Row(
+          children: [
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 12),
+              child: Icon(Icons.search, color: Brand.inkMuted, size: 20),
             ),
-          ),
+            Expanded(
+              child: TextField(
+                controller: widget.controller,
+                focusNode: _focus,
+                onChanged: _onChanged,
+                onSubmitted: (_) => _submitNow(),
+                textInputAction: TextInputAction.search,
+                style: const TextStyle(fontSize: 14, color: Brand.ink),
+                decoration: const InputDecoration(
+                  border: InputBorder.none,
+                  hintText: 'Search for medicines, brands & manufacturers…',
+                  hintStyle: TextStyle(color: Brand.inkMuted, fontSize: 14),
+                  isDense: true,
+                  contentPadding: EdgeInsets.symmetric(vertical: 13),
+                  filled: false,
+                ),
+              ),
+            ),
+            GestureDetector(
+              onTap: _submitNow,
+              child: Container(
+                margin: const EdgeInsets.all(5),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+                decoration: BoxDecoration(
+                  color: Brand.green,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Text(
+                  'Search',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ),
+          ],
         ),
-        const SizedBox(width: 8),
-        PressEffect(
-          child: FilledButton(
-            onPressed: _submitNow,
-            child: const Text('Search'),
-          ),
-        ),
-      ],
+      ),
     );
   }
 }
 
-class _Actions extends StatelessWidget {
-  final int cartUnits;
-  final double cartTotal;
-  final int ordersCount;
+// ─────────────────────── Quick-nav chips ───────────────────────
+
+/// Horizontally scrollable row of coloured nav cards:
+/// Pharmacy · Catalogue · Bulk Order · Orders.
+class _QuickNavRow extends StatelessWidget {
   final int index;
-  final VoidCallback onCart;
+  final bool cartOpen;
+  final VoidCallback onPharmacy;
+  final VoidCallback onCatalogue;
   final VoidCallback onOrders;
   final VoidCallback onBulk;
 
-  const _Actions({
-    required this.cartUnits,
-    required this.cartTotal,
-    required this.ordersCount,
+  const _QuickNavRow({
     required this.index,
-    required this.onCart,
+    required this.cartOpen,
+    required this.onPharmacy,
+    required this.onCatalogue,
     required this.onOrders,
     required this.onBulk,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        PressEffect(
-          child: TextButton.icon(
-            onPressed: onOrders,
-            style: TextButton.styleFrom(
-              foregroundColor: index == 1 ? Brand.green : Brand.ink,
+    final isHome = index == 0 && !cartOpen;
+    return Container(
+      width: double.infinity,
+      color: Colors.white,
+      padding: const EdgeInsets.fromLTRB(12, 2, 12, 14),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            _NavChip(
+              icon: Icons.local_pharmacy,
+              label: 'Pharmacy',
+              bg: Brand.mint,
+              fg: Brand.green,
+              selected: isHome,
+              onTap: onPharmacy,
             ),
-            icon: Badge(
-              isLabelVisible: ordersCount > 0,
-              label: Text('$ordersCount'),
-              child: const Icon(Icons.receipt_long_outlined, size: 20),
+            _NavChip(
+              icon: Icons.grid_view_rounded,
+              label: 'Catalogue',
+              bg: const Color(0xFFE8F1FF),
+              fg: const Color(0xFF2563EB),
+              selected: false,
+              onTap: onCatalogue,
             ),
-            label: const Text('Orders'),
-          ),
-        ),
-        const SizedBox(width: 4),
-        PressEffect(
-          child: TextButton.icon(
-            onPressed: onBulk,
-            style: TextButton.styleFrom(
-              foregroundColor: index == 2 ? Brand.green : Brand.ink,
+            _NavChip(
+              icon: Icons.upload_file_outlined,
+              label: 'Bulk Order',
+              bg: const Color(0xFFFFF1E6),
+              fg: const Color(0xFFEA7317),
+              selected: index == 2 && !cartOpen,
+              onTap: onBulk,
             ),
-            icon: const Icon(Icons.upload_file_outlined, size: 20),
-            label: const Text('Bulk'),
-          ),
-        ),
-        const SizedBox(width: 8),
-        _CartButton(units: cartUnits, total: cartTotal, onTap: onCart),
-      ],
-    );
-  }
-}
-
-/// Cart button that pulses (scale bounce) whenever the item count increases —
-/// the "added to cart" feedback.
-class _CartButton extends StatefulWidget {
-  final int units;
-  final double total;
-  final VoidCallback onTap;
-  const _CartButton(
-      {required this.units, required this.total, required this.onTap});
-
-  @override
-  State<_CartButton> createState() => _CartButtonState();
-}
-
-class _CartButtonState extends State<_CartButton>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _c =
-      AnimationController(vsync: this, duration: const Duration(milliseconds: 280));
-  late final Animation<double> _scale = TweenSequence<double>([
-    TweenSequenceItem(
-        tween: Tween(begin: 1.0, end: 1.18)
-            .chain(CurveTween(curve: Curves.easeOut)),
-        weight: 50),
-    TweenSequenceItem(
-        tween: Tween(begin: 1.18, end: 1.0)
-            .chain(CurveTween(curve: Curves.easeIn)),
-        weight: 50),
-  ]).animate(_c);
-
-  @override
-  void didUpdateWidget(_CartButton old) {
-    super.didUpdateWidget(old);
-    if (widget.units > old.units) _c.forward(from: 0);
-  }
-
-  @override
-  void dispose() {
-    _c.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return ScaleTransition(
-      scale: _scale,
-      child: PressEffect(
-        child: FilledButton.icon(
-          onPressed: widget.onTap,
-          icon: Badge(
-            isLabelVisible: widget.units > 0,
-            label: Text('${widget.units}'),
-            child: const Icon(Icons.shopping_cart_outlined, size: 20),
-          ),
-          label: Text(widget.units > 0 ? rupees(widget.total) : 'Cart'),
+            _NavChip(
+              icon: Icons.receipt_long_outlined,
+              label: 'Orders',
+              bg: const Color(0xFFECEBFF),
+              fg: const Color(0xFF4F46E5),
+              selected: index == 1 && !cartOpen,
+              onTap: onOrders,
+            ),
+          ],
         ),
       ),
     );
   }
 }
+
+class _NavChip extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final Color bg;
+  final Color fg;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _NavChip({
+    required this.icon,
+    required this.label,
+    required this.bg,
+    required this.fg,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 5),
+      child: PressEffect(
+        scale: 0.93,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(16),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            width: 78,
+            padding:
+                const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+            decoration: BoxDecoration(
+              color: selected ? fg.withValues(alpha: 0.10) : bg,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: selected ? fg : Colors.transparent,
+                width: 1.5,
+              ),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(icon, size: 26, color: fg),
+                const SizedBox(height: 5),
+                Text(
+                  label,
+                  textAlign: TextAlign.center,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600,
+                    color: fg,
+                    height: 1.2,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────── Bottom promo bar ───────────────────────
+
+/// Persistent green strip shown above the bottom navigation bar on all sizes.
+class _BottomPromoBar extends StatelessWidget {
+  const _BottomPromoBar();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      color: Brand.green,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: const [
+          Icon(Icons.local_offer, color: Colors.white, size: 14),
+          SizedBox(width: 6),
+          Text(
+            'Get 10% off on first order',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          SizedBox(width: 8),
+          Text(
+            '· Use code HEALTH10',
+            style: TextStyle(color: Colors.white70, fontSize: 12),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────── Cart panel ───────────────────────
 
 /// Right-edge slide-in cart sheet with a fading scrim. Driven by an explicit
 /// AnimationController so the panel + scrim move together.
@@ -691,8 +739,6 @@ class _CartPanelContent extends StatelessWidget {
             ),
           ),
           const Divider(height: 1),
-          // Force CartScreen into its narrow (single-column) layout regardless
-          // of the full screen width.
           Expanded(
             child: MediaQuery(
               data: mq.copyWith(size: Size(width, mq.size.height)),

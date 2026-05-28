@@ -18,9 +18,40 @@ class _LoginScreenState extends State<LoginScreen> {
   String? _error;
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && Supabase.instance.client.auth.currentUser != null) {
+        Navigator.of(context).popUntil((r) => r.isFirst);
+      }
+    });
+  }
+
+  @override
   void dispose() {
     _phoneCtrl.dispose();
     super.dispose();
+  }
+
+  Future<void> _googleSignIn() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      await Supabase.instance.client.auth.signInWithOAuth(
+        OAuthProvider.google,
+        redirectTo: 'https://medibo.in',
+      );
+      if (mounted) Navigator.of(context).popUntil((r) => r.isFirst);
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _error = 'Google sign-in failed. Please try again.';
+          _loading = false;
+        });
+      }
+    }
   }
 
   Future<void> _sendOtp() async {
@@ -50,25 +81,6 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
-  Future<void> _googleSignIn() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
-    try {
-      await UserState.read(context).signInWithGoogle();
-      // OAuth opens browser; pop back so root handles the redirect
-      if (mounted) Navigator.of(context).popUntil((r) => r.isFirst);
-    } catch (_) {
-      if (mounted) {
-        setState(() {
-          _error = 'Google sign-in failed. Please try again.';
-          _loading = false;
-        });
-      }
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -84,7 +96,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 children: [
                   // Logo
                   const Center(child: _MediBoLogo()),
-                  const SizedBox(height: 36),
+                  const SizedBox(height: 32),
                   // Heading
                   const Text(
                     'Welcome to mediBO',
@@ -102,103 +114,13 @@ class _LoginScreenState extends State<LoginScreen> {
                     textAlign: TextAlign.center,
                     style: TextStyle(fontSize: 15, color: Color(0xFF6B7280)),
                   ),
-                  const SizedBox(height: 44),
-                  // Phone label
-                  const Text(
-                    'Mobile Number',
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF374151),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  // Phone field
-                  Container(
-                    decoration: BoxDecoration(
-                      border: Border.all(
-                        color: _error != null
-                            ? const Color(0xFFDC2626)
-                            : const Color(0xFFD1D5DB),
-                        width: 1.5,
-                      ),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 14, vertical: 16),
-                          decoration: const BoxDecoration(
-                            border: Border(
-                                right:
-                                    BorderSide(color: Color(0xFFE5E7EB))),
-                          ),
-                          child: const Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text('🇮🇳', style: TextStyle(fontSize: 20)),
-                              SizedBox(width: 8),
-                              Text(
-                                '+91',
-                                style: TextStyle(
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w700,
-                                  color: Color(0xFF374151),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        Expanded(
-                          child: TextField(
-                            controller: _phoneCtrl,
-                            keyboardType: TextInputType.phone,
-                            inputFormatters: [
-                              FilteringTextInputFormatter.digitsOnly,
-                              LengthLimitingTextInputFormatter(10),
-                            ],
-                            onSubmitted: (_) => _sendOtp(),
-                            style: const TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
-                              color: Color(0xFF111827),
-                              letterSpacing: 1.2,
-                            ),
-                            decoration: const InputDecoration(
-                              border: InputBorder.none,
-                              enabledBorder: InputBorder.none,
-                              focusedBorder: InputBorder.none,
-                              contentPadding: EdgeInsets.symmetric(
-                                  horizontal: 14, vertical: 16),
-                              hintText: '9876543210',
-                              hintStyle: TextStyle(
-                                fontWeight: FontWeight.w400,
-                                color: Color(0xFF9CA3AF),
-                                letterSpacing: 0,
-                              ),
-                              isDense: true,
-                              filled: false,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  if (_error != null) ...[
-                    const SizedBox(height: 8),
-                    Text(
-                      _error!,
-                      style: const TextStyle(
-                          fontSize: 12, color: Color(0xFFDC2626)),
-                    ),
-                  ],
-                  const SizedBox(height: 20),
-                  // Send OTP button
+                  const SizedBox(height: 40),
+
+                  // PRIMARY: Google button
                   SizedBox(
-                    height: 52,
+                    height: 54,
                     child: FilledButton(
-                      onPressed: _loading ? null : _sendOtp,
+                      onPressed: _loading ? null : _googleSignIn,
                       style: FilledButton.styleFrom(
                         backgroundColor: const Color(0xFF1B5E20),
                         disabledBackgroundColor:
@@ -220,10 +142,19 @@ class _LoginScreenState extends State<LoginScreen> {
                                 strokeWidth: 2.5,
                               ),
                             )
-                          : const Text('Send OTP'),
+                          : const Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                _GoogleIcon(light: true),
+                                SizedBox(width: 10),
+                                Text('Continue with Google'),
+                              ],
+                            ),
                     ),
                   ),
+
                   const SizedBox(height: 28),
+
                   // Divider
                   const Row(
                     children: [
@@ -239,36 +170,122 @@ class _LoginScreenState extends State<LoginScreen> {
                       Expanded(child: Divider()),
                     ],
                   ),
-                  const SizedBox(height: 24),
-                  // Google button
+
+                  const SizedBox(height: 20),
+
+                  // SECONDARY: Mobile OTP
+                  const Text(
+                    'Continue with mobile number',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                      color: Color(0xFF6B7280),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  // Phone field
+                  Container(
+                    decoration: BoxDecoration(
+                      border: Border.all(
+                        color: _error != null
+                            ? const Color(0xFFDC2626)
+                            : const Color(0xFFD1D5DB),
+                        width: 1.5,
+                      ),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 13),
+                          decoration: const BoxDecoration(
+                            border: Border(
+                                right:
+                                    BorderSide(color: Color(0xFFE5E7EB))),
+                          ),
+                          child: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text('🇮🇳', style: TextStyle(fontSize: 18)),
+                              SizedBox(width: 6),
+                              Text(
+                                '+91',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w700,
+                                  color: Color(0xFF374151),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Expanded(
+                          child: TextField(
+                            controller: _phoneCtrl,
+                            keyboardType: TextInputType.phone,
+                            inputFormatters: [
+                              FilteringTextInputFormatter.digitsOnly,
+                              LengthLimitingTextInputFormatter(10),
+                            ],
+                            onSubmitted: (_) => _sendOtp(),
+                            style: const TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w600,
+                              color: Color(0xFF111827),
+                              letterSpacing: 1.2,
+                            ),
+                            decoration: const InputDecoration(
+                              border: InputBorder.none,
+                              enabledBorder: InputBorder.none,
+                              focusedBorder: InputBorder.none,
+                              contentPadding: EdgeInsets.symmetric(
+                                  horizontal: 12, vertical: 13),
+                              hintText: '9876543210',
+                              hintStyle: TextStyle(
+                                fontWeight: FontWeight.w400,
+                                color: Color(0xFF9CA3AF),
+                                letterSpacing: 0,
+                              ),
+                              isDense: true,
+                              filled: false,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (_error != null) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      _error!,
+                      style: const TextStyle(
+                          fontSize: 12, color: Color(0xFFDC2626)),
+                    ),
+                  ],
+                  const SizedBox(height: 12),
+                  // Send OTP button (secondary)
                   SizedBox(
-                    height: 52,
+                    height: 46,
                     child: OutlinedButton(
-                      onPressed: _loading ? null : _googleSignIn,
+                      onPressed: _loading ? null : _sendOtp,
                       style: OutlinedButton.styleFrom(
-                        foregroundColor: const Color(0xFF374151),
-                        side: const BorderSide(color: Color(0xFFD1D5DB)),
+                        foregroundColor: const Color(0xFF1B5E20),
+                        side: const BorderSide(
+                            color: Color(0xFF1B5E20), width: 1.5),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(10),
                         ),
+                        textStyle: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
-                      child: const Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          _GoogleIcon(),
-                          SizedBox(width: 10),
-                          Text(
-                            'Continue with Google',
-                            style: TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ],
-                      ),
+                      child: const Text('Send OTP'),
                     ),
                   ),
-                  const SizedBox(height: 36),
+
+                  const SizedBox(height: 32),
                   // Terms
                   const Text(
                     'By continuing you agree to our Terms & Privacy Policy',
@@ -339,7 +356,8 @@ class _MediBoLogo extends StatelessWidget {
 }
 
 class _GoogleIcon extends StatelessWidget {
-  const _GoogleIcon();
+  final bool light;
+  const _GoogleIcon({this.light = false});
 
   @override
   Widget build(BuildContext context) {
@@ -347,8 +365,10 @@ class _GoogleIcon extends StatelessWidget {
       width: 20,
       height: 20,
       decoration: BoxDecoration(
+        color: light ? Colors.white : null,
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
+        border: Border.all(
+            color: light ? Colors.transparent : const Color(0xFFE5E7EB)),
       ),
       child: const Center(
         child: Text(

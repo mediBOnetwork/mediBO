@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'app_state.dart';
 import 'models/cart_model.dart';
 import 'screens/auth/business_details_screen.dart';
+import 'screens/auth/login_screen.dart';
 import 'screens/home_shell.dart';
 import 'supabase_config.dart';
 import 'theme.dart';
@@ -70,16 +71,20 @@ class _AppRoot extends StatelessWidget {
           return const _SplashScreen();
         }
 
-        // Authenticated but no profile → business setup (mandatory)
         final user = Supabase.instance.client.auth.currentUser;
-        if (user != null && auth.needsProfile) {
+
+        // Not logged in → login screen
+        if (user == null) return const LoginScreen();
+
+        // Authenticated but no profile → business setup (mandatory)
+        if (auth.needsProfile) {
           return BusinessDetailsScreen(
             userId: user.id,
             phone: user.phone ?? '',
           );
         }
 
-        // All good — show the main shell (guests and logged-in users both land here)
+        // All good — show the main shell
         return const HomeShell();
       },
     );

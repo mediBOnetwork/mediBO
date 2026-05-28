@@ -28,6 +28,14 @@
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
   <meta name="description" content="B2B Pharmacy ordering platform">
 
+  <!-- Force browsers to always check for a fresh version instead of
+       serving index.html from cache. The _headers / server config should
+       set the same policy via HTTP headers, but these meta tags act as a
+       belt-and-suspenders fallback for proxies and older mobile browsers. -->
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+
   <!-- PWA theme color (Android Chrome address bar + status bar) -->
   <meta name="theme-color" content="#1D9E75">
   <meta name="application-name" content="mediBO">
@@ -78,7 +86,7 @@
     For more details:
     * https://docs.flutter.dev/platform-integration/web/initialization
   -->
-  <script src="flutter_bootstrap.js" async></script>
+  <script src="flutter_bootstrap.js?v=20260528" async></script>
   <script>
     // Intercept wheel events on the Flutter canvas and replay them at 40% speed
     // so one mouse-wheel tick scrolls a natural distance without overshoot.

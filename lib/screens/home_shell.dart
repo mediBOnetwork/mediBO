@@ -612,6 +612,9 @@ class _SearchBarRowState extends State<_SearchBarRow> {
                 onChanged: _onChanged,
                 onSubmitted: (_) => _submitNow(),
                 textInputAction: TextInputAction.search,
+                autocorrect: false,
+                enableSuggestions: false,
+                keyboardType: TextInputType.text,
                 style: const TextStyle(fontSize: 14, color: Brand.ink),
                 decoration: const InputDecoration(
                   border: InputBorder.none,

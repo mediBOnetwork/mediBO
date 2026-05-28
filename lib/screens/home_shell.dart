@@ -238,7 +238,6 @@ class _HomeShellState extends State<HomeShell> {
           Column(
             children: [
               _DesktopTopBar(
-                index: _index,
                 searchCtrl: _searchCtrl,
                 isLoading: _searchLoading,
                 onSearch: (v) => setState(() {
@@ -257,19 +256,23 @@ class _HomeShellState extends State<HomeShell> {
                   _index = 0;
                   _cartOpen = false;
                 }),
-                onCatalogue: () => setState(() {
-                  _index = 0;
+                onCart: () => setState(() => _cartOpen = true),
+              ),
+              _DesktopNavBar(
+                index: _index,
+                cartOpen: _cartOpen,
+                onMedicines: () => _selectCategory('All'),
+                onPersonalCare: () => _selectCategory('Personal Care'),
+                onHealthConditions: () => _selectCategory('Health Conditions'),
+                onVitamins: () => _selectCategory('Vitamins & Supplements'),
+                onBulk: () => setState(() {
+                  _index = 2;
                   _cartOpen = false;
                 }),
                 onOrders: () => setState(() {
                   _index = 1;
                   _cartOpen = false;
                 }),
-                onBulk: () => setState(() {
-                  _index = 2;
-                  _cartOpen = false;
-                }),
-                onCart: () => setState(() => _cartOpen = true),
               ),
               AnimatedSwitcher(
                 duration: const Duration(milliseconds: 550),
@@ -314,21 +317,9 @@ class _HomeShellState extends State<HomeShell> {
                     : const SizedBox.shrink(key: ValueKey('3pct-empty')),
               ),
               Expanded(
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _DesktopSidebar(
-                      meta: _desktopMeta,
-                      selected: _category,
-                      onSelected: _selectCategory,
-                    ),
-                    Expanded(
-                      child: IndexedStack(
-                        index: _index,
-                        children: pages,
-                      ),
-                    ),
-                  ],
+                child: IndexedStack(
+                  index: _index,
+                  children: pages,
                 ),
               ),
             ],
@@ -1303,30 +1294,22 @@ class _CartChip extends StatelessWidget {
   }
 }
 
-// ─────────────────────── Desktop top bar ───────────────────────
+// ─────────────────────── Desktop top bar (Row 1) ───────────────────────
 
 class _DesktopTopBar extends StatelessWidget {
-  final int index;
   final TextEditingController searchCtrl;
   final bool isLoading;
   final ValueChanged<String> onSearch;
   final VoidCallback onScrollToResults;
   final VoidCallback onHome;
-  final VoidCallback onCatalogue;
-  final VoidCallback onOrders;
-  final VoidCallback onBulk;
   final VoidCallback onCart;
 
   const _DesktopTopBar({
-    required this.index,
     required this.searchCtrl,
     required this.isLoading,
     required this.onSearch,
     required this.onScrollToResults,
     required this.onHome,
-    required this.onCatalogue,
-    required this.onOrders,
-    required this.onBulk,
     required this.onCart,
   });
 
@@ -1334,21 +1317,15 @@ class _DesktopTopBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final cartItems = AppState.of(context).distinctItems;
     return Container(
-      height: 64,
+      height: 70,
       decoration: const BoxDecoration(
         color: Colors.white,
-        boxShadow: [
-          BoxShadow(
-            color: Color(0x10000000),
-            blurRadius: 10,
-            offset: Offset(0, 2),
-          ),
-        ],
+        border: Border(bottom: BorderSide(color: Brand.border)),
       ),
       padding: const EdgeInsets.symmetric(horizontal: 32),
       child: Row(
         children: [
-          // Left: logo
+          // Logo
           GestureDetector(
             onTap: onHome,
             child: RichText(
@@ -1357,7 +1334,7 @@ class _DesktopTopBar extends StatelessWidget {
                   TextSpan(
                     text: 'medi',
                     style: TextStyle(
-                      fontSize: 20,
+                      fontSize: 22,
                       fontWeight: FontWeight.w500,
                       color: Brand.ink,
                       letterSpacing: -0.3,
@@ -1366,7 +1343,7 @@ class _DesktopTopBar extends StatelessWidget {
                   TextSpan(
                     text: 'BO',
                     style: TextStyle(
-                      fontSize: 20,
+                      fontSize: 22,
                       fontWeight: FontWeight.w800,
                       color: Brand.green,
                       letterSpacing: -0.3,
@@ -1376,41 +1353,121 @@ class _DesktopTopBar extends StatelessWidget {
               ),
             ),
           ),
-          const Spacer(),
-          // Center: horizontal nav items
-          _DesktopNavItem(label: 'Home', selected: index == 0, onTap: onHome),
-          _DesktopNavItem(label: 'Catalogue', selected: false, onTap: onCatalogue),
-          _DesktopNavItem(label: 'Bulk Order', selected: index == 2, onTap: onBulk),
-          _DesktopNavItem(label: 'Orders', selected: index == 1, onTap: onOrders),
-          const Spacer(),
-          // Right: search bar + cart
-          SizedBox(
-            width: 280,
-            child: _SearchBarRow(
+          const SizedBox(width: 16),
+          // "Deliver to" pill
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+            decoration: BoxDecoration(
+              border: Border.all(color: const Color(0xFFD1D5DB)),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.location_on, color: Brand.green, size: 15),
+                SizedBox(width: 4),
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Deliver to',
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: Brand.inkMuted,
+                        fontWeight: FontWeight.w400,
+                        height: 1.2,
+                      ),
+                    ),
+                    Text(
+                      'Raipur',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: Brand.ink,
+                        height: 1.2,
+                      ),
+                    ),
+                  ],
+                ),
+                SizedBox(width: 3),
+                Icon(Icons.keyboard_arrow_down, color: Brand.inkMuted, size: 16),
+              ],
+            ),
+          ),
+          const SizedBox(width: 16),
+          // Expanded inline search bar
+          Expanded(
+            child: _DesktopInlineSearch(
               controller: searchCtrl,
               isLoading: isLoading,
               onSearch: onSearch,
               onScrollToResults: onScrollToResults,
             ),
           ),
-          const SizedBox(width: 10),
+          const SizedBox(width: 20),
+          // "Download App" link
+          TextButton(
+            onPressed: () {},
+            style: TextButton.styleFrom(
+              foregroundColor: Brand.inkMuted,
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            child: const Text(
+              'Download App',
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+            ),
+          ),
+          const SizedBox(width: 4),
+          // "Login / Signup" link
+          TextButton(
+            onPressed: () {},
+            style: TextButton.styleFrom(
+              foregroundColor: const Color(0xFF2563EB),
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            child: const Text(
+              'Login / Signup',
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+            ),
+          ),
+          const SizedBox(width: 8),
+          // Cart button with text
           PressEffect(
             child: InkWell(
               onTap: onCart,
-              borderRadius: BorderRadius.circular(20),
+              borderRadius: BorderRadius.circular(8),
               child: Padding(
-                padding: const EdgeInsets.all(6),
-                child: Badge(
-                  isLabelVisible: cartItems > 0,
-                  label: Text(
-                    '$cartItems',
-                    style: const TextStyle(fontSize: 10),
-                  ),
-                  child: const Icon(
-                    Icons.shopping_cart_outlined,
-                    size: 26,
-                    color: Brand.ink,
-                  ),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Badge(
+                      isLabelVisible: cartItems > 0,
+                      label: Text(
+                        '$cartItems',
+                        style: const TextStyle(fontSize: 10),
+                      ),
+                      child: const Icon(
+                        Icons.shopping_cart_outlined,
+                        size: 22,
+                        color: Brand.ink,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    const Text(
+                      'Cart',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: Brand.ink,
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -1421,212 +1478,252 @@ class _DesktopTopBar extends StatelessWidget {
   }
 }
 
-class _DesktopNavItem extends StatelessWidget {
+// ─────────────────────── Desktop nav bar (Row 2) ───────────────────────
+
+class _DesktopNavBar extends StatelessWidget {
+  final int index;
+  final bool cartOpen;
+  final VoidCallback onMedicines;
+  final VoidCallback onPersonalCare;
+  final VoidCallback onHealthConditions;
+  final VoidCallback onVitamins;
+  final VoidCallback onBulk;
+  final VoidCallback onOrders;
+
+  const _DesktopNavBar({
+    required this.index,
+    required this.cartOpen,
+    required this.onMedicines,
+    required this.onPersonalCare,
+    required this.onHealthConditions,
+    required this.onVitamins,
+    required this.onBulk,
+    required this.onOrders,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isMedicines = index == 0 && !cartOpen;
+    final isBulk = index == 2 && !cartOpen;
+    final isOrders = index == 1 && !cartOpen;
+    return Container(
+      height: 44,
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        border: Border(bottom: BorderSide(color: Brand.border)),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 32),
+      child: Row(
+        children: [
+          _NavBarItem(label: 'Medicines', selected: isMedicines, onTap: onMedicines),
+          _NavBarItem(label: 'Personal Care', selected: false, onTap: onPersonalCare),
+          _NavBarItem(label: 'Health Conditions', selected: false, onTap: onHealthConditions),
+          _NavBarItem(label: 'Vitamins & Supplements', selected: false, onTap: onVitamins),
+          _NavBarItem(label: 'Bulk Order', selected: isBulk, onTap: onBulk),
+          _NavBarItem(label: 'Orders', selected: isOrders, onTap: onOrders),
+        ],
+      ),
+    );
+  }
+}
+
+class _NavBarItem extends StatefulWidget {
   final String label;
   final bool selected;
   final VoidCallback onTap;
 
-  const _DesktopNavItem({
+  const _NavBarItem({
     required this.label,
     required this.selected,
     required this.onTap,
   });
 
   @override
+  State<_NavBarItem> createState() => _NavBarItemState();
+}
+
+class _NavBarItemState extends State<_NavBarItem> {
+  bool _hovered = false;
+
+  @override
   Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(4),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text(
-              label,
+    final highlight = widget.selected || _hovered;
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: Container(
+          height: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 14),
+          decoration: BoxDecoration(
+            border: Border(
+              bottom: BorderSide(
+                color: highlight ? Brand.green : Colors.transparent,
+                width: 2,
+              ),
+            ),
+          ),
+          child: Center(
+            child: Text(
+              widget.label,
               style: TextStyle(
-                fontSize: 14,
-                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                color: selected ? Brand.green : Brand.inkMuted,
+                fontSize: 13,
+                fontWeight: widget.selected ? FontWeight.w700 : FontWeight.w500,
+                color: highlight ? Brand.green : const Color(0xFF374151),
               ),
             ),
-            const SizedBox(height: 3),
-            AnimatedContainer(
-              duration: const Duration(milliseconds: 180),
-              height: 2,
-              width: selected ? 20 : 0,
-              decoration: BoxDecoration(
-                color: Brand.green,
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-          ],
+          ),
         ),
       ),
     );
   }
 }
 
-// ─────────────────────── Desktop sidebar ───────────────────────
+// ─────────────────────── Desktop inline search ───────────────────────
 
-class _DesktopSidebar extends StatelessWidget {
-  final CatalogMeta? meta;
-  final String selected;
-  final ValueChanged<String> onSelected;
+class _DesktopInlineSearch extends StatefulWidget {
+  final TextEditingController controller;
+  final bool isLoading;
+  final ValueChanged<String> onSearch;
+  final VoidCallback onScrollToResults;
 
-  const _DesktopSidebar({
-    required this.meta,
-    required this.selected,
-    required this.onSelected,
+  const _DesktopInlineSearch({
+    required this.controller,
+    required this.isLoading,
+    required this.onSearch,
+    required this.onScrollToResults,
   });
+
+  @override
+  State<_DesktopInlineSearch> createState() => _DesktopInlineSearchState();
+}
+
+class _DesktopInlineSearchState extends State<_DesktopInlineSearch> {
+  Timer? _debounce;
+  bool _hasText = false;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.controller.addListener(_onControllerChange);
+    _hasText = widget.controller.text.isNotEmpty;
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeListener(_onControllerChange);
+    _debounce?.cancel();
+    super.dispose();
+  }
+
+  void _onControllerChange() {
+    final hasText = widget.controller.text.isNotEmpty;
+    if (hasText != _hasText) setState(() => _hasText = hasText);
+  }
+
+  void _onChanged(String v) {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 300), () {
+      widget.onSearch(v);
+    });
+  }
+
+  void _submitNow() {
+    _debounce?.cancel();
+    final text = widget.controller.text;
+    widget.onSearch(text);
+    if (text.trim().length >= 2) widget.onScrollToResults();
+    FocusManager.instance.primaryFocus?.unfocus();
+  }
+
+  void _clearSearch() {
+    _debounce?.cancel();
+    widget.controller.clear();
+    widget.onSearch('');
+    FocusManager.instance.primaryFocus?.unfocus();
+  }
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 220,
-      decoration: const BoxDecoration(
+      height: 44,
+      decoration: BoxDecoration(
         color: Colors.white,
-        border: Border(right: BorderSide(color: Brand.border)),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFFD1D5DB)),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
         children: [
           const Padding(
-            padding: EdgeInsets.fromLTRB(16, 14, 16, 8),
-            child: Text(
-              'CATEGORIES',
-              style: TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w800,
-                color: Brand.inkMuted,
-                letterSpacing: 0.8,
+            padding: EdgeInsets.symmetric(horizontal: 12),
+            child: Icon(Icons.search, color: Color(0xFF9CA3AF), size: 20),
+          ),
+          Expanded(
+            child: TextField(
+              controller: widget.controller,
+              onChanged: _onChanged,
+              onSubmitted: (_) => _submitNow(),
+              textInputAction: TextInputAction.search,
+              autocorrect: false,
+              enableSuggestions: false,
+              keyboardType: TextInputType.text,
+              style: const TextStyle(fontSize: 14, color: Brand.ink),
+              decoration: const InputDecoration(
+                border: InputBorder.none,
+                enabledBorder: InputBorder.none,
+                focusedBorder: InputBorder.none,
+                hintText: 'Search for medicines',
+                hintStyle: TextStyle(color: Brand.inkMuted, fontSize: 14),
+                isDense: true,
+                contentPadding: EdgeInsets.symmetric(vertical: 14),
+                filled: false,
               ),
             ),
           ),
-          const Divider(height: 1),
-          Expanded(
-            child: ListView(
-              padding: const EdgeInsets.symmetric(vertical: 6),
-              children: _buildItems(),
+          if (widget.isLoading)
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 10),
+              child: SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2, color: Brand.green),
+              ),
+            )
+          else if (_hasText)
+            IconButton(
+              onPressed: _clearSearch,
+              icon: const Icon(Icons.close, size: 18, color: Color(0xFF6B7280)),
+              visualDensity: VisualDensity.compact,
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+            ),
+          GestureDetector(
+            onTap: _submitNow,
+            child: Container(
+              height: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              decoration: const BoxDecoration(
+                color: Brand.green,
+                borderRadius: BorderRadius.only(
+                  topRight: Radius.circular(7),
+                  bottomRight: Radius.circular(7),
+                ),
+              ),
+              child: const Center(
+                child: Text(
+                  'Search',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
             ),
           ),
         ],
-      ),
-    );
-  }
-
-  List<Widget> _buildItems() {
-    final m = meta;
-    if (m == null) {
-      return List.generate(
-        9,
-        (_) => Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-          child: Container(
-            height: 36,
-            decoration: BoxDecoration(
-              color: const Color(0xFFF3F4F6),
-              borderRadius: BorderRadius.circular(8),
-            ),
-          ),
-        ),
-      );
-    }
-    return [
-      _DesktopCategoryItem(
-        name: 'All',
-        count: m.total,
-        selected: selected == 'All',
-        style: const CategoryStyle(Brand.mint, Brand.green, Icons.grid_view_rounded),
-        onTap: () => onSelected('All'),
-      ),
-      for (final cat in m.categories)
-        _DesktopCategoryItem(
-          name: cat.name,
-          count: cat.count,
-          selected: selected == cat.name,
-          style: categoryStyle(cat.name),
-          onTap: () => onSelected(cat.name),
-        ),
-    ];
-  }
-}
-
-class _DesktopCategoryItem extends StatelessWidget {
-  final String name;
-  final int count;
-  final bool selected;
-  final CategoryStyle style;
-  final VoidCallback onTap;
-
-  const _DesktopCategoryItem({
-    required this.name,
-    required this.count,
-    required this.selected,
-    required this.style,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
-        margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
-        decoration: BoxDecoration(
-          color: selected ? style.bg : Colors.transparent,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(
-            color: selected ? style.fg.withValues(alpha: 0.35) : Colors.transparent,
-            width: 1.5,
-          ),
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 28,
-              height: 28,
-              decoration: BoxDecoration(
-                color: style.bg,
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: Icon(style.icon, size: 15, color: style.fg),
-            ),
-            const SizedBox(width: 9),
-            Expanded(
-              child: Text(
-                name == 'All' ? 'All Products' : prettyCategory(name),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                  color: selected ? style.fg : Brand.ink,
-                  height: 1.2,
-                ),
-              ),
-            ),
-            const SizedBox(width: 4),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-              decoration: BoxDecoration(
-                color: selected ? style.fg : const Color(0xFFE5E7EB),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Text(
-                '$count',
-                style: TextStyle(
-                  fontSize: 10,
-                  fontWeight: FontWeight.w700,
-                  color: selected ? Colors.white : Brand.inkMuted,
-                ),
-              ),
-            ),
-          ],
-        ),
       ),
     );
   }

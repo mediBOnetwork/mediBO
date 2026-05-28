@@ -44,17 +44,23 @@ class CartModel extends ChangeNotifier {
   Timer? _sampleTimer;
   int _sampleCountdown = 15;
 
+  double _cachedSubtotal = 0;
+  double _cachedTotalGst = 0;
+
+  void _recomputeTotals() {
+    _cachedSubtotal = _lines.values.fold(0.0, (s, l) => s + l.lineTotal);
+    _cachedTotalGst = _lines.values.fold(0.0, (s, l) => s + l.lineGst);
+  }
+
   List<CartLine> get lines => _lines.values.toList();
   List<Order> get orders => List.unmodifiable(_orders.reversed);
 
   int get distinctItems => _lines.length;
   int get totalUnits => _lines.values.fold(0, (s, l) => s + l.quantity);
 
-  double get subtotal =>
-      _lines.values.fold(0.0, (s, l) => s + l.lineTotal);
-  double get totalGst =>
-      _lines.values.fold(0.0, (s, l) => s + l.lineGst);
-  double get grandTotal => subtotal + totalGst;
+  double get subtotal => _cachedSubtotal;
+  double get totalGst => _cachedTotalGst;
+  double get grandTotal => _cachedSubtotal + _cachedTotalGst;
 
   bool get hasSampleItems => _lines.values.any((l) => l.isSample);
   int get sampleCountdown => _sampleCountdown;
@@ -69,6 +75,7 @@ class CartModel extends ChangeNotifier {
     } else {
       existing.quantity += 1;
     }
+    _recomputeTotals();
     notifyListeners();
   }
 
@@ -83,6 +90,7 @@ class CartModel extends ChangeNotifier {
         line.quantity = qty;
       }
     }
+    _recomputeTotals();
     notifyListeners();
   }
 
@@ -104,6 +112,7 @@ class CartModel extends ChangeNotifier {
       _sampleTimer?.cancel();
       _sampleTimer = null;
     }
+    _recomputeTotals();
     notifyListeners();
   }
 
@@ -112,6 +121,7 @@ class CartModel extends ChangeNotifier {
     _sampleTimer = null;
     _sampleCountdown = 15;
     _lines.clear();
+    _recomputeTotals();
     notifyListeners();
   }
 
@@ -120,6 +130,7 @@ class CartModel extends ChangeNotifier {
       _lines[entry.key.id] = CartLine(entry.key, entry.value, isSample: true);
     }
     _startSampleTimer();
+    _recomputeTotals();
     notifyListeners();
   }
 
@@ -128,6 +139,7 @@ class CartModel extends ChangeNotifier {
     _sampleTimer = null;
     _sampleCountdown = 15;
     _lines.removeWhere((_, l) => l.isSample);
+    _recomputeTotals();
     notifyListeners();
   }
 
@@ -159,6 +171,7 @@ class CartModel extends ChangeNotifier {
     );
     _orders.add(order);
     _lines.clear();
+    _recomputeTotals();
     notifyListeners();
     return order;
   }

@@ -199,7 +199,7 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
   void _onScroll() {
     if (!_scroll.hasClients) return;
     final pos = _scroll.position;
-    if (pos.pixels >= pos.maxScrollExtent - 800) _loadMore();
+    if (pos.pixels >= pos.maxScrollExtent - pos.viewportDimension * 0.7) _loadMore();
   }
 
   /// If the freshly loaded content barely fills the viewport, pull another
@@ -968,12 +968,17 @@ class _ProductsSection extends StatelessWidget {
             mainAxisSpacing: 14,
           ),
           itemCount: items.length,
-          itemBuilder: (context, i) => EntranceAnimator(
-            key: ValueKey(items[i].id),
-            delay: Duration(milliseconds: ((i % MedicineRepository.pageSize) * 30)
-                .clamp(0, 420)),
-            child: ProductCard(product: items[i], isBestSeller: i < 3),
-          ),
+          itemBuilder: (context, i) {
+            final card = ProductCard(product: items[i], isBestSeller: i < 3);
+            if (i >= MedicineRepository.pageSize) {
+              return KeyedSubtree(key: ValueKey(items[i].id), child: card);
+            }
+            return EntranceAnimator(
+              key: ValueKey(items[i].id),
+              delay: Duration(milliseconds: (i * 30).clamp(0, 420)),
+              child: card,
+            );
+          },
         );
       },
     );

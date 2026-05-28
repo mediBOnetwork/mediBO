@@ -99,161 +99,74 @@ class _HomeShellState extends State<HomeShell> {
 
   @override
   Widget build(BuildContext context) {
-    final width = MediaQuery.sizeOf(context).width;
-    final isDesktop = width >= 900;
-    final cart = AppState.of(context);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isDesktop = constraints.maxWidth >= 900;
 
-    // IndexedStack keeps all screen States alive — no re-fetch on tab switch.
-    final pages = [
-      StorefrontScreen(
-        query: _query,
-        category: _category,
-        onCategorySelected: _selectCategory,
-        onSuggestionTap: (s) => setState(() {
-          _query = s;
-          _searchCtrl.text = s;
-          _category = 'All';
-          _index = 0;
-        }),
-        repo: _repo,
-        scrollTrigger: _scrollTrigger,
-        scrollToTopTrigger: _scrollToTopTrigger,
-        onLoadingChanged: (loading) {
-          if (mounted) {
-            setState(() => _searchLoading = loading && _query.trim().isNotEmpty);
-          }
-        },
-        showCategoryTiles: !isDesktop,
-        onMetaLoaded: _onMetaLoaded,
-      ),
-      const OrdersScreen(),
-      const BulkUploadScreen(),
-    ];
+        // IndexedStack keeps all screen States alive — no re-fetch on tab switch.
+        final pages = [
+          StorefrontScreen(
+            query: _query,
+            category: _category,
+            onCategorySelected: _selectCategory,
+            onSuggestionTap: (s) => setState(() {
+              _query = s;
+              _searchCtrl.text = s;
+              _category = 'All';
+              _index = 0;
+            }),
+            repo: _repo,
+            scrollTrigger: _scrollTrigger,
+            scrollToTopTrigger: _scrollToTopTrigger,
+            onLoadingChanged: (loading) {
+              if (mounted) {
+                setState(() => _searchLoading = loading && _query.trim().isNotEmpty);
+              }
+            },
+            showCategoryTiles: !isDesktop,
+            onMetaLoaded: _onMetaLoaded,
+          ),
+          const OrdersScreen(),
+          const BulkUploadScreen(),
+        ];
 
-    if (isDesktop) return _buildDesktop(cart, pages);
-    return _buildMobile(cart, pages);
+        if (isDesktop) return _buildDesktop(pages);
+        return _buildMobile(pages);
+      },
+    );
   }
 
   // ─── Mobile / tablet layout (< 900px) ────────────────────────────────────
 
-  Widget _buildMobile(CartModel cart, List<Widget> pages) {
-    // 4-item nav: 0=Home, 1=Catalogue, 2=Orders, 3=Bulk
-    final bottomNavIndex = _index == 1 ? 2 : _index == 2 ? 3 : 0;
-
+  Widget _buildMobile(List<Widget> pages) {
     return Scaffold(
       backgroundColor: Colors.white,
-      bottomNavigationBar: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          AnimatedSwitcher(
-            duration: const Duration(milliseconds: 550),
-            reverseDuration: const Duration(milliseconds: 300),
-            transitionBuilder: (child, anim) => SizeTransition(
-              sizeFactor: CurvedAnimation(
-                parent: anim,
-                curve: Curves.easeOutBack,
-                reverseCurve: Curves.easeIn,
-              ),
-              axisAlignment: 1.0,
-              child: child,
-            ),
-            child: _celebrateDelivery
-                ? _CelebrationBanner(
-                    key: const ValueKey('delivery'),
-                    message: '🎉 Awesome! You unlocked FREE delivery!',
-                    bgColor: const Color(0xFF15803D),
-                    textColor: Colors.white,
-                  )
-                : const SizedBox.shrink(key: ValueKey('delivery-empty')),
-          ),
-          AnimatedSwitcher(
-            duration: const Duration(milliseconds: 550),
-            reverseDuration: const Duration(milliseconds: 300),
-            transitionBuilder: (child, anim) => SizeTransition(
-              sizeFactor: CurvedAnimation(
-                parent: anim,
-                curve: Curves.easeOutBack,
-                reverseCurve: Curves.easeIn,
-              ),
-              axisAlignment: 1.0,
-              child: child,
-            ),
-            child: _celebrate3pct
-                ? _CelebrationBanner(
-                    key: const ValueKey('3pct'),
-                    message: '🎉 Congratulations! You unlocked 3% discount!',
-                    bgColor: const Color(0xFFF59E0B),
-                    textColor: const Color(0xFF1C1917),
-                  )
-                : const SizedBox.shrink(key: ValueKey('3pct-empty')),
-          ),
-          if (cart.distinctItems > 0)
-            RepaintBoundary(
-              child: _StickyCartBar(
-                onTap: () => setState(() => _cartOpen = true),
-              ),
-            ),
-          BottomNavigationBar(
-            currentIndex: bottomNavIndex,
-            type: BottomNavigationBarType.fixed,
-            selectedItemColor: Brand.green,
-            unselectedItemColor: Brand.inkMuted,
-            selectedFontSize: 10,
-            unselectedFontSize: 10,
-            elevation: 8,
-            onTap: (i) => setState(() {
-              switch (i) {
-                case 0:
-                case 1:
-                  _index = 0;
-                  _cartOpen = false;
-                case 2:
-                  _index = 1;
-                  _cartOpen = false;
-                case 3:
-                  _index = 2;
-                  _cartOpen = false;
-              }
-            }),
-            items: [
-              const BottomNavigationBarItem(
-                icon: Icon(Icons.home_outlined),
-                activeIcon: Icon(Icons.home),
-                label: 'Home',
-              ),
-              const BottomNavigationBarItem(
-                icon: Icon(Icons.grid_view_outlined),
-                activeIcon: Icon(Icons.grid_view),
-                label: 'Catalogue',
-              ),
-              BottomNavigationBarItem(
-                icon: Badge(
-                  isLabelVisible: cart.orders.isNotEmpty,
-                  label: Text('${cart.orders.length}'),
-                  child: const Icon(Icons.receipt_long_outlined),
-                ),
-                activeIcon: Badge(
-                  isLabelVisible: cart.orders.isNotEmpty,
-                  label: Text('${cart.orders.length}'),
-                  child: const Icon(Icons.receipt_long),
-                ),
-                label: 'Orders',
-              ),
-              const BottomNavigationBarItem(
-                icon: Icon(Icons.upload_file_outlined),
-                activeIcon: Icon(Icons.upload_file),
-                label: 'Bulk',
-              ),
-            ],
-          ),
-        ],
+      bottomNavigationBar: _MobileBottomBar(
+        celebrateDelivery: _celebrateDelivery,
+        celebrate3pct: _celebrate3pct,
+        index: _index,
+        cartOpen: _cartOpen,
+        onCartTap: () => setState(() => _cartOpen = true),
+        onNavTap: (i) => setState(() {
+          switch (i) {
+            case 0:
+            case 1:
+              _index = 0;
+              _cartOpen = false;
+            case 2:
+              _index = 1;
+              _cartOpen = false;
+            case 3:
+              _index = 2;
+              _cartOpen = false;
+          }
+        }),
       ),
       body: Stack(
         children: [
           Column(
             children: [
               _LocationHeader(
-                cartItems: cart.distinctItems,
                 onCart: () => setState(() => _cartOpen = true),
               ),
               _SearchBarRow(
@@ -317,7 +230,7 @@ class _HomeShellState extends State<HomeShell> {
 
   // ─── Desktop layout (≥ 900px) ────────────────────────────────────────────
 
-  Widget _buildDesktop(CartModel cart, List<Widget> pages) {
+  Widget _buildDesktop(List<Widget> pages) {
     return Scaffold(
       backgroundColor: Colors.white,
       body: Stack(
@@ -326,7 +239,6 @@ class _HomeShellState extends State<HomeShell> {
             children: [
               _DesktopTopBar(
                 index: _index,
-                cartItems: cart.distinctItems,
                 searchCtrl: _searchCtrl,
                 isLoading: _searchLoading,
                 onSearch: (v) => setState(() {
@@ -440,12 +352,12 @@ class _HomeShellState extends State<HomeShell> {
 // ─────────────────────── Location header ───────────────────────
 
 class _LocationHeader extends StatelessWidget {
-  final int cartItems;
   final VoidCallback onCart;
-  const _LocationHeader({required this.cartItems, required this.onCart});
+  const _LocationHeader({required this.onCart});
 
   @override
   Widget build(BuildContext context) {
+    final cartItems = AppState.of(context).distinctItems;
     return Container(
       width: double.infinity,
       decoration: const BoxDecoration(
@@ -1001,6 +913,126 @@ class _CartPanelContent extends StatelessWidget {
   }
 }
 
+// ─────────────────────── Mobile bottom bar ───────────────────────
+
+/// Houses the celebration banners, sticky cart bar, and bottom nav.
+/// Reads cart from context so HomeShell.build() is not triggered on every
+/// cart change — only milestone banners and nav state changes rebuild the shell.
+class _MobileBottomBar extends StatelessWidget {
+  final bool celebrateDelivery;
+  final bool celebrate3pct;
+  final int index;
+  final bool cartOpen;
+  final VoidCallback onCartTap;
+  final ValueChanged<int> onNavTap;
+
+  const _MobileBottomBar({
+    required this.celebrateDelivery,
+    required this.celebrate3pct,
+    required this.index,
+    required this.cartOpen,
+    required this.onCartTap,
+    required this.onNavTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cart = AppState.of(context);
+    final bottomNavIndex = index == 1 ? 2 : index == 2 ? 3 : 0;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        AnimatedSwitcher(
+          duration: const Duration(milliseconds: 550),
+          reverseDuration: const Duration(milliseconds: 300),
+          transitionBuilder: (child, anim) => SizeTransition(
+            sizeFactor: CurvedAnimation(
+              parent: anim,
+              curve: Curves.easeOutBack,
+              reverseCurve: Curves.easeIn,
+            ),
+            axisAlignment: 1.0,
+            child: child,
+          ),
+          child: celebrateDelivery
+              ? _CelebrationBanner(
+                  key: const ValueKey('delivery'),
+                  message: '🎉 Awesome! You unlocked FREE delivery!',
+                  bgColor: const Color(0xFF15803D),
+                  textColor: Colors.white,
+                )
+              : const SizedBox.shrink(key: ValueKey('delivery-empty')),
+        ),
+        AnimatedSwitcher(
+          duration: const Duration(milliseconds: 550),
+          reverseDuration: const Duration(milliseconds: 300),
+          transitionBuilder: (child, anim) => SizeTransition(
+            sizeFactor: CurvedAnimation(
+              parent: anim,
+              curve: Curves.easeOutBack,
+              reverseCurve: Curves.easeIn,
+            ),
+            axisAlignment: 1.0,
+            child: child,
+          ),
+          child: celebrate3pct
+              ? _CelebrationBanner(
+                  key: const ValueKey('3pct'),
+                  message: '🎉 Congratulations! You unlocked 3% discount!',
+                  bgColor: const Color(0xFFF59E0B),
+                  textColor: const Color(0xFF1C1917),
+                )
+              : const SizedBox.shrink(key: ValueKey('3pct-empty')),
+        ),
+        if (cart.distinctItems > 0)
+          RepaintBoundary(
+            child: _StickyCartBar(onTap: onCartTap),
+          ),
+        BottomNavigationBar(
+          currentIndex: bottomNavIndex,
+          type: BottomNavigationBarType.fixed,
+          selectedItemColor: Brand.green,
+          unselectedItemColor: Brand.inkMuted,
+          selectedFontSize: 10,
+          unselectedFontSize: 10,
+          elevation: 8,
+          onTap: onNavTap,
+          items: [
+            const BottomNavigationBarItem(
+              icon: Icon(Icons.home_outlined),
+              activeIcon: Icon(Icons.home),
+              label: 'Home',
+            ),
+            const BottomNavigationBarItem(
+              icon: Icon(Icons.grid_view_outlined),
+              activeIcon: Icon(Icons.grid_view),
+              label: 'Catalogue',
+            ),
+            BottomNavigationBarItem(
+              icon: Badge(
+                isLabelVisible: cart.orders.isNotEmpty,
+                label: Text('${cart.orders.length}'),
+                child: const Icon(Icons.receipt_long_outlined),
+              ),
+              activeIcon: Badge(
+                isLabelVisible: cart.orders.isNotEmpty,
+                label: Text('${cart.orders.length}'),
+                child: const Icon(Icons.receipt_long),
+              ),
+              label: 'Orders',
+            ),
+            const BottomNavigationBarItem(
+              icon: Icon(Icons.upload_file_outlined),
+              activeIcon: Icon(Icons.upload_file),
+              label: 'Bulk',
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
 // ─────────────────────── Sticky cart bar (mobile) ───────────────────────
 
 /// Blinkit-style dark-navy bar above the bottom nav on mobile.
@@ -1275,7 +1307,6 @@ class _CartChip extends StatelessWidget {
 
 class _DesktopTopBar extends StatelessWidget {
   final int index;
-  final int cartItems;
   final TextEditingController searchCtrl;
   final bool isLoading;
   final ValueChanged<String> onSearch;
@@ -1288,7 +1319,6 @@ class _DesktopTopBar extends StatelessWidget {
 
   const _DesktopTopBar({
     required this.index,
-    required this.cartItems,
     required this.searchCtrl,
     required this.isLoading,
     required this.onSearch,
@@ -1302,19 +1332,23 @@ class _DesktopTopBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cartItems = AppState.of(context).distinctItems;
     return Container(
       height: 64,
       decoration: const BoxDecoration(
         color: Colors.white,
-        border: Border(bottom: BorderSide(color: Brand.border)),
         boxShadow: [
           BoxShadow(
-              color: Color(0x08000000), blurRadius: 8, offset: Offset(0, 2)),
+            color: Color(0x10000000),
+            blurRadius: 10,
+            offset: Offset(0, 2),
+          ),
         ],
       ),
-      padding: const EdgeInsets.symmetric(horizontal: 24),
+      padding: const EdgeInsets.symmetric(horizontal: 32),
       child: Row(
         children: [
+          // Left: logo
           GestureDetector(
             onTap: onHome,
             child: RichText(
@@ -1342,8 +1376,16 @@ class _DesktopTopBar extends StatelessWidget {
               ),
             ),
           ),
-          const SizedBox(width: 20),
-          Expanded(
+          const Spacer(),
+          // Center: horizontal nav items
+          _DesktopNavItem(label: 'Home', selected: index == 0, onTap: onHome),
+          _DesktopNavItem(label: 'Catalogue', selected: false, onTap: onCatalogue),
+          _DesktopNavItem(label: 'Bulk Order', selected: index == 2, onTap: onBulk),
+          _DesktopNavItem(label: 'Orders', selected: index == 1, onTap: onOrders),
+          const Spacer(),
+          // Right: search bar + cart
+          SizedBox(
+            width: 280,
             child: _SearchBarRow(
               controller: searchCtrl,
               isLoading: isLoading,
@@ -1351,37 +1393,7 @@ class _DesktopTopBar extends StatelessWidget {
               onScrollToResults: onScrollToResults,
             ),
           ),
-          const SizedBox(width: 8),
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              _DesktopNavItem(
-                icon: Icons.home_outlined,
-                label: 'Home',
-                selected: index == 0,
-                onTap: onHome,
-              ),
-              _DesktopNavItem(
-                icon: Icons.grid_view_outlined,
-                label: 'Catalogue',
-                selected: false,
-                onTap: onCatalogue,
-              ),
-              _DesktopNavItem(
-                icon: Icons.receipt_long_outlined,
-                label: 'Orders',
-                selected: index == 1,
-                onTap: onOrders,
-              ),
-              _DesktopNavItem(
-                icon: Icons.upload_file_outlined,
-                label: 'Bulk',
-                selected: index == 2,
-                onTap: onBulk,
-              ),
-            ],
-          ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 10),
           PressEffect(
             child: InkWell(
               onTap: onCart,
@@ -1410,13 +1422,11 @@ class _DesktopTopBar extends StatelessWidget {
 }
 
 class _DesktopNavItem extends StatelessWidget {
-  final IconData icon;
   final String label;
   final bool selected;
   final VoidCallback onTap;
 
   const _DesktopNavItem({
-    required this.icon,
     required this.label,
     required this.selected,
     required this.onTap,
@@ -1426,24 +1436,29 @@ class _DesktopNavItem extends StatelessWidget {
   Widget build(BuildContext context) {
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(8),
+      borderRadius: BorderRadius.circular(4),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-        child: Row(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        child: Column(
           mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(
-              icon,
-              size: 17,
-              color: selected ? Brand.green : Brand.inkMuted,
-            ),
-            const SizedBox(width: 5),
             Text(
               label,
               style: TextStyle(
-                fontSize: 13,
+                fontSize: 14,
                 fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
                 color: selected ? Brand.green : Brand.inkMuted,
+              ),
+            ),
+            const SizedBox(height: 3),
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 180),
+              height: 2,
+              width: selected ? 20 : 0,
+              decoration: BoxDecoration(
+                color: Brand.green,
+                borderRadius: BorderRadius.circular(2),
               ),
             ),
           ],

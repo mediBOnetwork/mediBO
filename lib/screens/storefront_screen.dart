@@ -254,6 +254,16 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
         _captchaLoading = false;
         _reachedEnd = page.length < 100;
       });
+      // Scroll down so the newly added products are visible.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _scroll.hasClients) {
+          _scroll.animateTo(
+            _scroll.position.maxScrollExtent,
+            duration: const Duration(milliseconds: 600),
+            curve: Curves.easeOut,
+          );
+        }
+      });
     } catch (e) {
       if (!mounted) return;
       setState(() => _captchaLoading = false);
@@ -265,7 +275,10 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
     // ignore: deprecated_member_use
     final jsCallback = js.JsFunction.withThis((dynamic _, dynamic token) {
       if (!completer.isCompleted) {
-        completer.complete(token is String ? token : null);
+        // JS strings cross the interop boundary as dynamic, not Dart String —
+        // convert via toString() and treat empty/null as cancelled.
+        final t = token?.toString();
+        completer.complete((t != null && t.isNotEmpty) ? t : null);
       }
     });
     js.context.callMethod('showTurnstile', [jsCallback]);

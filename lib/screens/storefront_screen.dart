@@ -1,3 +1,7 @@
+import 'dart:async';
+// ignore: avoid_web_libraries_in_flutter, deprecated_member_use
+import 'dart:js' as js;
+
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
@@ -76,6 +80,10 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
   Object? _pageError;
   List<String> _suggestions = [];
 
+  // Captcha-gated pagination: 1 = first 100 shown, 2 = up to 200 shown.
+  int _paginationPage = 1;
+  bool _captchaLoading = false;
+
   @override
   void initState() {
     super.initState();
@@ -132,6 +140,8 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
       _reachedEnd = false;
       _pageError = null;
       _suggestions = [];
+      _paginationPage = 1;
+      _captchaLoading = false;
     });
     try {
       final page = await widget.repo.fetchPage(
@@ -175,6 +185,8 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
 
   Future<void> _loadMore() async {
     if (_loadingFirst || _loadingMore || _reachedEnd) return;
+    if (_paginationPage == 1 && _items.length >= 100) return;
+    if (_paginationPage == 2 && _items.length >= 200) return;
     final token = _loadToken;
     setState(() => _loadingMore = true);
     try {
@@ -215,6 +227,49 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
         _loadMore();
       }
     });
+  }
+
+  Future<void> _onLoadMorePressed() async {
+    if (_captchaLoading) return;
+    setState(() => _captchaLoading = true);
+    final captchaToken = await _showTurnstile();
+    if (!mounted) return;
+    if (captchaToken == null) {
+      setState(() => _captchaLoading = false);
+      return;
+    }
+    final loadToken = _loadToken;
+    final offset = _items.length;
+    try {
+      final page = await widget.repo.fetchPage(
+        category: widget.category,
+        query: widget.query,
+        offset: offset,
+        limit: 100,
+      );
+      if (loadToken != _loadToken || !mounted) return;
+      setState(() {
+        _items.addAll(page);
+        _paginationPage = 2;
+        _captchaLoading = false;
+        _reachedEnd = page.length < 100;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _captchaLoading = false);
+    }
+  }
+
+  Future<String?> _showTurnstile() {
+    final completer = Completer<String?>();
+    // ignore: deprecated_member_use
+    final jsCallback = js.JsFunction.withThis((dynamic _, dynamic token) {
+      if (!completer.isCompleted) {
+        completer.complete(token is String ? token : null);
+      }
+    });
+    js.context.callMethod('showTurnstile', [jsCallback]);
+    return completer.future;
   }
 
   void _scrollToProducts() {
@@ -285,6 +340,9 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
                 onClear: () => widget.onCategorySelected('All'),
                 onRetry: _resetAndLoad,
                 onSuggestionTap: widget.onSuggestionTap,
+                paginationPage: _paginationPage,
+                captchaLoading: _captchaLoading,
+                onLoadMore: _onLoadMorePressed,
               ),
             ),
           ),
@@ -645,7 +703,7 @@ class _CategoryTiles extends StatelessWidget {
                     mainAxisExtent: extent,
                   ),
                   itemCount: 10,
-                  itemBuilder: (_, __) => const _SkeletonTile(),
+                  itemBuilder: (ctx, i) => const _SkeletonTile(),
                 ),
               );
             }
@@ -812,6 +870,9 @@ class _ProductsSection extends StatelessWidget {
   final VoidCallback onClear;
   final VoidCallback onRetry;
   final ValueChanged<String> onSuggestionTap;
+  final int paginationPage;
+  final bool captchaLoading;
+  final VoidCallback onLoadMore;
   const _ProductsSection({
     required this.items,
     required this.categoryTotal,
@@ -825,12 +886,14 @@ class _ProductsSection extends StatelessWidget {
     required this.onClear,
     required this.onRetry,
     required this.onSuggestionTap,
+    required this.paginationPage,
+    required this.captchaLoading,
+    required this.onLoadMore,
   });
 
   @override
   Widget build(BuildContext context) {
     final searching = query.trim().isNotEmpty;
-    final filtering = category != 'All' || searching;
     final title = category == 'All' ? 'Best Sellers' : prettyCategory(category);
     final resultCount = items.length;
     final subtitle = searching
@@ -858,12 +921,70 @@ class _ProductsSection extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 24),
-        _PageFooter(
-          loadingMore: loadingMore,
-          reachedEnd: reachedEnd && items.length > MedicineRepository.pageSize,
-        ),
+        _buildPaginationFooter(),
       ],
     );
+  }
+
+  Widget _buildPaginationFooter() {
+    if (captchaLoading || loadingMore) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 12),
+        child: Center(
+          child: SizedBox(
+            width: 26,
+            height: 26,
+            child: CircularProgressIndicator(strokeWidth: 2.6, color: Brand.green),
+          ),
+        ),
+      );
+    }
+    if (paginationPage == 2 && (reachedEnd || items.length >= 200)) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 12),
+        child: Center(
+          child: Text(
+            '🔍 Use Search Feature For More Products',
+            style: TextStyle(
+              color: Colors.grey,
+              fontSize: 13,
+              fontStyle: FontStyle.italic,
+            ),
+          ),
+        ),
+      );
+    }
+    if (paginationPage == 1 && items.length >= 100 && !reachedEnd) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        child: Center(
+          child: OutlinedButton(
+            onPressed: onLoadMore,
+            style: OutlinedButton.styleFrom(
+              foregroundColor: Brand.green,
+              side: const BorderSide(color: Brand.green),
+              padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 14),
+            ),
+            child: const Text(
+              'Load More Products',
+              style: TextStyle(fontWeight: FontWeight.w600),
+            ),
+          ),
+        ),
+      );
+    }
+    if (reachedEnd && items.length > MedicineRepository.pageSize) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 8),
+        child: Center(
+          child: Text(
+            "You've reached the end of this category",
+            style: TextStyle(color: Brand.inkMuted, fontSize: 12),
+          ),
+        ),
+      );
+    }
+    return const SizedBox(height: 4);
   }
 
   Widget _gridBody() {
@@ -904,39 +1025,6 @@ class _ProductsSection extends StatelessWidget {
   }
 }
 
-/// Bottom-of-grid status: a spinner while the next page loads, or an
-/// end-of-list note once everything for the filter has been shown.
-class _PageFooter extends StatelessWidget {
-  final bool loadingMore;
-  final bool reachedEnd;
-  const _PageFooter({required this.loadingMore, required this.reachedEnd});
-
-  @override
-  Widget build(BuildContext context) {
-    if (loadingMore) {
-      return const Padding(
-        padding: EdgeInsets.symmetric(vertical: 12),
-        child: Center(
-          child: SizedBox(
-            width: 26,
-            height: 26,
-            child: CircularProgressIndicator(strokeWidth: 2.6, color: Brand.green),
-          ),
-        ),
-      );
-    }
-    if (reachedEnd) {
-      return const Padding(
-        padding: EdgeInsets.symmetric(vertical: 8),
-        child: Center(
-          child: Text("You've reached the end of this category",
-              style: TextStyle(color: Brand.inkMuted, fontSize: 12)),
-        ),
-      );
-    }
-    return const SizedBox(height: 4);
-  }
-}
 
 class _EmptyResults extends StatelessWidget {
   final String query;

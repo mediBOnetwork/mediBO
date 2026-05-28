@@ -50,6 +50,10 @@ class _PharmaB2BAppState extends State<PharmaB2BApp> {
           theme: buildTheme(),
           scrollBehavior: const SmoothScrollBehavior(),
           home: _AppRoot(auth: _auth),
+          routes: {
+            '/login': (_) => const LoginScreen(),
+            '/register': (_) => const LoginScreen(),
+          },
         ),
       ),
     );
@@ -73,18 +77,15 @@ class _AppRoot extends StatelessWidget {
 
         final user = Supabase.instance.client.auth.currentUser;
 
-        // Not logged in → login screen
-        if (user == null) return const LoginScreen();
-
         // Authenticated but no profile → business setup (mandatory)
-        if (auth.needsProfile) {
+        if (user != null && auth.needsProfile) {
           return BusinessDetailsScreen(
             userId: user.id,
             phone: user.phone ?? '',
           );
         }
 
-        // All good — show the main shell
+        // Guests and logged-in users both land on home — login is not required to browse
         return const HomeShell();
       },
     );

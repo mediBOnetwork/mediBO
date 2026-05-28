@@ -117,6 +117,37 @@ class Product {
     );
   }
 
+  /// Reconstructs a minimal Product from cart row data (Supabase or localStorage).
+  factory Product.fromCartData({
+    required String id,
+    required String name,
+    required double b2bPrice,
+    required double mrp,
+    String imageUrl = '',
+    String manufacturer = '',
+    String packSize = '',
+    String category = 'Other',
+  }) {
+    return Product(
+      id: id,
+      name: name,
+      genericName: '',
+      manufacturer: manufacturer,
+      category: category.isNotEmpty ? category : 'Other',
+      therapeuticClass: category,
+      imageUrl: imageUrl,
+      imageUrls: imageUrl.isNotEmpty ? [imageUrl] : [],
+      packSize: packSize,
+      mrp: mrp,
+      b2bPrice: b2bPrice,
+      moq: 1,
+      stock: 100,
+      schedule: 'OTC',
+      requiresPrescription: false,
+      discount: 18.0,
+    );
+  }
+
   /// Margin the buyer earns reselling at MRP, as a percentage.
   double get marginPercent => mrp <= 0 ? 0 : ((mrp - b2bPrice) / mrp) * 100;
 

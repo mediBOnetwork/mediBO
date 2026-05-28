@@ -218,29 +218,8 @@ class _HomeShellState extends State<HomeShell> {
         children: [
           Column(
             children: [
-              _DesktopTopBar(
-                onHome: () => setState(() {
-                  _index = 0;
-                  _cartOpen = false;
-                }),
-                onCart: () => setState(() => _cartOpen = true),
-              ),
-              _DesktopNavBar(
-                index: _index,
-                cartOpen: _cartOpen,
-                onPharmacy: () => _selectCategory('All'),
-                onHealthConditions: () => _selectCategory('Health Conditions'),
-                onBulk: () => setState(() {
-                  _index = 2;
-                  _cartOpen = false;
-                }),
-                onOrders: () => setState(() {
-                  _index = 1;
-                  _cartOpen = false;
-                }),
-              ),
-              _SearchBarRow(
-                controller: _searchCtrl,
+              _DesktopHeader(
+                searchCtrl: _searchCtrl,
                 isLoading: _searchLoading,
                 onSearch: (v) => setState(() {
                   final q = v.trim();
@@ -254,6 +233,21 @@ class _HomeShellState extends State<HomeShell> {
                   }
                 }),
                 onScrollToResults: () => setState(() => _scrollTrigger++),
+                onHome: () => setState(() {
+                  _index = 0;
+                  _cartOpen = false;
+                }),
+                onBulk: () => setState(() {
+                  _index = 2;
+                  _cartOpen = false;
+                }),
+                onOrders: () => setState(() {
+                  _index = 1;
+                  _cartOpen = false;
+                }),
+                onCart: () => setState(() => _cartOpen = true),
+                index: _index,
+                cartOpen: _cartOpen,
               ),
               AnimatedSwitcher(
                 duration: const Duration(milliseconds: 550),
@@ -396,156 +390,6 @@ class _LocationHeader extends StatelessWidget {
   }
 }
 
-// ─────────────────────── Full-width search bar ───────────────────────
-
-class _SearchBarRow extends StatefulWidget {
-  final TextEditingController controller;
-  final bool isLoading;
-  final ValueChanged<String> onSearch;
-  final VoidCallback onScrollToResults;
-
-  const _SearchBarRow({
-    required this.controller,
-    required this.isLoading,
-    required this.onSearch,
-    required this.onScrollToResults,
-  });
-
-  @override
-  State<_SearchBarRow> createState() => _SearchBarRowState();
-}
-
-class _SearchBarRowState extends State<_SearchBarRow> {
-  Timer? _debounce;
-  bool _hasText = false;
-
-  @override
-  void initState() {
-    super.initState();
-    widget.controller.addListener(_onControllerChange);
-    _hasText = widget.controller.text.isNotEmpty;
-  }
-
-  @override
-  void dispose() {
-    widget.controller.removeListener(_onControllerChange);
-    _debounce?.cancel();
-    super.dispose();
-  }
-
-  void _onControllerChange() {
-    final hasText = widget.controller.text.isNotEmpty;
-    if (hasText != _hasText) setState(() => _hasText = hasText);
-  }
-
-  void _onChanged(String v) {
-    _debounce?.cancel();
-    _debounce = Timer(const Duration(milliseconds: 300), () {
-      widget.onSearch(v);
-    });
-  }
-
-  void _submitNow() {
-    _debounce?.cancel();
-    final text = widget.controller.text;
-    widget.onSearch(text);
-    if (text.trim().length >= 2) widget.onScrollToResults();
-    FocusManager.instance.primaryFocus?.unfocus();
-  }
-
-  void _clearSearch() {
-    _debounce?.cancel();
-    widget.controller.clear();
-    widget.onSearch('');
-    FocusManager.instance.primaryFocus?.unfocus();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      color: Colors.white,
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-      child: Container(
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: const Color(0xFFE5E7EB)),
-        ),
-        child: Row(
-          children: [
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 12),
-              child: Icon(Icons.search, color: Color(0xFF9CA3AF), size: 20),
-            ),
-            Expanded(
-              child: TextField(
-                controller: widget.controller,
-                onChanged: _onChanged,
-                onSubmitted: (_) => _submitNow(),
-                textInputAction: TextInputAction.search,
-                autocorrect: false,
-                enableSuggestions: false,
-                keyboardType: TextInputType.text,
-                style: const TextStyle(fontSize: 14, color: Brand.ink),
-                decoration: const InputDecoration(
-                  border: InputBorder.none,
-                  enabledBorder: InputBorder.none,
-                  focusedBorder: InputBorder.none,
-                  hintText: 'Search for medicines',
-                  hintStyle: TextStyle(color: Brand.inkMuted, fontSize: 14),
-                  isDense: true,
-                  contentPadding: EdgeInsets.symmetric(vertical: 13),
-                  filled: false,
-                ),
-              ),
-            ),
-            if (widget.isLoading)
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 10),
-                child: SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: Brand.green,
-                  ),
-                ),
-              )
-            else if (_hasText)
-              IconButton(
-                onPressed: _clearSearch,
-                icon: const Icon(Icons.close,
-                    size: 20, color: Color(0xFF6B7280)),
-                visualDensity: VisualDensity.compact,
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-              ),
-            GestureDetector(
-              onTap: _submitNow,
-              child: Container(
-                margin: const EdgeInsets.all(5),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
-                decoration: BoxDecoration(
-                  color: Brand.green,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: const Text(
-                  'Search',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
 
 // ─────────────────────── Mobile search bar (pill style) ───────────────────────
 
@@ -1371,30 +1215,106 @@ class _CartChip extends StatelessWidget {
 
 // ─────────────────────── Desktop top bar (Row 1) ───────────────────────
 
-class _DesktopTopBar extends StatelessWidget {
-  final VoidCallback onHome;
-  final VoidCallback onCart;
+// ─────────────────────── Desktop single-row header ───────────────────────
 
-  const _DesktopTopBar({
+class _DesktopHeader extends StatefulWidget {
+  final TextEditingController searchCtrl;
+  final bool isLoading;
+  final ValueChanged<String> onSearch;
+  final VoidCallback onScrollToResults;
+  final VoidCallback onHome;
+  final VoidCallback onBulk;
+  final VoidCallback onOrders;
+  final VoidCallback onCart;
+  final int index;
+  final bool cartOpen;
+
+  const _DesktopHeader({
+    required this.searchCtrl,
+    required this.isLoading,
+    required this.onSearch,
+    required this.onScrollToResults,
     required this.onHome,
+    required this.onBulk,
+    required this.onOrders,
     required this.onCart,
+    required this.index,
+    required this.cartOpen,
   });
+
+  @override
+  State<_DesktopHeader> createState() => _DesktopHeaderState();
+}
+
+class _DesktopHeaderState extends State<_DesktopHeader> {
+  Timer? _debounce;
+  bool _hasText = false;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.searchCtrl.addListener(_onControllerChange);
+    _hasText = widget.searchCtrl.text.isNotEmpty;
+  }
+
+  @override
+  void dispose() {
+    widget.searchCtrl.removeListener(_onControllerChange);
+    _debounce?.cancel();
+    super.dispose();
+  }
+
+  void _onControllerChange() {
+    final hasText = widget.searchCtrl.text.isNotEmpty;
+    if (hasText != _hasText) setState(() => _hasText = hasText);
+  }
+
+  void _onChanged(String v) {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 300), () {
+      widget.onSearch(v);
+    });
+  }
+
+  void _submitNow() {
+    _debounce?.cancel();
+    final text = widget.searchCtrl.text;
+    widget.onSearch(text);
+    if (text.trim().length >= 2) widget.onScrollToResults();
+    FocusManager.instance.primaryFocus?.unfocus();
+  }
+
+  void _clearSearch() {
+    _debounce?.cancel();
+    widget.searchCtrl.clear();
+    widget.onSearch('');
+    FocusManager.instance.primaryFocus?.unfocus();
+  }
 
   @override
   Widget build(BuildContext context) {
     final cartItems = AppState.of(context).distinctItems;
+    final isBulk = widget.index == 2 && !widget.cartOpen;
+    final isOrders = widget.index == 1 && !widget.cartOpen;
+
     return Container(
-      height: 70,
-      decoration: const BoxDecoration(
+      height: 72,
+      decoration: BoxDecoration(
         color: Colors.white,
-        border: Border(bottom: BorderSide(color: Brand.border)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.06),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
       ),
-      padding: const EdgeInsets.symmetric(horizontal: 32),
+      padding: const EdgeInsets.symmetric(horizontal: 24),
       child: Row(
         children: [
-          // Logo — far left
+          // 1. Logo
           GestureDetector(
-            onTap: onHome,
+            onTap: widget.onHome,
             child: RichText(
               text: const TextSpan(
                 children: [
@@ -1420,44 +1340,164 @@ class _DesktopTopBar extends StatelessWidget {
               ),
             ),
           ),
-          const Spacer(),
-          // "Download App" link — blue
-          TextButton(
-            onPressed: () {},
-            style: TextButton.styleFrom(
-              foregroundColor: const Color(0xFF2563EB),
-              padding: const EdgeInsets.symmetric(horizontal: 10),
-              minimumSize: Size.zero,
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          const SizedBox(width: 14),
+          // 2. Deliver-to location pill
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              border: Border.all(color: const Color(0xFFD1D5DB)),
+              borderRadius: BorderRadius.circular(20),
             ),
-            child: const Text(
-              'Download App',
-              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+            child: const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.location_on, color: Brand.green, size: 14),
+                SizedBox(width: 3),
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Deliver to',
+                      style: TextStyle(
+                        fontSize: 9,
+                        color: Brand.inkMuted,
+                        fontWeight: FontWeight.w400,
+                        height: 1.2,
+                      ),
+                    ),
+                    Text(
+                      'Raipur',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        color: Brand.ink,
+                        height: 1.2,
+                      ),
+                    ),
+                  ],
+                ),
+                SizedBox(width: 2),
+                Icon(Icons.keyboard_arrow_down,
+                    color: Brand.inkMuted, size: 15),
+              ],
             ),
+          ),
+          const SizedBox(width: 16),
+          // 3. Search bar — takes most of the remaining width
+          Expanded(
+            child: Container(
+              height: 46,
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFFD1D5DB)),
+              ),
+              child: Row(
+                children: [
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 12),
+                    child:
+                        Icon(Icons.search, color: Color(0xFF9CA3AF), size: 20),
+                  ),
+                  Expanded(
+                    child: TextField(
+                      controller: widget.searchCtrl,
+                      onChanged: _onChanged,
+                      onSubmitted: (_) => _submitNow(),
+                      textInputAction: TextInputAction.search,
+                      autocorrect: false,
+                      enableSuggestions: false,
+                      keyboardType: TextInputType.text,
+                      style:
+                          const TextStyle(fontSize: 14, color: Brand.ink),
+                      decoration: const InputDecoration(
+                        border: InputBorder.none,
+                        enabledBorder: InputBorder.none,
+                        focusedBorder: InputBorder.none,
+                        hintText: 'Search for medicines',
+                        hintStyle:
+                            TextStyle(color: Brand.inkMuted, fontSize: 14),
+                        isDense: true,
+                        contentPadding:
+                            EdgeInsets.symmetric(vertical: 14),
+                        filled: false,
+                      ),
+                    ),
+                  ),
+                  if (widget.isLoading)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 10),
+                      child: SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: Brand.green),
+                      ),
+                    )
+                  else if (_hasText)
+                    IconButton(
+                      onPressed: _clearSearch,
+                      icon: const Icon(Icons.close,
+                          size: 18, color: Color(0xFF6B7280)),
+                      visualDensity: VisualDensity.compact,
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(
+                          minWidth: 32, minHeight: 32),
+                    ),
+                  // Green Search button attached to right edge
+                  GestureDetector(
+                    onTap: _submitNow,
+                    child: Container(
+                      height: double.infinity,
+                      padding:
+                          const EdgeInsets.symmetric(horizontal: 20),
+                      decoration: const BoxDecoration(
+                        color: Brand.green,
+                        borderRadius: BorderRadius.only(
+                          topRight: Radius.circular(7),
+                          bottomRight: Radius.circular(7),
+                        ),
+                      ),
+                      child: const Center(
+                        child: Text(
+                          'Search',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(width: 16),
+          // 4. Bulk Upload text link
+          _DesktopNavLink(
+            label: 'Bulk Upload',
+            selected: isBulk,
+            onTap: widget.onBulk,
           ),
           const SizedBox(width: 4),
-          // "Login / Signup" link — blue
-          TextButton(
-            onPressed: () {},
-            style: TextButton.styleFrom(
-              foregroundColor: const Color(0xFF2563EB),
-              padding: const EdgeInsets.symmetric(horizontal: 10),
-              minimumSize: Size.zero,
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            ),
-            child: const Text(
-              'Login / Signup',
-              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-            ),
+          // 5. Orders text link
+          _DesktopNavLink(
+            label: 'Orders',
+            selected: isOrders,
+            onTap: widget.onOrders,
           ),
-          const SizedBox(width: 8),
-          // Cart icon + "Cart" text
+          const SizedBox(width: 12),
+          // 6. Cart icon + "Cart" text
           PressEffect(
             child: InkWell(
-              onTap: onCart,
+              onTap: widget.onCart,
               borderRadius: BorderRadius.circular(8),
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 10, vertical: 8),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -1493,68 +1533,23 @@ class _DesktopTopBar extends StatelessWidget {
   }
 }
 
-// ─────────────────────── Desktop nav bar (Row 2) ───────────────────────
-
-class _DesktopNavBar extends StatelessWidget {
-  final int index;
-  final bool cartOpen;
-  final VoidCallback onPharmacy;
-  final VoidCallback onHealthConditions;
-  final VoidCallback onBulk;
-  final VoidCallback onOrders;
-
-  const _DesktopNavBar({
-    required this.index,
-    required this.cartOpen,
-    required this.onPharmacy,
-    required this.onHealthConditions,
-    required this.onBulk,
-    required this.onOrders,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final isHome = index == 0 && !cartOpen;
-    final isBulk = index == 2 && !cartOpen;
-    final isOrders = index == 1 && !cartOpen;
-    return Container(
-      height: 46,
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        border: Border(
-          top: BorderSide(color: Brand.border),
-          bottom: BorderSide(color: Brand.border),
-        ),
-      ),
-      padding: const EdgeInsets.symmetric(horizontal: 32),
-      child: Row(
-        children: [
-          _NavBarItem(label: 'Pharmacy', selected: isHome, onTap: onPharmacy),
-          _NavBarItem(label: 'Bulk Order', selected: isBulk, onTap: onBulk),
-          _NavBarItem(label: 'Orders', selected: isOrders, onTap: onOrders),
-          _NavBarItem(label: 'Health Conditions', selected: false, onTap: onHealthConditions),
-        ],
-      ),
-    );
-  }
-}
-
-class _NavBarItem extends StatefulWidget {
+// Simple hover text link used inside the single-row desktop header
+class _DesktopNavLink extends StatefulWidget {
   final String label;
   final bool selected;
   final VoidCallback onTap;
 
-  const _NavBarItem({
+  const _DesktopNavLink({
     required this.label,
     required this.selected,
     required this.onTap,
   });
 
   @override
-  State<_NavBarItem> createState() => _NavBarItemState();
+  State<_DesktopNavLink> createState() => _DesktopNavLinkState();
 }
 
-class _NavBarItemState extends State<_NavBarItem> {
+class _DesktopNavLinkState extends State<_DesktopNavLink> {
   bool _hovered = false;
 
   @override
@@ -1566,25 +1561,15 @@ class _NavBarItemState extends State<_NavBarItem> {
       cursor: SystemMouseCursors.click,
       child: GestureDetector(
         onTap: widget.onTap,
-        child: Container(
-          height: double.infinity,
-          padding: const EdgeInsets.symmetric(horizontal: 14),
-          decoration: BoxDecoration(
-            border: Border(
-              bottom: BorderSide(
-                color: highlight ? Brand.green : Colors.transparent,
-                width: 2,
-              ),
-            ),
-          ),
-          child: Center(
-            child: Text(
-              widget.label,
-              style: TextStyle(
-                fontSize: 15,
-                fontWeight: widget.selected ? FontWeight.w700 : FontWeight.w500,
-                color: highlight ? Brand.green : const Color(0xFF374151),
-              ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          child: Text(
+            widget.label,
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight:
+                  widget.selected ? FontWeight.w700 : FontWeight.w500,
+              color: highlight ? Brand.green : const Color(0xFF374151),
             ),
           ),
         ),

@@ -369,58 +369,57 @@ class _LocationHeader extends StatelessWidget {
           color: Colors.white,
           border: Border(bottom: BorderSide(color: Brand.border)),
         ),
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-        child: Stack(
-          alignment: Alignment.center,
+        padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+        child: Row(
           children: [
-            // Logo icon + text perfectly centered
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 28,
-                  height: 28,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF1B5E20),
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: const Icon(Icons.add, color: Colors.white, size: 17),
-                ),
-                const SizedBox(width: 7),
-                RichText(
-                  text: const TextSpan(
-                    children: [
-                      TextSpan(
-                        text: 'medi',
-                        style: TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.w700,
-                          color: Color(0xFF1B5E20),
-                          letterSpacing: -0.3,
-                        ),
+            // LEFT: profile avatar
+            _MobileProfileAvatar(),
+            // CENTER: logo
+            Expanded(
+              child: Center(
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 28,
+                      height: 28,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF1B5E20),
+                        borderRadius: BorderRadius.circular(6),
                       ),
-                      TextSpan(
-                        text: 'BO',
-                        style: TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.w800,
-                          color: Color(0xFF4CAF50),
-                          letterSpacing: -0.3,
-                        ),
+                      child: const Icon(Icons.add, color: Colors.white, size: 17),
+                    ),
+                    const SizedBox(width: 7),
+                    RichText(
+                      text: const TextSpan(
+                        children: [
+                          TextSpan(
+                            text: 'medi',
+                            style: TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.w700,
+                              color: Color(0xFF1B5E20),
+                              letterSpacing: -0.3,
+                            ),
+                          ),
+                          TextSpan(
+                            text: 'BO',
+                            style: TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.w800,
+                              color: Color(0xFF4CAF50),
+                              letterSpacing: -0.3,
+                            ),
+                          ),
+                        ],
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
-              ],
-            ),
-            // Profile + cart icons anchored to the right
-            Positioned(
-              right: 0,
-              child: _MobileHeaderIcons(
-                cartItems: cartItems,
-                onCart: onCart,
               ),
             ),
+            // RIGHT: cart icon
+            _MobileCartIcon(cartItems: cartItems, onCart: onCart),
           ],
         ),
       ),
@@ -429,18 +428,79 @@ class _LocationHeader extends StatelessWidget {
 }
 
 
-// ─────────────────────── Mobile header icons (profile + cart) ──────────────────
+// ─────────────────────── Mobile profile avatar (left) ───────────────────────
 
-class _MobileHeaderIcons extends StatefulWidget {
-  final int cartItems;
-  final VoidCallback onCart;
-  const _MobileHeaderIcons({required this.cartItems, required this.onCart});
-
+class _MobileProfileAvatar extends StatelessWidget {
   @override
-  State<_MobileHeaderIcons> createState() => _MobileHeaderIconsState();
+  Widget build(BuildContext context) {
+    final auth = UserState.of(context);
+    final profile = auth.profile;
+    final initial = (profile?.displayName.isNotEmpty == true)
+        ? profile!.displayName[0].toUpperCase()
+        : null;
+
+    return PressEffect(
+      scale: 0.92,
+      child: GestureDetector(
+        onTap: () {
+          if (!auth.isAuthenticated) {
+            Navigator.push(context,
+                MaterialPageRoute(builder: (_) => const LoginScreen()));
+          } else {
+            Navigator.push(context,
+                MaterialPageRoute(builder: (_) => const ProfileScreen()));
+          }
+        },
+        child: Container(
+          width: 40,
+          height: 40,
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [Color(0xFF1D9E75), Color(0xFF0F4C35)],
+            ),
+            shape: BoxShape.circle,
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFF1D9E75).withValues(alpha: 0.35),
+                blurRadius: 8,
+                offset: const Offset(0, 3),
+              ),
+            ],
+          ),
+          child: Center(
+            child: initial != null
+                ? Text(
+                    initial,
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w800,
+                      color: Colors.white,
+                      height: 1,
+                    ),
+                  )
+                : const Icon(Icons.person_rounded,
+                    color: Colors.white, size: 20),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
-class _MobileHeaderIconsState extends State<_MobileHeaderIcons>
+// ─────────────────────── Mobile cart icon (right) ────────────────────────────
+
+class _MobileCartIcon extends StatefulWidget {
+  final int cartItems;
+  final VoidCallback onCart;
+  const _MobileCartIcon({required this.cartItems, required this.onCart});
+
+  @override
+  State<_MobileCartIcon> createState() => _MobileCartIconState();
+}
+
+class _MobileCartIconState extends State<_MobileCartIcon>
     with SingleTickerProviderStateMixin {
   late final AnimationController _badgeCtrl;
   late final Animation<double> _badgeScale;
@@ -466,7 +526,7 @@ class _MobileHeaderIconsState extends State<_MobileHeaderIcons>
   }
 
   @override
-  void didUpdateWidget(_MobileHeaderIcons old) {
+  void didUpdateWidget(_MobileCartIcon old) {
     super.didUpdateWidget(old);
     if (widget.cartItems != _prevCount) {
       _badgeCtrl.forward(from: 0);
@@ -482,124 +542,62 @@ class _MobileHeaderIconsState extends State<_MobileHeaderIcons>
 
   @override
   Widget build(BuildContext context) {
-    final auth = UserState.of(context);
-    final profile = auth.profile;
-    final initial = (profile?.displayName.isNotEmpty == true)
-        ? profile!.displayName[0].toUpperCase()
-        : null;
-
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        // Profile avatar
-        PressEffect(
-          scale: 0.92,
-          child: GestureDetector(
-            onTap: () {
-              if (!auth.isAuthenticated) {
-                Navigator.push(context,
-                    MaterialPageRoute(builder: (_) => const LoginScreen()));
-              } else {
-                Navigator.push(context,
-                    MaterialPageRoute(builder: (_) => const ProfileScreen()));
-              }
-            },
-            child: Container(
+    return PressEffect(
+      scale: 0.92,
+      child: GestureDetector(
+        onTap: widget.onCart,
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Container(
               width: 40,
               height: 40,
               decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [Color(0xFF1D9E75), Color(0xFF0F4C35)],
-                ),
+                color: Brand.mint,
                 shape: BoxShape.circle,
+                border: Border.all(color: const Color(0xFFBBF7D0), width: 1.5),
                 boxShadow: [
                   BoxShadow(
-                    color: const Color(0xFF1D9E75).withValues(alpha: 0.35),
-                    blurRadius: 8,
-                    offset: const Offset(0, 3),
+                    color: Brand.green.withValues(alpha: 0.18),
+                    blurRadius: 6,
+                    offset: const Offset(0, 2),
                   ),
                 ],
               ),
-              child: Center(
-                child: initial != null
-                    ? Text(
-                        initial,
+              child: const Icon(Icons.shopping_bag_outlined,
+                  color: Brand.green, size: 20),
+            ),
+            if (widget.cartItems > 0)
+              Positioned(
+                top: -2,
+                right: -2,
+                child: ScaleTransition(
+                  scale: _badgeScale,
+                  child: Container(
+                    width: 18,
+                    height: 18,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFDC2626),
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Colors.white, width: 2),
+                    ),
+                    child: Center(
+                      child: Text(
+                        widget.cartItems > 9 ? '9+' : '${widget.cartItems}',
                         style: const TextStyle(
-                          fontSize: 16,
+                          fontSize: 9,
                           fontWeight: FontWeight.w800,
                           color: Colors.white,
                           height: 1,
                         ),
-                      )
-                    : const Icon(Icons.person_rounded,
-                        color: Colors.white, size: 20),
-              ),
-            ),
-          ),
-        ),
-        const SizedBox(width: 12),
-        // Cart button
-        PressEffect(
-          scale: 0.92,
-          child: GestureDetector(
-            onTap: widget.onCart,
-            child: Stack(
-              clipBehavior: Clip.none,
-              children: [
-                Container(
-                  width: 40,
-                  height: 40,
-                  decoration: BoxDecoration(
-                    color: Brand.mint,
-                    shape: BoxShape.circle,
-                    border:
-                        Border.all(color: const Color(0xFFBBF7D0), width: 1.5),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Brand.green.withValues(alpha: 0.18),
-                        blurRadius: 6,
-                        offset: const Offset(0, 2),
-                      ),
-                    ],
-                  ),
-                  child: const Icon(Icons.shopping_bag_outlined,
-                      color: Brand.green, size: 20),
-                ),
-                if (widget.cartItems > 0)
-                  Positioned(
-                    top: -2,
-                    right: -2,
-                    child: ScaleTransition(
-                      scale: _badgeScale,
-                      child: Container(
-                        width: 18,
-                        height: 18,
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFDC2626),
-                          shape: BoxShape.circle,
-                          border: Border.all(color: Colors.white, width: 2),
-                        ),
-                        child: Center(
-                          child: Text(
-                            widget.cartItems > 9 ? '9+' : '${widget.cartItems}',
-                            style: const TextStyle(
-                              fontSize: 9,
-                              fontWeight: FontWeight.w800,
-                              color: Colors.white,
-                              height: 1,
-                            ),
-                          ),
-                        ),
                       ),
                     ),
                   ),
-              ],
-            ),
-          ),
+                ),
+              ),
+          ],
         ),
-      ],
+      ),
     );
   }
 }

@@ -169,7 +169,7 @@ class _HomeShellState extends State<HomeShell> {
               _LocationHeader(
                 onCart: () => setState(() => _cartOpen = true),
               ),
-              _SearchBarRow(
+              _MobileSearchBar(
                 controller: _searchCtrl,
                 isLoading: _searchLoading,
                 onSearch: (v) => setState(() {
@@ -185,26 +185,7 @@ class _HomeShellState extends State<HomeShell> {
                 }),
                 onScrollToResults: () => setState(() => _scrollTrigger++),
               ),
-              _QuickNavRow(
-                index: _index,
-                cartOpen: _cartOpen,
-                onPharmacy: () => setState(() {
-                  _index = 0;
-                  _cartOpen = false;
-                }),
-                onCatalogue: () => setState(() {
-                  _index = 0;
-                  _cartOpen = false;
-                }),
-                onOrders: () => setState(() {
-                  _index = 1;
-                  _cartOpen = false;
-                }),
-                onBulk: () => setState(() {
-                  _index = 2;
-                  _cartOpen = false;
-                }),
-              ),
+              const _PromoChipsRow(),
               Expanded(
                 child: IndexedStack(
                   index: _index,
@@ -357,33 +338,17 @@ class _LocationHeader extends StatelessWidget {
         border: Border(bottom: BorderSide(color: Brand.border)),
       ),
       padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
-      child: Row(
+      child: Stack(
+        alignment: Alignment.center,
         children: [
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: const [
-              Icon(Icons.location_on, color: Brand.green, size: 20),
-              SizedBox(width: 4),
-              Text(
-                'Raipur',
-                style: TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w700,
-                  color: Brand.ink,
-                ),
-              ),
-              Icon(Icons.keyboard_arrow_down,
-                  color: Brand.inkMuted, size: 18),
-            ],
-          ),
-          const Spacer(),
+          // Logo perfectly centered
           RichText(
             text: const TextSpan(
               children: [
                 TextSpan(
                   text: 'medi',
                   style: TextStyle(
-                    fontSize: 18,
+                    fontSize: 20,
                     fontWeight: FontWeight.w500,
                     color: Brand.ink,
                     letterSpacing: -0.3,
@@ -392,7 +357,7 @@ class _LocationHeader extends StatelessWidget {
                 TextSpan(
                   text: 'BO',
                   style: TextStyle(
-                    fontSize: 18,
+                    fontSize: 20,
                     fontWeight: FontWeight.w800,
                     color: Brand.green,
                     letterSpacing: -0.3,
@@ -401,23 +366,26 @@ class _LocationHeader extends StatelessWidget {
               ],
             ),
           ),
-          const Spacer(),
-          PressEffect(
-            child: InkWell(
-              onTap: onCart,
-              borderRadius: BorderRadius.circular(20),
-              child: Padding(
-                padding: const EdgeInsets.all(4),
-                child: Badge(
-                  isLabelVisible: cartItems > 0,
-                  label: Text(
-                    '$cartItems',
-                    style: const TextStyle(fontSize: 10),
-                  ),
-                  child: const Icon(
-                    Icons.shopping_cart_outlined,
-                    size: 26,
-                    color: Brand.ink,
+          // Cart icon anchored to the right
+          Positioned(
+            right: 0,
+            child: PressEffect(
+              child: InkWell(
+                onTap: onCart,
+                borderRadius: BorderRadius.circular(20),
+                child: Padding(
+                  padding: const EdgeInsets.all(4),
+                  child: Badge(
+                    isLabelVisible: cartItems > 0,
+                    label: Text(
+                      '$cartItems',
+                      style: const TextStyle(fontSize: 10),
+                    ),
+                    child: const Icon(
+                      Icons.shopping_cart_outlined,
+                      size: 26,
+                      color: Brand.ink,
+                    ),
                   ),
                 ),
               ),
@@ -580,68 +548,139 @@ class _SearchBarRowState extends State<_SearchBarRow> {
   }
 }
 
-// ─────────────────────── Quick-nav chips ───────────────────────
+// ─────────────────────── Mobile search bar (pill style) ───────────────────────
 
-class _QuickNavRow extends StatelessWidget {
-  final int index;
-  final bool cartOpen;
-  final VoidCallback onPharmacy;
-  final VoidCallback onCatalogue;
-  final VoidCallback onOrders;
-  final VoidCallback onBulk;
+class _MobileSearchBar extends StatefulWidget {
+  final TextEditingController controller;
+  final bool isLoading;
+  final ValueChanged<String> onSearch;
+  final VoidCallback onScrollToResults;
 
-  const _QuickNavRow({
-    required this.index,
-    required this.cartOpen,
-    required this.onPharmacy,
-    required this.onCatalogue,
-    required this.onOrders,
-    required this.onBulk,
+  const _MobileSearchBar({
+    required this.controller,
+    required this.isLoading,
+    required this.onSearch,
+    required this.onScrollToResults,
   });
 
   @override
+  State<_MobileSearchBar> createState() => _MobileSearchBarState();
+}
+
+class _MobileSearchBarState extends State<_MobileSearchBar> {
+  Timer? _debounce;
+  bool _hasText = false;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.controller.addListener(_onControllerChange);
+    _hasText = widget.controller.text.isNotEmpty;
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeListener(_onControllerChange);
+    _debounce?.cancel();
+    super.dispose();
+  }
+
+  void _onControllerChange() {
+    final hasText = widget.controller.text.isNotEmpty;
+    if (hasText != _hasText) setState(() => _hasText = hasText);
+  }
+
+  void _onChanged(String v) {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 300), () {
+      widget.onSearch(v);
+    });
+  }
+
+  void _submitNow() {
+    _debounce?.cancel();
+    final text = widget.controller.text;
+    widget.onSearch(text);
+    if (text.trim().length >= 2) widget.onScrollToResults();
+    FocusManager.instance.primaryFocus?.unfocus();
+  }
+
+  void _clearSearch() {
+    _debounce?.cancel();
+    widget.controller.clear();
+    widget.onSearch('');
+    FocusManager.instance.primaryFocus?.unfocus();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final isHome = index == 0 && !cartOpen;
     return Container(
-      width: double.infinity,
       color: Colors.white,
-      padding: const EdgeInsets.fromLTRB(12, 2, 12, 14),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.fromLTRB(14, 8, 14, 8),
+      child: Container(
+        decoration: BoxDecoration(
+          color: const Color(0xFFF3F4F6),
+          borderRadius: BorderRadius.circular(28),
+        ),
         child: Row(
           children: [
-            _NavChip(
-              icon: Icons.local_pharmacy,
-              label: 'Pharmacy',
-              bg: Brand.mint,
-              fg: Brand.green,
-              selected: isHome,
-              onTap: onPharmacy,
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 14),
+              child: Icon(Icons.search, color: Color(0xFF9CA3AF), size: 20),
             ),
-            _NavChip(
-              icon: Icons.grid_view_rounded,
-              label: 'Catalogue',
-              bg: const Color(0xFFE8F1FF),
-              fg: const Color(0xFF2563EB),
-              selected: false,
-              onTap: onCatalogue,
+            Expanded(
+              child: TextField(
+                controller: widget.controller,
+                onChanged: _onChanged,
+                onSubmitted: (_) => _submitNow(),
+                textInputAction: TextInputAction.search,
+                autocorrect: false,
+                enableSuggestions: false,
+                keyboardType: TextInputType.text,
+                style: const TextStyle(fontSize: 14, color: Brand.ink),
+                decoration: const InputDecoration(
+                  border: InputBorder.none,
+                  enabledBorder: InputBorder.none,
+                  focusedBorder: InputBorder.none,
+                  hintText: 'Search for medicines',
+                  hintStyle: TextStyle(color: Brand.inkMuted, fontSize: 14),
+                  isDense: true,
+                  contentPadding: EdgeInsets.symmetric(vertical: 13),
+                  filled: false,
+                ),
+              ),
             ),
-            _NavChip(
-              icon: Icons.upload_file_outlined,
-              label: 'Bulk Order',
-              bg: const Color(0xFFFFF1E6),
-              fg: const Color(0xFFEA7317),
-              selected: index == 2 && !cartOpen,
-              onTap: onBulk,
-            ),
-            _NavChip(
-              icon: Icons.receipt_long_outlined,
-              label: 'Orders',
-              bg: const Color(0xFFECEBFF),
-              fg: const Color(0xFF4F46E5),
-              selected: index == 1 && !cartOpen,
-              onTap: onOrders,
-            ),
+            if (widget.isLoading)
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 14),
+                child: SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Brand.green,
+                  ),
+                ),
+              )
+            else if (_hasText)
+              IconButton(
+                onPressed: _clearSearch,
+                icon: const Icon(Icons.close,
+                    size: 18, color: Color(0xFF6B7280)),
+                visualDensity: VisualDensity.compact,
+                padding: EdgeInsets.zero,
+                constraints:
+                    const BoxConstraints(minWidth: 40, minHeight: 40),
+              )
+            else
+              GestureDetector(
+                onTap: _submitNow,
+                child: const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 14),
+                  child: Icon(Icons.search,
+                      color: Color(0xFF9CA3AF), size: 20),
+                ),
+              ),
           ],
         ),
       ),
@@ -649,66 +688,102 @@ class _QuickNavRow extends StatelessWidget {
   }
 }
 
-class _NavChip extends StatelessWidget {
-  final IconData icon;
+// ─────────────────────── Promo chips row (mobile) ───────────────────────
+
+class _PromoChipsRow extends StatelessWidget {
+  const _PromoChipsRow();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: Colors.white,
+      height: 44,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.fromLTRB(14, 4, 14, 4),
+        children: const [
+          _PromoChip(
+            emoji: '🔥',
+            label: 'Hot Deals',
+            bg: Color(0xFFFFF3E0),
+            fg: Color(0xFFE65100),
+          ),
+          SizedBox(width: 8),
+          _PromoChip(
+            emoji: '💊',
+            label: 'Antibiotics',
+            bg: Color(0xFFE8F5E9),
+            fg: Color(0xFF2E7D32),
+          ),
+          SizedBox(width: 8),
+          _PromoChip(
+            emoji: '❤️',
+            label: 'Cardiac',
+            bg: Color(0xFFFCE4EC),
+            fg: Color(0xFFC62828),
+          ),
+          SizedBox(width: 8),
+          _PromoChip(
+            emoji: '🧴',
+            label: 'Skincare',
+            bg: Color(0xFFF3E5F5),
+            fg: Color(0xFF6A1B9A),
+          ),
+          SizedBox(width: 8),
+          _PromoChip(
+            emoji: '🍼',
+            label: 'Baby Care',
+            bg: Color(0xFFE3F2FD),
+            fg: Color(0xFF1565C0),
+          ),
+          SizedBox(width: 8),
+          _PromoChip(
+            emoji: '💪',
+            label: 'Vitamins',
+            bg: Color(0xFFFFF8E1),
+            fg: Color(0xFFF57F17),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PromoChip extends StatelessWidget {
+  final String emoji;
   final String label;
   final Color bg;
   final Color fg;
-  final bool selected;
-  final VoidCallback onTap;
 
-  const _NavChip({
-    required this.icon,
+  const _PromoChip({
+    required this.emoji,
     required this.label,
     required this.bg,
     required this.fg,
-    required this.selected,
-    required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 5),
-      child: PressEffect(
-        scale: 0.93,
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(16),
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 180),
-            width: 78,
-            padding:
-                const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
-            decoration: BoxDecoration(
-              color: selected ? fg.withValues(alpha: 0.10) : bg,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(
-                color: selected ? fg : Colors.transparent,
-                width: 1.5,
-              ),
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(icon, size: 26, color: fg),
-                const SizedBox(height: 5),
-                Text(
-                  label,
-                  textAlign: TextAlign.center,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w600,
-                    color: fg,
-                    height: 1.2,
-                  ),
-                ),
-              ],
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(emoji, style: const TextStyle(fontSize: 13)),
+          const SizedBox(width: 5),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: fg,
             ),
           ),
-        ),
+        ],
       ),
     );
   }

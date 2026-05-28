@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <!--
+    If you are serving your web app in a path other than the root, change the
+    href value below to reflect the base path you are serving from.
+
+    The path provided below has to start and end with a slash "/" in order for
+    it to work correctly.
+
+    For more details:
+    * https://developer.mozilla.org/en-US/docs/Web/HTML/Element/base
+
+    This is a placeholder for base href that will be replaced by the value of
+    the `--base-href` argument provided to `flutter build`.
+  -->
+  <base href="/">
+
+  <!-- Early connection to back-end services so the first Supabase query
+       doesn't pay a full DNS + TLS round-trip after Flutter boots. -->
+  <link rel="preconnect" href="https://qkcuoaqrpnmdnejzahdv.supabase.co">
+  <link rel="dns-prefetch" href="https://qkcuoaqrpnmdnejzahdv.supabase.co">
+  <link rel="preconnect" href="https://generativelanguage.googleapis.com">
+  <link rel="dns-prefetch" href="https://generativelanguage.googleapis.com">
+
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+  <meta name="description" content="B2B Pharmacy ordering platform">
+  <meta name="autocomplete" content="off">
+
+  <!-- Force browsers to always check for a fresh version instead of
+       serving index.html from cache. The _headers / server config should
+       set the same policy via HTTP headers, but these meta tags act as a
+       belt-and-suspenders fallback for proxies and older mobile browsers. -->
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+
+  <!-- PWA theme color (Android Chrome address bar + status bar) -->
+  <meta name="theme-color" content="#1D9E75">
+  <meta name="application-name" content="mediBO">
+
+  <!-- iOS PWA meta tags -->
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="mediBO">
+  <!-- black-translucent lets Flutter content extend behind the iOS status bar -->
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+
+  <!-- iOS touch icons (Safari "Add to Home Screen") -->
+  <link rel="apple-touch-icon" href="icons/Icon-192.png">
+  <link rel="apple-touch-icon" sizes="192x192" href="icons/Icon-192.png">
+  <link rel="apple-touch-icon" sizes="512x512" href="icons/Icon-512.png">
+
+  <style>
+    /* Disable the dark flash that mobile browsers show on tap */
+    * {
+      -webkit-tap-highlight-color: transparent !important;
+      -webkit-touch-callout: none;
+      tap-highlight-color: transparent !important;
+    }
+    body {
+      margin: 0;
+      background-color: #ffffff;
+      -webkit-tap-highlight-color: transparent !important;
+    }
+    flt-glass-pane {
+      -webkit-tap-highlight-color: transparent !important;
+    }
+  </style>
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" href="favicon.png"/>
+
+  <!-- PWA manifest -->
+  <link rel="manifest" href="manifest.json">
+
+  <title>mediBO</title>
+</head>
+<body>
+  <!--
+    You can customize the "flutter_bootstrap.js" script.
+    This is useful to provide a custom configuration to the Flutter loader
+    or to give the user feedback during the initialization process.
+
+    For more details:
+    * https://docs.flutter.dev/platform-integration/web/initialization
+  -->
+  <script src="flutter_bootstrap.js?v=20260528" async></script>
+  <script>
+    // Intercept wheel events on the Flutter canvas and replay them at 40% speed
+    // so one mouse-wheel tick scrolls a natural distance without overshoot.
+    // We wait 3 s for Flutter to mount its element before attaching.
+    window.addEventListener('load', function () {
+      setTimeout(function () {
+        var target = document.querySelector('flt-glass-pane') ||
+                     document.querySelector('canvas');
+        if (!target) return;
+        target.addEventListener('wheel', function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          target.dispatchEvent(new WheelEvent('wheel', {
+            deltaY:    e.deltaY    * 0.4,
+            deltaX:    e.deltaX    * 0.4,
+            deltaMode: e.deltaMode,
+            bubbles:   true,
+            cancelable: true,
+          }));
+        }, { passive: false });
+      }, 3000);
+    });
+  </script>
+</body>
+</html>

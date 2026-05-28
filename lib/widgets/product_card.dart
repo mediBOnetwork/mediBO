@@ -551,7 +551,7 @@ class _SchemePill extends StatelessWidget {
   }
 }
 
-// ─── Pack size + scheme badge row ────────────────────────────────────────────
+// ─── Pack size + category/scheme row ─────────────────────────────────────────
 
 class _PackSizeRow extends StatelessWidget {
   final Product product;
@@ -559,25 +559,52 @@ class _PackSizeRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.center,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
       children: [
-        Expanded(
-          child: Text(
-            product.packSize.isNotEmpty ? product.packSize : '—',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              fontSize: 11,
-              color: Color(0xFF9CA3AF),
-              fontWeight: FontWeight.w500,
-            ),
+        // Pack size in green
+        Text(
+          product.packSize.isNotEmpty ? product.packSize : '—',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(
+            fontSize: 11,
+            color: Color(0xFF1D9E75),
+            fontWeight: FontWeight.w500,
           ),
         ),
-        if (_hasScheme(product.id)) ...[
-          const SizedBox(width: 6),
-          _SchemePill(text: '5+1'),
-        ],
+        const SizedBox(height: 4),
+        // Category pill (left, truncated) + scheme badge (right)
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Expanded(
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF3F4F6),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(
+                  prettyCategory(product.category),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w500,
+                    color: Color(0xFF6B7280),
+                  ),
+                ),
+              ),
+            ),
+            if (_hasScheme(product.id)) ...[
+              const SizedBox(width: 6),
+              _SchemePill(text: '5+1'),
+            ],
+          ],
+        ),
       ],
     );
   }

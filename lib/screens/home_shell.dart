@@ -1513,53 +1513,57 @@ class _DesktopHeaderState extends State<_DesktopHeader> {
       padding: const EdgeInsets.symmetric(horizontal: 20),
       child: Row(
         children: [
-          // 1. Logo — 250px to align with sidebar below
+          // 1. Profile button — 250px to match category sidebar below
           SizedBox(
             width: 250,
-            child: GestureDetector(
-              onTap: widget.onHome,
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    width: 44,
-                    height: 44,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF1B5E20),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: const Icon(Icons.add, color: Colors.white, size: 26),
+            child: _DesktopProfileButton(),
+          ),
+          const SizedBox(width: 20),
+          // 2. Logo
+          GestureDetector(
+            onTap: widget.onHome,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1B5E20),
+                    borderRadius: BorderRadius.circular(8),
                   ),
-                  const SizedBox(width: 10),
-                  RichText(
-                    text: const TextSpan(
-                      children: [
-                        TextSpan(
-                          text: 'medi',
-                          style: TextStyle(
-                            fontSize: 24,
-                            fontWeight: FontWeight.w700,
-                            color: Color(0xFF1B5E20),
-                            letterSpacing: -0.3,
-                          ),
+                  child: const Icon(Icons.add, color: Colors.white, size: 26),
+                ),
+                const SizedBox(width: 10),
+                RichText(
+                  text: const TextSpan(
+                    children: [
+                      TextSpan(
+                        text: 'medi',
+                        style: TextStyle(
+                          fontSize: 24,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFF1B5E20),
+                          letterSpacing: -0.3,
                         ),
-                        TextSpan(
-                          text: 'BO',
-                          style: TextStyle(
-                            fontSize: 24,
-                            fontWeight: FontWeight.w800,
-                            color: Color(0xFF4CAF50),
-                            letterSpacing: -0.3,
-                          ),
+                      ),
+                      TextSpan(
+                        text: 'BO',
+                        style: TextStyle(
+                          fontSize: 24,
+                          fontWeight: FontWeight.w800,
+                          color: Color(0xFF4CAF50),
+                          letterSpacing: -0.3,
                         ),
-                      ],
-                    ),
+                      ),
+                    ],
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
-          // 2. Search bar — takes most of the remaining width
+          const SizedBox(width: 16),
+          // 3. Search bar — takes most of the remaining width
           Expanded(
             child: Container(
               height: 46,
@@ -1702,9 +1706,6 @@ class _DesktopHeaderState extends State<_DesktopHeader> {
               ),
             ),
           ),
-          const SizedBox(width: 8),
-          // 7. Profile / Login button
-          _DesktopProfileButton(),
         ],
       ),
     );
@@ -1727,8 +1728,9 @@ class _DesktopProfileButton extends StatelessWidget {
           ),
           borderRadius: BorderRadius.circular(8),
           child: Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            width: double.infinity,
+            alignment: Alignment.center,
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
             decoration: BoxDecoration(
               border: Border.all(color: const Color(0xFF1B5E20)),
               borderRadius: BorderRadius.circular(8),
@@ -1748,41 +1750,13 @@ class _DesktopProfileButton extends StatelessWidget {
 
     final profile = auth.profile;
     final displayName = profile?.displayName ?? 'Account';
-    final phone = profile?.phone ?? '';
-    final shortName = displayName.length > 18
-        ? '${displayName.substring(0, 16)}…'
-        : displayName;
+    final initial = displayName.isNotEmpty ? displayName[0].toUpperCase() : '?';
 
     return PopupMenuButton<String>(
-      offset: const Offset(0, 52),
+      offset: const Offset(0, 56),
       tooltip: '',
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       itemBuilder: (_) => [
-        PopupMenuItem(
-          enabled: false,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                displayName,
-                style: const TextStyle(
-                  fontWeight: FontWeight.w700,
-                  fontSize: 14,
-                  color: Color(0xFF111827),
-                ),
-              ),
-              if (phone.isNotEmpty) ...[
-                const SizedBox(height: 2),
-                Text(
-                  phone,
-                  style: const TextStyle(
-                      fontSize: 12, color: Color(0xFF6B7280)),
-                ),
-              ],
-            ],
-          ),
-        ),
-        const PopupMenuDivider(),
         PopupMenuItem(
           value: 'profile',
           child: const Row(
@@ -1790,8 +1764,7 @@ class _DesktopProfileButton extends StatelessWidget {
               Icon(Icons.person_outline, size: 16, color: Color(0xFF374151)),
               SizedBox(width: 10),
               Text('View Profile',
-                  style: TextStyle(
-                      fontSize: 14, color: Color(0xFF374151))),
+                  style: TextStyle(fontSize: 14, color: Color(0xFF374151))),
             ],
           ),
         ),
@@ -1799,11 +1772,10 @@ class _DesktopProfileButton extends StatelessWidget {
           value: 'logout',
           child: const Row(
             children: [
-              Icon(Icons.logout, size: 16, color: Color(0xFF374151)),
+              Icon(Icons.logout, size: 16, color: Color(0xFFDC2626)),
               SizedBox(width: 10),
               Text('Logout',
-                  style: TextStyle(
-                      fontSize: 14, color: Color(0xFF374151))),
+                  style: TextStyle(fontSize: 14, color: Color(0xFFDC2626))),
             ],
           ),
         ),
@@ -1816,52 +1788,49 @@ class _DesktopProfileButton extends StatelessWidget {
         if (val == 'logout') await UserState.read(context).signOut();
       },
       child: Container(
-        padding:
-            const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
           color: const Color(0xFFECFDF5),
           borderRadius: BorderRadius.circular(8),
           border: Border.all(color: const Color(0xFFBBF7D0)),
         ),
         child: Row(
-          mainAxisSize: MainAxisSize.min,
           children: [
             Container(
-              width: 28,
-              height: 28,
+              width: 34,
+              height: 34,
               decoration: const BoxDecoration(
                 color: Color(0xFF1B5E20),
                 shape: BoxShape.circle,
               ),
-              child: const Icon(Icons.person,
-                  color: Colors.white, size: 16),
-            ),
-            const SizedBox(width: 8),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Text(
-                  'Hi,',
-                  style: TextStyle(
-                      fontSize: 10,
-                      color: Color(0xFF6B7280),
-                      height: 1.1),
-                ),
-                Text(
-                  shortName,
+              child: Center(
+                child: Text(
+                  initial,
                   style: const TextStyle(
-                    fontSize: 12,
+                    fontSize: 15,
                     fontWeight: FontWeight.w700,
-                    color: Color(0xFF111827),
-                    height: 1.1,
+                    color: Colors.white,
+                    height: 1,
                   ),
                 ),
-              ],
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                'Hello $displayName',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF111827),
+                ),
+              ),
             ),
             const SizedBox(width: 4),
-            const Icon(Icons.expand_more,
-                size: 16, color: Color(0xFF6B7280)),
+            const Icon(Icons.expand_more, size: 16, color: Color(0xFF6B7280)),
           ],
         ),
       ),

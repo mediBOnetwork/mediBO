@@ -1,41 +1,19 @@
-# MANDATORY RULE - NEVER SKIP
+# RULES - NEVER BREAK THESE
 
-After EVERY change to ANY file, you MUST run these commands:
+## Deploy Rules
+- NEVER auto-run any command without user asking
+- NEVER type anything in terminal without user asking
+- NEVER use wrangler pages deploy
+- NEVER use netlify deploy
+- Only deploy via: git push origin main --force
 
-```bash
-cd ~/mediBO
+## After every code change:
 flutter build web --release
 git add -A
-git commit -m "auto deploy $(date +%H:%M)"
+git commit -m "update"
 git push origin main --force
-echo "✅ DEPLOYED TO MEDIBO.IN"
-```
 
-Do not stop until `git push` shows success. No exceptions.
-
-**NEVER use `wrangler`. NEVER use `netlify`. Only `git push`.**
-
-## Behaviour Rules
-
-- Never auto-type commands in terminal without being asked
-- Never run deploy commands unless user explicitly asks
-
-## Important build note
-
-Use `flutter build web --release` only — **never** add `--web-renderer canvaskit` (that flag was removed in Flutter 3.22 and causes an immediate build failure).
-
-## Project context
-
-- Flutter 3.44 web app — package name `pharma_b2b`, at `/home/mimbonetwork/mediBO`
-- Remote: `https://github.com/mediBOnetwork/mediBO.git` branch `main`
-- Supabase: `qkcuoaqrpnmdnejzahdv.supabase.co`
-- Gemini key: `lib/config/api_keys.dart`
-
-## Architecture
-
-- `AppState` (`InheritedNotifier<CartModel>`) — use `AppState.of(context)` for cart state
-- `CartModel.distinctItems` = unique products; `totalUnits` = total pack qty
-- Bottom nav: 4 items — Home, Catalogue, Orders, Bulk (Cart opens as slide-in panel)
-- `IndexedStack` keeps all three screen States alive across tab switches
-- `RepaintBoundary` on `_StickyCartBar`, `CartPanel`, and `Shimmer`
-- Celebration banners fire at ₹999 (free delivery) and ₹2999 (3% discount)
+## Behaviour
+- Wait for user instruction
+- Do NOT auto-suggest next steps
+- Do NOT auto-run deploy after finishing a task

@@ -232,7 +232,7 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
   Future<void> _onLoadMorePressed() async {
     if (_captchaLoading) return;
     setState(() => _captchaLoading = true);
-    final captchaToken = await _showTurnstile();
+    final captchaToken = await _showRecaptcha();
     if (!mounted) return;
     if (captchaToken == null) {
       setState(() => _captchaLoading = false);
@@ -270,7 +270,7 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
     }
   }
 
-  Future<String?> _showTurnstile() {
+  Future<String?> _showRecaptcha() {
     final completer = Completer<String?>();
     // ignore: deprecated_member_use
     final jsCallback = js.JsFunction.withThis((dynamic _, dynamic token) {
@@ -281,7 +281,7 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
         completer.complete((t != null && t.isNotEmpty) ? t : null);
       }
     });
-    js.context.callMethod('showTurnstile', [jsCallback]);
+    js.context.callMethod('showRecaptcha', [jsCallback]);
     return completer.future;
   }
 

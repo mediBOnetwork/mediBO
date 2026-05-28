@@ -104405,7 +104405,7 @@ case 2:return A.E(o.at(-1),r)}})
 return A.G($async$xs,r)},
 ax_(){var s=new A.aN($.aA,t._T),r=function(a,b,c){return function(){return a(b,c,this,Array.prototype.slice.apply(arguments))}}(A.b0W,new A.aMe(new A.bV(s,t.lB)),!0)
 $.abf()
-$.b5d().uj("showTurnstile",[new A.y4(r)])
+$.b5d().uj("showRecaptcha",[new A.y4(r)])
 return s},
 CJ(){var s=$.a9.aq$.x.i(0,this.e)
 if(s!=null)A.aZs(s,0,B.a1x,B.bw,B.rs)},

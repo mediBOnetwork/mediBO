@@ -1,10 +1,9 @@
 import 'package:flutter/material.dart';
-import 'package:razorpay_flutter/razorpay_flutter.dart';
 
 import '../app_state.dart';
-import '../config/payment_config.dart';
 import '../models/cart_model.dart';
 import '../models/product.dart';
+import '../services/payment_service.dart';
 import '../theme.dart';
 import '../util.dart';
 import '../widgets/animations.dart';
@@ -18,88 +17,68 @@ class CartScreen extends StatefulWidget {
 }
 
 class _CartScreenState extends State<CartScreen> {
-  late final Razorpay _razorpay;
+  bool _paymentInProgress = false;
 
-  @override
-  void initState() {
-    super.initState();
-    _razorpay = Razorpay();
-    _razorpay.on(Razorpay.EVENT_PAYMENT_SUCCESS, _handleSuccess);
-    _razorpay.on(Razorpay.EVENT_PAYMENT_ERROR, _handleError);
-    _razorpay.on(Razorpay.EVENT_EXTERNAL_WALLET, _handleExternalWallet);
-  }
+  Future<void> _openPayment() async {
+    if (_paymentInProgress) return;
+    setState(() => _paymentInProgress = true);
 
-  @override
-  void dispose() {
-    _razorpay.clear();
-    super.dispose();
-  }
-
-  void _openPayment() {
     final cart = AppState.of(context);
-    final options = {
-      'key': razorpayKey,
-      'amount': (cart.grandTotal * 100).round(),
-      'name': 'mediBO',
-      'description': 'Medicine Order',
-      'currency': 'INR',
-      'theme': {'color': '#1B5E20'},
-    };
+    final amount = cart.grandTotal;
+
     try {
-      _razorpay.open(options);
+      final result = await PaymentService.initiatePayment(
+        amount: amount,
+        name: 'Customer',
+        email: 'customer@medibo.in',
+        phone: '9999999999',
+      );
+      if (!mounted) return;
+
+      final status = result['status'] ?? 'dismissed';
+
+      if (status == 'success') {
+        final order = cart.checkout();
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (_) => _PaymentSuccessDialog(
+            paymentId: result['payment_id'] ?? '',
+            orderNumber: order.number,
+            amount: rupees(order.grandTotal),
+            onDone: () {
+              Navigator.of(context).pop();
+              widget.onOrderPlaced?.call();
+            },
+          ),
+        );
+      } else if (status == 'failed') {
+        showDialog(
+          context: context,
+          builder: (_) => _PaymentErrorDialog(
+            message: result['description']?.isNotEmpty == true
+                ? result['description']!
+                : 'Payment could not be completed.',
+            onRetry: () {
+              Navigator.of(context).pop();
+              _openPayment();
+            },
+            onCancel: () => Navigator.of(context).pop(),
+          ),
+        );
+      }
+      // 'dismissed' → user closed modal, no action needed
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Could not open payment: $e'),
+          content: Text('Payment error: $e'),
           behavior: SnackBarBehavior.floating,
         ),
       );
+    } finally {
+      if (mounted) setState(() => _paymentInProgress = false);
     }
-  }
-
-  void _handleSuccess(PaymentSuccessResponse response) {
-    if (!mounted) return;
-    final cart = AppState.of(context);
-    final order = cart.checkout();
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => _PaymentSuccessDialog(
-        paymentId: response.paymentId ?? '',
-        orderNumber: order.number,
-        amount: rupees(order.grandTotal),
-        onDone: () {
-          Navigator.of(context).pop();
-          widget.onOrderPlaced?.call();
-        },
-      ),
-    );
-  }
-
-  void _handleError(PaymentFailureResponse response) {
-    if (!mounted) return;
-    showDialog(
-      context: context,
-      builder: (_) => _PaymentErrorDialog(
-        message: response.message ?? 'Payment could not be completed.',
-        onRetry: () {
-          Navigator.of(context).pop();
-          _openPayment();
-        },
-        onCancel: () => Navigator.of(context).pop(),
-      ),
-    );
-  }
-
-  void _handleExternalWallet(ExternalWalletResponse response) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Redirecting to ${response.walletName}...'),
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
   }
 
   @override

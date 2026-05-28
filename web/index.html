@@ -162,5 +162,36 @@
       }, 3000);
     });
   </script>
+  <script>
+    function openRazorpay(amount, name, email, phone, callback) {
+      var options = {
+        key: 'rzp_test_Sui4xL8jGTDxav',
+        amount: amount,
+        currency: 'INR',
+        name: 'mediBO',
+        description: 'Medicine Order',
+        prefill: {
+          name: name || '',
+          email: email || '',
+          contact: phone || ''
+        },
+        theme: { color: '#1B5E20' },
+        handler: function(response) {
+          callback('success', response.razorpay_payment_id || '', '', '');
+        },
+        modal: {
+          ondismiss: function() {
+            callback('dismissed', '', '', '');
+          }
+        }
+      };
+      var rzp = new Razorpay(options);
+      rzp.on('payment.failed', function(response) {
+        var desc = (response.error && response.error.description) ? response.error.description : 'Payment failed';
+        callback('failed', '', desc, '');
+      });
+      rzp.open();
+    }
+  </script>
 </body>
 </html>

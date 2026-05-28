@@ -229,7 +229,6 @@ class _HomeShellState extends State<HomeShell> {
                 index: _index,
                 cartOpen: _cartOpen,
                 onPharmacy: () => _selectCategory('All'),
-                onCatalogue: () => _selectCategory('All'),
                 onHealthConditions: () => _selectCategory('Health Conditions'),
                 onBulk: () => setState(() {
                   _index = 2;
@@ -1500,7 +1499,6 @@ class _DesktopNavBar extends StatelessWidget {
   final int index;
   final bool cartOpen;
   final VoidCallback onPharmacy;
-  final VoidCallback onCatalogue;
   final VoidCallback onHealthConditions;
   final VoidCallback onBulk;
   final VoidCallback onOrders;
@@ -1509,7 +1507,6 @@ class _DesktopNavBar extends StatelessWidget {
     required this.index,
     required this.cartOpen,
     required this.onPharmacy,
-    required this.onCatalogue,
     required this.onHealthConditions,
     required this.onBulk,
     required this.onOrders,
@@ -1533,7 +1530,6 @@ class _DesktopNavBar extends StatelessWidget {
       child: Row(
         children: [
           _NavBarItem(label: 'Pharmacy', selected: isHome, onTap: onPharmacy),
-          _NavBarItem(label: 'Catalogue', selected: false, onTap: onCatalogue),
           _NavBarItem(label: 'Bulk Order', selected: isBulk, onTap: onBulk),
           _NavBarItem(label: 'Orders', selected: isOrders, onTap: onOrders),
           _NavBarItem(label: 'Health Conditions', selected: false, onTap: onHealthConditions),

@@ -1351,121 +1351,109 @@ class _Footer extends StatelessWidget {
     this.onCart,
   });
 
+  static const _kBg = Color(0xFF1B5E20);
+  static const _kAccent = Color(0xFF4CAF50);
+  static const _kLink = Color(0xFFA5D6A7);
+  static const _kHeading = TextStyle(
+    color: Colors.white,
+    fontSize: 14,
+    fontWeight: FontWeight.w700,
+    letterSpacing: 1.1,
+  );
+  static const _kLinkStyle = TextStyle(
+    color: _kLink,
+    fontSize: 13,
+    height: 1.6,
+  );
+
   @override
   Widget build(BuildContext context) {
     final shown = categories.take(8).toList();
     return Container(
       width: double.infinity,
-      color: Brand.greenDarker,
+      color: _kBg,
       child: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: _kMaxContent),
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 44),
+            padding: const EdgeInsets.fromLTRB(24, 48, 24, 0),
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Wrap(
-                  spacing: 48,
-                  runSpacing: 32,
-                  alignment: WrapAlignment.center,
-                  children: [
-                    SizedBox(
-                      width: 260,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.center,
+                LayoutBuilder(
+                  builder: (ctx, c) {
+                    final wide = c.maxWidth >= 600;
+                    if (wide) {
+                      return Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: const [
-                              Icon(Icons.local_pharmacy,
-                                  color: Brand.green, size: 26),
-                              SizedBox(width: 8),
-                              Text('mediBO',
-                                  style: TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 20,
-                                      fontWeight: FontWeight.w800)),
-                            ],
-                          ),
-                          const SizedBox(height: 12),
-                          Text(
-                            'Your trusted B2B pharmacy distributor delivering '
-                            'genuine medicines to pharmacies & clinics.',
-                            style: TextStyle(
-                                color: Colors.white.withValues(alpha: 0.7),
-                                fontSize: 13,
-                                height: 1.5),
-                          ),
-                          const SizedBox(height: 14),
-                          const _FooterContact(
-                              icon: Icons.call, text: '9329252090'),
-                          const _FooterContact(
-                              icon: Icons.mail,
-                              text: 'medibonetwork@gmail.com'),
+                          Expanded(child: _brandCol()),
+                          Expanded(child: _categoryCol(shown)),
+                          Expanded(child: _servicesCol()),
+                          Expanded(child: _quickCol(context)),
                         ],
-                      ),
-                    ),
-                    _FooterLinks(
-                      title: 'Shop by Category',
-                      links: [for (final c in shown) prettyCategory(c)],
-                      values: shown,
-                      onTap: onCategory,
-                    ),
-                    _FooterCallbackLinks(
-                      title: 'Our Services',
-                      items: [
-                        ('Search Medicines', onSearch),
-                        ('Bulk Upload', onBulkUpload),
-                        ('My Orders', onOrders),
-                        ('Cart', onCart),
+                      );
+                    }
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _brandCol(),
+                        const SizedBox(height: 32),
+                        _categoryCol(shown),
+                        const SizedBox(height: 32),
+                        _servicesCol(),
+                        const SizedBox(height: 32),
+                        _quickCol(context),
                       ],
-                    ),
-                    _FooterCallbackLinks(
-                      title: 'Quick Links',
-                      items: [
-                        (
-                          'About Us',
-                          () => Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                  builder: (_) => const AboutScreen()))
-                        ),
-                        (
-                          'Contact Us',
-                          () => Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                  builder: (_) => const ContactScreen()))
-                        ),
-                      ],
-                    ),
-                  ],
+                    );
+                  },
                 ),
-                const SizedBox(height: 36),
-                Divider(color: Colors.white.withValues(alpha: 0.12)),
-                const SizedBox(height: 16),
-                SizedBox(
-                  width: double.infinity,
-                  child: Text(
-                    '© 2026 mediBO | All rights reserved',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.6), fontSize: 12),
-                  ),
-                ),
-                const SizedBox(height: 10),
-                Divider(color: Colors.white.withValues(alpha: 0.08)),
-                const SizedBox(height: 10),
-                SizedBox(
-                  width: double.infinity,
-                  child: Text(
-                    'Drug License No: 20B — WLF20B2025CT000337  ·  21B — WLF21B2025CT000337',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.45),
-                      fontSize: 11,
-                    ),
+                const SizedBox(height: 40),
+                Divider(color: Colors.white.withValues(alpha: 0.15)),
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 20),
+                  child: LayoutBuilder(
+                    builder: (ctx, c) {
+                      final wide = c.maxWidth >= 600;
+                      if (wide) {
+                        return Row(
+                          children: [
+                            Text(
+                              '© 2026 mediBO | All rights reserved',
+                              style: TextStyle(
+                                  color: Colors.white.withValues(alpha: 0.6),
+                                  fontSize: 12),
+                            ),
+                            const Spacer(),
+                            Text(
+                              'Drug License: 20B — WLF20B2025CT000337  ·  21B — WLF21B2025CT000337',
+                              style: TextStyle(
+                                  color: Colors.white.withValues(alpha: 0.45),
+                                  fontSize: 11),
+                            ),
+                          ],
+                        );
+                      }
+                      return Column(
+                        children: [
+                          Text(
+                            '© 2026 mediBO | All rights reserved',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                                color: Colors.white.withValues(alpha: 0.6),
+                                fontSize: 12),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            'Drug License: 20B — WLF20B2025CT000337  ·  21B — WLF21B2025CT000337',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                                color: Colors.white.withValues(alpha: 0.45),
+                                fontSize: 11),
+                          ),
+                        ],
+                      );
+                    },
                   ),
                 ),
               ],
@@ -1475,90 +1463,101 @@ class _Footer extends StatelessWidget {
       ),
     );
   }
-}
 
-class _FooterContact extends StatelessWidget {
-  final IconData icon;
-  final String text;
-  const _FooterContact({required this.icon, required this.text});
-
-  @override
-  Widget build(BuildContext context) {
+  Widget _brandCol() {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
+      padding: const EdgeInsets.only(right: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          Icon(icon, size: 15, color: Colors.white.withValues(alpha: 0.7)),
-          const SizedBox(width: 8),
-          Text(text,
-              style: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.8), fontSize: 13)),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: const [
+              Icon(Icons.local_pharmacy, color: _kAccent, size: 24),
+              SizedBox(width: 8),
+              Text('mediBO',
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 20,
+                      fontWeight: FontWeight.w800)),
+            ],
+          ),
+          const SizedBox(height: 12),
+          const Text(
+            'Your trusted B2B pharmacy distributor. Genuine medicines delivered to pharmacies & clinics.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: _kLink, fontSize: 12, height: 1.6),
+          ),
+          const SizedBox(height: 16),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: const [
+              Icon(Icons.call, size: 13, color: _kAccent),
+              SizedBox(width: 6),
+              Text('9329252090', style: _kLinkStyle),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: const [
+              Icon(Icons.mail, size: 13, color: _kAccent),
+              SizedBox(width: 6),
+              Text('medibonetwork@gmail.com', style: _kLinkStyle),
+            ],
+          ),
         ],
       ),
     );
   }
-}
 
-class _FooterLinks extends StatelessWidget {
-  final String title;
-  final List<String> links;
-  final List<String>? values;
-  final ValueChanged<String>? onTap;
-  const _FooterLinks(
-      {required this.title, required this.links, this.values, this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
+  Widget _categoryCol(List<String> shown) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(title,
-            style: const TextStyle(
-                color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700)),
-        const SizedBox(height: 14),
-        for (var i = 0; i < links.length; i++)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 10),
-            child: InkWell(
-              onTap: onTap == null ? null : () => onTap!((values ?? links)[i]),
-              child: Text(links[i],
-                  style: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.72),
-                      fontSize: 13)),
-            ),
-          ),
+        const Text('SHOP BY CATEGORY', style: _kHeading),
+        const SizedBox(height: 16),
+        for (final c in shown)
+          _footerLink(prettyCategory(c), () => onCategory(c)),
       ],
     );
   }
-}
 
-class _FooterCallbackLinks extends StatelessWidget {
-  final String title;
-  final List<(String, VoidCallback?)> items;
-  const _FooterCallbackLinks({required this.title, required this.items});
-
-  @override
-  Widget build(BuildContext context) {
+  Widget _servicesCol() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(title,
-            style: const TextStyle(
-                color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700)),
-        const SizedBox(height: 14),
-        for (final (label, callback) in items)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 10),
-            child: InkWell(
-              onTap: callback,
-              child: Text(label,
-                  style: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.72),
-                      fontSize: 13)),
-            ),
-          ),
+        const Text('OUR SERVICES', style: _kHeading),
+        const SizedBox(height: 16),
+        _footerLink('Search Medicines', onSearch),
+        _footerLink('Bulk Upload', onBulkUpload),
+        _footerLink('My Orders', onOrders),
+        _footerLink('Cart', onCart),
       ],
+    );
+  }
+
+  Widget _quickCol(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text('QUICK LINKS', style: _kHeading),
+        const SizedBox(height: 16),
+        _footerLink('About Us', () => Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const AboutScreen()))),
+        _footerLink('Contact Us', () => Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const ContactScreen()))),
+      ],
+    );
+  }
+
+  static Widget _footerLink(String label, VoidCallback? onTap) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: InkWell(
+        onTap: onTap,
+        child: Text(label, style: _kLinkStyle),
+      ),
     );
   }
 }

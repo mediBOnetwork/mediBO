@@ -1348,13 +1348,13 @@ class _DesktopHeaderState extends State<_DesktopHeader> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Container(
-                    width: 36,
-                    height: 36,
+                    width: 44,
+                    height: 44,
                     decoration: BoxDecoration(
-                      color: Brand.green,
+                      color: const Color(0xFF1B5E20),
                       borderRadius: BorderRadius.circular(8),
                     ),
-                    child: const Icon(Icons.add, color: Colors.white, size: 22),
+                    child: const Icon(Icons.add, color: Colors.white, size: 26),
                   ),
                   const SizedBox(width: 10),
                   RichText(
@@ -1363,18 +1363,18 @@ class _DesktopHeaderState extends State<_DesktopHeader> {
                         TextSpan(
                           text: 'medi',
                           style: TextStyle(
-                            fontSize: 22,
-                            fontWeight: FontWeight.w500,
-                            color: Brand.ink,
+                            fontSize: 24,
+                            fontWeight: FontWeight.w700,
+                            color: Color(0xFF1B5E20),
                             letterSpacing: -0.3,
                           ),
                         ),
                         TextSpan(
                           text: 'BO',
                           style: TextStyle(
-                            fontSize: 22,
+                            fontSize: 24,
                             fontWeight: FontWeight.w800,
-                            color: Brand.green,
+                            color: Color(0xFF4CAF50),
                             letterSpacing: -0.3,
                           ),
                         ),

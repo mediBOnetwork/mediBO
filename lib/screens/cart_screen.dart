@@ -350,9 +350,10 @@ class _CartItemCard extends StatelessWidget {
                     else
                       const SizedBox(),
                     const Spacer(),
-                    _QtyDropdown(
-                      qty: line.quantity,
-                      onChanged: (v) => cart.setQuantity(p, v),
+                    _CartStepper(
+                      product: p,
+                      quantity: line.quantity,
+                      cart: cart,
                     ),
                   ],
                 ),
@@ -411,60 +412,166 @@ class _ProductImage extends StatelessWidget {
   }
 }
 
-// ─── Quantity dropdown pill ───────────────────────────────────────────────────
+// ─── Cart quantity stepper ────────────────────────────────────────────────────
 
-class _QtyDropdown extends StatelessWidget {
-  final int qty;
-  final ValueChanged<int> onChanged;
-  const _QtyDropdown({required this.qty, required this.onChanged});
+class _CartStepper extends StatefulWidget {
+  final Product product;
+  final int quantity;
+  final CartModel cart;
+  const _CartStepper({
+    required this.product,
+    required this.quantity,
+    required this.cart,
+  });
 
-  static const _blue = Color(0xFF1D4ED8);
+  static String _unit(String packSize) {
+    final s = packSize.toLowerCase();
+    if (s.contains('strip')) return 'Strip';
+    if (s.contains('bottle')) return 'Bottle';
+    if (s.contains('vial')) return 'Vial';
+    if (s.contains('tube')) return 'Tube';
+    if (s.contains('sachet')) return 'Sachet';
+    if (s.contains('box')) return 'Box';
+    if (s.contains('ampoule') || s.contains('ampule')) return 'Ampoule';
+    if (s.contains('pack')) return 'Pack';
+    return 'Unit';
+  }
+
+  @override
+  State<_CartStepper> createState() => _CartStepperState();
+}
+
+class _CartStepperState extends State<_CartStepper> {
+  bool _increasing = true;
+
+  @override
+  void didUpdateWidget(_CartStepper old) {
+    super.didUpdateWidget(old);
+    if (widget.quantity != old.quantity) {
+      _increasing = widget.quantity > old.quantity;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    return PopupMenuButton<int>(
-      initialValue: qty,
-      onSelected: onChanged,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      color: Colors.white,
-      elevation: 8,
-      offset: const Offset(0, -8),
-      constraints: const BoxConstraints(minWidth: 100),
-      itemBuilder: (_) => [
-        for (int i = 1; i <= 12; i++)
-          PopupMenuItem<int>(
-            value: i,
-            height: 40,
-            child: Text(
-              'Qty: $i',
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: i == qty ? FontWeight.w700 : FontWeight.w400,
-                color: i == qty ? _blue : const Color(0xFF111827),
-              ),
-            ),
-          ),
-      ],
+    final unit = _CartStepper._unit(widget.product.packSize);
+    final qty = widget.quantity;
+    final increasing = _increasing;
+
+    return SizedBox(
+      width: 150,
+      height: 40,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
         decoration: BoxDecoration(
-          color: _blue,
-          borderRadius: BorderRadius.circular(20),
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: const Color(0xFFE5E7EB)),
         ),
         child: Row(
-          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(
-              'Qty: $qty',
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 13,
-                fontWeight: FontWeight.w700,
+            // Minus button
+            MouseRegion(
+              cursor: SystemMouseCursors.click,
+              child: GestureDetector(
+                onTap: () => widget.cart.decrement(widget.product),
+                child: const SizedBox(
+                  width: 40,
+                  child: Center(
+                    child: Text(
+                      '−',
+                      style: TextStyle(
+                        color: Color(0xFF1a1a1a),
+                        fontSize: 20,
+                        fontWeight: FontWeight.w600,
+                        height: 1,
+                      ),
+                    ),
+                  ),
+                ),
               ),
             ),
-            const SizedBox(width: 4),
-            const Icon(Icons.keyboard_arrow_down,
-                color: Colors.white, size: 16),
+            // Center: qty + unit with slide animation
+            Expanded(
+              child: Center(
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    ClipRect(
+                      child: AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 200),
+                        transitionBuilder: (child, anim) {
+                          final isNew =
+                              (child.key as ValueKey<int>).value == qty;
+                          final begin = isNew
+                              ? (increasing
+                                  ? const Offset(0, -1)
+                                  : const Offset(0, 1))
+                              : (increasing
+                                  ? const Offset(0, 1)
+                                  : const Offset(0, -1));
+                          return SlideTransition(
+                            position: Tween<Offset>(
+                                    begin: begin, end: Offset.zero)
+                                .animate(anim),
+                            child: child,
+                          );
+                        },
+                        child: Text(
+                          '$qty',
+                          key: ValueKey<int>(qty),
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w700,
+                            color: Color(0xFF1a1a1a),
+                            fontSize: 14,
+                            height: 1,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      unit,
+                      style: const TextStyle(
+                        fontSize: 13,
+                        color: Color(0xFF1a1a1a),
+                        fontWeight: FontWeight.w600,
+                        height: 1,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            // Plus button — green
+            MouseRegion(
+              cursor: SystemMouseCursors.click,
+              child: GestureDetector(
+                onTap: () => widget.cart.increment(widget.product),
+                child: Container(
+                  width: 40,
+                  decoration: const BoxDecoration(
+                    color: Brand.green,
+                    borderRadius: BorderRadius.only(
+                      topRight: Radius.circular(7),
+                      bottomRight: Radius.circular(7),
+                    ),
+                  ),
+                  child: const Center(
+                    child: Text(
+                      '+',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 20,
+                        fontWeight: FontWeight.w600,
+                        height: 1,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
           ],
         ),
       ),

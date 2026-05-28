@@ -1,9 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-
-import '../../user_state.dart';
-import 'otp_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -13,8 +9,9 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  final _phoneCtrl = TextEditingController();
+  final _emailCtrl = TextEditingController();
   bool _loading = false;
+  bool _emailSent = false;
   String? _error;
 
   @override
@@ -29,8 +26,14 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   void dispose() {
-    _phoneCtrl.dispose();
+    _emailCtrl.dispose();
     super.dispose();
+  }
+
+  void _handleBack() {
+    if (Navigator.canPop(context)) {
+      Navigator.pop(context);
+    }
   }
 
   Future<void> _googleSignIn() async {
@@ -54,10 +57,10 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
-  Future<void> _sendOtp() async {
-    final raw = _phoneCtrl.text.trim();
-    if (raw.length != 10 || !RegExp(r'^[6-9]\d{9}$').hasMatch(raw)) {
-      setState(() => _error = 'Enter a valid 10-digit Indian mobile number');
+  Future<void> _sendMagicLink() async {
+    final email = _emailCtrl.text.trim();
+    if (email.isEmpty || !email.contains('@')) {
+      setState(() => _error = 'Enter a valid email address');
       return;
     }
     setState(() {
@@ -65,19 +68,20 @@ class _LoginScreenState extends State<LoginScreen> {
       _error = null;
     });
     try {
-      final phone = '+91$raw';
-      await Supabase.instance.client.auth.signInWithOtp(phone: phone);
-      if (!mounted) return;
-      await Navigator.push(
-        context,
-        MaterialPageRoute(builder: (_) => OtpScreen(phone: phone)),
+      await Supabase.instance.client.auth.signInWithOtp(
+        email: email,
+        emailRedirectTo: 'https://medibo.in',
       );
+      if (mounted) setState(() { _emailSent = true; _loading = false; });
     } on AuthException catch (e) {
-      if (mounted) setState(() => _error = e.message);
+      if (mounted) setState(() { _error = e.message; _loading = false; });
     } catch (_) {
-      if (mounted) setState(() => _error = 'Failed to send OTP. Please try again.');
-    } finally {
-      if (mounted) setState(() => _loading = false);
+      if (mounted) {
+        setState(() {
+          _error = 'Failed to send link. Please try again.';
+          _loading = false;
+        });
+      }
     }
   }
 
@@ -86,227 +90,234 @@ class _LoginScreenState extends State<LoginScreen> {
     return Scaffold(
       backgroundColor: Colors.white,
       body: SafeArea(
-        child: Center(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 40),
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 420),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  // Logo
-                  const Center(child: _MediBoLogo()),
-                  const SizedBox(height: 32),
-                  // Heading
-                  const Text(
-                    'Welcome to mediBO',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: 26,
-                      fontWeight: FontWeight.w800,
-                      color: Color(0xFF111827),
-                      letterSpacing: -0.5,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  const Text(
-                    'B2B Pharmacy Platform',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 15, color: Color(0xFF6B7280)),
-                  ),
-                  const SizedBox(height: 40),
-
-                  // PRIMARY: Google button
-                  SizedBox(
-                    height: 54,
-                    child: FilledButton(
-                      onPressed: _loading ? null : _googleSignIn,
-                      style: FilledButton.styleFrom(
-                        backgroundColor: const Color(0xFF1B5E20),
-                        disabledBackgroundColor:
-                            const Color(0xFF1B5E20).withValues(alpha: 0.5),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        textStyle: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                      child: _loading
-                          ? const SizedBox(
-                              width: 22,
-                              height: 22,
-                              child: CircularProgressIndicator(
-                                color: Colors.white,
-                                strokeWidth: 2.5,
-                              ),
-                            )
-                          : const Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                _GoogleIcon(light: true),
-                                SizedBox(width: 10),
-                                Text('Continue with Google'),
-                              ],
-                            ),
-                    ),
-                  ),
-
-                  const SizedBox(height: 28),
-
-                  // Divider
-                  const Row(
-                    children: [
-                      Expanded(child: Divider()),
-                      Padding(
-                        padding: EdgeInsets.symmetric(horizontal: 14),
-                        child: Text(
-                          'or',
-                          style: TextStyle(
-                              color: Color(0xFF9CA3AF), fontSize: 13),
-                        ),
-                      ),
-                      Expanded(child: Divider()),
-                    ],
-                  ),
-
-                  const SizedBox(height: 20),
-
-                  // SECONDARY: Mobile OTP
-                  const Text(
-                    'Continue with mobile number',
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w500,
-                      color: Color(0xFF6B7280),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  // Phone field
-                  Container(
-                    decoration: BoxDecoration(
-                      border: Border.all(
-                        color: _error != null
-                            ? const Color(0xFFDC2626)
-                            : const Color(0xFFD1D5DB),
-                        width: 1.5,
-                      ),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 12, vertical: 13),
-                          decoration: const BoxDecoration(
-                            border: Border(
-                                right:
-                                    BorderSide(color: Color(0xFFE5E7EB))),
-                          ),
-                          child: const Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text('🇮🇳', style: TextStyle(fontSize: 18)),
-                              SizedBox(width: 6),
-                              Text(
-                                '+91',
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w700,
-                                  color: Color(0xFF374151),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        Expanded(
-                          child: TextField(
-                            controller: _phoneCtrl,
-                            keyboardType: TextInputType.phone,
-                            inputFormatters: [
-                              FilteringTextInputFormatter.digitsOnly,
-                              LengthLimitingTextInputFormatter(10),
-                            ],
-                            onSubmitted: (_) => _sendOtp(),
-                            style: const TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.w600,
-                              color: Color(0xFF111827),
-                              letterSpacing: 1.2,
-                            ),
-                            decoration: const InputDecoration(
-                              border: InputBorder.none,
-                              enabledBorder: InputBorder.none,
-                              focusedBorder: InputBorder.none,
-                              contentPadding: EdgeInsets.symmetric(
-                                  horizontal: 12, vertical: 13),
-                              hintText: '9876543210',
-                              hintStyle: TextStyle(
-                                fontWeight: FontWeight.w400,
-                                color: Color(0xFF9CA3AF),
-                                letterSpacing: 0,
-                              ),
-                              isDense: true,
-                              filled: false,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  if (_error != null) ...[
-                    const SizedBox(height: 6),
-                    Text(
-                      _error!,
-                      style: const TextStyle(
-                          fontSize: 12, color: Color(0xFFDC2626)),
-                    ),
-                  ],
-                  const SizedBox(height: 12),
-                  // Send OTP button (secondary)
-                  SizedBox(
-                    height: 46,
-                    child: OutlinedButton(
-                      onPressed: _loading ? null : _sendOtp,
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: const Color(0xFF1B5E20),
-                        side: const BorderSide(
-                            color: Color(0xFF1B5E20), width: 1.5),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        textStyle: const TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      child: const Text('Send OTP'),
-                    ),
-                  ),
-
-                  const SizedBox(height: 32),
-                  // Terms
-                  const Text(
-                    'By continuing you agree to our Terms & Privacy Policy',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: Color(0xFF9CA3AF),
-                      height: 1.5,
-                    ),
-                  ),
-                ],
+        child: Stack(
+          children: [
+            Positioned(
+              top: 8,
+              left: 8,
+              child: IconButton(
+                icon: const Icon(Icons.arrow_back_ios_new, size: 20),
+                color: const Color(0xFF1B5E20),
+                onPressed: _handleBack,
+                tooltip: 'Back',
               ),
             ),
-          ),
+            Center(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 40),
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 420),
+                  child: _emailSent ? _buildEmailSentView() : _buildLoginForm(),
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
   }
+
+  Widget _buildEmailSentView() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Center(child: _MediBoLogo()),
+        const SizedBox(height: 32),
+        const Icon(Icons.mark_email_read_outlined, size: 64, color: Color(0xFF1B5E20)),
+        const SizedBox(height: 20),
+        const Text(
+          'Check your email',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontSize: 22,
+            fontWeight: FontWeight.w800,
+            color: Color(0xFF111827),
+          ),
+        ),
+        const SizedBox(height: 10),
+        Text(
+          'We sent a sign-in link to ${_emailCtrl.text.trim()}',
+          textAlign: TextAlign.center,
+          style: const TextStyle(fontSize: 14, color: Color(0xFF6B7280), height: 1.5),
+        ),
+        const SizedBox(height: 32),
+        OutlinedButton(
+          onPressed: () => setState(() { _emailSent = false; _emailCtrl.clear(); }),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: const Color(0xFF1B5E20),
+            side: const BorderSide(color: Color(0xFF1B5E20), width: 1.5),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            padding: const EdgeInsets.symmetric(vertical: 14),
+          ),
+          child: const Text(
+            'Use a different email',
+            style: TextStyle(fontWeight: FontWeight.w600),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildLoginForm() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Center(child: _MediBoLogo()),
+        const SizedBox(height: 32),
+        const Text(
+          'Welcome to mediBO',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontSize: 26,
+            fontWeight: FontWeight.w800,
+            color: Color(0xFF111827),
+            letterSpacing: -0.5,
+          ),
+        ),
+        const SizedBox(height: 6),
+        const Text(
+          'B2B Pharmacy Platform',
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 15, color: Color(0xFF6B7280)),
+        ),
+        const SizedBox(height: 40),
+
+        // Google sign-in
+        SizedBox(
+          height: 54,
+          child: FilledButton(
+            onPressed: _loading ? null : _googleSignIn,
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFF1B5E20),
+              disabledBackgroundColor:
+                  const Color(0xFF1B5E20).withValues(alpha: 0.5),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+              textStyle: const TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            child: _loading
+                ? const SizedBox(
+                    width: 22,
+                    height: 22,
+                    child: CircularProgressIndicator(
+                      color: Colors.white,
+                      strokeWidth: 2.5,
+                    ),
+                  )
+                : const Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      _GoogleIcon(light: true),
+                      SizedBox(width: 10),
+                      Text('Continue with Google'),
+                    ],
+                  ),
+          ),
+        ),
+
+        const SizedBox(height: 28),
+
+        const Row(
+          children: [
+            Expanded(child: Divider()),
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: 14),
+              child: Text(
+                'or',
+                style: TextStyle(color: Color(0xFF9CA3AF), fontSize: 13),
+              ),
+            ),
+            Expanded(child: Divider()),
+          ],
+        ),
+
+        const SizedBox(height: 20),
+
+        // Email magic link
+        const Text(
+          'Continue with email',
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w500,
+            color: Color(0xFF6B7280),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Container(
+          decoration: BoxDecoration(
+            border: Border.all(
+              color: _error != null
+                  ? const Color(0xFFDC2626)
+                  : const Color(0xFFD1D5DB),
+              width: 1.5,
+            ),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: TextField(
+            controller: _emailCtrl,
+            keyboardType: TextInputType.emailAddress,
+            onSubmitted: (_) => _sendMagicLink(),
+            style: const TextStyle(fontSize: 15, color: Color(0xFF111827)),
+            decoration: const InputDecoration(
+              border: InputBorder.none,
+              enabledBorder: InputBorder.none,
+              focusedBorder: InputBorder.none,
+              contentPadding:
+                  EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+              hintText: 'your@email.com',
+              hintStyle: TextStyle(color: Color(0xFF9CA3AF)),
+              isDense: true,
+              filled: false,
+            ),
+          ),
+        ),
+        if (_error != null) ...[
+          const SizedBox(height: 6),
+          Text(
+            _error!,
+            style: const TextStyle(fontSize: 12, color: Color(0xFFDC2626)),
+          ),
+        ],
+        const SizedBox(height: 12),
+        SizedBox(
+          height: 46,
+          child: OutlinedButton(
+            onPressed: _loading ? null : _sendMagicLink,
+            style: OutlinedButton.styleFrom(
+              foregroundColor: const Color(0xFF1B5E20),
+              side: const BorderSide(color: Color(0xFF1B5E20), width: 1.5),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+              textStyle: const TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            child: const Text('Send Magic Link'),
+          ),
+        ),
+
+        const SizedBox(height: 32),
+        const Text(
+          'By continuing you agree to our Terms & Privacy Policy',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontSize: 11,
+            color: Color(0xFF9CA3AF),
+            height: 1.5,
+          ),
+        ),
+      ],
+    );
+  }
 }
 
-// ─── mediBO logo widget (shared) ─────────────────────────────────────────────
+// ─── mediBO logo ─────────────────────────────────────────────────────────────
 
 class _MediBoLogo extends StatelessWidget {
   const _MediBoLogo();
@@ -368,7 +379,8 @@ class _GoogleIcon extends StatelessWidget {
         color: light ? Colors.white : null,
         borderRadius: BorderRadius.circular(10),
         border: Border.all(
-            color: light ? Colors.transparent : const Color(0xFFE5E7EB)),
+          color: light ? Colors.transparent : const Color(0xFFE5E7EB),
+        ),
       ),
       child: const Center(
         child: Text(

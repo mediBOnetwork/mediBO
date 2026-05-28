@@ -202,43 +202,45 @@ class _CartControlState extends State<_CartControl>
   }
 
   Future<void> _addToCart() async {
-    final auth = UserState.read(context);
-    if (!auth.isAuthenticated) {
-      final goLogin = await showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16)),
-          title: const Text(
-            'Login required',
-            style: TextStyle(fontWeight: FontWeight.w700),
-          ),
-          content: const Text(
-            'Please log in to add items to your cart.',
-            style: TextStyle(fontSize: 14),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              style: FilledButton.styleFrom(
-                  backgroundColor: const Color(0xFF1B5E20)),
-              child: const Text('Log In'),
-            ),
-          ],
-        ),
-      );
-      if (goLogin != true || !mounted) return;
-      await Navigator.push(
-        context,
-        MaterialPageRoute(builder: (_) => const LoginScreen()),
-      );
-      if (!mounted) return;
-      if (!UserState.read(context).isAuthenticated) return;
-    }
+    // TODO: RE-ENABLE LOGIN CHECK BEFORE LAUNCH
+    // DISABLED FOR NOW - RE-ENABLE LATER
+    // final auth = UserState.read(context);
+    // if (!auth.isAuthenticated) {
+    //   final goLogin = await showDialog<bool>(
+    //     context: context,
+    //     builder: (ctx) => AlertDialog(
+    //       shape: RoundedRectangleBorder(
+    //           borderRadius: BorderRadius.circular(16)),
+    //       title: const Text(
+    //         'Login required',
+    //         style: TextStyle(fontWeight: FontWeight.w700),
+    //       ),
+    //       content: const Text(
+    //         'Please log in to add items to your cart.',
+    //         style: TextStyle(fontSize: 14),
+    //       ),
+    //       actions: [
+    //         TextButton(
+    //           onPressed: () => Navigator.pop(ctx, false),
+    //           child: const Text('Cancel'),
+    //         ),
+    //         FilledButton(
+    //           onPressed: () => Navigator.pop(ctx, true),
+    //           style: FilledButton.styleFrom(
+    //               backgroundColor: const Color(0xFF1B5E20)),
+    //           child: const Text('Log In'),
+    //         ),
+    //       ],
+    //     ),
+    //   );
+    //   if (goLogin != true || !mounted) return;
+    //   await Navigator.push(
+    //     context,
+    //     MaterialPageRoute(builder: (_) => const LoginScreen()),
+    //   );
+    //   if (!mounted) return;
+    //   if (!UserState.read(context).isAuthenticated) return;
+    // }
     _popCtrl.forward(from: 0);
     AppState.of(context).add(widget.product);
     MedicineRepository().incrementSalesCount(widget.product.id);

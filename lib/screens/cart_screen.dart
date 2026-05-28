@@ -25,41 +25,43 @@ class _CartScreenState extends State<CartScreen> {
   Future<void> _openPayment() async {
     if (_paymentInProgress) return;
 
-    // Require login before payment
-    final auth = UserState.read(context);
-    if (!auth.isAuthenticated) {
-      final goLogin = await showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16)),
-          title: const Text('Login required',
-              style: TextStyle(fontWeight: FontWeight.w700)),
-          content: const Text(
-            'Please log in to complete your purchase.',
-            style: TextStyle(fontSize: 14),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              style: FilledButton.styleFrom(
-                  backgroundColor: const Color(0xFF1B5E20)),
-              child: const Text('Log In'),
-            ),
-          ],
-        ),
-      );
-      if (goLogin != true || !mounted) return;
-      await Navigator.push(
-        context,
-        MaterialPageRoute(builder: (_) => const LoginScreen()),
-      );
-      return; // User can retry payment after logging in
-    }
+    // TODO: RE-ENABLE LOGIN CHECK BEFORE LAUNCH
+    // DISABLED FOR NOW - RE-ENABLE LATER
+    // // Require login before payment
+    // final auth = UserState.read(context);
+    // if (!auth.isAuthenticated) {
+    //   final goLogin = await showDialog<bool>(
+    //     context: context,
+    //     builder: (ctx) => AlertDialog(
+    //       shape: RoundedRectangleBorder(
+    //           borderRadius: BorderRadius.circular(16)),
+    //       title: const Text('Login required',
+    //           style: TextStyle(fontWeight: FontWeight.w700)),
+    //       content: const Text(
+    //         'Please log in to complete your purchase.',
+    //         style: TextStyle(fontSize: 14),
+    //       ),
+    //       actions: [
+    //         TextButton(
+    //           onPressed: () => Navigator.pop(ctx, false),
+    //           child: const Text('Cancel'),
+    //         ),
+    //         FilledButton(
+    //           onPressed: () => Navigator.pop(ctx, true),
+    //           style: FilledButton.styleFrom(
+    //               backgroundColor: const Color(0xFF1B5E20)),
+    //           child: const Text('Log In'),
+    //         ),
+    //       ],
+    //     ),
+    //   );
+    //   if (goLogin != true || !mounted) return;
+    //   await Navigator.push(
+    //     context,
+    //     MaterialPageRoute(builder: (_) => const LoginScreen()),
+    //   );
+    //   return; // User can retry payment after logging in
+    // }
 
     setState(() => _paymentInProgress = true);
     final cart = AppState.of(context);

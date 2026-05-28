@@ -32,6 +32,12 @@ class StorefrontScreen extends StatefulWidget {
   // Called with true when a load starts, false when it completes or errors.
   final ValueChanged<bool>? onLoadingChanged;
 
+  // When false (desktop), the category tile grid is hidden; the shell sidebar
+  // handles category filtering instead.
+  final bool showCategoryTiles;
+  // Called once after CatalogMeta loads so the shell can populate its sidebar.
+  final ValueChanged<CatalogMeta>? onMetaLoaded;
+
   const StorefrontScreen({
     super.key,
     required this.query,
@@ -42,6 +48,8 @@ class StorefrontScreen extends StatefulWidget {
     this.scrollTrigger = 0,
     this.scrollToTopTrigger = 0,
     this.onLoadingChanged,
+    this.showCategoryTiles = true,
+    this.onMetaLoaded,
   });
 
   @override
@@ -107,6 +115,7 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
         _meta = meta;
         _metaError = null;
       });
+      widget.onMetaLoaded?.call(meta);
     } catch (e) {
       if (!mounted) return;
       setState(() => _metaError = e);
@@ -244,19 +253,20 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
       child: Column(
         children: [
           _Hero(onShopNow: _scrollToProducts),
-          _Section(
-            child: _CategoryTiles(
-              meta: _meta,
-              metaError: _metaError,
-              selected: widget.category,
-              onRetry: _loadMeta,
-              onSelected: (c) {
-                widget.onCategorySelected(c);
-                WidgetsBinding.instance
-                    .addPostFrameCallback((_) => _scrollToProducts());
-              },
+          if (widget.showCategoryTiles)
+            _Section(
+              child: _CategoryTiles(
+                meta: _meta,
+                metaError: _metaError,
+                selected: widget.category,
+                onRetry: _loadMeta,
+                onSelected: (c) {
+                  widget.onCategorySelected(c);
+                  WidgetsBinding.instance
+                      .addPostFrameCallback((_) => _scrollToProducts());
+                },
+              ),
             ),
-          ),
           _Section(
             padding: const EdgeInsets.fromLTRB(20, 0, 20, 28),
             child: const _PromoStrip(),

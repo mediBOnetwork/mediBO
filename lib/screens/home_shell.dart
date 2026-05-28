@@ -6,14 +6,15 @@ import '../app_state.dart';
 import '../data/medicine_repository.dart';
 import '../models/cart_model.dart';
 import '../theme.dart';
+import '../util.dart';
 import '../widgets/animations.dart';
 import 'bulk_upload_screen.dart';
 import 'cart_screen.dart';
 import 'orders_screen.dart';
 import 'storefront_screen.dart';
 
-/// App shell: 1mg-style header (location + logo + cart), full-width search bar,
-/// horizontal quick-nav chips, the active page, and a persistent bottom promo bar.
+/// App shell: responsive — desktop gets a top nav + sidebar, mobile/tablet
+/// keeps the existing header + quick-nav chips + bottom nav layout.
 class HomeShell extends StatefulWidget {
   const HomeShell({super.key});
 
@@ -40,6 +41,9 @@ class _HomeShellState extends State<HomeShell> {
   bool _celebrate3pct = false;
   Timer? _deliveryTimer;
   Timer? _discountTimer;
+
+  // Desktop sidebar: populated once storefront loads its CatalogMeta
+  CatalogMeta? _desktopMeta;
 
   @override
   void didChangeDependencies() {
@@ -72,6 +76,10 @@ class _HomeShellState extends State<HomeShell> {
     _prevSubtotal = sub;
   }
 
+  void _onMetaLoaded(CatalogMeta meta) {
+    if (mounted) setState(() => _desktopMeta = meta);
+  }
+
   @override
   void dispose() {
     _searchCtrl.dispose();
@@ -91,9 +99,11 @@ class _HomeShellState extends State<HomeShell> {
 
   @override
   Widget build(BuildContext context) {
-    final isMobile = MediaQuery.sizeOf(context).width < 600;
+    final width = MediaQuery.sizeOf(context).width;
+    final isDesktop = width >= 900;
     final cart = AppState.of(context);
 
+    // IndexedStack keeps all screen States alive — no re-fetch on tab switch.
     final pages = [
       StorefrontScreen(
         query: _query,
@@ -113,11 +123,20 @@ class _HomeShellState extends State<HomeShell> {
             setState(() => _searchLoading = loading && _query.trim().isNotEmpty);
           }
         },
+        showCategoryTiles: !isDesktop,
+        onMetaLoaded: _onMetaLoaded,
       ),
       const OrdersScreen(),
       const BulkUploadScreen(),
     ];
 
+    if (isDesktop) return _buildDesktop(cart, pages);
+    return _buildMobile(cart, pages);
+  }
+
+  // ─── Mobile / tablet layout (< 900px) ────────────────────────────────────
+
+  Widget _buildMobile(CartModel cart, List<Widget> pages) {
     // 4-item nav: 0=Home, 1=Catalogue, 2=Orders, 3=Bulk
     final bottomNavIndex = _index == 1 ? 2 : _index == 2 ? 3 : 0;
 
@@ -126,110 +145,107 @@ class _HomeShellState extends State<HomeShell> {
       bottomNavigationBar: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (isMobile)
-            AnimatedSwitcher(
-              duration: const Duration(milliseconds: 550),
-              reverseDuration: const Duration(milliseconds: 300),
-              transitionBuilder: (child, anim) => SizeTransition(
-                sizeFactor: CurvedAnimation(
-                  parent: anim,
-                  curve: Curves.easeOutBack,
-                  reverseCurve: Curves.easeIn,
-                ),
-                axisAlignment: 1.0,
-                child: child,
+          AnimatedSwitcher(
+            duration: const Duration(milliseconds: 550),
+            reverseDuration: const Duration(milliseconds: 300),
+            transitionBuilder: (child, anim) => SizeTransition(
+              sizeFactor: CurvedAnimation(
+                parent: anim,
+                curve: Curves.easeOutBack,
+                reverseCurve: Curves.easeIn,
               ),
-              child: _celebrateDelivery
-                  ? _CelebrationBanner(
-                      key: const ValueKey('delivery'),
-                      message: '🎉 Awesome! You unlocked FREE delivery!',
-                      bgColor: const Color(0xFF15803D),
-                      textColor: Colors.white,
-                    )
-                  : const SizedBox.shrink(key: ValueKey('delivery-empty')),
+              axisAlignment: 1.0,
+              child: child,
             ),
-          if (isMobile)
-            AnimatedSwitcher(
-              duration: const Duration(milliseconds: 550),
-              reverseDuration: const Duration(milliseconds: 300),
-              transitionBuilder: (child, anim) => SizeTransition(
-                sizeFactor: CurvedAnimation(
-                  parent: anim,
-                  curve: Curves.easeOutBack,
-                  reverseCurve: Curves.easeIn,
-                ),
-                axisAlignment: 1.0,
-                child: child,
+            child: _celebrateDelivery
+                ? _CelebrationBanner(
+                    key: const ValueKey('delivery'),
+                    message: '🎉 Awesome! You unlocked FREE delivery!',
+                    bgColor: const Color(0xFF15803D),
+                    textColor: Colors.white,
+                  )
+                : const SizedBox.shrink(key: ValueKey('delivery-empty')),
+          ),
+          AnimatedSwitcher(
+            duration: const Duration(milliseconds: 550),
+            reverseDuration: const Duration(milliseconds: 300),
+            transitionBuilder: (child, anim) => SizeTransition(
+              sizeFactor: CurvedAnimation(
+                parent: anim,
+                curve: Curves.easeOutBack,
+                reverseCurve: Curves.easeIn,
               ),
-              child: _celebrate3pct
-                  ? _CelebrationBanner(
-                      key: const ValueKey('3pct'),
-                      message: '🎉 Congratulations! You unlocked 3% discount!',
-                      bgColor: const Color(0xFFF59E0B),
-                      textColor: const Color(0xFF1C1917),
-                    )
-                  : const SizedBox.shrink(key: ValueKey('3pct-empty')),
+              axisAlignment: 1.0,
+              child: child,
             ),
-          if (isMobile && cart.distinctItems > 0)
+            child: _celebrate3pct
+                ? _CelebrationBanner(
+                    key: const ValueKey('3pct'),
+                    message: '🎉 Congratulations! You unlocked 3% discount!',
+                    bgColor: const Color(0xFFF59E0B),
+                    textColor: const Color(0xFF1C1917),
+                  )
+                : const SizedBox.shrink(key: ValueKey('3pct-empty')),
+          ),
+          if (cart.distinctItems > 0)
             RepaintBoundary(
               child: _StickyCartBar(
                 onTap: () => setState(() => _cartOpen = true),
               ),
             ),
-          if (isMobile)
-            BottomNavigationBar(
-              currentIndex: bottomNavIndex,
-              type: BottomNavigationBarType.fixed,
-              selectedItemColor: Brand.green,
-              unselectedItemColor: Brand.inkMuted,
-              selectedFontSize: 10,
-              unselectedFontSize: 10,
-              elevation: 8,
-              onTap: (i) => setState(() {
-                switch (i) {
-                  case 0:
-                  case 1:
-                    _index = 0;
-                    _cartOpen = false;
-                  case 2:
-                    _index = 1;
-                    _cartOpen = false;
-                  case 3:
-                    _index = 2;
-                    _cartOpen = false;
-                }
-              }),
-              items: [
-                const BottomNavigationBarItem(
-                  icon: Icon(Icons.home_outlined),
-                  activeIcon: Icon(Icons.home),
-                  label: 'Home',
+          BottomNavigationBar(
+            currentIndex: bottomNavIndex,
+            type: BottomNavigationBarType.fixed,
+            selectedItemColor: Brand.green,
+            unselectedItemColor: Brand.inkMuted,
+            selectedFontSize: 10,
+            unselectedFontSize: 10,
+            elevation: 8,
+            onTap: (i) => setState(() {
+              switch (i) {
+                case 0:
+                case 1:
+                  _index = 0;
+                  _cartOpen = false;
+                case 2:
+                  _index = 1;
+                  _cartOpen = false;
+                case 3:
+                  _index = 2;
+                  _cartOpen = false;
+              }
+            }),
+            items: [
+              const BottomNavigationBarItem(
+                icon: Icon(Icons.home_outlined),
+                activeIcon: Icon(Icons.home),
+                label: 'Home',
+              ),
+              const BottomNavigationBarItem(
+                icon: Icon(Icons.grid_view_outlined),
+                activeIcon: Icon(Icons.grid_view),
+                label: 'Catalogue',
+              ),
+              BottomNavigationBarItem(
+                icon: Badge(
+                  isLabelVisible: cart.orders.isNotEmpty,
+                  label: Text('${cart.orders.length}'),
+                  child: const Icon(Icons.receipt_long_outlined),
                 ),
-                const BottomNavigationBarItem(
-                  icon: Icon(Icons.grid_view_outlined),
-                  activeIcon: Icon(Icons.grid_view),
-                  label: 'Catalogue',
+                activeIcon: Badge(
+                  isLabelVisible: cart.orders.isNotEmpty,
+                  label: Text('${cart.orders.length}'),
+                  child: const Icon(Icons.receipt_long),
                 ),
-                BottomNavigationBarItem(
-                  icon: Badge(
-                    isLabelVisible: cart.orders.isNotEmpty,
-                    label: Text('${cart.orders.length}'),
-                    child: const Icon(Icons.receipt_long_outlined),
-                  ),
-                  activeIcon: Badge(
-                    isLabelVisible: cart.orders.isNotEmpty,
-                    label: Text('${cart.orders.length}'),
-                    child: const Icon(Icons.receipt_long),
-                  ),
-                  label: 'Orders',
-                ),
-                const BottomNavigationBarItem(
-                  icon: Icon(Icons.upload_file_outlined),
-                  activeIcon: Icon(Icons.upload_file),
-                  label: 'Bulk',
-                ),
-              ],
-            ),
+                label: 'Orders',
+              ),
+              const BottomNavigationBarItem(
+                icon: Icon(Icons.upload_file_outlined),
+                activeIcon: Icon(Icons.upload_file),
+                label: 'Bulk',
+              ),
+            ],
+          ),
         ],
       ),
       body: Stack(
@@ -276,11 +292,131 @@ class _HomeShellState extends State<HomeShell> {
                   _cartOpen = false;
                 }),
               ),
-              // IndexedStack keeps all screen States alive — no re-fetch on tab switch.
               Expanded(
                 child: IndexedStack(
                   index: _index,
                   children: pages,
+                ),
+              ),
+            ],
+          ),
+          RepaintBoundary(
+            child: CartPanel(
+              open: _cartOpen,
+              onClose: () => setState(() => _cartOpen = false),
+              onOrderPlaced: () => setState(() {
+                _cartOpen = false;
+                _index = 1;
+              }),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ─── Desktop layout (≥ 900px) ────────────────────────────────────────────
+
+  Widget _buildDesktop(CartModel cart, List<Widget> pages) {
+    return Scaffold(
+      backgroundColor: Colors.white,
+      body: Stack(
+        children: [
+          Column(
+            children: [
+              _DesktopTopBar(
+                index: _index,
+                cartItems: cart.distinctItems,
+                searchCtrl: _searchCtrl,
+                isLoading: _searchLoading,
+                onSearch: (v) => setState(() {
+                  final q = v.trim();
+                  _category = 'All';
+                  _index = 0;
+                  if (q.length >= 2) {
+                    _query = v;
+                  } else {
+                    _query = '';
+                    _scrollToTopTrigger++;
+                  }
+                }),
+                onScrollToResults: () => setState(() => _scrollTrigger++),
+                onHome: () => setState(() {
+                  _index = 0;
+                  _cartOpen = false;
+                }),
+                onCatalogue: () => setState(() {
+                  _index = 0;
+                  _cartOpen = false;
+                }),
+                onOrders: () => setState(() {
+                  _index = 1;
+                  _cartOpen = false;
+                }),
+                onBulk: () => setState(() {
+                  _index = 2;
+                  _cartOpen = false;
+                }),
+                onCart: () => setState(() => _cartOpen = true),
+              ),
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 550),
+                reverseDuration: const Duration(milliseconds: 300),
+                transitionBuilder: (child, anim) => SizeTransition(
+                  sizeFactor: CurvedAnimation(
+                    parent: anim,
+                    curve: Curves.easeOutBack,
+                    reverseCurve: Curves.easeIn,
+                  ),
+                  axisAlignment: -1.0,
+                  child: child,
+                ),
+                child: _celebrateDelivery
+                    ? _CelebrationBanner(
+                        key: const ValueKey('delivery'),
+                        message: '🎉 Awesome! You unlocked FREE delivery!',
+                        bgColor: const Color(0xFF15803D),
+                        textColor: Colors.white,
+                      )
+                    : const SizedBox.shrink(key: ValueKey('delivery-empty')),
+              ),
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 550),
+                reverseDuration: const Duration(milliseconds: 300),
+                transitionBuilder: (child, anim) => SizeTransition(
+                  sizeFactor: CurvedAnimation(
+                    parent: anim,
+                    curve: Curves.easeOutBack,
+                    reverseCurve: Curves.easeIn,
+                  ),
+                  axisAlignment: -1.0,
+                  child: child,
+                ),
+                child: _celebrate3pct
+                    ? _CelebrationBanner(
+                        key: const ValueKey('3pct'),
+                        message: '🎉 Congratulations! You unlocked 3% discount!',
+                        bgColor: const Color(0xFFF59E0B),
+                        textColor: const Color(0xFF1C1917),
+                      )
+                    : const SizedBox.shrink(key: ValueKey('3pct-empty')),
+              ),
+              Expanded(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _DesktopSidebar(
+                      meta: _desktopMeta,
+                      selected: _category,
+                      onSelected: _selectCategory,
+                    ),
+                    Expanded(
+                      child: IndexedStack(
+                        index: _index,
+                        children: pages,
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ],
@@ -1128,6 +1264,352 @@ class _CartChip extends StatelessWidget {
         const SizedBox(width: 2),
         const Icon(Icons.chevron_right, color: Colors.white, size: 20),
       ],
+    );
+  }
+}
+
+// ─────────────────────── Desktop top bar ───────────────────────
+
+class _DesktopTopBar extends StatelessWidget {
+  final int index;
+  final int cartItems;
+  final TextEditingController searchCtrl;
+  final bool isLoading;
+  final ValueChanged<String> onSearch;
+  final VoidCallback onScrollToResults;
+  final VoidCallback onHome;
+  final VoidCallback onCatalogue;
+  final VoidCallback onOrders;
+  final VoidCallback onBulk;
+  final VoidCallback onCart;
+
+  const _DesktopTopBar({
+    required this.index,
+    required this.cartItems,
+    required this.searchCtrl,
+    required this.isLoading,
+    required this.onSearch,
+    required this.onScrollToResults,
+    required this.onHome,
+    required this.onCatalogue,
+    required this.onOrders,
+    required this.onBulk,
+    required this.onCart,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 64,
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        border: Border(bottom: BorderSide(color: Brand.border)),
+        boxShadow: [
+          BoxShadow(
+              color: Color(0x08000000), blurRadius: 8, offset: Offset(0, 2)),
+        ],
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 24),
+      child: Row(
+        children: [
+          GestureDetector(
+            onTap: onHome,
+            child: RichText(
+              text: const TextSpan(
+                children: [
+                  TextSpan(
+                    text: 'medi',
+                    style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w500,
+                      color: Brand.ink,
+                      letterSpacing: -0.3,
+                    ),
+                  ),
+                  TextSpan(
+                    text: 'BO',
+                    style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w800,
+                      color: Brand.green,
+                      letterSpacing: -0.3,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(width: 20),
+          Expanded(
+            child: _SearchBarRow(
+              controller: searchCtrl,
+              isLoading: isLoading,
+              onSearch: onSearch,
+              onScrollToResults: onScrollToResults,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _DesktopNavItem(
+                icon: Icons.home_outlined,
+                label: 'Home',
+                selected: index == 0,
+                onTap: onHome,
+              ),
+              _DesktopNavItem(
+                icon: Icons.grid_view_outlined,
+                label: 'Catalogue',
+                selected: false,
+                onTap: onCatalogue,
+              ),
+              _DesktopNavItem(
+                icon: Icons.receipt_long_outlined,
+                label: 'Orders',
+                selected: index == 1,
+                onTap: onOrders,
+              ),
+              _DesktopNavItem(
+                icon: Icons.upload_file_outlined,
+                label: 'Bulk',
+                selected: index == 2,
+                onTap: onBulk,
+              ),
+            ],
+          ),
+          const SizedBox(width: 12),
+          PressEffect(
+            child: InkWell(
+              onTap: onCart,
+              borderRadius: BorderRadius.circular(20),
+              child: Padding(
+                padding: const EdgeInsets.all(6),
+                child: Badge(
+                  isLabelVisible: cartItems > 0,
+                  label: Text(
+                    '$cartItems',
+                    style: const TextStyle(fontSize: 10),
+                  ),
+                  child: const Icon(
+                    Icons.shopping_cart_outlined,
+                    size: 26,
+                    color: Brand.ink,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DesktopNavItem extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _DesktopNavItem({
+    required this.icon,
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              icon,
+              size: 17,
+              color: selected ? Brand.green : Brand.inkMuted,
+            ),
+            const SizedBox(width: 5),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                color: selected ? Brand.green : Brand.inkMuted,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────── Desktop sidebar ───────────────────────
+
+class _DesktopSidebar extends StatelessWidget {
+  final CatalogMeta? meta;
+  final String selected;
+  final ValueChanged<String> onSelected;
+
+  const _DesktopSidebar({
+    required this.meta,
+    required this.selected,
+    required this.onSelected,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 220,
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        border: Border(right: BorderSide(color: Brand.border)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 14, 16, 8),
+            child: Text(
+              'CATEGORIES',
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w800,
+                color: Brand.inkMuted,
+                letterSpacing: 0.8,
+              ),
+            ),
+          ),
+          const Divider(height: 1),
+          Expanded(
+            child: ListView(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              children: _buildItems(),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  List<Widget> _buildItems() {
+    final m = meta;
+    if (m == null) {
+      return List.generate(
+        9,
+        (_) => Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+          child: Container(
+            height: 36,
+            decoration: BoxDecoration(
+              color: const Color(0xFFF3F4F6),
+              borderRadius: BorderRadius.circular(8),
+            ),
+          ),
+        ),
+      );
+    }
+    return [
+      _DesktopCategoryItem(
+        name: 'All',
+        count: m.total,
+        selected: selected == 'All',
+        style: const CategoryStyle(Brand.mint, Brand.green, Icons.grid_view_rounded),
+        onTap: () => onSelected('All'),
+      ),
+      for (final cat in m.categories)
+        _DesktopCategoryItem(
+          name: cat.name,
+          count: cat.count,
+          selected: selected == cat.name,
+          style: categoryStyle(cat.name),
+          onTap: () => onSelected(cat.name),
+        ),
+    ];
+  }
+}
+
+class _DesktopCategoryItem extends StatelessWidget {
+  final String name;
+  final int count;
+  final bool selected;
+  final CategoryStyle style;
+  final VoidCallback onTap;
+
+  const _DesktopCategoryItem({
+    required this.name,
+    required this.count,
+    required this.selected,
+    required this.style,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+        decoration: BoxDecoration(
+          color: selected ? style.bg : Colors.transparent,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: selected ? style.fg.withValues(alpha: 0.35) : Colors.transparent,
+            width: 1.5,
+          ),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 28,
+              height: 28,
+              decoration: BoxDecoration(
+                color: style.bg,
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Icon(style.icon, size: 15, color: style.fg),
+            ),
+            const SizedBox(width: 9),
+            Expanded(
+              child: Text(
+                name == 'All' ? 'All Products' : prettyCategory(name),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                  color: selected ? style.fg : Brand.ink,
+                  height: 1.2,
+                ),
+              ),
+            ),
+            const SizedBox(width: 4),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+              decoration: BoxDecoration(
+                color: selected ? style.fg : const Color(0xFFE5E7EB),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                '$count',
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                  color: selected ? Colors.white : Brand.inkMuted,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

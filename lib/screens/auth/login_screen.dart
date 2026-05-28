@@ -36,7 +36,7 @@ class _LoginScreenState extends State<LoginScreen> {
     try {
       await Supabase.instance.client.auth.signInWithOAuth(
         OAuthProvider.google,
-        redirectTo: 'https://medibo.in',
+        redirectTo: 'https://svojhmarmaijkshsbeih.supabase.co/auth/v1/callback',
       );
       if (mounted) Navigator.of(context).popUntil((r) => r.isFirst);
     } catch (_) {

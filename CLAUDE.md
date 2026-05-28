@@ -13,6 +13,13 @@ echo "✅ DEPLOYED TO MEDIBO.IN"
 
 Do not stop until `git push` shows success. No exceptions.
 
+**NEVER use `wrangler`. NEVER use `netlify`. Only `git push`.**
+
+## Behaviour Rules
+
+- Never auto-type commands in terminal without being asked
+- Never run deploy commands unless user explicitly asks
+
 ## Important build note
 
 Use `flutter build web --release` only — **never** add `--web-renderer canvaskit` (that flag was removed in Flutter 3.22 and causes an immediate build failure).

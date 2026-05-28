@@ -337,67 +337,71 @@ class _LocationHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cartItems = AppState.of(context).distinctItems;
-    return Container(
-      width: double.infinity,
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        border: Border(bottom: BorderSide(color: Brand.border)),
-      ),
-      padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
-      child: Stack(
-        alignment: Alignment.center,
-        children: [
-          // Logo perfectly centered
-          RichText(
-            text: const TextSpan(
-              children: [
-                TextSpan(
-                  text: 'medi',
-                  style: TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w500,
-                    color: Brand.ink,
-                    letterSpacing: -0.3,
-                  ),
-                ),
-                TextSpan(
-                  text: 'BO',
-                  style: TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w800,
-                    color: Brand.green,
-                    letterSpacing: -0.3,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          // Cart icon anchored to the right
-          Positioned(
-            right: 0,
-            child: PressEffect(
-              child: InkWell(
-                onTap: onCart,
-                borderRadius: BorderRadius.circular(20),
-                child: Padding(
-                  padding: const EdgeInsets.all(4),
-                  child: Badge(
-                    isLabelVisible: cartItems > 0,
-                    label: Text(
-                      '$cartItems',
-                      style: const TextStyle(fontSize: 10),
-                    ),
-                    child: const Icon(
-                      Icons.shopping_cart_outlined,
-                      size: 26,
+    final logoSize = MediaQuery.sizeOf(context).width < 360 ? 18.0 : 20.0;
+    return SafeArea(
+      bottom: false,
+      child: Container(
+        width: double.infinity,
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          border: Border(bottom: BorderSide(color: Brand.border)),
+        ),
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            // Logo perfectly centered
+            RichText(
+              text: TextSpan(
+                children: [
+                  TextSpan(
+                    text: 'medi',
+                    style: TextStyle(
+                      fontSize: logoSize,
+                      fontWeight: FontWeight.w500,
                       color: Brand.ink,
+                      letterSpacing: -0.3,
+                    ),
+                  ),
+                  TextSpan(
+                    text: 'BO',
+                    style: TextStyle(
+                      fontSize: logoSize,
+                      fontWeight: FontWeight.w800,
+                      color: Brand.green,
+                      letterSpacing: -0.3,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            // Cart icon anchored to the right
+            Positioned(
+              right: 0,
+              child: PressEffect(
+                child: InkWell(
+                  onTap: onCart,
+                  borderRadius: BorderRadius.circular(20),
+                  child: Padding(
+                    padding: const EdgeInsets.all(4),
+                    child: Badge(
+                      isLabelVisible: cartItems > 0,
+                      label: Text(
+                        '$cartItems',
+                        style: const TextStyle(fontSize: 10),
+                      ),
+                      child: const Icon(
+                        Icons.shopping_cart_outlined,
+                        size: 26,
+                        color: Brand.ink,
+                      ),
                     ),
                   ),
                 ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

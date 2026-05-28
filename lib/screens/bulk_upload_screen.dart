@@ -908,20 +908,31 @@ class _PageHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'Place Bulk Order',
-          style: TextStyle(
-              fontSize: 30, fontWeight: FontWeight.w800, color: Color(0xFF111827)),
-        ),
-        SizedBox(height: 6),
-        Text(
-          "Choose how you'd like to send your order — WhatsApp for quick photo orders, or upload\na file for smart SKU matching.",
-          style: TextStyle(fontSize: 14, color: Color(0xFF6B7280), height: 1.5),
-        ),
-      ],
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final titleSize = constraints.maxWidth < 360
+            ? 22.0
+            : constraints.maxWidth < 600
+                ? 26.0
+                : 30.0;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Place Bulk Order',
+              style: TextStyle(
+                  fontSize: titleSize,
+                  fontWeight: FontWeight.w800,
+                  color: const Color(0xFF111827)),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              "Choose how you'd like to send your order — WhatsApp for quick photo orders, or upload a file for smart SKU matching.",
+              style: TextStyle(fontSize: 14, color: Color(0xFF6B7280), height: 1.5),
+            ),
+          ],
+        );
+      },
     );
   }
 }
@@ -1582,64 +1593,103 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    const Text(
-                      'Smart match preview',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700,
-                        color: Color(0xFF111827),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFF3F4F6),
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: Text(
-                        badge,
-                        style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280)),
-                      ),
-                    ),
-                    const Spacer(),
-                    if (widget.addingToCart)
-                      const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    else
-                      FilledButton(
-                        onPressed: canAdd ? () => widget.onAddToCart() : null,
-                        style: FilledButton.styleFrom(
-                          backgroundColor: const Color(0xFF16A34A),
-                          padding:
-                              const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
-                          textStyle: const TextStyle(
-                              fontWeight: FontWeight.w600, fontSize: 13),
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(8)),
-                          elevation: 0,
-                        ),
-                        child: const Text('Add matched to cart'),
-                      ),
-                  ],
-                ),
-                const SizedBox(height: 4),
-                Text(
+            child: LayoutBuilder(
+              builder: (_, lc) {
+                final narrow = lc.maxWidth < 460;
+                final badgeWidget = Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF3F4F6),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    badge,
+                    style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280)),
+                  ),
+                );
+                final addButton = FilledButton(
+                  onPressed: canAdd ? () => widget.onAddToCart() : null,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFF16A34A),
+                    padding: EdgeInsets.symmetric(
+                        horizontal: narrow ? 12 : 18, vertical: 10),
+                    textStyle: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: narrow ? 12 : 13),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8)),
+                    elevation: 0,
+                  ),
+                  child: Text(narrow ? 'Add to cart' : 'Add matched to cart'),
+                );
+                final spinner = const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                );
+                final statsText = Text(
                   widget.isLoading
                       ? widget.loadingMessage
                       : '$matched matched · $manuallyMatched manually matched · $partial partial · $unrecognized unrecognized',
                   style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
-                ),
-              ],
+                );
+                if (narrow) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          const Flexible(
+                            child: Text(
+                              'Smart match preview',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w700,
+                                color: Color(0xFF111827),
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          badgeWidget,
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Expanded(child: statsText),
+                          const SizedBox(width: 8),
+                          widget.addingToCart ? spinner : addButton,
+                        ],
+                      ),
+                    ],
+                  );
+                }
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        const Text(
+                          'Smart match preview',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                            color: Color(0xFF111827),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        badgeWidget,
+                        const Spacer(),
+                        widget.addingToCart ? spinner : addButton,
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    statsText,
+                  ],
+                );
+              },
             ),
           ),
           const SizedBox(height: 16),

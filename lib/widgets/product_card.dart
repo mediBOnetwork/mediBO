@@ -59,10 +59,10 @@ class ProductCard extends StatelessWidget {
                           ),
                         ),
                         const SizedBox(height: 3),
-                        // Line 2 — product name (1 line, fixed)
+                        // Line 2 — product name (2 lines)
                         Text(
                           product.name,
-                          maxLines: 1,
+                          maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
                             fontWeight: FontWeight.w700,
@@ -72,30 +72,24 @@ class ProductCard extends StatelessWidget {
                           ),
                         ),
                         const SizedBox(height: 3),
-                        // Lines 3-4 — composition (exactly 2 lines, fixed height)
-                        SizedBox(
-                          height: 29,
-                          child: Text(
-                            product.genericName.isNotEmpty
-                                ? product.genericName
-                                : '—',
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              fontSize: 11,
-                              color: Color(0xFF6B7280),
-                              height: 1.3,
-                            ),
+                        // Line 3 — composition (1 line, ellipsis)
+                        Text(
+                          product.genericName.isNotEmpty
+                              ? product.genericName
+                              : '—',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 11,
+                            color: Color(0xFF6B7280),
+                            height: 1.3,
                           ),
                         ),
                         const SizedBox(height: 5),
-                        // Line 5 — category badge
-                        _Pill(
-                          text: prettyCategory(product.therapeuticClass),
-                          bg: style.fg.withValues(alpha: 0.88),
-                        ),
-                        const SizedBox(height: 6),
-                        // Line 6 — price row
+                        // Line 4 — pack size (left, ellipsis) + scheme badge (right, fixed)
+                        _PackSizeRow(product: product),
+                        const SizedBox(height: 5),
+                        // Line 5 — price row
                         _PriceRow(product: product),
                         const SizedBox(height: 8),
                         // Line 7 — cart button
@@ -121,46 +115,32 @@ class _PriceRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Fixed-height row: left side is natural width, Expanded gives remaining
-    // space to pack-size so it can never push price off-screen or wrap.
-    return SizedBox(
-      height: 22,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          Text(
-            rupees(product.b2bPrice),
-            style: const TextStyle(
-              fontWeight: FontWeight.w800,
-              fontSize: 18,
-              color: Color(0xFF111827),
-            ),
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.baseline,
+      textBaseline: TextBaseline.alphabetic,
+      children: [
+        Text(
+          rupees(product.b2bPrice),
+          style: const TextStyle(
+            fontWeight: FontWeight.w800,
+            fontSize: 18,
+            color: Color(0xFF111827),
           ),
+        ),
+        if (product.mrp > product.b2bPrice) ...[
           const SizedBox(width: 6),
-          const Text(
-            'MRP',
-            style: TextStyle(
-              fontSize: 11,
+          Text(
+            rupees(product.mrp),
+            style: const TextStyle(
+              fontSize: 12,
               color: Color(0xFF9CA3AF),
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-          // Expanded captures all remaining space; text right-aligns inside it.
-          Expanded(
-            child: Text(
-              product.packSize,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              textAlign: TextAlign.right,
-              style: const TextStyle(
-                fontSize: 11,
-                color: Color(0xFF16A34A),
-                fontWeight: FontWeight.w500,
-              ),
+              fontWeight: FontWeight.w400,
+              decoration: TextDecoration.lineThrough,
+              decorationColor: Color(0xFF9CA3AF),
             ),
           ),
         ],
-      ),
+      ],
     );
   }
 }
@@ -272,33 +252,55 @@ class _CartControlState extends State<_CartControl>
               )
             : ScaleTransition(
                 scale: _popAnim,
-                child: PressEffect(
-                  key: const ValueKey('add'),
-                  child: SizedBox.expand(
-                    child: FilledButton.icon(
-                      style: FilledButton.styleFrom(
-                        backgroundColor: const Color(0xFF0d0d1a),
-                        foregroundColor: Colors.white,
-                        disabledBackgroundColor: const Color(0xFFD1D5DB),
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(6)),
-                        padding:
-                            const EdgeInsets.symmetric(horizontal: 12),
-                        textStyle: const TextStyle(
-                            fontWeight: FontWeight.w500, fontSize: 14),
-                        elevation: 0,
-                        splashFactory: NoSplash.splashFactory,
-                        shadowColor: Colors.transparent,
-                      ).copyWith(
-                        overlayColor:
-                            const WidgetStatePropertyAll(Colors.transparent),
+                child: widget.product.inStock
+                    ? PressEffect(
+                        key: const ValueKey('add'),
+                        child: SizedBox.expand(
+                          child: FilledButton.icon(
+                            style: FilledButton.styleFrom(
+                              backgroundColor: const Color(0xFF0d0d1a),
+                              foregroundColor: Colors.white,
+                              shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(6)),
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 12),
+                              textStyle: const TextStyle(
+                                  fontWeight: FontWeight.w500, fontSize: 14),
+                              elevation: 0,
+                              splashFactory: NoSplash.splashFactory,
+                              shadowColor: Colors.transparent,
+                            ).copyWith(
+                              overlayColor: const WidgetStatePropertyAll(
+                                  Colors.transparent),
+                            ),
+                            onPressed: _addToCart,
+                            icon: const Icon(Icons.add, size: 16),
+                            label: const Text('Add to cart'),
+                          ),
+                        ),
+                      )
+                    : SizedBox.expand(
+                        key: const ValueKey('unavailable'),
+                        child: FilledButton(
+                          style: FilledButton.styleFrom(
+                            backgroundColor: const Color(0xFFF3F4F6),
+                            foregroundColor: const Color(0xFF9CA3AF),
+                            disabledBackgroundColor: const Color(0xFFF3F4F6),
+                            disabledForegroundColor: const Color(0xFF9CA3AF),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(6)),
+                            padding:
+                                const EdgeInsets.symmetric(horizontal: 12),
+                            textStyle: const TextStyle(
+                                fontWeight: FontWeight.w500, fontSize: 14),
+                            elevation: 0,
+                            splashFactory: NoSplash.splashFactory,
+                            shadowColor: Colors.transparent,
+                          ),
+                          onPressed: null,
+                          child: const Text('Unavailable'),
+                        ),
                       ),
-                      onPressed: widget.product.inStock ? _addToCart : null,
-                      icon: const Icon(Icons.add, size: 16),
-                      label: const Text('Add to cart'),
-                    ),
-                  ),
-                ),
               ),
       ),
     );
@@ -351,8 +353,6 @@ class _ImageBlockState extends State<_ImageBlock> {
     // Desktop (≥900px): show arrows only on hover. Mobile: always show.
     final isDesktop = MediaQuery.sizeOf(context).width >= 900;
     final showArrows = multi && (isDesktop ? _hovered : true);
-    final status = widget.product.inStock ? 'Available' : 'Out of Stock';
-
     return SizedBox(
       height: 180,
       width: double.infinity,
@@ -401,16 +401,6 @@ class _ImageBlockState extends State<_ImageBlock> {
             // ── Static overlays ───────────────────────────────────────────
             if (_hasScheme(widget.product.id))
               Positioned(left: 8, top: 8, child: _SchemePill(text: '5+1')),
-            Positioned(
-              right: 8,
-              top: 8,
-              child: _Pill(
-                text: status,
-                bg: widget.product.inStock
-                    ? const Color(0xFF16A34A)
-                    : const Color(0xFFDC2626),
-              ),
-            ),
             if (widget.isBestSeller)
               Positioned(
                 left: 8,
@@ -557,6 +547,38 @@ class _SchemePill extends StatelessWidget {
           letterSpacing: 0.2,
         ),
       ),
+    );
+  }
+}
+
+// ─── Pack size + scheme badge row ────────────────────────────────────────────
+
+class _PackSizeRow extends StatelessWidget {
+  final Product product;
+  const _PackSizeRow({required this.product});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Expanded(
+          child: Text(
+            product.packSize.isNotEmpty ? product.packSize : '—',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              fontSize: 11,
+              color: Color(0xFF9CA3AF),
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ),
+        if (_hasScheme(product.id)) ...[
+          const SizedBox(width: 6),
+          _SchemePill(text: '5+1'),
+        ],
+      ],
     );
   }
 }

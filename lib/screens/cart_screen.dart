@@ -1,15 +1,106 @@
 import 'package:flutter/material.dart';
+import 'package:razorpay_flutter/razorpay_flutter.dart';
 
 import '../app_state.dart';
+import '../config/payment_config.dart';
 import '../models/cart_model.dart';
 import '../models/product.dart';
 import '../theme.dart';
 import '../util.dart';
 import '../widgets/animations.dart';
 
-class CartScreen extends StatelessWidget {
+class CartScreen extends StatefulWidget {
   final VoidCallback? onOrderPlaced;
   const CartScreen({super.key, this.onOrderPlaced});
+
+  @override
+  State<CartScreen> createState() => _CartScreenState();
+}
+
+class _CartScreenState extends State<CartScreen> {
+  late final Razorpay _razorpay;
+
+  @override
+  void initState() {
+    super.initState();
+    _razorpay = Razorpay();
+    _razorpay.on(Razorpay.EVENT_PAYMENT_SUCCESS, _handleSuccess);
+    _razorpay.on(Razorpay.EVENT_PAYMENT_ERROR, _handleError);
+    _razorpay.on(Razorpay.EVENT_EXTERNAL_WALLET, _handleExternalWallet);
+  }
+
+  @override
+  void dispose() {
+    _razorpay.clear();
+    super.dispose();
+  }
+
+  void _openPayment() {
+    final cart = AppState.of(context);
+    final options = {
+      'key': razorpayKey,
+      'amount': (cart.grandTotal * 100).round(),
+      'name': 'mediBO',
+      'description': 'Medicine Order',
+      'currency': 'INR',
+      'theme': {'color': '#1B5E20'},
+    };
+    try {
+      _razorpay.open(options);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not open payment: $e'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
+  void _handleSuccess(PaymentSuccessResponse response) {
+    if (!mounted) return;
+    final cart = AppState.of(context);
+    final order = cart.checkout();
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => _PaymentSuccessDialog(
+        paymentId: response.paymentId ?? '',
+        orderNumber: order.number,
+        amount: rupees(order.grandTotal),
+        onDone: () {
+          Navigator.of(context).pop();
+          widget.onOrderPlaced?.call();
+        },
+      ),
+    );
+  }
+
+  void _handleError(PaymentFailureResponse response) {
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      builder: (_) => _PaymentErrorDialog(
+        message: response.message ?? 'Payment could not be completed.',
+        onRetry: () {
+          Navigator.of(context).pop();
+          _openPayment();
+        },
+        onCancel: () => Navigator.of(context).pop(),
+      ),
+    );
+  }
+
+  void _handleExternalWallet(ExternalWalletResponse response) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Redirecting to ${response.walletName}...'),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -21,8 +112,6 @@ class CartScreen extends StatelessWidget {
 
     final banner = cart.hasSampleItems ? _SampleBanner(cart: cart) : null;
 
-    // LayoutBuilder gives the actual available width of this widget, which is
-    // reliable even inside CartPanel where MediaQuery is overridden.
     return LayoutBuilder(
       builder: (context, constraints) {
         final wide = constraints.maxWidth >= 600;
@@ -50,7 +139,7 @@ class CartScreen extends StatelessWidget {
                             flex: 2,
                             child: _OrderSummaryPanel(
                               cart: cart,
-                              onOrderPlaced: onOrderPlaced,
+                              onMakePayment: _openPayment,
                             ),
                           ),
                         ],
@@ -68,7 +157,7 @@ class CartScreen extends StatelessWidget {
           children: [
             if (banner != null) banner,
             Expanded(child: _ItemList(cart: cart)),
-            _CheckoutBar(cart: cart, onOrderPlaced: onOrderPlaced),
+            _CheckoutBar(cart: cart, onMakePayment: _openPayment),
           ],
         );
       },
@@ -583,10 +672,8 @@ class _CartStepperState extends State<_CartStepper> {
 
 class _CheckoutBar extends StatelessWidget {
   final CartModel cart;
-  final VoidCallback? onOrderPlaced;
-  const _CheckoutBar({required this.cart, this.onOrderPlaced});
-
-  static const _navy = Color(0xFF1E3A5F);
+  final VoidCallback onMakePayment;
+  const _CheckoutBar({required this.cart, required this.onMakePayment});
 
   @override
   Widget build(BuildContext context) {
@@ -639,25 +726,31 @@ class _CheckoutBar extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 14),
-          // "Add delivery details" button
+          // Make Payment button
           Expanded(
             child: GestureDetector(
-              onTap: () => _checkout(context),
+              onTap: onMakePayment,
               child: Container(
                 padding: const EdgeInsets.symmetric(vertical: 15),
                 decoration: BoxDecoration(
-                  color: _navy,
+                  color: const Color(0xFF1B5E20),
                   borderRadius: BorderRadius.circular(12),
                 ),
-                child: const Text(
-                  'Add delivery details',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 0.2,
-                  ),
+                child: const Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.payment_rounded, color: Colors.white, size: 18),
+                    SizedBox(width: 8),
+                    Text(
+                      'Make Payment',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.2,
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -676,18 +769,6 @@ class _CheckoutBar extends StatelessWidget {
       backgroundColor: Colors.white,
       builder: (_) => _BillSheet(cart: cart),
     );
-  }
-
-  void _checkout(BuildContext context) {
-    final order = cart.checkout();
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content:
-            Text('Order ${order.number} placed · ${rupees(order.grandTotal)}'),
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
-    onOrderPlaced?.call();
   }
 }
 
@@ -794,10 +875,8 @@ class _BillSheet extends StatelessWidget {
 
 class _OrderSummaryPanel extends StatelessWidget {
   final CartModel cart;
-  final VoidCallback? onOrderPlaced;
-  const _OrderSummaryPanel({required this.cart, this.onOrderPlaced});
-
-  static const _navy = Color(0xFF1E3A5F);
+  final VoidCallback onMakePayment;
+  const _OrderSummaryPanel({required this.cart, required this.onMakePayment});
 
   @override
   Widget build(BuildContext context) {
@@ -835,32 +914,28 @@ class _OrderSummaryPanel extends StatelessWidget {
           _row('Grand total', rupees(cart.grandTotal), bold: true),
           const SizedBox(height: 20),
           GestureDetector(
-            onTap: () {
-              final order = cart.checkout();
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(
-                      'Order ${order.number} placed · ${rupees(order.grandTotal)}'),
-                  behavior: SnackBarBehavior.floating,
-                ),
-              );
-              onOrderPlaced?.call();
-            },
+            onTap: onMakePayment,
             child: Container(
               padding: const EdgeInsets.symmetric(vertical: 15),
               decoration: BoxDecoration(
-                color: _navy,
+                color: const Color(0xFF1B5E20),
                 borderRadius: BorderRadius.circular(12),
               ),
-              child: const Text(
-                'Add delivery details',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 0.2,
-                ),
+              child: const Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.payment_rounded, color: Colors.white, size: 18),
+                  SizedBox(width: 8),
+                  Text(
+                    'Make Payment',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.2,
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -922,6 +997,169 @@ class _OrderSummaryPanel extends StatelessWidget {
                     : const Color(0xFF374151),
               )),
         ],
+      ),
+    );
+  }
+}
+
+// ─── Payment dialogs ─────────────────────────────────────────────────────────
+
+class _PaymentSuccessDialog extends StatelessWidget {
+  final String paymentId;
+  final String orderNumber;
+  final String amount;
+  final VoidCallback onDone;
+
+  const _PaymentSuccessDialog({
+    required this.paymentId,
+    required this.orderNumber,
+    required this.amount,
+    required this.onDone,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      backgroundColor: Colors.white,
+      child: Padding(
+        padding: const EdgeInsets.all(28),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 72,
+              height: 72,
+              decoration: const BoxDecoration(
+                color: Color(0xFFDCFCE7),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.check_circle_rounded,
+                  color: Color(0xFF16A34A), size: 44),
+            ),
+            const SizedBox(height: 20),
+            const Text(
+              'Payment Successful!',
+              style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w800,
+                  color: Color(0xFF111827)),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Order #$orderNumber • $amount',
+              style: const TextStyle(fontSize: 14, color: Color(0xFF374151)),
+            ),
+            if (paymentId.isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Text(
+                'Payment ID: $paymentId',
+                style:
+                    const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF)),
+                textAlign: TextAlign.center,
+              ),
+            ],
+            const SizedBox(height: 24),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton(
+                onPressed: onDone,
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFF1B5E20),
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10)),
+                ),
+                child: const Text('View Orders',
+                    style: TextStyle(
+                        fontSize: 15, fontWeight: FontWeight.w700)),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PaymentErrorDialog extends StatelessWidget {
+  final String message;
+  final VoidCallback onRetry;
+  final VoidCallback onCancel;
+
+  const _PaymentErrorDialog({
+    required this.message,
+    required this.onRetry,
+    required this.onCancel,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      backgroundColor: Colors.white,
+      child: Padding(
+        padding: const EdgeInsets.all(28),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 72,
+              height: 72,
+              decoration: const BoxDecoration(
+                color: Color(0xFFFEE2E2),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.error_rounded,
+                  color: Color(0xFFDC2626), size: 44),
+            ),
+            const SizedBox(height: 20),
+            const Text(
+              'Payment Failed',
+              style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w800,
+                  color: Color(0xFF111827)),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                  fontSize: 13, color: Color(0xFF6B7280), height: 1.4),
+            ),
+            const SizedBox(height: 24),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: onCancel,
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 13),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10)),
+                    ),
+                    child: const Text('Cancel'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: FilledButton(
+                    onPressed: onRetry,
+                    style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFFDC2626),
+                      padding: const EdgeInsets.symmetric(vertical: 13),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10)),
+                    ),
+                    child: const Text('Retry',
+                        style: TextStyle(fontWeight: FontWeight.w700)),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }

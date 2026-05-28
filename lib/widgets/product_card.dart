@@ -3,7 +3,9 @@ import 'package:flutter/material.dart';
 import '../app_state.dart';
 import '../data/medicine_repository.dart';
 import '../models/product.dart';
+import '../screens/auth/login_screen.dart';
 import '../theme.dart';
+import '../user_state.dart';
 import '../util.dart';
 import 'animations.dart';
 
@@ -199,6 +201,49 @@ class _CartControlState extends State<_CartControl>
     super.dispose();
   }
 
+  Future<void> _addToCart() async {
+    final auth = UserState.read(context);
+    if (!auth.isAuthenticated) {
+      final goLogin = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16)),
+          title: const Text(
+            'Login required',
+            style: TextStyle(fontWeight: FontWeight.w700),
+          ),
+          content: const Text(
+            'Please log in to add items to your cart.',
+            style: TextStyle(fontSize: 14),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFF1B5E20)),
+              child: const Text('Log In'),
+            ),
+          ],
+        ),
+      );
+      if (goLogin != true || !mounted) return;
+      await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const LoginScreen()),
+      );
+      if (!mounted) return;
+      if (!UserState.read(context).isAuthenticated) return;
+    }
+    _popCtrl.forward(from: 0);
+    AppState.of(context).add(widget.product);
+    MedicineRepository().incrementSalesCount(widget.product.id);
+  }
+
   @override
   Widget build(BuildContext context) {
     final cart = AppState.of(context);
@@ -246,14 +291,7 @@ class _CartControlState extends State<_CartControl>
                         overlayColor:
                             const WidgetStatePropertyAll(Colors.transparent),
                       ),
-                      onPressed: widget.product.inStock
-                          ? () {
-                              _popCtrl.forward(from: 0);
-                              cart.add(widget.product);
-                              MedicineRepository()
-                                  .incrementSalesCount(widget.product.id);
-                            }
-                          : null,
+                      onPressed: widget.product.inStock ? _addToCart : null,
                       icon: const Icon(Icons.add, size: 16),
                       label: const Text('Add to cart'),
                     ),

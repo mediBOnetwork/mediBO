@@ -3,9 +3,11 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'app_state.dart';
 import 'models/cart_model.dart';
+import 'screens/auth/business_details_screen.dart';
 import 'screens/home_shell.dart';
 import 'supabase_config.dart';
 import 'theme.dart';
+import 'user_state.dart';
 import 'widgets/animations.dart';
 
 Future<void> main() async {
@@ -26,23 +28,76 @@ class PharmaB2BApp extends StatefulWidget {
 
 class _PharmaB2BAppState extends State<PharmaB2BApp> {
   final CartModel _cart = CartModel();
+  final AuthNotifier _auth = AuthNotifier();
 
   @override
   void dispose() {
     _cart.dispose();
+    _auth.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return AppState(
-      cart: _cart,
-      child: MaterialApp(
-        title: 'mediBO',
-        debugShowCheckedModeBanner: false,
-        theme: buildTheme(),
-        scrollBehavior: const SmoothScrollBehavior(),
-        home: const HomeShell(),
+    return UserState(
+      notifier: _auth,
+      child: AppState(
+        cart: _cart,
+        child: MaterialApp(
+          title: 'mediBO',
+          debugShowCheckedModeBanner: false,
+          theme: buildTheme(),
+          scrollBehavior: const SmoothScrollBehavior(),
+          home: _AppRoot(auth: _auth),
+        ),
+      ),
+    );
+  }
+}
+
+/// Root widget: switches between loading, business setup, and the main shell.
+class _AppRoot extends StatelessWidget {
+  final AuthNotifier auth;
+  const _AppRoot({required this.auth});
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: auth,
+      builder: (context, _) {
+        // Show splash while checking initial session or loading profile
+        if (auth.loading || auth.profileLoading) {
+          return const _SplashScreen();
+        }
+
+        // Authenticated but no profile → business setup (mandatory)
+        final user = Supabase.instance.client.auth.currentUser;
+        if (user != null && auth.needsProfile) {
+          return BusinessDetailsScreen(
+            userId: user.id,
+            phone: user.phone ?? '',
+          );
+        }
+
+        // All good — show the main shell (guests and logged-in users both land here)
+        return const HomeShell();
+      },
+    );
+  }
+}
+
+class _SplashScreen extends StatelessWidget {
+  const _SplashScreen();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Scaffold(
+      backgroundColor: Colors.white,
+      body: Center(
+        child: CircularProgressIndicator(
+          color: Color(0xFF1B5E20),
+          strokeWidth: 3,
+        ),
       ),
     );
   }

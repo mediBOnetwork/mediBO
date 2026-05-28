@@ -1,13 +1,14 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-
 import '../app_state.dart';
 import '../data/medicine_repository.dart';
 import '../models/cart_model.dart';
 import '../theme.dart';
+import '../user_state.dart';
 import '../util.dart';
 import '../widgets/animations.dart';
+import 'auth/login_screen.dart';
 import 'bulk_upload_screen.dart';
 import 'cart_screen.dart';
 import 'orders_screen.dart';
@@ -411,29 +412,36 @@ class _LocationHeader extends StatelessWidget {
                 ),
               ],
             ),
-            // Cart icon anchored to the right
+            // Profile + cart icons anchored to the right
             Positioned(
               right: 0,
-              child: PressEffect(
-                child: InkWell(
-                  onTap: onCart,
-                  borderRadius: BorderRadius.circular(20),
-                  child: Padding(
-                    padding: const EdgeInsets.all(4),
-                    child: Badge(
-                      isLabelVisible: cartItems > 0,
-                      label: Text(
-                        '$cartItems',
-                        style: const TextStyle(fontSize: 10),
-                      ),
-                      child: const Icon(
-                        Icons.shopping_cart_outlined,
-                        size: 26,
-                        color: Brand.ink,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _MobileProfileButton(),
+                  const SizedBox(width: 2),
+                  PressEffect(
+                    child: InkWell(
+                      onTap: onCart,
+                      borderRadius: BorderRadius.circular(20),
+                      child: Padding(
+                        padding: const EdgeInsets.all(4),
+                        child: Badge(
+                          isLabelVisible: cartItems > 0,
+                          label: Text(
+                            '$cartItems',
+                            style: const TextStyle(fontSize: 10),
+                          ),
+                          child: const Icon(
+                            Icons.shopping_cart_outlined,
+                            size: 26,
+                            color: Brand.ink,
+                          ),
+                        ),
                       ),
                     ),
                   ),
-                ),
+                ],
               ),
             ),
           ],
@@ -1542,7 +1550,290 @@ class _DesktopHeaderState extends State<_DesktopHeader> {
               ),
             ),
           ),
+          const SizedBox(width: 8),
+          // 7. Profile / Login button
+          _DesktopProfileButton(),
         ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────── Profile buttons ────────────────────────────────
+
+/// Desktop: shows "Hi, [Name]" with dropdown when logged in, or "Login" button.
+class _DesktopProfileButton extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final auth = UserState.of(context);
+    if (!auth.isAuthenticated) {
+      return PressEffect(
+        child: InkWell(
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const LoginScreen()),
+          ),
+          borderRadius: BorderRadius.circular(8),
+          child: Container(
+            padding:
+                const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            decoration: BoxDecoration(
+              border: Border.all(color: const Color(0xFF1B5E20)),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: const Text(
+              'Login',
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+                color: Color(0xFF1B5E20),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    final profile = auth.profile;
+    final displayName = profile?.displayName ?? 'Account';
+    final phone = profile?.phone ?? '';
+    final shortName = displayName.length > 18
+        ? '${displayName.substring(0, 16)}…'
+        : displayName;
+
+    return PopupMenuButton<String>(
+      offset: const Offset(0, 52),
+      tooltip: '',
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      itemBuilder: (_) => [
+        PopupMenuItem(
+          enabled: false,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                displayName,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 14,
+                  color: Color(0xFF111827),
+                ),
+              ),
+              if (phone.isNotEmpty) ...[
+                const SizedBox(height: 2),
+                Text(
+                  phone,
+                  style: const TextStyle(
+                      fontSize: 12, color: Color(0xFF6B7280)),
+                ),
+              ],
+            ],
+          ),
+        ),
+        const PopupMenuDivider(),
+        PopupMenuItem(
+          value: 'logout',
+          child: const Row(
+            children: [
+              Icon(Icons.logout, size: 16, color: Color(0xFF374151)),
+              SizedBox(width: 10),
+              Text('Logout',
+                  style: TextStyle(
+                      fontSize: 14, color: Color(0xFF374151))),
+            ],
+          ),
+        ),
+      ],
+      onSelected: (val) async {
+        if (val == 'logout') await UserState.read(context).signOut();
+      },
+      child: Container(
+        padding:
+            const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+        decoration: BoxDecoration(
+          color: const Color(0xFFECFDF5),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: const Color(0xFFBBF7D0)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 28,
+              height: 28,
+              decoration: const BoxDecoration(
+                color: Color(0xFF1B5E20),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.person,
+                  color: Colors.white, size: 16),
+            ),
+            const SizedBox(width: 8),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'Hi,',
+                  style: TextStyle(
+                      fontSize: 10,
+                      color: Color(0xFF6B7280),
+                      height: 1.1),
+                ),
+                Text(
+                  shortName,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF111827),
+                    height: 1.1,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(width: 4),
+            const Icon(Icons.expand_more,
+                size: 16, color: Color(0xFF6B7280)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Mobile: compact person icon that opens a profile bottom sheet.
+class _MobileProfileButton extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final auth = UserState.of(context);
+
+    return PressEffect(
+      child: InkWell(
+        borderRadius: BorderRadius.circular(20),
+        onTap: () {
+          if (!auth.isAuthenticated) {
+            Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const LoginScreen()),
+            );
+          } else {
+            _showProfileSheet(context, auth);
+          }
+        },
+        child: Padding(
+          padding: const EdgeInsets.all(4),
+          child: auth.isAuthenticated
+              ? Container(
+                  width: 28,
+                  height: 28,
+                  decoration: const BoxDecoration(
+                    color: Color(0xFF1B5E20),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.person,
+                      color: Colors.white, size: 16),
+                )
+              : const Icon(Icons.person_outline,
+                  size: 26, color: Brand.ink),
+        ),
+      ),
+    );
+  }
+
+  void _showProfileSheet(BuildContext context, AuthNotifier auth) {
+    final profile = auth.profile;
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      backgroundColor: Colors.white,
+      builder: (_) => Padding(
+        padding: const EdgeInsets.fromLTRB(24, 20, 24, 40),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFD1D5DB),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
+            Row(
+              children: [
+                Container(
+                  width: 44,
+                  height: 44,
+                  decoration: const BoxDecoration(
+                    color: Color(0xFF1B5E20),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.person,
+                      color: Colors.white, size: 24),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        profile?.displayName ?? 'Account',
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFF111827),
+                        ),
+                      ),
+                      if (profile?.phone.isNotEmpty == true) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          profile!.phone,
+                          style: const TextStyle(
+                              fontSize: 13, color: Color(0xFF6B7280)),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 24),
+            const Divider(),
+            const SizedBox(height: 8),
+            InkWell(
+              onTap: () async {
+                Navigator.pop(context);
+                await auth.signOut();
+              },
+              borderRadius: BorderRadius.circular(8),
+              child: const Padding(
+                padding:
+                    EdgeInsets.symmetric(horizontal: 4, vertical: 12),
+                child: Row(
+                  children: [
+                    Icon(Icons.logout,
+                        size: 20, color: Color(0xFFDC2626)),
+                    SizedBox(width: 12),
+                    Text(
+                      'Logout',
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFFDC2626),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

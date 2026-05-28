@@ -1,12 +1,15 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../app_state.dart';
 import '../models/cart_model.dart';
 import '../models/product.dart';
 import '../services/payment_service.dart';
 import '../theme.dart';
+import '../user_state.dart';
 import '../util.dart';
 import '../widgets/animations.dart';
+import 'auth/login_screen.dart';
 
 class CartScreen extends StatefulWidget {
   final VoidCallback? onOrderPlaced;
@@ -21,17 +24,54 @@ class _CartScreenState extends State<CartScreen> {
 
   Future<void> _openPayment() async {
     if (_paymentInProgress) return;
-    setState(() => _paymentInProgress = true);
 
+    // Require login before payment
+    final auth = UserState.read(context);
+    if (!auth.isAuthenticated) {
+      final goLogin = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16)),
+          title: const Text('Login required',
+              style: TextStyle(fontWeight: FontWeight.w700)),
+          content: const Text(
+            'Please log in to complete your purchase.',
+            style: TextStyle(fontSize: 14),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFF1B5E20)),
+              child: const Text('Log In'),
+            ),
+          ],
+        ),
+      );
+      if (goLogin != true || !mounted) return;
+      await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const LoginScreen()),
+      );
+      return; // User can retry payment after logging in
+    }
+
+    setState(() => _paymentInProgress = true);
     final cart = AppState.of(context);
     final amount = cart.grandTotal;
+    final profile = UserState.read(context).profile;
 
     try {
       final result = await PaymentService.initiatePayment(
         amount: amount,
-        name: 'Customer',
-        email: 'customer@medibo.in',
-        phone: '9999999999',
+        name: profile?.fullName ?? '',
+        email: '',
+        phone: profile?.phone ?? '',
       );
       if (!mounted) return;
 
@@ -39,6 +79,12 @@ class _CartScreenState extends State<CartScreen> {
 
       if (status == 'success') {
         final order = cart.checkout();
+        // Persist order to Supabase (fire-and-forget)
+        _saveOrder(
+          order: order,
+          paymentId: result['payment_id'] ?? '',
+          pharmacyName: profile?.businessName ?? '',
+        );
         showDialog(
           context: context,
           barrierDismissible: false,
@@ -79,6 +125,31 @@ class _CartScreenState extends State<CartScreen> {
     } finally {
       if (mounted) setState(() => _paymentInProgress = false);
     }
+  }
+
+  void _saveOrder({
+    required Order order,
+    required String paymentId,
+    required String pharmacyName,
+  }) {
+    final userId =
+        Supabase.instance.client.auth.currentUser?.id;
+    if (userId == null) return;
+    Supabase.instance.client.from('orders').insert({
+      'user_id': userId,
+      'pharmacy_name': pharmacyName,
+      'items': order.lines
+          .map((l) => {
+                'product_name': l.product.name,
+                'quantity': l.quantity,
+                'price': l.product.b2bPrice,
+                'line_total': l.lineTotal,
+              })
+          .toList(),
+      'total_amount': order.grandTotal,
+      'payment_id': paymentId,
+      'status': 'paid',
+    }).then((_) {}).catchError((_) {});
   }
 
   @override

@@ -932,22 +932,36 @@ class _ProductsSection extends StatelessWidget {
     required this.animatedFrom,
   });
 
+  String _buildSubtitle() {
+    final q = query.trim();
+    if (q.isEmpty) {
+      return 'Showing ${items.length} of $categoryTotal products';
+    }
+    // At the 200-item cap for search
+    if (paginationPage == 2 && (reachedEnd || items.length >= 200)) {
+      return 'Showing ${items.length} results for “$q” — try a more specific term';
+    }
+    // All results fit within the first page
+    if (reachedEnd) {
+      final n = items.length;
+      return '$n result${n == 1 ? '' : 's'} found for “$q”';
+    }
+    // Loading or capped at 100 with more available
+    final shown = items.length >= 100 ? '100+' : '${items.length}+';
+    return 'Showing $shown results for “$q”';
+  }
+
   @override
   Widget build(BuildContext context) {
     final searching = query.trim().isNotEmpty;
-    final title = category == 'All' ? 'Best Sellers' : prettyCategory(category);
-    final resultCount = items.length;
-    final subtitle = searching
-        ? 'Showing $resultCount${reachedEnd ? '' : '+'} result${resultCount == 1 ? '' : 's'} for “${query.trim()}”'
-        : 'Showing ${items.length} of $categoryTotal products';
+    final title = searching ? 'Search Results' : (category == 'All' ? 'Best Sellers' : prettyCategory(category));
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _SectionHeader(title: title, subtitle: subtitle),
+        _SectionHeader(title: title, subtitle: _buildSubtitle()),
         const SizedBox(height: 20),
-        // Cross-fade the grid when the category changes; within a category,
-        // appended pages update the grid in place.
+        // Cross-fade the grid on category change OR on each new search query.
         AnimatedSwitcher(
           duration: const Duration(milliseconds: 320),
           switchInCurve: Curves.easeOut,
@@ -957,7 +971,7 @@ class _ProductsSection extends StatelessWidget {
             children: [...previousChildren, ?currentChild],
           ),
           child: KeyedSubtree(
-            key: ValueKey('grid-$category-$searching'),
+            key: ValueKey('grid-$category-${query.trim()}'),
             child: _gridBody(),
           ),
         ),
@@ -980,13 +994,17 @@ class _ProductsSection extends StatelessWidget {
         ),
       );
     }
+    final isSearch = query.trim().isNotEmpty;
     if (paginationPage == 2 && (reachedEnd || items.length >= 200)) {
-      return const Padding(
-        padding: EdgeInsets.symmetric(vertical: 12),
+      final msg = isSearch
+          ? '🔍 Too many results? Try a more specific search term'
+          : '🔍 Use Search Feature For More Products';
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 12),
         child: Center(
           child: Text(
-            '🔍 Use Search Feature For More Products',
-            style: TextStyle(
+            msg,
+            style: const TextStyle(
               color: Colors.grey,
               fontSize: 13,
               fontStyle: FontStyle.italic,
@@ -996,6 +1014,7 @@ class _ProductsSection extends StatelessWidget {
       );
     }
     if (paginationPage == 1 && items.length >= 100 && !reachedEnd) {
+      final label = isSearch ? 'Load More Results' : 'Load More Products';
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 16),
         child: Center(
@@ -1006,21 +1025,24 @@ class _ProductsSection extends StatelessWidget {
               side: const BorderSide(color: Brand.green),
               padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 14),
             ),
-            child: const Text(
-              'Load More Products',
-              style: TextStyle(fontWeight: FontWeight.w600),
+            child: Text(
+              label,
+              style: const TextStyle(fontWeight: FontWeight.w600),
             ),
           ),
         ),
       );
     }
     if (reachedEnd && items.length > MedicineRepository.pageSize) {
-      return const Padding(
-        padding: EdgeInsets.symmetric(vertical: 8),
+      final msg = isSearch
+          ? 'All results shown for "${query.trim()}"'
+          : "You've reached the end of this category";
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
         child: Center(
           child: Text(
-            "You've reached the end of this category",
-            style: TextStyle(color: Brand.inkMuted, fontSize: 12),
+            msg,
+            style: const TextStyle(color: Brand.inkMuted, fontSize: 12),
           ),
         ),
       );
@@ -1363,6 +1385,20 @@ class _Footer extends StatelessWidget {
                       ],
                     ),
                   ],
+                ),
+                const SizedBox(height: 10),
+                Divider(color: Colors.white.withValues(alpha: 0.08)),
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  child: Text(
+                    'Drug License No: 20B — WLF20B2025CT000337  ·  21B — WLF21B2025CT000337',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.45),
+                      fontSize: 11,
+                    ),
+                  ),
                 ),
               ],
             ),

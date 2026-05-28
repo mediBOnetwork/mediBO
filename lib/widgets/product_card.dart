@@ -399,8 +399,20 @@ class _ImageBlockState extends State<_ImageBlock> {
                         ),
                       ),
             // ── Static overlays ───────────────────────────────────────────
+            // Category pill — top-left, constrained so it never reaches scheme badge
+            Positioned(
+              left: 8,
+              top: 8,
+              right: _hasScheme(widget.product.id) ? 50 : 8,
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: _CategoryImagePill(
+                    text: prettyCategory(widget.product.category)),
+              ),
+            ),
+            // Scheme badge — top-right (only when product has a scheme)
             if (_hasScheme(widget.product.id))
-              Positioned(left: 8, top: 8, child: _SchemePill(text: '5+1')),
+              Positioned(right: 8, top: 8, child: _SchemePill(text: '5+1')),
             if (widget.isBestSeller)
               Positioned(
                 left: 8,
@@ -525,7 +537,36 @@ bool _hasScheme(String productId) {
   return id % 10 < 3;
 }
 
-// Scheme badge (top-left of image): solid yellow, white bold text, boxy shape.
+// Category overlay pill (top-left of image): semi-transparent dark background.
+class _CategoryImagePill extends StatelessWidget {
+  final String text;
+  const _CategoryImagePill({required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.52),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text(
+        text,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(
+          fontSize: 9,
+          fontWeight: FontWeight.w600,
+          color: Colors.white,
+          height: 1.0,
+          leadingDistribution: TextLeadingDistribution.even,
+        ),
+      ),
+    );
+  }
+}
+
+// Scheme badge (top-right of image): solid amber, white bold text.
 class _SchemePill extends StatelessWidget {
   final String text;
   const _SchemePill({required this.text});
@@ -551,7 +592,7 @@ class _SchemePill extends StatelessWidget {
   }
 }
 
-// ─── Pack size + category/scheme row ─────────────────────────────────────────
+// ─── Pack size row ────────────────────────────────────────────────────────────
 
 class _PackSizeRow extends StatelessWidget {
   final Product product;
@@ -559,53 +600,15 @@ class _PackSizeRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        // Pack size in green
-        Text(
-          product.packSize.isNotEmpty ? product.packSize : '—',
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
-            fontSize: 11,
-            color: Color(0xFF1D9E75),
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-        const SizedBox(height: 4),
-        // Category pill (left, truncated) + scheme badge (right)
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            Expanded(
-              child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF3F4F6),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Text(
-                  prettyCategory(product.category),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w500,
-                    color: Color(0xFF6B7280),
-                  ),
-                ),
-              ),
-            ),
-            if (_hasScheme(product.id)) ...[
-              const SizedBox(width: 6),
-              _SchemePill(text: '5+1'),
-            ],
-          ],
-        ),
-      ],
+    return Text(
+      product.packSize.isNotEmpty ? product.packSize : '—',
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: const TextStyle(
+        fontSize: 11,
+        color: Color(0xFF1D9E75),
+        fontWeight: FontWeight.w500,
+      ),
     );
   }
 }

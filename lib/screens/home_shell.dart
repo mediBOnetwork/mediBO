@@ -125,6 +125,16 @@ class _HomeShellState extends State<HomeShell> {
             },
             showCategoryTiles: !isDesktop,
             onMetaLoaded: _onMetaLoaded,
+            onFooterSearch: () => setState(() => _scrollToTopTrigger++),
+            onFooterBulkUpload: () => setState(() {
+              _index = 2;
+              _cartOpen = false;
+            }),
+            onFooterOrders: () => setState(() {
+              _index = 1;
+              _cartOpen = false;
+            }),
+            onFooterCart: () => setState(() => _cartOpen = true),
           ),
           const OrdersScreen(),
           const BulkUploadScreen(),

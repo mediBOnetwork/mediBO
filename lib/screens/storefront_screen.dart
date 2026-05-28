@@ -11,6 +11,8 @@ import '../theme.dart';
 import '../util.dart';
 import '../widgets/animations.dart';
 import '../widgets/product_card.dart';
+import 'about_screen.dart';
+import 'contact_screen.dart';
 
 const double _kMaxContent = 1200;
 
@@ -42,6 +44,12 @@ class StorefrontScreen extends StatefulWidget {
   // Called once after CatalogMeta loads so the shell can populate its sidebar.
   final ValueChanged<CatalogMeta>? onMetaLoaded;
 
+  // Footer navigation callbacks.
+  final VoidCallback? onFooterSearch;
+  final VoidCallback? onFooterBulkUpload;
+  final VoidCallback? onFooterOrders;
+  final VoidCallback? onFooterCart;
+
   const StorefrontScreen({
     super.key,
     required this.query,
@@ -54,6 +62,10 @@ class StorefrontScreen extends StatefulWidget {
     this.onLoadingChanged,
     this.showCategoryTiles = true,
     this.onMetaLoaded,
+    this.onFooterSearch,
+    this.onFooterBulkUpload,
+    this.onFooterOrders,
+    this.onFooterCart,
   });
 
   @override
@@ -387,6 +399,10 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
           _Footer(
             categories: _categoryNames,
             onCategory: widget.onCategorySelected,
+            onSearch: widget.onFooterSearch,
+            onBulkUpload: widget.onFooterBulkUpload,
+            onOrders: widget.onFooterOrders,
+            onCart: widget.onFooterCart,
           ),
         ],
       ),
@@ -1279,11 +1295,22 @@ class _TrustItem extends StatelessWidget {
 class _Footer extends StatelessWidget {
   final List<String> categories;
   final ValueChanged<String> onCategory;
-  const _Footer({required this.categories, required this.onCategory});
+  final VoidCallback? onSearch;
+  final VoidCallback? onBulkUpload;
+  final VoidCallback? onOrders;
+  final VoidCallback? onCart;
+
+  const _Footer({
+    required this.categories,
+    required this.onCategory,
+    this.onSearch,
+    this.onBulkUpload,
+    this.onOrders,
+    this.onCart,
+  });
 
   @override
   Widget build(BuildContext context) {
-    // Show a manageable slice of categories in the footer.
     final shown = categories.take(8).toList();
     return Container(
       width: double.infinity,
@@ -1301,7 +1328,7 @@ class _Footer extends StatelessWidget {
                   runSpacing: 32,
                   children: [
                     SizedBox(
-                      width: 280,
+                      width: 260,
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -1328,9 +1355,10 @@ class _Footer extends StatelessWidget {
                           ),
                           const SizedBox(height: 14),
                           const _FooterContact(
-                              icon: Icons.call, text: '1800-123-4567 (Toll Free)'),
+                              icon: Icons.call, text: '9329252090'),
                           const _FooterContact(
-                              icon: Icons.mail, text: 'care@medibo.in'),
+                              icon: Icons.mail,
+                              text: 'medibonetwork@gmail.com'),
                         ],
                       ),
                     ),
@@ -1340,22 +1368,32 @@ class _Footer extends StatelessWidget {
                       values: shown,
                       onTap: onCategory,
                     ),
-                    const _FooterLinks(
+                    _FooterCallbackLinks(
                       title: 'Our Services',
-                      links: [
-                        'Upload Prescription',
-                        'Book Lab Test',
-                        'Track Your Order',
-                        'Refill Prescription',
+                      items: [
+                        ('Search Medicines', onSearch),
+                        ('Bulk Upload', onBulkUpload),
+                        ('My Orders', onOrders),
+                        ('Cart', onCart),
                       ],
                     ),
-                    const _FooterLinks(
-                      title: 'Company',
-                      links: [
-                        'About Us',
-                        'Careers',
-                        'Blog & Health Articles',
-                        'Store Locator',
+                    _FooterCallbackLinks(
+                      title: 'Quick Links',
+                      items: [
+                        (
+                          'About Us',
+                          () => Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                  builder: (_) => const AboutScreen()))
+                        ),
+                        (
+                          'Contact Us',
+                          () => Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                  builder: (_) => const ContactScreen()))
+                        ),
                       ],
                     ),
                   ],
@@ -1363,28 +1401,10 @@ class _Footer extends StatelessWidget {
                 const SizedBox(height: 36),
                 Divider(color: Colors.white.withValues(alpha: 0.12)),
                 const SizedBox(height: 16),
-                Wrap(
-                  alignment: WrapAlignment.spaceBetween,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  runSpacing: 12,
-                  children: [
-                    Text(
-                      '© 2026 mediBO Pharmacy Pvt. Ltd. · Lic. No: PH/MH/2024/001234',
-                      style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.6),
-                          fontSize: 12),
-                    ),
-                    Wrap(
-                      spacing: 8,
-                      children: const [
-                        _PayChip('Visa'),
-                        _PayChip('Mastercard'),
-                        _PayChip('UPI'),
-                        _PayChip('NetBanking'),
-                        _PayChip('COD'),
-                      ],
-                    ),
-                  ],
+                Text(
+                  '© 2026 mediBO | All rights reserved',
+                  style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.6), fontSize: 12),
                 ),
                 const SizedBox(height: 10),
                 Divider(color: Colors.white.withValues(alpha: 0.08)),
@@ -1434,7 +1454,6 @@ class _FooterContact extends StatelessWidget {
 class _FooterLinks extends StatelessWidget {
   final String title;
   final List<String> links;
-  /// Raw values passed to [onTap]; defaults to [links] when omitted.
   final List<String>? values;
   final ValueChanged<String>? onTap;
   const _FooterLinks(
@@ -1453,12 +1472,11 @@ class _FooterLinks extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.only(bottom: 10),
             child: InkWell(
-              onTap: onTap == null
-                  ? null
-                  : () => onTap!((values ?? links)[i]),
+              onTap: onTap == null ? null : () => onTap!((values ?? links)[i]),
               child: Text(links[i],
                   style: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.72), fontSize: 13)),
+                      color: Colors.white.withValues(alpha: 0.72),
+                      fontSize: 13)),
             ),
           ),
       ],
@@ -1466,21 +1484,32 @@ class _FooterLinks extends StatelessWidget {
   }
 }
 
-class _PayChip extends StatelessWidget {
-  final String label;
-  const _PayChip(this.label);
+class _FooterCallbackLinks extends StatelessWidget {
+  final String title;
+  final List<(String, VoidCallback?)> items;
+  const _FooterCallbackLinks({required this.title, required this.items});
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(6),
-      ),
-      child: Text(label,
-          style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.85), fontSize: 11)),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(title,
+            style: const TextStyle(
+                color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700)),
+        const SizedBox(height: 14),
+        for (final (label, callback) in items)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: InkWell(
+              onTap: callback,
+              child: Text(label,
+                  style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.72),
+                      fontSize: 13)),
+            ),
+          ),
+      ],
     );
   }
 }

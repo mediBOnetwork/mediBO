@@ -127,6 +127,7 @@ class _ItemList extends StatelessWidget {
     return ListView.builder(
       physics: platformScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+      cacheExtent: 400,
       itemCount: lines.length + 1,
       itemBuilder: (_, i) {
         if (i == 0) {

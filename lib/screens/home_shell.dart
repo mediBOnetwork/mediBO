@@ -416,33 +416,9 @@ class _LocationHeader extends StatelessWidget {
             // Profile + cart icons anchored to the right
             Positioned(
               right: 0,
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  _MobileProfileButton(),
-                  const SizedBox(width: 2),
-                  PressEffect(
-                    child: InkWell(
-                      onTap: onCart,
-                      borderRadius: BorderRadius.circular(20),
-                      child: Padding(
-                        padding: const EdgeInsets.all(4),
-                        child: Badge(
-                          isLabelVisible: cartItems > 0,
-                          label: Text(
-                            '$cartItems',
-                            style: const TextStyle(fontSize: 10),
-                          ),
-                          child: const Icon(
-                            Icons.shopping_cart_outlined,
-                            size: 26,
-                            color: Brand.ink,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
+              child: _MobileHeaderIcons(
+                cartItems: cartItems,
+                onCart: onCart,
               ),
             ),
           ],
@@ -452,6 +428,181 @@ class _LocationHeader extends StatelessWidget {
   }
 }
 
+
+// ─────────────────────── Mobile header icons (profile + cart) ──────────────────
+
+class _MobileHeaderIcons extends StatefulWidget {
+  final int cartItems;
+  final VoidCallback onCart;
+  const _MobileHeaderIcons({required this.cartItems, required this.onCart});
+
+  @override
+  State<_MobileHeaderIcons> createState() => _MobileHeaderIconsState();
+}
+
+class _MobileHeaderIconsState extends State<_MobileHeaderIcons>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _badgeCtrl;
+  late final Animation<double> _badgeScale;
+  int _prevCount = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _prevCount = widget.cartItems;
+    _badgeCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 400),
+    );
+    _badgeScale = TweenSequence<double>([
+      TweenSequenceItem(tween: Tween(begin: 1.0, end: 1.4), weight: 30),
+      TweenSequenceItem(tween: Tween(begin: 1.4, end: 0.85), weight: 30),
+      TweenSequenceItem(
+        tween: Tween(begin: 0.85, end: 1.0)
+            .chain(CurveTween(curve: Curves.elasticOut)),
+        weight: 40,
+      ),
+    ]).animate(_badgeCtrl);
+  }
+
+  @override
+  void didUpdateWidget(_MobileHeaderIcons old) {
+    super.didUpdateWidget(old);
+    if (widget.cartItems != _prevCount) {
+      _badgeCtrl.forward(from: 0);
+      _prevCount = widget.cartItems;
+    }
+  }
+
+  @override
+  void dispose() {
+    _badgeCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final auth = UserState.of(context);
+    final profile = auth.profile;
+    final initial = (profile?.displayName.isNotEmpty == true)
+        ? profile!.displayName[0].toUpperCase()
+        : null;
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // Profile avatar
+        PressEffect(
+          scale: 0.92,
+          child: GestureDetector(
+            onTap: () {
+              if (!auth.isAuthenticated) {
+                Navigator.push(context,
+                    MaterialPageRoute(builder: (_) => const LoginScreen()));
+              } else {
+                Navigator.push(context,
+                    MaterialPageRoute(builder: (_) => const ProfileScreen()));
+              }
+            },
+            child: Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [Color(0xFF1D9E75), Color(0xFF0F4C35)],
+                ),
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: const Color(0xFF1D9E75).withValues(alpha: 0.35),
+                    blurRadius: 8,
+                    offset: const Offset(0, 3),
+                  ),
+                ],
+              ),
+              child: Center(
+                child: initial != null
+                    ? Text(
+                        initial,
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w800,
+                          color: Colors.white,
+                          height: 1,
+                        ),
+                      )
+                    : const Icon(Icons.person_rounded,
+                        color: Colors.white, size: 20),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(width: 12),
+        // Cart button
+        PressEffect(
+          scale: 0.92,
+          child: GestureDetector(
+            onTap: widget.onCart,
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: Brand.mint,
+                    shape: BoxShape.circle,
+                    border:
+                        Border.all(color: const Color(0xFFBBF7D0), width: 1.5),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Brand.green.withValues(alpha: 0.18),
+                        blurRadius: 6,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: const Icon(Icons.shopping_bag_outlined,
+                      color: Brand.green, size: 20),
+                ),
+                if (widget.cartItems > 0)
+                  Positioned(
+                    top: -2,
+                    right: -2,
+                    child: ScaleTransition(
+                      scale: _badgeScale,
+                      child: Container(
+                        width: 18,
+                        height: 18,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFDC2626),
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white, width: 2),
+                        ),
+                        child: Center(
+                          child: Text(
+                            widget.cartItems > 9 ? '9+' : '${widget.cartItems}',
+                            style: const TextStyle(
+                              fontSize: 9,
+                              fontWeight: FontWeight.w800,
+                              color: Colors.white,
+                              height: 1,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
 
 // ─────────────────────── Mobile search bar (pill style) ───────────────────────
 

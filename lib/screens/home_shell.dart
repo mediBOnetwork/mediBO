@@ -1336,38 +1336,55 @@ class _DesktopHeaderState extends State<_DesktopHeader> {
           ),
         ],
       ),
-      padding: const EdgeInsets.symmetric(horizontal: 24),
+      padding: const EdgeInsets.symmetric(horizontal: 20),
       child: Row(
         children: [
-          // 1. Logo
-          GestureDetector(
-            onTap: widget.onHome,
-            child: RichText(
-              text: const TextSpan(
+          // 1. Logo — 250px to align with sidebar below
+          SizedBox(
+            width: 250,
+            child: GestureDetector(
+              onTap: widget.onHome,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  TextSpan(
-                    text: 'medi',
-                    style: TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.w500,
-                      color: Brand.ink,
-                      letterSpacing: -0.3,
-                    ),
-                  ),
-                  TextSpan(
-                    text: 'BO',
-                    style: TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.w800,
+                  Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
                       color: Brand.green,
-                      letterSpacing: -0.3,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Icon(Icons.add, color: Colors.white, size: 22),
+                  ),
+                  const SizedBox(width: 10),
+                  RichText(
+                    text: const TextSpan(
+                      children: [
+                        TextSpan(
+                          text: 'medi',
+                          style: TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.w500,
+                            color: Brand.ink,
+                            letterSpacing: -0.3,
+                          ),
+                        ),
+                        TextSpan(
+                          text: 'BO',
+                          style: TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.w800,
+                            color: Brand.green,
+                            letterSpacing: -0.3,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ],
               ),
             ),
           ),
-          const SizedBox(width: 24),
           // 2. Search bar — takes most of the remaining width
           Expanded(
             child: Container(
@@ -1530,42 +1547,20 @@ class _DesktopCategorySidebar extends StatelessWidget {
     required this.onCategorySelected,
   });
 
-  static const _sidebarKeys = [
-    'All',
-    'CARDIAC',
-    'GASTRO INTESTINAL',
-    'ANTI INFECTIVES',
-    'NEURO CNS',
-    'PAIN ANALGESICS',
-    'RESPIRATORY',
-    'ANTI DIABETIC',
-    'DERMA',
-  ];
-
-  static const _sidebarLabels = <String, String>{
-    'All': 'All Products',
-    'CARDIAC': 'Cardiac',
-    'GASTRO INTESTINAL': 'Gastro Intestinal',
-    'ANTI INFECTIVES': 'Anti Infectives',
-    'NEURO CNS': 'Neuro CNS',
-    'PAIN ANALGESICS': 'Pain Analgesics',
-    'RESPIRATORY': 'Respiratory',
-    'ANTI DIABETIC': 'Anti Diabetic',
-    'DERMA': 'Derma',
-  };
-
-  int _countFor(String key) {
-    final m = meta;
-    if (m == null) return 0;
-    if (key == 'All') return m.total;
-    for (final c in m.categories) {
-      if (c.name == key) return c.count;
-    }
-    return 0;
-  }
-
   @override
   Widget build(BuildContext context) {
+    final m = meta;
+
+    // Build items: "All" first, then every category sorted by count desc.
+    final items = m == null
+        ? <(String, String, int)>[]
+        : [
+            ('All', 'All Products', m.total),
+            ...(List<CategoryCount>.from(m.categories)
+                  ..sort((a, b) => b.count.compareTo(a.count)))
+                .map((c) => (c.name, prettyCategory(c.name), c.count)),
+          ];
+
     return Container(
       width: 250,
       decoration: const BoxDecoration(
@@ -1588,19 +1583,24 @@ class _DesktopCategorySidebar extends StatelessWidget {
             ),
           ),
           Expanded(
-            child: ListView(
-              padding: const EdgeInsets.fromLTRB(8, 0, 8, 16),
-              children: [
-                for (final key in _sidebarKeys)
-                  _SidebarCategoryRow(
-                    catKey: key,
-                    label: _sidebarLabels[key] ?? prettyCategory(key),
-                    count: _countFor(key),
-                    isSelected: selected == key,
-                    onTap: () => onCategorySelected(key),
+            child: m == null
+                ? const Center(
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: Brand.green),
+                  )
+                : ListView(
+                    padding: const EdgeInsets.fromLTRB(8, 0, 8, 16),
+                    children: [
+                      for (final (key, label, count) in items)
+                        _SidebarCategoryRow(
+                          catKey: key,
+                          label: label,
+                          count: count,
+                          isSelected: selected == key,
+                          onTap: () => onCategorySelected(key),
+                        ),
+                    ],
                   ),
-              ],
-            ),
           ),
         ],
       ),

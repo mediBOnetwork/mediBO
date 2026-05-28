@@ -354,7 +354,11 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
       physics: platformScrollPhysics(),
       child: Column(
         children: [
-          _Hero(onShopNow: _scrollToProducts),
+          _Hero(
+            onShopNow: _scrollToProducts,
+            onUploadOrder: widget.onFooterBulkUpload,
+            medicineCount: _meta?.total,
+          ),
           if (widget.showCategoryTiles)
             _Section(
               child: _CategoryTiles(
@@ -475,7 +479,9 @@ class _SectionHeader extends StatelessWidget {
 
 class _Hero extends StatelessWidget {
   final VoidCallback onShopNow;
-  const _Hero({required this.onShopNow});
+  final int? medicineCount;
+  final VoidCallback? onUploadOrder;
+  const _Hero({required this.onShopNow, this.medicineCount, this.onUploadOrder});
 
   @override
   Widget build(BuildContext context) {
@@ -516,6 +522,17 @@ class _Hero extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  String _formatCount(int? n) {
+    if (n == null || n == 0) return '...';
+    final s = n.toString();
+    final buf = StringBuffer();
+    for (var i = 0; i < s.length; i++) {
+      if (i > 0 && (s.length - i) % 3 == 0) buf.write(',');
+      buf.write(s[i]);
+    }
+    return '${buf.toString()}+';
   }
 
   Widget _heroText(BuildContext context, {bool wide = true}) {
@@ -573,12 +590,9 @@ class _Hero extends StatelessWidget {
                   foregroundColor: Colors.white,
                   side: const BorderSide(color: Colors.white70),
                 ),
-                onPressed: () => ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                      content: Text('Prescription upload — coming soon')),
-                ),
+                onPressed: onUploadOrder,
                 icon: const Icon(Icons.upload_file, size: 18),
-                label: const Text('Upload Rx'),
+                label: const Text('Upload Order'),
               ),
             ),
           ],
@@ -587,10 +601,10 @@ class _Hero extends StatelessWidget {
         Wrap(
           spacing: 28,
           runSpacing: 12,
-          children: const [
-            _HeroStat(value: '4,400+', label: 'Medicines'),
-            _HeroStat(value: '2 hr', label: 'Fast Delivery'),
-            _HeroStat(value: '100%', label: 'Genuine'),
+          children: [
+            _HeroStat(value: _formatCount(medicineCount), label: 'Medicines'),
+            const _HeroStat(value: '2 hr', label: 'Fast Delivery'),
+            const _HeroStat(value: '100%', label: 'Genuine'),
           ],
         ),
       ],
@@ -625,41 +639,69 @@ class _HeroArt extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    return SizedBox(
       height: 260,
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [Color(0xFF1F6F52), Color(0xFF155E40)],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
+      child: ClipRRect(
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
-      ),
-      child: Stack(
-        children: [
-          const Center(
-            child: Icon(Icons.medication_liquid, size: 110, color: Colors.white24),
-          ),
-          Positioned(
-            top: 18,
-            right: 18,
-            child: _FloatingBadge(
-              icon: Icons.bolt,
-              title: 'Express Delivery',
-              subtitle: 'In 2 hours',
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            Image.network(
+              'https://images.unsplash.com/photo-1584308666744-24d5c474f2ae?w=400',
+              fit: BoxFit.cover,
+              loadingBuilder: (ctx, child, progress) {
+                if (progress == null) return child;
+                return Container(
+                  color: const Color(0xFF1F6F52),
+                  child: const Center(
+                    child: CircularProgressIndicator(
+                        color: Colors.white38, strokeWidth: 2),
+                  ),
+                );
+              },
+              errorBuilder: (ctx, _, __) => Container(
+                color: const Color(0xFF1F6F52),
+                child: const Center(
+                  child: Icon(Icons.medication_liquid,
+                      size: 110, color: Colors.white24),
+                ),
+              ),
             ),
-          ),
-          Positioned(
-            bottom: 18,
-            left: 18,
-            child: _FloatingBadge(
-              icon: Icons.verified_user,
-              title: 'Verified Pharmacy',
-              subtitle: '100% genuine',
+            Positioned(
+              bottom: 0,
+              left: 0,
+              right: 0,
+              child: Container(
+                height: 80,
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.bottomCenter,
+                    end: Alignment.topCenter,
+                    colors: [Colors.black45, Colors.transparent],
+                  ),
+                ),
+              ),
             ),
-          ),
-        ],
+            Positioned(
+              top: 18,
+              right: 18,
+              child: _FloatingBadge(
+                icon: Icons.bolt,
+                title: 'Express Delivery',
+                subtitle: 'In 2 hours',
+              ),
+            ),
+            Positioned(
+              bottom: 18,
+              left: 18,
+              child: _FloatingBadge(
+                icon: Icons.verified_user,
+                title: 'Verified Pharmacy',
+                subtitle: '100% genuine',
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1321,18 +1363,20 @@ class _Footer extends StatelessWidget {
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 44),
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
                 Wrap(
                   spacing: 48,
                   runSpacing: 32,
+                  alignment: WrapAlignment.center,
                   children: [
                     SizedBox(
                       width: 260,
                       child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                        crossAxisAlignment: CrossAxisAlignment.center,
                         children: [
                           Row(
+                            mainAxisSize: MainAxisSize.min,
                             children: const [
                               Icon(Icons.local_pharmacy,
                                   color: Brand.green, size: 26),
@@ -1401,10 +1445,14 @@ class _Footer extends StatelessWidget {
                 const SizedBox(height: 36),
                 Divider(color: Colors.white.withValues(alpha: 0.12)),
                 const SizedBox(height: 16),
-                Text(
-                  '© 2026 mediBO | All rights reserved',
-                  style: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.6), fontSize: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: Text(
+                    '© 2026 mediBO | All rights reserved',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.6), fontSize: 12),
+                  ),
                 ),
                 const SizedBox(height: 10),
                 Divider(color: Colors.white.withValues(alpha: 0.08)),
@@ -1439,6 +1487,7 @@ class _FooterContact extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Row(
+        mainAxisSize: MainAxisSize.min,
         children: [
           Icon(icon, size: 15, color: Colors.white.withValues(alpha: 0.7)),
           const SizedBox(width: 8),

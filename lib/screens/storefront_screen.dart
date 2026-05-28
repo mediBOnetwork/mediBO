@@ -840,20 +840,7 @@ class _ProductsSection extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(
-              child: _SectionHeader(title: title, subtitle: subtitle),
-            ),
-            if (filtering)
-              TextButton.icon(
-                onPressed: onClear,
-                icon: const Icon(Icons.close, size: 16),
-                label: const Text('Clear filter'),
-              ),
-          ],
-        ),
+        _SectionHeader(title: title, subtitle: subtitle),
         const SizedBox(height: 20),
         // Cross-fade the grid when the category changes; within a category,
         // appended pages update the grid in place.

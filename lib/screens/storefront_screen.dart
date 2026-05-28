@@ -83,6 +83,10 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
   // Captcha-gated pagination: 1 = first 100 shown, 2 = up to 200 shown.
   int _paginationPage = 1;
   bool _captchaLoading = false;
+  // true while products are being drip-fed one-by-one after captcha
+  bool _addingItems = false;
+  // items at/above this index get the slide-in entrance animation
+  int _animatedFrom = 0;
 
   @override
   void initState() {
@@ -142,6 +146,8 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
       _suggestions = [];
       _paginationPage = 1;
       _captchaLoading = false;
+      _addingItems = false;
+      _animatedFrom = 0;
     });
     try {
       final page = await widget.repo.fetchPage(
@@ -184,7 +190,7 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
   }
 
   Future<void> _loadMore() async {
-    if (_loadingFirst || _loadingMore || _reachedEnd) return;
+    if (_loadingFirst || _loadingMore || _reachedEnd || _addingItems) return;
     if (_paginationPage == 1 && _items.length >= 100) return;
     if (_paginationPage == 2 && _items.length >= 200) return;
     final token = _loadToken;
@@ -230,7 +236,7 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
   }
 
   Future<void> _onLoadMorePressed() async {
-    if (_captchaLoading) return;
+    if (_captchaLoading || _addingItems) return;
     setState(() => _captchaLoading = true);
     final captchaToken = await _showRecaptcha();
     if (!mounted) return;
@@ -248,13 +254,26 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
         limit: 100,
       );
       if (loadToken != _loadToken || !mounted) return;
+      // Record where new items start so _gridBody can animate them,
+      // then switch from captcha-spinner to the drip-feed phase.
       setState(() {
-        _items.addAll(page);
-        _paginationPage = 2;
+        _animatedFrom = _items.length;
         _captchaLoading = false;
+        _addingItems = true;
+      });
+      // Drip-feed each product one at a time so cards slide in individually.
+      for (var i = 0; i < page.length; i++) {
+        await Future.delayed(const Duration(milliseconds: 50));
+        if (loadToken != _loadToken || !mounted) return;
+        setState(() => _items.add(page[i]));
+      }
+      if (loadToken != _loadToken || !mounted) return;
+      setState(() {
+        _paginationPage = 2;
+        _addingItems = false;
         _reachedEnd = page.length < 100;
       });
-      // Scroll down so the newly added products are visible.
+      // Scroll to the bottom so the last batch of new products is visible.
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted && _scroll.hasClients) {
           _scroll.animateTo(
@@ -266,7 +285,10 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
       });
     } catch (e) {
       if (!mounted) return;
-      setState(() => _captchaLoading = false);
+      setState(() {
+        _captchaLoading = false;
+        _addingItems = false;
+      });
     }
   }
 
@@ -356,6 +378,8 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
                 paginationPage: _paginationPage,
                 captchaLoading: _captchaLoading,
                 onLoadMore: _onLoadMorePressed,
+                addingItems: _addingItems,
+                animatedFrom: _animatedFrom,
               ),
             ),
           ),
@@ -886,6 +910,8 @@ class _ProductsSection extends StatelessWidget {
   final int paginationPage;
   final bool captchaLoading;
   final VoidCallback onLoadMore;
+  final bool addingItems;
+  final int animatedFrom;
   const _ProductsSection({
     required this.items,
     required this.categoryTotal,
@@ -902,6 +928,8 @@ class _ProductsSection extends StatelessWidget {
     required this.paginationPage,
     required this.captchaLoading,
     required this.onLoadMore,
+    required this.addingItems,
+    required this.animatedFrom,
   });
 
   @override
@@ -940,7 +968,7 @@ class _ProductsSection extends StatelessWidget {
   }
 
   Widget _buildPaginationFooter() {
-    if (captchaLoading || loadingMore) {
+    if (captchaLoading || loadingMore || addingItems) {
       return const Padding(
         padding: EdgeInsets.symmetric(vertical: 12),
         child: Center(
@@ -1023,14 +1051,24 @@ class _ProductsSection extends StatelessWidget {
           itemCount: items.length,
           itemBuilder: (context, i) {
             final card = ProductCard(product: items[i], isBestSeller: i < 3);
-            if (i >= MedicineRepository.pageSize) {
-              return KeyedSubtree(key: ValueKey(items[i].id), child: card);
+            // "Load More" batch: each card slides in as it's added (no delay —
+            // the 50 ms stagger comes from the drip-feed loop in state).
+            if (animatedFrom > 0 && i >= animatedFrom) {
+              return EntranceAnimator(
+                key: ValueKey(items[i].id),
+                delay: Duration.zero,
+                child: card,
+              );
             }
-            return EntranceAnimator(
-              key: ValueKey(items[i].id),
-              delay: Duration(milliseconds: (i * 30).clamp(0, 420)),
-              child: card,
-            );
+            // First page: stagger entrance on initial load.
+            if (i < MedicineRepository.pageSize) {
+              return EntranceAnimator(
+                key: ValueKey(items[i].id),
+                delay: Duration(milliseconds: (i * 30).clamp(0, 420)),
+                child: card,
+              );
+            }
+            return KeyedSubtree(key: ValueKey(items[i].id), child: card);
           },
         );
       },

@@ -126,7 +126,6 @@ class _HomeShellState extends State<HomeShell> {
       bottomNavigationBar: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const _BottomPromoBar(),
           if (isMobile)
             AnimatedSwitcher(
               duration: const Duration(milliseconds: 550),
@@ -667,41 +666,6 @@ class _NavChip extends StatelessWidget {
             ),
           ),
         ),
-      ),
-    );
-  }
-}
-
-// ─────────────────────── Bottom promo bar ───────────────────────
-
-class _BottomPromoBar extends StatelessWidget {
-  const _BottomPromoBar();
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      color: Brand.green,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: const [
-          Icon(Icons.local_offer, color: Colors.white, size: 14),
-          SizedBox(width: 6),
-          Text(
-            'Get 10% off on first order',
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          SizedBox(width: 8),
-          Text(
-            '· Use code HEALTH10',
-            style: TextStyle(color: Colors.white70, fontSize: 12),
-          ),
-        ],
       ),
     );
   }

@@ -1,31 +1,34 @@
-# mediBO — Claude Code Instructions
+# MANDATORY RULE - NEVER SKIP
 
-## Auto-build and push after every change
-
-After **every** code change you make, always run these commands automatically without being asked:
+After EVERY change to ANY file, you MUST run these commands:
 
 ```bash
+cd ~/mediBO
 flutter build web --release
 git add -A
-git commit -m "auto update $(date)"
+git commit -m "auto deploy $(date +%H:%M)"
 git push origin main --force
+echo "✅ DEPLOYED TO MEDIBO.IN"
 ```
 
-**Never skip this step.** Always build and push after every single change, no exceptions.
+Do not stop until `git push` shows success. No exceptions.
+
+## Important build note
+
+Use `flutter build web --release` only — **never** add `--web-renderer canvaskit` (that flag was removed in Flutter 3.22 and causes an immediate build failure).
 
 ## Project context
 
-- Flutter 3.44 web app — package name `pharma_b2b`, located at `/home/mimbonetwork/mediBO`
-- Build command: `flutter build web --release` (CanvasKit is already the default renderer; `--web-renderer canvaskit` flag was removed in Flutter 3.22 and causes a build failure — never use it)
-- Remote: `https://github.com/mediBOnetwork/mediBO.git` on branch `main`
-- Supabase backend: `qkcuoaqrpnmdnejzahdv.supabase.co`
-- Gemini API key in `lib/config/api_keys.dart`
+- Flutter 3.44 web app — package name `pharma_b2b`, at `/home/mimbonetwork/mediBO`
+- Remote: `https://github.com/mediBOnetwork/mediBO.git` branch `main`
+- Supabase: `qkcuoaqrpnmdnejzahdv.supabase.co`
+- Gemini key: `lib/config/api_keys.dart`
 
-## Architecture notes
+## Architecture
 
-- `AppState` (`InheritedNotifier<CartModel>`) wraps the whole app — use `AppState.of(context)` to read cart state
-- `CartModel.distinctItems` = unique products; `CartModel.totalUnits` = total pack quantity
-- Bottom nav has 4 items: Home, Catalogue, Orders, Bulk (no Cart item — cart opens as a slide-in panel)
-- `IndexedStack` keeps all three screen States alive across tab switches — `StorefrontScreen` state/data is preserved
-- `_StickyCartBar` and `CartPanel` are each wrapped in `RepaintBoundary`
-- Celebration banners fire when subtotal crosses ₹999 (free delivery) and ₹2999 (3% discount)
+- `AppState` (`InheritedNotifier<CartModel>`) — use `AppState.of(context)` for cart state
+- `CartModel.distinctItems` = unique products; `totalUnits` = total pack qty
+- Bottom nav: 4 items — Home, Catalogue, Orders, Bulk (Cart opens as slide-in panel)
+- `IndexedStack` keeps all three screen States alive across tab switches
+- `RepaintBoundary` on `_StickyCartBar`, `CartPanel`, and `Shimmer`
+- Celebration banners fire at ₹999 (free delivery) and ₹2999 (3% discount)

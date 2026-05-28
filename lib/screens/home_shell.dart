@@ -12,6 +12,7 @@ import 'auth/login_screen.dart';
 import 'bulk_upload_screen.dart';
 import 'cart_screen.dart';
 import 'orders_screen.dart';
+import 'profile_screen.dart';
 import 'storefront_screen.dart';
 
 /// App shell: responsive — desktop gets a top nav + sidebar, mobile/tablet
@@ -1632,6 +1633,18 @@ class _DesktopProfileButton extends StatelessWidget {
         ),
         const PopupMenuDivider(),
         PopupMenuItem(
+          value: 'profile',
+          child: const Row(
+            children: [
+              Icon(Icons.person_outline, size: 16, color: Color(0xFF374151)),
+              SizedBox(width: 10),
+              Text('View Profile',
+                  style: TextStyle(
+                      fontSize: 14, color: Color(0xFF374151))),
+            ],
+          ),
+        ),
+        PopupMenuItem(
           value: 'logout',
           child: const Row(
             children: [
@@ -1645,6 +1658,10 @@ class _DesktopProfileButton extends StatelessWidget {
         ),
       ],
       onSelected: (val) async {
+        if (val == 'profile' && context.mounted) {
+          Navigator.push(context,
+              MaterialPageRoute(builder: (_) => const ProfileScreen()));
+        }
         if (val == 'logout') await UserState.read(context).signOut();
       },
       child: Container(
@@ -1805,7 +1822,33 @@ class _MobileProfileButton extends StatelessWidget {
             ),
             const SizedBox(height: 24),
             const Divider(),
-            const SizedBox(height: 8),
+            const SizedBox(height: 4),
+            InkWell(
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.push(context,
+                    MaterialPageRoute(builder: (_) => const ProfileScreen()));
+              },
+              borderRadius: BorderRadius.circular(8),
+              child: const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 4, vertical: 12),
+                child: Row(
+                  children: [
+                    Icon(Icons.person_outline,
+                        size: 20, color: Color(0xFF374151)),
+                    SizedBox(width: 12),
+                    Text(
+                      'View Profile',
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF374151),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
             InkWell(
               onTap: () async {
                 Navigator.pop(context);

@@ -267,10 +267,6 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
                 },
               ),
             ),
-          _Section(
-            padding: const EdgeInsets.fromLTRB(20, 0, 20, 28),
-            child: const _PromoStrip(),
-          ),
           Container(
             key: _productsKey,
             color: Brand.section,
@@ -796,70 +792,6 @@ class _CategoryTile extends StatelessWidget {
             ],
           ),
         ),
-      ),
-    );
-  }
-}
-
-// ─────────────────────── Promo strip ───────────────────────
-
-class _PromoStrip extends StatelessWidget {
-  const _PromoStrip();
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-            colors: [Brand.green, Color(0xFF12894A)]),
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Wrap(
-        alignment: WrapAlignment.spaceBetween,
-        crossAxisAlignment: WrapCrossAlignment.center,
-        runSpacing: 12,
-        children: [
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: const [
-              Icon(Icons.local_offer, color: Colors.white, size: 22),
-              SizedBox(width: 10),
-              Text('Get 15% off on your first order',
-                  style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 17,
-                      fontWeight: FontWeight.w700)),
-            ],
-          ),
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.2),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.white54),
-                ),
-                child: const Text('FIRST15',
-                    style: TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: 1)),
-              ),
-              const SizedBox(width: 12),
-              FilledButton(
-                style: FilledButton.styleFrom(
-                    backgroundColor: Colors.white,
-                    foregroundColor: Brand.greenDark),
-                onPressed: () {},
-                child: const Text('Register Now'),
-              ),
-            ],
-          ),
-        ],
       ),
     );
   }

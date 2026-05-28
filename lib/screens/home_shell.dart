@@ -292,9 +292,22 @@ class _HomeShellState extends State<HomeShell> {
                     : const SizedBox.shrink(key: ValueKey('3pct-empty')),
               ),
               Expanded(
-                child: IndexedStack(
-                  index: _index,
-                  children: pages,
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (_index == 0)
+                      _DesktopCategorySidebar(
+                        meta: _desktopMeta,
+                        selected: _category,
+                        onCategorySelected: _selectCategory,
+                      ),
+                    Expanded(
+                      child: IndexedStack(
+                        index: _index,
+                        children: pages,
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ],
@@ -1340,51 +1353,8 @@ class _DesktopHeaderState extends State<_DesktopHeader> {
               ),
             ),
           ),
-          const SizedBox(width: 14),
-          // 2. Deliver-to location pill
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            decoration: BoxDecoration(
-              border: Border.all(color: const Color(0xFFD1D5DB)),
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: const Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.location_on, color: Brand.green, size: 14),
-                SizedBox(width: 3),
-                Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Deliver to',
-                      style: TextStyle(
-                        fontSize: 9,
-                        color: Brand.inkMuted,
-                        fontWeight: FontWeight.w400,
-                        height: 1.2,
-                      ),
-                    ),
-                    Text(
-                      'Raipur',
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700,
-                        color: Brand.ink,
-                        height: 1.2,
-                      ),
-                    ),
-                  ],
-                ),
-                SizedBox(width: 2),
-                Icon(Icons.keyboard_arrow_down,
-                    color: Brand.inkMuted, size: 15),
-              ],
-            ),
-          ),
-          const SizedBox(width: 16),
-          // 3. Search bar — takes most of the remaining width
+          const SizedBox(width: 24),
+          // 2. Search bar — takes most of the remaining width
           Expanded(
             child: Container(
               height: 46,
@@ -1528,6 +1498,181 @@ class _DesktopHeaderState extends State<_DesktopHeader> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────── Desktop category sidebar ───────────────────────
+
+class _DesktopCategorySidebar extends StatelessWidget {
+  final CatalogMeta? meta;
+  final String selected;
+  final ValueChanged<String> onCategorySelected;
+
+  const _DesktopCategorySidebar({
+    required this.meta,
+    required this.selected,
+    required this.onCategorySelected,
+  });
+
+  static const _sidebarKeys = [
+    'All',
+    'CARDIAC',
+    'GASTRO INTESTINAL',
+    'ANTI INFECTIVES',
+    'NEURO CNS',
+    'PAIN ANALGESICS',
+    'RESPIRATORY',
+    'ANTI DIABETIC',
+    'DERMA',
+  ];
+
+  static const _sidebarLabels = <String, String>{
+    'All': 'All Products',
+    'CARDIAC': 'Cardiac',
+    'GASTRO INTESTINAL': 'Gastro Intestinal',
+    'ANTI INFECTIVES': 'Anti Infectives',
+    'NEURO CNS': 'Neuro CNS',
+    'PAIN ANALGESICS': 'Pain Analgesics',
+    'RESPIRATORY': 'Respiratory',
+    'ANTI DIABETIC': 'Anti Diabetic',
+    'DERMA': 'Derma',
+  };
+
+  int _countFor(String key) {
+    final m = meta;
+    if (m == null) return 0;
+    if (key == 'All') return m.total;
+    for (final c in m.categories) {
+      if (c.name == key) return c.count;
+    }
+    return 0;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 250,
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        border: Border(right: BorderSide(color: Color(0xFFE5E7EB))),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 20, 16, 12),
+            child: Text(
+              'CATEGORIES',
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                color: Color(0xFF9CA3AF),
+                letterSpacing: 1.2,
+              ),
+            ),
+          ),
+          Expanded(
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(8, 0, 8, 16),
+              children: [
+                for (final key in _sidebarKeys)
+                  _SidebarCategoryRow(
+                    catKey: key,
+                    label: _sidebarLabels[key] ?? prettyCategory(key),
+                    count: _countFor(key),
+                    isSelected: selected == key,
+                    onTap: () => onCategorySelected(key),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SidebarCategoryRow extends StatelessWidget {
+  final String catKey;
+  final String label;
+  final int count;
+  final bool isSelected;
+  final VoidCallback onTap;
+
+  const _SidebarCategoryRow({
+    required this.catKey,
+    required this.label,
+    required this.count,
+    required this.isSelected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final style = catKey == 'All'
+        ? const CategoryStyle(Brand.mint, Brand.green, Icons.grid_view_rounded)
+        : categoryStyle(catKey);
+
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 2),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+        decoration: BoxDecoration(
+          color: isSelected ? const Color(0xFFECFDF5) : Colors.transparent,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 30,
+              height: 30,
+              decoration: BoxDecoration(
+                color: style.bg,
+                borderRadius: BorderRadius.circular(7),
+              ),
+              child: Icon(style.icon, size: 16, color: style.fg),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                label,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight:
+                      isSelected ? FontWeight.w700 : FontWeight.w500,
+                  color: isSelected ? Brand.green : const Color(0xFF374151),
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            if (count > 0)
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                decoration: BoxDecoration(
+                  color: isSelected
+                      ? const Color(0xFFDCFCE7)
+                      : const Color(0xFFF3F4F6),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  '$count',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: isSelected
+                        ? Brand.green
+                        : const Color(0xFF6B7280),
+                  ),
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }

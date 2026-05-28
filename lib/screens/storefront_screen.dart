@@ -993,7 +993,9 @@ class _ProductsSection extends StatelessWidget {
   String _buildSubtitle() {
     final q = query.trim();
     if (q.isEmpty) {
-      return 'Showing ${items.length} of $categoryTotal products';
+      final catSuffix =
+          category != 'All' ? ' in ${prettyCategory(category)}' : '';
+      return 'Showing ${items.length} of $categoryTotal products$catSuffix';
     }
     // At the 200-item cap for search
     if (paginationPage == 2 && (reachedEnd || items.length >= 200)) {

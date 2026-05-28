@@ -123,7 +123,7 @@ class _HomeShellState extends State<HomeShell> {
                 setState(() => _searchLoading = loading && _query.trim().isNotEmpty);
               }
             },
-            showCategoryTiles: !isDesktop,
+            showCategoryTiles: false,
             onMetaLoaded: _onMetaLoaded,
             onFooterSearch: () => setState(() => _scrollToTopTrigger++),
             onFooterBulkUpload: () => setState(() {
@@ -195,7 +195,18 @@ class _HomeShellState extends State<HomeShell> {
                 }),
                 onScrollToResults: () => setState(() => _scrollTrigger++),
               ),
-              const _PromoChipsRow(),
+              _MobileCategoryChips(
+                meta: _desktopMeta,
+                selected: _category,
+                onCategoryTap: (key) => setState(() {
+                  _category = key;
+                  _query = '';
+                  _searchCtrl.clear();
+                  _index = 0;
+                  _cartOpen = false;
+                  _scrollTrigger++;
+                }),
+              ),
               Expanded(
                 child: IndexedStack(
                   index: _index,
@@ -347,43 +358,58 @@ class _LocationHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cartItems = AppState.of(context).distinctItems;
-    final logoSize = MediaQuery.sizeOf(context).width < 360 ? 18.0 : 20.0;
     return SafeArea(
       bottom: false,
       child: Container(
         width: double.infinity,
+        constraints: const BoxConstraints(minHeight: 70),
         decoration: const BoxDecoration(
           color: Colors.white,
           border: Border(bottom: BorderSide(color: Brand.border)),
         ),
-        padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
         child: Stack(
           alignment: Alignment.center,
           children: [
-            // Logo perfectly centered
-            RichText(
-              text: TextSpan(
-                children: [
-                  TextSpan(
-                    text: 'medi',
-                    style: TextStyle(
-                      fontSize: logoSize,
-                      fontWeight: FontWeight.w500,
-                      color: Brand.ink,
-                      letterSpacing: -0.3,
-                    ),
+            // Logo icon + text perfectly centered
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 28,
+                  height: 28,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1B5E20),
+                    borderRadius: BorderRadius.circular(6),
                   ),
-                  TextSpan(
-                    text: 'BO',
-                    style: TextStyle(
-                      fontSize: logoSize,
-                      fontWeight: FontWeight.w800,
-                      color: Brand.green,
-                      letterSpacing: -0.3,
-                    ),
+                  child: const Icon(Icons.add, color: Colors.white, size: 17),
+                ),
+                const SizedBox(width: 7),
+                RichText(
+                  text: const TextSpan(
+                    children: [
+                      TextSpan(
+                        text: 'medi',
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFF1B5E20),
+                          letterSpacing: -0.3,
+                        ),
+                      ),
+                      TextSpan(
+                        text: 'BO',
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w800,
+                          color: Color(0xFF4CAF50),
+                          letterSpacing: -0.3,
+                        ),
+                      ),
+                    ],
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
             // Cart icon anchored to the right
             Positioned(
@@ -558,102 +584,90 @@ class _MobileSearchBarState extends State<_MobileSearchBar> {
   }
 }
 
-// ─────────────────────── Promo chips row (mobile) ───────────────────────
+// ─────────────────────── Mobile category chips row ───────────────────────
 
-class _PromoChipsRow extends StatelessWidget {
-  const _PromoChipsRow();
+class _MobileCategoryChips extends StatelessWidget {
+  final CatalogMeta? meta;
+  final String selected;
+  final ValueChanged<String> onCategoryTap;
 
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      color: Colors.white,
-      height: 44,
-      child: ListView(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.fromLTRB(14, 4, 14, 4),
-        children: const [
-          _PromoChip(
-            emoji: '🔥',
-            label: 'Hot Deals',
-            bg: Color(0xFFFFF3E0),
-            fg: Color(0xFFE65100),
-          ),
-          SizedBox(width: 8),
-          _PromoChip(
-            emoji: '💊',
-            label: 'Antibiotics',
-            bg: Color(0xFFE8F5E9),
-            fg: Color(0xFF2E7D32),
-          ),
-          SizedBox(width: 8),
-          _PromoChip(
-            emoji: '❤️',
-            label: 'Cardiac',
-            bg: Color(0xFFFCE4EC),
-            fg: Color(0xFFC62828),
-          ),
-          SizedBox(width: 8),
-          _PromoChip(
-            emoji: '🧴',
-            label: 'Skincare',
-            bg: Color(0xFFF3E5F5),
-            fg: Color(0xFF6A1B9A),
-          ),
-          SizedBox(width: 8),
-          _PromoChip(
-            emoji: '🍼',
-            label: 'Baby Care',
-            bg: Color(0xFFE3F2FD),
-            fg: Color(0xFF1565C0),
-          ),
-          SizedBox(width: 8),
-          _PromoChip(
-            emoji: '💪',
-            label: 'Vitamins',
-            bg: Color(0xFFFFF8E1),
-            fg: Color(0xFFF57F17),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _PromoChip extends StatelessWidget {
-  final String emoji;
-  final String label;
-  final Color bg;
-  final Color fg;
-
-  const _PromoChip({
-    required this.emoji,
-    required this.label,
-    required this.bg,
-    required this.fg,
+  const _MobileCategoryChips({
+    required this.meta,
+    required this.selected,
+    required this.onCategoryTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(emoji, style: const TextStyle(fontSize: 13)),
-          const SizedBox(width: 5),
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              color: fg,
-            ),
+    final m = meta;
+    if (m == null) {
+      // Slim placeholder while meta is loading
+      return Container(
+        color: Colors.white,
+        height: 48,
+        child: const Center(
+          child: SizedBox(
+            width: 16,
+            height: 16,
+            child: CircularProgressIndicator(strokeWidth: 2, color: Brand.green),
           ),
-        ],
+        ),
+      );
+    }
+
+    // "All" first, then categories sorted by count desc
+    final cats = List<CategoryCount>.from(m.categories)
+      ..sort((a, b) => b.count.compareTo(a.count));
+
+    return Container(
+      color: Colors.white,
+      height: 50,
+      child: ListView.builder(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.fromLTRB(12, 7, 12, 7),
+        itemCount: cats.length + 1, // +1 for "All"
+        itemBuilder: (ctx, i) {
+          final isAll = i == 0;
+          final key = isAll ? 'All' : cats[i - 1].name;
+          final label = isAll ? 'All' : prettyCategory(cats[i - 1].name);
+          final style = isAll
+              ? const CategoryStyle(Brand.mint, Brand.green, Icons.grid_view_rounded)
+              : categoryStyle(key);
+          final isSelected = selected == key;
+
+          return Padding(
+            padding: EdgeInsets.only(right: i < cats.length ? 8 : 0),
+            child: GestureDetector(
+              onTap: () => onCategoryTap(key),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 5),
+                decoration: BoxDecoration(
+                  color: isSelected ? style.fg : style.bg,
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      style.icon,
+                      size: 13,
+                      color: isSelected ? Colors.white : style.fg,
+                    ),
+                    const SizedBox(width: 5),
+                    Text(
+                      label,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: isSelected ? Colors.white : style.fg,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
       ),
     );
   }

@@ -105303,7 +105303,7 @@ q=3
 n=$.ev().b
 n===$&&A.a()
 s=6
-return A.t(A.U5(n.gfU(),B.qR,"https://svojhmarmaijkshsbeih.supabase.co/auth/v1/callback"),$async$Cw)
+return A.t(A.U5(n.gfU(),B.qR,"https://medibo.in"),$async$Cw)
 case 6:n=o.c
 if(n!=null)A.er(n,!1).a8C(new A.aKK())
 q=1

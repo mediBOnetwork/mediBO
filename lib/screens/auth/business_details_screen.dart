@@ -54,13 +54,13 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
           ? widget.phone
           : '+91${_pincodeCtrl.text}'; // fallback
       final profile = UserProfile(
-        id: widget.userId,
-        fullName: _ownerCtrl.text.trim(),
-        businessName: _pharmacyCtrl.text.trim(),
+        userId: widget.userId,
+        ownerName: _ownerCtrl.text.trim(),
+        pharmacyName: _pharmacyCtrl.text.trim(),
         phone: phone,
         gstin: _gstinCtrl.text.trim().toUpperCase(),
         drugLicense: _dlCtrl.text.trim(),
-        addressLine: _addressCtrl.text.trim(),
+        address: _addressCtrl.text.trim(),
         city: _cityCtrl.text.trim(),
         pincode: _pincodeCtrl.text.trim(),
       );

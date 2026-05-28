@@ -69,7 +69,7 @@ class _CartScreenState extends State<CartScreen> {
     try {
       final result = await PaymentService.initiatePayment(
         amount: amount,
-        name: profile?.fullName ?? '',
+        name: profile?.ownerName ?? '',
         email: '',
         phone: profile?.phone ?? '',
       );
@@ -83,7 +83,9 @@ class _CartScreenState extends State<CartScreen> {
         _saveOrder(
           order: order,
           paymentId: result['payment_id'] ?? '',
-          pharmacyName: profile?.businessName ?? '',
+          pharmacyName: profile?.pharmacyName ?? '',
+          phone: profile?.phone ?? '',
+          address: '${profile?.address ?? ''}, ${profile?.city ?? ''} ${profile?.pincode ?? ''}'.trim(),
         );
         showDialog(
           context: context,
@@ -131,6 +133,8 @@ class _CartScreenState extends State<CartScreen> {
     required Order order,
     required String paymentId,
     required String pharmacyName,
+    required String phone,
+    required String address,
   }) {
     final userId =
         Supabase.instance.client.auth.currentUser?.id;
@@ -138,6 +142,8 @@ class _CartScreenState extends State<CartScreen> {
     Supabase.instance.client.from('orders').insert({
       'user_id': userId,
       'pharmacy_name': pharmacyName,
+      if (phone.isNotEmpty) 'phone': phone,
+      if (address.isNotEmpty) 'address': address,
       'items': order.lines
           .map((l) => {
                 'product_name': l.product.name,

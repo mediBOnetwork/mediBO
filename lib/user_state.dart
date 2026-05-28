@@ -1,6 +1,4 @@
-// ignore_for_file: avoid_web_libraries_in_flutter
 import 'dart:async';
-import 'dart:html' as html;
 
 import 'package:flutter/widgets.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -58,9 +56,9 @@ class AuthNotifier extends ChangeNotifier {
   Future<void> _loadProfile(String userId) async {
     try {
       final res = await Supabase.instance.client
-          .from('user_profiles')
+          .from('pharmacy_profiles')
           .select()
-          .eq('id', userId)
+          .eq('user_id', userId)
           .maybeSingle();
       if (res != null) {
         _profile = UserProfile.fromJson(res);
@@ -76,8 +74,8 @@ class AuthNotifier extends ChangeNotifier {
 
   Future<void> saveProfile(UserProfile profile) async {
     await Supabase.instance.client
-        .from('user_profiles')
-        .upsert(profile.toInsertJson());
+        .from('pharmacy_profiles')
+        .upsert(profile.toInsertJson(), onConflict: 'user_id');
     _profile = profile;
     _needsProfile = false;
     notifyListeners();
@@ -86,7 +84,7 @@ class AuthNotifier extends ChangeNotifier {
   Future<void> signInWithGoogle() async {
     await Supabase.instance.client.auth.signInWithOAuth(
       OAuthProvider.google,
-      redirectTo: html.window.location.origin,
+      redirectTo: 'https://medibo.in',
     );
   }
 

@@ -20,6 +20,9 @@ class Product {
   /// Product photo URL (onemg CDN). Empty when unavailable.
   final String imageUrl;
 
+  /// All non-empty product image URLs (image_url_1 … image_url_5).
+  final List<String> imageUrls;
+
   /// Pack description, e.g. "Strip of 10 tablets".
   final String packSize;
 
@@ -56,6 +59,7 @@ class Product {
     required this.category,
     required this.therapeuticClass,
     required this.imageUrl,
+    this.imageUrls = const [],
     required this.packSize,
     required this.mrp,
     required this.b2bPrice,
@@ -84,6 +88,14 @@ class Product {
     // Standard pharma B2B margin: 18% off MRP.
     final b2bPrice = mrp > 0 ? double.parse((mrp * 0.82).toStringAsFixed(2)) : 0.0;
 
+    final allImages = [
+      (map['image_url_1'] as String?)?.trim() ?? '',
+      (map['image_url_2'] as String?)?.trim() ?? '',
+      (map['image_url_3'] as String?)?.trim() ?? '',
+      (map['image_url_4'] as String?)?.trim() ?? '',
+      (map['image_url_5'] as String?)?.trim() ?? '',
+    ].where((u) => u.isNotEmpty).toList(growable: false);
+
     return Product(
       id: map['id'].toString(),
       name: (map['product_name'] as String?) ?? 'Unnamed',
@@ -91,7 +103,8 @@ class Product {
       manufacturer: (map['marketer'] as String?) ?? '',
       category: tClass.isNotEmpty ? tClass : 'Other',
       therapeuticClass: tClass,
-      imageUrl: (map['image_url_1'] as String?)?.trim() ?? '',
+      imageUrl: allImages.isNotEmpty ? allImages[0] : '',
+      imageUrls: allImages,
       // pack_size is null in MEDICINE; pack_qty holds "10 tablets in 1 strip"
       packSize: (map['pack_qty'] as String?) ?? (map['pack_size'] as String?) ?? '',
       mrp: mrp,

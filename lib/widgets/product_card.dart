@@ -265,9 +265,9 @@ class _CartControlState extends State<_CartControl>
   }
 }
 
-// ─── Image block ─────────────────────────────────────────────────────────────
+// ─── Image block (carousel when multiple images) ─────────────────────────────
 
-class _ImageBlock extends StatelessWidget {
+class _ImageBlock extends StatefulWidget {
   final Product product;
   final CategoryStyle style;
   final int discountPct;
@@ -280,79 +280,208 @@ class _ImageBlock extends StatelessWidget {
   });
 
   @override
+  State<_ImageBlock> createState() => _ImageBlockState();
+}
+
+class _ImageBlockState extends State<_ImageBlock> {
+  late final PageController _pageCtrl = PageController();
+  int _page = 0;
+  bool _hovered = false;
+
+  @override
+  void dispose() {
+    _pageCtrl.dispose();
+    super.dispose();
+  }
+
+  void _prev() => _pageCtrl.previousPage(
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeInOut,
+      );
+
+  void _next() => _pageCtrl.nextPage(
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeInOut,
+      );
+
+  @override
   Widget build(BuildContext context) {
-    final status = product.inStock ? 'Available' : 'Out of Stock';
+    final images = widget.product.imageUrls;
+    final multi = images.length > 1;
+    // Desktop (≥900px): show arrows only on hover. Mobile: always show.
+    final isDesktop = MediaQuery.sizeOf(context).width >= 900;
+    final showArrows = multi && (isDesktop ? _hovered : true);
+    final status = widget.product.inStock ? 'Available' : 'Out of Stock';
+
     return SizedBox(
       height: 180,
       width: double.infinity,
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          // Product image — cover fill (no white gaps around image)
-          product.imageUrl.isEmpty
-              ? _IconFallback(style: style)
-              : Image.network(
-                  product.imageUrl,
-                  fit: BoxFit.cover,
-                  gaplessPlayback: true,
-                  cacheWidth: 400,
-                  cacheHeight: 360,
-                  loadingBuilder: (context, child, progress) => progress == null
-                      ? child
-                      : Container(color: style.bg.withValues(alpha: 0.4)),
-                  errorBuilder: (_, _, _) => _IconFallback(style: style),
-                ),
-          // Scheme badge top-left — deterministic 30% of products
-          if (_hasScheme(product.id))
-            Positioned(
-              left: 8,
-              top: 8,
-              child: _SchemePill(text: '5+1'),
-            ),
-          // Available / Out of Stock — top right, fully opaque
-          Positioned(
-            right: 8,
-            top: 8,
-            child: _Pill(
-              text: status,
-              bg: product.inStock
-                  ? const Color(0xFF16A34A)
-                  : const Color(0xFFDC2626),
-            ),
-          ),
-          // Best Seller badge — bottom left, gold
-          if (isBestSeller)
-            Positioned(
-              left: 8,
-              bottom: 8,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFD97706),
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: const Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.local_fire_department_rounded,
-                        size: 12, color: Colors.white),
-                    SizedBox(width: 4),
-                    Text(
-                      'Best Seller',
-                      style: TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.w700,
-                        color: Colors.white,
-                        height: 1.0,
-                        leadingDistribution: TextLeadingDistribution.even,
+      child: MouseRegion(
+        onEnter: (_) => setState(() => _hovered = true),
+        onExit: (_) => setState(() => _hovered = false),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            // ── Image / carousel ──────────────────────────────────────────
+            images.isEmpty
+                ? _IconFallback(style: widget.style)
+                : images.length == 1
+                    ? Image.network(
+                        images[0],
+                        fit: BoxFit.cover,
+                        gaplessPlayback: true,
+                        cacheWidth: 400,
+                        cacheHeight: 360,
+                        loadingBuilder: (_, child, prog) => prog == null
+                            ? child
+                            : Container(
+                                color: widget.style.bg.withValues(alpha: 0.4)),
+                        errorBuilder: (_, _, _) =>
+                            _IconFallback(style: widget.style),
+                      )
+                    : PageView.builder(
+                        controller: _pageCtrl,
+                        itemCount: images.length,
+                        onPageChanged: (p) => setState(() => _page = p),
+                        itemBuilder: (_, i) => Image.network(
+                          images[i],
+                          fit: BoxFit.cover,
+                          gaplessPlayback: true,
+                          cacheWidth: 400,
+                          cacheHeight: 360,
+                          loadingBuilder: (_, child, prog) => prog == null
+                              ? child
+                              : Container(
+                                  color:
+                                      widget.style.bg.withValues(alpha: 0.4)),
+                          errorBuilder: (_, _, _) =>
+                              _IconFallback(style: widget.style),
+                        ),
                       ),
-                    ),
-                  ],
-                ),
+            // ── Static overlays ───────────────────────────────────────────
+            if (_hasScheme(widget.product.id))
+              Positioned(left: 8, top: 8, child: _SchemePill(text: '5+1')),
+            Positioned(
+              right: 8,
+              top: 8,
+              child: _Pill(
+                text: status,
+                bg: widget.product.inStock
+                    ? const Color(0xFF16A34A)
+                    : const Color(0xFFDC2626),
               ),
             ),
-        ],
+            if (widget.isBestSeller)
+              Positioned(
+                left: 8,
+                bottom: multi ? 24 : 8,
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFD97706),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.local_fire_department_rounded,
+                          size: 12, color: Colors.white),
+                      SizedBox(width: 4),
+                      Text(
+                        'Best Seller',
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.white,
+                          height: 1.0,
+                          leadingDistribution: TextLeadingDistribution.even,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            // ── Carousel arrows ───────────────────────────────────────────
+            if (showArrows && _page > 0)
+              Positioned(
+                left: 4,
+                top: 0,
+                bottom: 0,
+                child: Center(
+                  child: _CarouselArrow(icon: Icons.chevron_left, onTap: _prev),
+                ),
+              ),
+            if (showArrows && _page < images.length - 1)
+              Positioned(
+                right: 4,
+                top: 0,
+                bottom: 0,
+                child: Center(
+                  child:
+                      _CarouselArrow(icon: Icons.chevron_right, onTap: _next),
+                ),
+              ),
+            // ── Dot indicators ────────────────────────────────────────────
+            if (multi)
+              Positioned(
+                bottom: 6,
+                left: 0,
+                right: 0,
+                child: _DotIndicators(count: images.length, current: _page),
+              ),
+          ],
+        ),
       ),
+    );
+  }
+}
+
+class _CarouselArrow extends StatelessWidget {
+  final IconData icon;
+  final VoidCallback onTap;
+  const _CarouselArrow({required this.icon, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 28,
+        height: 28,
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.45),
+          shape: BoxShape.circle,
+        ),
+        child: Icon(icon, color: Colors.white, size: 18),
+      ),
+    );
+  }
+}
+
+class _DotIndicators extends StatelessWidget {
+  final int count;
+  final int current;
+  const _DotIndicators({required this.count, required this.current});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: List.generate(count, (i) {
+        return AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          margin: const EdgeInsets.symmetric(horizontal: 2),
+          width: i == current ? 12.0 : 6.0,
+          height: 6,
+          decoration: BoxDecoration(
+            color: i == current
+                ? Colors.white
+                : Colors.white.withValues(alpha: 0.55),
+            borderRadius: BorderRadius.circular(3),
+          ),
+        );
+      }),
     );
   }
 }

@@ -19,52 +19,59 @@ class CartScreen extends StatelessWidget {
       return const _EmptyCart();
     }
 
-    final wide = MediaQuery.of(context).size.width >= 760;
     final banner = cart.hasSampleItems ? _SampleBanner(cart: cart) : null;
 
-    if (wide) {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          if (banner != null) banner,
-          Expanded(
-            child: Center(
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 960),
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(
-                        flex: 3,
-                        child: _ItemList(cart: cart),
+    // LayoutBuilder gives the actual available width of this widget, which is
+    // reliable even inside CartPanel where MediaQuery is overridden.
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final wide = constraints.maxWidth >= 600;
+
+        if (wide) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (banner != null) banner,
+              Expanded(
+                child: Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 960),
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            flex: 3,
+                            child: _ItemList(cart: cart),
+                          ),
+                          const SizedBox(width: 16),
+                          Expanded(
+                            flex: 2,
+                            child: _OrderSummaryPanel(
+                              cart: cart,
+                              onOrderPlaced: onOrderPlaced,
+                            ),
+                          ),
+                        ],
                       ),
-                      const SizedBox(width: 16),
-                      Expanded(
-                        flex: 2,
-                        child: _OrderSummaryPanel(
-                          cart: cart,
-                          onOrderPlaced: onOrderPlaced,
-                        ),
-                      ),
-                    ],
+                    ),
                   ),
                 ),
               ),
-            ),
-          ),
-        ],
-      );
-    }
+            ],
+          );
+        }
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        if (banner != null) banner,
-        Expanded(child: _ItemList(cart: cart)),
-        _CheckoutBar(cart: cart, onOrderPlaced: onOrderPlaced),
-      ],
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (banner != null) banner,
+            Expanded(child: _ItemList(cart: cart)),
+            _CheckoutBar(cart: cart, onOrderPlaced: onOrderPlaced),
+          ],
+        );
+      },
     );
   }
 }

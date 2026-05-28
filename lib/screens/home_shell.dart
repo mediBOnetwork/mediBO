@@ -1497,198 +1497,192 @@ class _DesktopHeaderState extends State<_DesktopHeader> {
     final isOrders = widget.index == 1 && !widget.cartOpen;
 
     return Container(
-      height: 72,
+      height: 76,
       decoration: BoxDecoration(
         color: Colors.white,
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.06),
-            blurRadius: 6,
+            color: Colors.black.withValues(alpha: 0.07),
+            blurRadius: 8,
             offset: const Offset(0, 2),
           ),
         ],
       ),
-      padding: const EdgeInsets.symmetric(horizontal: 20),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          // 1. Profile button — 250px to match category sidebar below
+          // 1. Logo — 250px, padded 24px left, aligns with category sidebar
           SizedBox(
             width: 250,
-            child: _DesktopProfileButton(),
-          ),
-          const SizedBox(width: 20),
-          // 2. Logo
-          GestureDetector(
-            onTap: widget.onHome,
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 44,
-                  height: 44,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF1B5E20),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: const Icon(Icons.add, color: Colors.white, size: 26),
-                ),
-                const SizedBox(width: 10),
-                RichText(
-                  text: const TextSpan(
-                    children: [
-                      TextSpan(
-                        text: 'medi',
-                        style: TextStyle(
-                          fontSize: 24,
-                          fontWeight: FontWeight.w700,
-                          color: Color(0xFF1B5E20),
-                          letterSpacing: -0.3,
-                        ),
+            child: Padding(
+              padding: const EdgeInsets.only(left: 24),
+              child: GestureDetector(
+                onTap: widget.onHome,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF1B5E20),
+                        borderRadius: BorderRadius.circular(8),
                       ),
-                      TextSpan(
-                        text: 'BO',
-                        style: TextStyle(
-                          fontSize: 24,
-                          fontWeight: FontWeight.w800,
-                          color: Color(0xFF4CAF50),
-                          letterSpacing: -0.3,
-                        ),
+                      child: const Icon(Icons.add, color: Colors.white, size: 24),
+                    ),
+                    const SizedBox(width: 10),
+                    RichText(
+                      text: const TextSpan(
+                        children: [
+                          TextSpan(
+                            text: 'medi',
+                            style: TextStyle(
+                              fontSize: 22,
+                              fontWeight: FontWeight.w700,
+                              color: Color(0xFF1B5E20),
+                              letterSpacing: -0.3,
+                            ),
+                          ),
+                          TextSpan(
+                            text: 'BO',
+                            style: TextStyle(
+                              fontSize: 22,
+                              fontWeight: FontWeight.w800,
+                              color: Color(0xFF4CAF50),
+                              letterSpacing: -0.3,
+                            ),
+                          ),
+                        ],
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
-              ],
+              ),
             ),
           ),
-          const SizedBox(width: 16),
-          // 3. Search bar — takes most of the remaining width
+          // 2. Search bar — fills all remaining space, 24px margin each side
           Expanded(
-            child: Container(
-              height: 46,
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: const Color(0xFFD1D5DB)),
-              ),
-              child: Row(
-                children: [
-                  const Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 12),
-                    child:
-                        Icon(Icons.search, color: Color(0xFF9CA3AF), size: 20),
-                  ),
-                  Expanded(
-                    child: TextField(
-                      controller: widget.searchCtrl,
-                      onChanged: _onChanged,
-                      onSubmitted: (_) => _submitNow(),
-                      textInputAction: TextInputAction.search,
-                      autocorrect: false,
-                      enableSuggestions: false,
-                      keyboardType: TextInputType.text,
-                      style:
-                          const TextStyle(fontSize: 14, color: Brand.ink),
-                      decoration: const InputDecoration(
-                        border: InputBorder.none,
-                        enabledBorder: InputBorder.none,
-                        focusedBorder: InputBorder.none,
-                        hintText: 'Search for medicines',
-                        hintStyle:
-                            TextStyle(color: Brand.inkMuted, fontSize: 14),
-                        isDense: true,
-                        contentPadding:
-                            EdgeInsets.symmetric(vertical: 14),
-                        filled: false,
-                      ),
-                    ),
-                  ),
-                  if (widget.isLoading)
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: Container(
+                height: 46,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF9FAFB),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: const Color(0xFFD1D5DB)),
+                ),
+                child: Row(
+                  children: [
                     const Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 10),
-                      child: SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(
-                            strokeWidth: 2, color: Brand.green),
-                      ),
-                    )
-                  else if (_hasText)
-                    IconButton(
-                      onPressed: _clearSearch,
-                      icon: const Icon(Icons.close,
-                          size: 18, color: Color(0xFF6B7280)),
-                      visualDensity: VisualDensity.compact,
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(
-                          minWidth: 32, minHeight: 32),
+                      padding: EdgeInsets.symmetric(horizontal: 14),
+                      child: Icon(Icons.search,
+                          color: Color(0xFF9CA3AF), size: 20),
                     ),
-                  // Green Search button attached to right edge
-                  GestureDetector(
-                    onTap: _submitNow,
-                    child: Container(
-                      height: double.infinity,
-                      padding:
-                          const EdgeInsets.symmetric(horizontal: 20),
-                      decoration: const BoxDecoration(
-                        color: Brand.green,
-                        borderRadius: BorderRadius.only(
-                          topRight: Radius.circular(7),
-                          bottomRight: Radius.circular(7),
+                    Expanded(
+                      child: TextField(
+                        controller: widget.searchCtrl,
+                        onChanged: _onChanged,
+                        onSubmitted: (_) => _submitNow(),
+                        textInputAction: TextInputAction.search,
+                        autocorrect: false,
+                        enableSuggestions: false,
+                        keyboardType: TextInputType.text,
+                        style: const TextStyle(fontSize: 14, color: Brand.ink),
+                        decoration: const InputDecoration(
+                          border: InputBorder.none,
+                          enabledBorder: InputBorder.none,
+                          focusedBorder: InputBorder.none,
+                          hintText: 'Search for medicines',
+                          hintStyle:
+                              TextStyle(color: Brand.inkMuted, fontSize: 14),
+                          isDense: true,
+                          contentPadding: EdgeInsets.symmetric(vertical: 14),
+                          filled: false,
                         ),
                       ),
-                      child: const Center(
-                        child: Text(
-                          'Search',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
+                    ),
+                    if (widget.isLoading)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 10),
+                        child: SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: Brand.green),
+                        ),
+                      )
+                    else if (_hasText)
+                      IconButton(
+                        onPressed: _clearSearch,
+                        icon: const Icon(Icons.close,
+                            size: 18, color: Color(0xFF6B7280)),
+                        visualDensity: VisualDensity.compact,
+                        padding: EdgeInsets.zero,
+                        constraints:
+                            const BoxConstraints(minWidth: 32, minHeight: 32),
+                      ),
+                    // Green Search button attached to right edge
+                    GestureDetector(
+                      onTap: _submitNow,
+                      child: Container(
+                        height: double.infinity,
+                        padding: const EdgeInsets.symmetric(horizontal: 22),
+                        decoration: const BoxDecoration(
+                          color: Brand.green,
+                          borderRadius: BorderRadius.only(
+                            topRight: Radius.circular(9),
+                            bottomRight: Radius.circular(9),
+                          ),
+                        ),
+                        child: const Center(
+                          child: Text(
+                            'Search',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                            ),
                           ),
                         ),
                       ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),
-          const SizedBox(width: 16),
-          // 4. Bulk Upload text link
+          // 3. Bulk Upload
           _DesktopNavLink(
             label: 'Bulk Upload',
+            icon: Icons.upload_file_outlined,
             selected: isBulk,
             onTap: widget.onBulk,
           ),
           const SizedBox(width: 4),
-          // 5. Orders text link
+          // 4. Orders
           _DesktopNavLink(
             label: 'Orders',
+            icon: Icons.receipt_long_outlined,
             selected: isOrders,
             onTap: widget.onOrders,
           ),
-          const SizedBox(width: 12),
-          // 6. Cart icon + "Cart" text
+          const SizedBox(width: 8),
+          // 5. Cart
           PressEffect(
             child: InkWell(
               onTap: widget.onCart,
               borderRadius: BorderRadius.circular(8),
               child: Padding(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 10, vertical: 8),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Badge(
                       isLabelVisible: cartItems > 0,
-                      label: Text(
-                        '$cartItems',
-                        style: const TextStyle(fontSize: 10),
-                      ),
-                      child: const Icon(
-                        Icons.shopping_cart_outlined,
-                        size: 22,
-                        color: Brand.ink,
-                      ),
+                      label: Text('$cartItems',
+                          style: const TextStyle(fontSize: 10)),
+                      child: const Icon(Icons.shopping_cart_outlined,
+                          size: 22, color: Brand.ink),
                     ),
                     const SizedBox(width: 6),
                     const Text(
@@ -1704,6 +1698,10 @@ class _DesktopHeaderState extends State<_DesktopHeader> {
               ),
             ),
           ),
+          const SizedBox(width: 16),
+          // 6. Auth button (Login or profile dropdown) — far right
+          _DesktopProfileButton(),
+          const SizedBox(width: 24),
         ],
       ),
     );
@@ -1712,11 +1710,13 @@ class _DesktopHeaderState extends State<_DesktopHeader> {
 
 // ─────────────────────── Profile buttons ────────────────────────────────
 
-/// Desktop: shows "Hi, [Name]" with dropdown when logged in, or "Login" button.
+/// Desktop: solid green "Login" button when logged out;
+/// "Hello [name]" avatar pill with dropdown when logged in.
 class _DesktopProfileButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final auth = UserState.of(context);
+
     if (!auth.isAuthenticated) {
       return PressEffect(
         child: InkWell(
@@ -1726,11 +1726,9 @@ class _DesktopProfileButton extends StatelessWidget {
           ),
           borderRadius: BorderRadius.circular(8),
           child: Container(
-            width: double.infinity,
-            alignment: Alignment.center,
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
             decoration: BoxDecoration(
-              border: Border.all(color: const Color(0xFF1B5E20)),
+              color: const Color(0xFF1D9E75),
               borderRadius: BorderRadius.circular(8),
             ),
             child: const Text(
@@ -1738,7 +1736,7 @@ class _DesktopProfileButton extends StatelessWidget {
               style: TextStyle(
                 fontSize: 14,
                 fontWeight: FontWeight.w700,
-                color: Color(0xFF1B5E20),
+                color: Colors.white,
               ),
             ),
           ),
@@ -1749,9 +1747,11 @@ class _DesktopProfileButton extends StatelessWidget {
     final profile = auth.profile;
     final displayName = profile?.displayName ?? 'Account';
     final initial = displayName.isNotEmpty ? displayName[0].toUpperCase() : '?';
+    final shortName =
+        displayName.length > 16 ? '${displayName.substring(0, 14)}…' : displayName;
 
     return PopupMenuButton<String>(
-      offset: const Offset(0, 56),
+      offset: const Offset(0, 52),
       tooltip: '',
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       itemBuilder: (_) => [
@@ -1786,7 +1786,6 @@ class _DesktopProfileButton extends StatelessWidget {
         if (val == 'logout') await UserState.read(context).signOut();
       },
       child: Container(
-        width: double.infinity,
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
           color: const Color(0xFFECFDF5),
@@ -1794,10 +1793,11 @@ class _DesktopProfileButton extends StatelessWidget {
           border: Border.all(color: const Color(0xFFBBF7D0)),
         ),
         child: Row(
+          mainAxisSize: MainAxisSize.min,
           children: [
             Container(
-              width: 34,
-              height: 34,
+              width: 32,
+              height: 32,
               decoration: const BoxDecoration(
                 color: Color(0xFF1B5E20),
                 shape: BoxShape.circle,
@@ -1806,7 +1806,7 @@ class _DesktopProfileButton extends StatelessWidget {
                 child: Text(
                   initial,
                   style: const TextStyle(
-                    fontSize: 15,
+                    fontSize: 14,
                     fontWeight: FontWeight.w700,
                     color: Colors.white,
                     height: 1,
@@ -1814,17 +1814,13 @@ class _DesktopProfileButton extends StatelessWidget {
                 ),
               ),
             ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                'Hello $displayName',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: Color(0xFF111827),
-                ),
+            const SizedBox(width: 9),
+            Text(
+              'Hello $shortName',
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFF111827),
               ),
             ),
             const SizedBox(width: 4),
@@ -2158,9 +2154,10 @@ class _SidebarCategoryRow extends StatelessWidget {
   }
 }
 
-// Simple hover text link used inside the single-row desktop header
+// Simple hover text link (with optional icon) used inside the desktop header
 class _DesktopNavLink extends StatefulWidget {
   final String label;
+  final IconData? icon;
   final bool selected;
   final VoidCallback onTap;
 
@@ -2168,6 +2165,7 @@ class _DesktopNavLink extends StatefulWidget {
     required this.label,
     required this.selected,
     required this.onTap,
+    this.icon,
   });
 
   @override
@@ -2180,6 +2178,7 @@ class _DesktopNavLinkState extends State<_DesktopNavLink> {
   @override
   Widget build(BuildContext context) {
     final highlight = widget.selected || _hovered;
+    final color = highlight ? Brand.green : const Color(0xFF374151);
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
@@ -2187,15 +2186,24 @@ class _DesktopNavLinkState extends State<_DesktopNavLink> {
       child: GestureDetector(
         onTap: widget.onTap,
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          child: Text(
-            widget.label,
-            style: TextStyle(
-              fontSize: 14,
-              fontWeight:
-                  widget.selected ? FontWeight.w700 : FontWeight.w500,
-              color: highlight ? Brand.green : const Color(0xFF374151),
-            ),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (widget.icon != null) ...[
+                Icon(widget.icon, size: 16, color: color),
+                const SizedBox(width: 5),
+              ],
+              Text(
+                widget.label,
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight:
+                      widget.selected ? FontWeight.w700 : FontWeight.w500,
+                  color: color,
+                ),
+              ),
+            ],
           ),
         ),
       ),

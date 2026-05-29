@@ -117,6 +117,51 @@ class Product {
     );
   }
 
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        'genericName': genericName,
+        'manufacturer': manufacturer,
+        'category': category,
+        'therapeuticClass': therapeuticClass,
+        'imageUrl': imageUrl,
+        'imageUrls': imageUrls,
+        'packSize': packSize,
+        'mrp': mrp,
+        'b2bPrice': b2bPrice,
+        'gstPercent': gstPercent,
+        'moq': moq,
+        'stock': stock,
+        'schedule': schedule,
+        'requiresPrescription': requiresPrescription,
+        'discount': discount,
+      };
+
+  factory Product.fromJson(Map<String, dynamic> map) {
+    return Product(
+      id: (map['id'] as String?) ?? '',
+      name: (map['name'] as String?) ?? '',
+      genericName: (map['genericName'] as String?) ?? '',
+      manufacturer: (map['manufacturer'] as String?) ?? '',
+      category: (map['category'] as String?) ?? 'Other',
+      therapeuticClass: (map['therapeuticClass'] as String?) ?? '',
+      imageUrl: (map['imageUrl'] as String?) ?? '',
+      imageUrls: (map['imageUrls'] as List<dynamic>?)
+              ?.map((e) => e as String)
+              .toList() ??
+          [],
+      packSize: (map['packSize'] as String?) ?? '',
+      mrp: (map['mrp'] as num?)?.toDouble() ?? 0.0,
+      b2bPrice: (map['b2bPrice'] as num?)?.toDouble() ?? 0.0,
+      gstPercent: (map['gstPercent'] as num?)?.toDouble() ?? 12.0,
+      moq: (map['moq'] as int?) ?? 1,
+      stock: (map['stock'] as int?) ?? 0,
+      schedule: (map['schedule'] as String?) ?? 'OTC',
+      requiresPrescription: (map['requiresPrescription'] as bool?) ?? false,
+      discount: (map['discount'] as num?)?.toDouble() ?? 0.0,
+    );
+  }
+
   /// Reconstructs a minimal Product from cart row data (Supabase or localStorage).
   factory Product.fromCartData({
     required String id,

@@ -1421,14 +1421,14 @@ class _Footer extends StatelessWidget {
                         return Row(
                           children: [
                             Text(
-                              '© 2026 mediBO | All rights reserved',
+                              '© 2025 Jai Mahakal Medical And Surgical | GSTIN: 22BXXPJ8518F1Z4',
                               style: TextStyle(
                                   color: Colors.white.withValues(alpha: 0.6),
                                   fontSize: 12),
                             ),
                             const Spacer(),
                             Text(
-                              'Drug License: 20B — WLF20B2025CT000337  ·  21B — WLF21B2025CT000337',
+                              'DL 20B: WLF20B2025CT000337  ·  DL 21B: WLF21B2025CT000337',
                               style: TextStyle(
                                   color: Colors.white.withValues(alpha: 0.45),
                                   fontSize: 11),
@@ -1439,15 +1439,23 @@ class _Footer extends StatelessWidget {
                       return Column(
                         children: [
                           Text(
-                            '© 2026 mediBO | All rights reserved',
+                            '© 2025 Jai Mahakal Medical And Surgical',
                             textAlign: TextAlign.center,
                             style: TextStyle(
                                 color: Colors.white.withValues(alpha: 0.6),
                                 fontSize: 12),
                           ),
-                          const SizedBox(height: 8),
+                          const SizedBox(height: 4),
                           Text(
-                            'Drug License: 20B — WLF20B2025CT000337  ·  21B — WLF21B2025CT000337',
+                            'GSTIN: 22BXXPJ8518F1Z4',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                                color: Colors.white.withValues(alpha: 0.5),
+                                fontSize: 11),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            'DL 20B: WLF20B2025CT000337  ·  DL 21B: WLF21B2025CT000337',
                             textAlign: TextAlign.center,
                             style: TextStyle(
                                 color: Colors.white.withValues(alpha: 0.45),
@@ -1549,6 +1557,19 @@ class _Footer extends StatelessWidget {
             MaterialPageRoute(builder: (_) => const AboutScreen()))),
         _footerLink('Contact Us', () => Navigator.push(context,
             MaterialPageRoute(builder: (_) => const ContactScreen()))),
+        const SizedBox(height: 16),
+        const Text('LEGAL', style: _kHeading),
+        const SizedBox(height: 16),
+        _footerLink('Terms & Conditions',
+            () => Navigator.pushNamed(context, '/terms')),
+        _footerLink('Privacy Policy',
+            () => Navigator.pushNamed(context, '/privacy')),
+        _footerLink('Refund & Return',
+            () => Navigator.pushNamed(context, '/refund')),
+        _footerLink('Shipping & Delivery',
+            () => Navigator.pushNamed(context, '/shipping')),
+        _footerLink('Cancellation',
+            () => Navigator.pushNamed(context, '/cancellation')),
       ],
     );
   }

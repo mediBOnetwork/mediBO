@@ -57,9 +57,9 @@ class AboutScreen extends StatelessWidget {
               _heading('About Us'),
               const SizedBox(height: 10),
               const Text(
-                'mediBO is a B2B pharmacy platform connecting distributors with '
-                'pharmacies and clinics across India. We provide genuine medicines '
-                'and wellness products with express delivery and competitive B2B pricing.',
+                'mediBO is the B2B ordering platform of Jai Mahakal Medical And Surgical, '
+                'a licensed wholesale pharmaceutical distributor supplying genuine medicines '
+                'and healthcare products exclusively to pharmacies, hospitals, and clinics across India.',
                 style: TextStyle(fontSize: 15, height: 1.65, color: Brand.ink),
               ),
               const SizedBox(height: 28),
@@ -73,12 +73,16 @@ class AboutScreen extends StatelessWidget {
               ),
               const SizedBox(height: 28),
 
-              _heading('Company Details'),
+              _heading('Registered Legal Entity'),
               const SizedBox(height: 12),
               _InfoCard(items: const [
-                _InfoRow(Icons.calendar_today_outlined, 'Founded', '2025'),
-                _InfoRow(Icons.location_on_outlined, 'Location', 'India'),
-                _InfoRow(Icons.storefront_outlined, 'Type', 'B2B Pharmaceutical Platform'),
+                _InfoRow(Icons.business_outlined,       'Legal Name',      'Anshu Jaiswal (Proprietor)'),
+                _InfoRow(Icons.storefront_outlined,     'Business Name',   'Jai Mahakal Medical And Surgical'),
+                _InfoRow(Icons.receipt_long_outlined,   'GSTIN',           '22BXXPJ8518F1Z4'),
+                _InfoRow(Icons.location_on_outlined,    'Address',
+                    'P H No 19, Vill-Jaunda, R N M-Champaran, Tah-Gobra Nawapara, District-Raipur, Chhattisgarh - 493885'),
+                _InfoRow(Icons.calendar_today_outlined, 'Established',     '2025'),
+                _InfoRow(Icons.account_balance_outlined,'Constitution',     'Proprietorship'),
               ]),
               const SizedBox(height: 28),
 
@@ -90,11 +94,14 @@ class AboutScreen extends StatelessWidget {
               ]),
               const SizedBox(height: 28),
 
-              _heading('Drug Licenses'),
+              _heading('Drug Licences'),
               const SizedBox(height: 12),
               _InfoCard(items: const [
-                _InfoRow(Icons.verified_outlined, 'License 20B', 'WLF20B2025CT000337'),
-                _InfoRow(Icons.verified_outlined, 'License 21B', 'WLF21B2025CT000337'),
+                _InfoRow(Icons.verified_outlined, 'Licence 20B', 'WLF20B2025CT000337'),
+                _InfoRow(Icons.verified_outlined, 'Licence 21B', 'WLF21B2025CT000337'),
+                _InfoRow(Icons.gavel_outlined,    'Issuing Authority',
+                    'Food & Drugs Administration Chhattisgarh, Raipur'),
+                _InfoRow(Icons.event_outlined,    'Valid Until', '23-Apr-2030'),
               ]),
               const SizedBox(height: 28),
 
@@ -108,13 +115,13 @@ class AboutScreen extends StatelessWidget {
               const SizedBox(height: 10),
               _DocTile(
                 icon: Icons.verified_outlined,
-                label: 'Drug License 20B',
+                label: 'Drug Licence 20B',
                 url: 'https://drive.google.com/file/d/12KFsiEpAEZESrSANJfoNiqmgqa_-zLE1/view?usp=sharing',
               ),
               const SizedBox(height: 10),
               _DocTile(
                 icon: Icons.verified_outlined,
-                label: 'Drug License 21B',
+                label: 'Drug Licence 21B',
                 url: 'https://drive.google.com/file/d/1RuXEv32644D7hr94dckOFVpZdviOxJVa/view?usp=sharing',
               ),
             ],
@@ -151,6 +158,7 @@ class _InfoCard extends StatelessWidget {
                 padding:
                     const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                 child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Icon(items[i].icon, size: 18, color: Brand.green),
                     const SizedBox(width: 12),

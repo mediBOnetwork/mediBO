@@ -364,38 +364,70 @@ class _ImageBlockState extends State<_ImageBlock> {
           children: [
             // ── Image / carousel ──────────────────────────────────────────
             images.isEmpty
-                ? _IconFallback(style: widget.style)
+                ? const _IconFallback()
                 : images.length == 1
-                    ? Image.network(
-                        images[0],
-                        fit: BoxFit.cover,
-                        gaplessPlayback: true,
-                        cacheWidth: 400,
-                        cacheHeight: 360,
-                        loadingBuilder: (_, child, prog) => prog == null
-                            ? child
-                            : Container(
-                                color: widget.style.bg.withValues(alpha: 0.4)),
-                        errorBuilder: (_, _, _) =>
-                            _IconFallback(style: widget.style),
-                      )
-                    : PageView.builder(
-                        controller: _pageCtrl,
-                        itemCount: images.length,
-                        onPageChanged: (p) => setState(() => _page = p),
-                        itemBuilder: (_, i) => Image.network(
-                          images[i],
-                          fit: BoxFit.cover,
+                    ? Container(
+                        color: Colors.white,
+                        padding: const EdgeInsets.all(12),
+                        child: Image.network(
+                          images[0],
+                          fit: BoxFit.contain,
+                          alignment: Alignment.center,
                           gaplessPlayback: true,
                           cacheWidth: 400,
                           cacheHeight: 360,
                           loadingBuilder: (_, child, prog) => prog == null
                               ? child
-                              : Container(
-                                  color:
-                                      widget.style.bg.withValues(alpha: 0.4)),
-                          errorBuilder: (_, _, _) =>
-                              _IconFallback(style: widget.style),
+                              : const ColoredBox(
+                                  color: Colors.white,
+                                  child: Center(
+                                    child: SizedBox(
+                                      width: 20,
+                                      height: 20,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: Color(0xFFD1D5DB),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                          errorBuilder: (_, __, ___) => const _IconFallback(),
+                        ),
+                      )
+                    : Container(
+                        color: Colors.white,
+                        child: PageView.builder(
+                          controller: _pageCtrl,
+                          itemCount: images.length,
+                          onPageChanged: (p) => setState(() => _page = p),
+                          itemBuilder: (_, i) => Padding(
+                            padding: const EdgeInsets.all(12),
+                            child: Image.network(
+                              images[i],
+                              fit: BoxFit.contain,
+                              alignment: Alignment.center,
+                              gaplessPlayback: true,
+                              cacheWidth: 400,
+                              cacheHeight: 360,
+                              loadingBuilder: (_, child, prog) => prog == null
+                                  ? child
+                                  : const ColoredBox(
+                                      color: Colors.white,
+                                      child: Center(
+                                        child: SizedBox(
+                                          width: 20,
+                                          height: 20,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                            color: Color(0xFFD1D5DB),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                              errorBuilder: (_, __, ___) =>
+                                  const _IconFallback(),
+                            ),
+                          ),
                         ),
                       ),
             // ── Static overlays ───────────────────────────────────────────
@@ -645,15 +677,18 @@ class _Pill extends StatelessWidget {
 // ─── Icon fallback ────────────────────────────────────────────────────────────
 
 class _IconFallback extends StatelessWidget {
-  final CategoryStyle style;
-  const _IconFallback({required this.style});
+  const _IconFallback();
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      color: style.bg,
+      color: Colors.white,
       alignment: Alignment.center,
-      child: Icon(style.icon, size: 64, color: style.fg.withValues(alpha: 0.4)),
+      child: const Icon(
+        Icons.medication_outlined,
+        size: 56,
+        color: Color(0xFFE5E7EB),
+      ),
     );
   }
 }

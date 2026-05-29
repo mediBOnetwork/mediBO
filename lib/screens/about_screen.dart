@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../theme.dart';
 
 class AboutScreen extends StatelessWidget {
@@ -95,6 +96,27 @@ class AboutScreen extends StatelessWidget {
                 _InfoRow(Icons.verified_outlined, 'License 20B', 'WLF20B2025CT000337'),
                 _InfoRow(Icons.verified_outlined, 'License 21B', 'WLF21B2025CT000337'),
               ]),
+              const SizedBox(height: 28),
+
+              _heading('Documents'),
+              const SizedBox(height: 12),
+              _DocTile(
+                icon: Icons.receipt_long_outlined,
+                label: 'GST Certificate',
+                url: 'https://drive.google.com/file/d/1BeFSWHTr8wQMnhpSPxMHK-fB22Q3nPjc/view?usp=sharing',
+              ),
+              const SizedBox(height: 10),
+              _DocTile(
+                icon: Icons.verified_outlined,
+                label: 'Drug License 20B',
+                url: 'https://drive.google.com/file/d/12KFsiEpAEZESrSANJfoNiqmgqa_-zLE1/view?usp=sharing',
+              ),
+              const SizedBox(height: 10),
+              _DocTile(
+                icon: Icons.verified_outlined,
+                label: 'Drug License 21B',
+                url: 'https://drive.google.com/file/d/1RuXEv32644D7hr94dckOFVpZdviOxJVa/view?usp=sharing',
+              ),
             ],
           ),
         ),
@@ -161,4 +183,43 @@ class _InfoRow {
   final String label;
   final String value;
   const _InfoRow(this.icon, this.label, this.value);
+}
+
+class _DocTile extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String url;
+  const _DocTile({required this.icon, required this.label, required this.url});
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: () => launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication),
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        decoration: BoxDecoration(
+          border: Border.all(color: Brand.border),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, size: 18, color: Brand.green),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                label,
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: Brand.ink,
+                ),
+              ),
+            ),
+            const Icon(Icons.open_in_new, size: 16, color: Brand.green),
+          ],
+        ),
+      ),
+    );
+  }
 }

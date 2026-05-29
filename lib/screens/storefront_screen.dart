@@ -1389,10 +1389,11 @@ class _Footer extends StatelessWidget {
                       return Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Expanded(child: _brandCol()),
-                          Expanded(child: _categoryCol(shown)),
-                          Expanded(child: _servicesCol()),
-                          Expanded(child: _quickCol(context)),
+                          Expanded(flex: 2, child: _brandCol()),
+                          Expanded(flex: 2, child: _categoryCol(shown)),
+                          Expanded(flex: 2, child: _servicesCol()),
+                          Expanded(flex: 2, child: _quickCol(context)),
+                          Expanded(flex: 2, child: _legalCol(context)),
                         ],
                       );
                     }
@@ -1406,6 +1407,8 @@ class _Footer extends StatelessWidget {
                         _servicesCol(),
                         const SizedBox(height: 32),
                         _quickCol(context),
+                        const SizedBox(height: 32),
+                        _legalCol(context),
                       ],
                     );
                   },
@@ -1553,11 +1556,18 @@ class _Footer extends StatelessWidget {
       children: [
         const Text('QUICK LINKS', style: _kHeading),
         const SizedBox(height: 16),
-        _footerLink('About Us', () => Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const AboutScreen()))),
-        _footerLink('Contact Us', () => Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const ContactScreen()))),
-        const SizedBox(height: 16),
+        _footerLink('About Us',
+            () => Navigator.pushNamed(context, '/about')),
+        _footerLink('Contact Us',
+            () => Navigator.pushNamed(context, '/contact')),
+      ],
+    );
+  }
+
+  Widget _legalCol(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
         const Text('LEGAL', style: _kHeading),
         const SizedBox(height: 16),
         _footerLink('Terms & Conditions',
@@ -1566,9 +1576,9 @@ class _Footer extends StatelessWidget {
             () => Navigator.pushNamed(context, '/privacy')),
         _footerLink('Refund & Return',
             () => Navigator.pushNamed(context, '/refund')),
-        _footerLink('Shipping & Delivery',
+        _footerLink('Shipping Policy',
             () => Navigator.pushNamed(context, '/shipping')),
-        _footerLink('Cancellation',
+        _footerLink('Cancellation Policy',
             () => Navigator.pushNamed(context, '/cancellation')),
       ],
     );

@@ -6,6 +6,8 @@ import 'models/cart_model.dart';
 import 'screens/auth/business_details_screen.dart';
 import 'screens/auth/login_screen.dart';
 import 'screens/home_shell.dart';
+import 'screens/about_screen.dart';
+import 'screens/contact_screen.dart';
 import 'screens/legal_pages.dart';
 import 'supabase_config.dart';
 import 'theme.dart';
@@ -54,6 +56,8 @@ class _PharmaB2BAppState extends State<PharmaB2BApp> {
           routes: {
             '/login':        (_) => const LoginScreen(),
             '/register':     (_) => const LoginScreen(),
+            '/about':        (_) => const AboutScreen(),
+            '/contact':      (_) => const ContactScreen(),
             '/terms':        (_) => const TermsScreen(),
             '/privacy':      (_) => const PrivacyScreen(),
             '/refund':       (_) => const RefundScreen(),

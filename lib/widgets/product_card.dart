@@ -326,8 +326,17 @@ class _ImageBlock extends StatefulWidget {
 }
 
 class _ImageBlockState extends State<_ImageBlock> {
-  late final PageController _pageCtrl = PageController();
+  late final PageController _pageCtrl;
+  late final int _rawInitial;
   int _page = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    final count = widget.product.imageUrls.length;
+    _rawInitial = count > 1 ? count * 500 : 0;
+    _pageCtrl = PageController(initialPage: _rawInitial);
+  }
 
   @override
   void dispose() {
@@ -335,9 +344,17 @@ class _ImageBlockState extends State<_ImageBlock> {
     super.dispose();
   }
 
-  void _goTo(int i) {
-    setState(() => _page = i);
-    _pageCtrl.animateToPage(i,
+  // Navigate to a logical index, choosing the closest raw page (supports loop).
+  void _goTo(int logical) {
+    final count = widget.product.imageUrls.length;
+    if (count < 2) return;
+    final raw = _pageCtrl.page?.round() ?? _rawInitial;
+    final base = (raw ~/ count) * count;
+    var target = base + logical;
+    if (target - raw > count / 2) target -= count;
+    if (raw - target > count / 2) target += count;
+    setState(() => _page = logical);
+    _pageCtrl.animateToPage(target,
         duration: const Duration(milliseconds: 250), curve: Curves.easeInOut);
   }
 
@@ -376,7 +393,8 @@ class _ImageBlockState extends State<_ImageBlock> {
   @override
   Widget build(BuildContext context) {
     final images = widget.product.imageUrls;
-    final multi = images.length > 1;
+    final count = images.length;
+    final multi = count > 1;
 
     return SizedBox(
       height: 180,
@@ -384,11 +402,9 @@ class _ImageBlockState extends State<_ImageBlock> {
       child: Stack(
         fit: StackFit.expand,
         children: [
-          // ── Image / carousel ──────────────────────────────────────────
+          // ── Image / carousel (infinite loop) ─────────────────────────
           GestureDetector(
-            onTap: images.isNotEmpty
-                ? () => _openZoom(context, images)
-                : null,
+            onTap: images.isNotEmpty ? () => _openZoom(context, images) : null,
             child: images.isEmpty
                 ? const _IconFallback()
                 : images.length == 1
@@ -401,11 +417,13 @@ class _ImageBlockState extends State<_ImageBlock> {
                         color: Colors.white,
                         child: PageView.builder(
                           controller: _pageCtrl,
-                          itemCount: images.length,
-                          onPageChanged: (p) => setState(() => _page = p),
+                          // Large virtual count → seamless infinite loop
+                          itemCount: count * 1000,
+                          onPageChanged: (p) =>
+                              setState(() => _page = p % count),
                           itemBuilder: (_, i) => Padding(
                             padding: const EdgeInsets.all(4),
-                            child: _netImage(images[i]),
+                            child: _netImage(images[i % count]),
                           ),
                         ),
                       ),
@@ -481,30 +499,42 @@ class _DotNav extends StatelessWidget {
   const _DotNav(
       {required this.count, required this.current, required this.onSelect});
 
+  // Graduated size: active=11, distance-1=8, distance≥2=6
+  static double _size(int dist) {
+    if (dist == 0) return 11.0;
+    if (dist == 1) return 8.0;
+    return 6.0;
+  }
+
+  // Graduated colour: active=near-black, d1=mid-grey, d≥2=light-grey
+  static Color _color(int dist) {
+    if (dist == 0) return const Color(0xFF1F2937);
+    if (dist == 1) return const Color(0xFF6B7280);
+    return const Color(0xFFD1D5DB);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: List.generate(count, (i) {
-        final active = i == current;
+        final dist = (i - current).abs();
+        final sz = _size(dist);
         return MouseRegion(
           cursor: SystemMouseCursors.click,
           onEnter: (_) => onSelect(i),
           child: GestureDetector(
             onTap: () => onSelect(i),
-            // Extra padding enlarges the tap target without affecting dot size
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 6),
               child: AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
+                duration: const Duration(milliseconds: 220),
                 curve: Curves.easeInOut,
-                width: active ? 10.0 : 6.0,
-                height: active ? 10.0 : 6.0,
+                width: sz,
+                height: sz,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: active
-                      ? const Color(0xFF1F2937)
-                      : const Color(0xFF9CA3AF),
+                  color: _color(dist),
                 ),
               ),
             ),
@@ -528,13 +558,16 @@ class _ZoomDialog extends StatefulWidget {
 
 class _ZoomDialogState extends State<_ZoomDialog> {
   late final PageController _ctrl;
+  late final int _rawInitial;
   int _page = 0;
 
   @override
   void initState() {
     super.initState();
     _page = widget.initialPage;
-    _ctrl = PageController(initialPage: widget.initialPage);
+    final count = widget.images.length;
+    _rawInitial = count > 1 ? count * 500 + widget.initialPage : 0;
+    _ctrl = PageController(initialPage: _rawInitial);
   }
 
   @override
@@ -543,27 +576,40 @@ class _ZoomDialogState extends State<_ZoomDialog> {
     super.dispose();
   }
 
-  void _goTo(int i) {
-    setState(() => _page = i);
-    _ctrl.animateToPage(i,
+  void _goTo(int logical) {
+    final count = widget.images.length;
+    if (count < 2) return;
+    final raw = _ctrl.page?.round() ?? _rawInitial;
+    final base = (raw ~/ count) * count;
+    var target = base + logical;
+    if (target - raw > count / 2) target -= count;
+    if (raw - target > count / 2) target += count;
+    setState(() => _page = logical);
+    _ctrl.animateToPage(target,
         duration: const Duration(milliseconds: 250), curve: Curves.easeInOut);
   }
 
   @override
   Widget build(BuildContext context) {
-    final multi = widget.images.length > 1;
+    final images = widget.images;
+    final count = images.length;
+    final multi = count > 1;
+
     return Dialog(
       backgroundColor: Colors.transparent,
       insetPadding: EdgeInsets.zero,
       child: SizedBox.expand(
         child: GestureDetector(
+          // opaque so taps on the dark background always register
+          behavior: HitTestBehavior.opaque,
           onTap: () => Navigator.of(context).pop(),
           child: Stack(
             children: [
               // ── Full-screen image (or carousel) ──────────────────────
               Center(
                 child: GestureDetector(
-                  // Absorb taps on the image itself so they don't close the dialog
+                  // opaque so taps on the image are absorbed (don't close)
+                  behavior: HitTestBehavior.opaque,
                   onTap: () {},
                   child: multi
                       ? Column(
@@ -574,14 +620,14 @@ class _ZoomDialogState extends State<_ZoomDialog> {
                                   MediaQuery.sizeOf(context).height * 0.78,
                               child: PageView.builder(
                                 controller: _ctrl,
-                                itemCount: widget.images.length,
+                                itemCount: count * 1000,
                                 onPageChanged: (p) =>
-                                    setState(() => _page = p),
+                                    setState(() => _page = p % count),
                                 itemBuilder: (_, i) => InteractiveViewer(
                                   minScale: 0.8,
                                   maxScale: 4.0,
                                   child: Image.network(
-                                    widget.images[i],
+                                    images[i % count],
                                     fit: BoxFit.contain,
                                   ),
                                 ),
@@ -589,7 +635,7 @@ class _ZoomDialogState extends State<_ZoomDialog> {
                             ),
                             const SizedBox(height: 12),
                             _DotNav(
-                              count: widget.images.length,
+                              count: count,
                               current: _page,
                               onSelect: _goTo,
                             ),
@@ -599,7 +645,7 @@ class _ZoomDialogState extends State<_ZoomDialog> {
                           minScale: 0.8,
                           maxScale: 4.0,
                           child: Image.network(
-                            widget.images[0],
+                            images[0],
                             fit: BoxFit.contain,
                           ),
                         ),

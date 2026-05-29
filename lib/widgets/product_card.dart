@@ -368,10 +368,10 @@ class _ImageBlockState extends State<_ImageBlock> {
                 : images.length == 1
                     ? Container(
                         color: Colors.white,
-                        padding: const EdgeInsets.all(12),
+                        padding: const EdgeInsets.all(4),
                         child: Image.network(
                           images[0],
-                          fit: BoxFit.contain,
+                          fit: BoxFit.cover,
                           alignment: Alignment.center,
                           gaplessPlayback: true,
                           cacheWidth: 400,
@@ -401,10 +401,10 @@ class _ImageBlockState extends State<_ImageBlock> {
                           itemCount: images.length,
                           onPageChanged: (p) => setState(() => _page = p),
                           itemBuilder: (_, i) => Padding(
-                            padding: const EdgeInsets.all(12),
+                            padding: const EdgeInsets.all(4),
                             child: Image.network(
                               images[i],
-                              fit: BoxFit.contain,
+                              fit: BoxFit.cover,
                               alignment: Alignment.center,
                               gaplessPlayback: true,
                               cacheWidth: 400,

@@ -328,7 +328,6 @@ class _ImageBlock extends StatefulWidget {
 class _ImageBlockState extends State<_ImageBlock> {
   late final PageController _pageCtrl = PageController();
   int _page = 0;
-  bool _hovered = false;
 
   @override
   void dispose() {
@@ -336,63 +335,67 @@ class _ImageBlockState extends State<_ImageBlock> {
     super.dispose();
   }
 
-  void _prev() => _pageCtrl.previousPage(
-        duration: const Duration(milliseconds: 250),
-        curve: Curves.easeInOut,
-      );
+  void _goTo(int i) {
+    setState(() => _page = i);
+    _pageCtrl.animateToPage(i,
+        duration: const Duration(milliseconds: 250), curve: Curves.easeInOut);
+  }
 
-  void _next() => _pageCtrl.nextPage(
-        duration: const Duration(milliseconds: 250),
-        curve: Curves.easeInOut,
+  void _openZoom(BuildContext context, List<String> images) {
+    showDialog(
+      context: context,
+      barrierColor: Colors.black87,
+      barrierDismissible: true,
+      builder: (_) => _ZoomDialog(images: images, initialPage: _page),
+    );
+  }
+
+  Widget _netImage(String url) => Image.network(
+        url,
+        fit: BoxFit.cover,
+        alignment: Alignment.center,
+        gaplessPlayback: true,
+        cacheWidth: 400,
+        cacheHeight: 360,
+        loadingBuilder: (_, child, prog) => prog == null
+            ? child
+            : const ColoredBox(
+                color: Colors.white,
+                child: Center(
+                  child: SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: Color(0xFFD1D5DB)),
+                  ),
+                ),
+              ),
+        errorBuilder: (_, __, ___) => const _IconFallback(),
       );
 
   @override
   Widget build(BuildContext context) {
     final images = widget.product.imageUrls;
     final multi = images.length > 1;
-    // Desktop (≥900px): show arrows only on hover. Mobile: always show.
-    final isDesktop = MediaQuery.sizeOf(context).width >= 900;
-    final showArrows = multi && (isDesktop ? _hovered : true);
+
     return SizedBox(
       height: 180,
       width: double.infinity,
-      child: MouseRegion(
-        onEnter: (_) => setState(() => _hovered = true),
-        onExit: (_) => setState(() => _hovered = false),
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            // ── Image / carousel ──────────────────────────────────────────
-            images.isEmpty
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          // ── Image / carousel ──────────────────────────────────────────
+          GestureDetector(
+            onTap: images.isNotEmpty
+                ? () => _openZoom(context, images)
+                : null,
+            child: images.isEmpty
                 ? const _IconFallback()
                 : images.length == 1
                     ? Container(
                         color: Colors.white,
                         padding: const EdgeInsets.all(4),
-                        child: Image.network(
-                          images[0],
-                          fit: BoxFit.cover,
-                          alignment: Alignment.center,
-                          gaplessPlayback: true,
-                          cacheWidth: 400,
-                          cacheHeight: 360,
-                          loadingBuilder: (_, child, prog) => prog == null
-                              ? child
-                              : const ColoredBox(
-                                  color: Colors.white,
-                                  child: Center(
-                                    child: SizedBox(
-                                      width: 20,
-                                      height: 20,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2,
-                                        color: Color(0xFFD1D5DB),
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                          errorBuilder: (_, __, ___) => const _IconFallback(),
-                        ),
+                        child: _netImage(images[0]),
                       )
                     : Container(
                         color: Colors.white,
@@ -402,160 +405,228 @@ class _ImageBlockState extends State<_ImageBlock> {
                           onPageChanged: (p) => setState(() => _page = p),
                           itemBuilder: (_, i) => Padding(
                             padding: const EdgeInsets.all(4),
-                            child: Image.network(
-                              images[i],
-                              fit: BoxFit.cover,
-                              alignment: Alignment.center,
-                              gaplessPlayback: true,
-                              cacheWidth: 400,
-                              cacheHeight: 360,
-                              loadingBuilder: (_, child, prog) => prog == null
-                                  ? child
-                                  : const ColoredBox(
-                                      color: Colors.white,
-                                      child: Center(
-                                        child: SizedBox(
-                                          width: 20,
-                                          height: 20,
-                                          child: CircularProgressIndicator(
-                                            strokeWidth: 2,
-                                            color: Color(0xFFD1D5DB),
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                              errorBuilder: (_, __, ___) =>
-                                  const _IconFallback(),
-                            ),
+                            child: _netImage(images[i]),
                           ),
                         ),
                       ),
-            // ── Static overlays ───────────────────────────────────────────
-            // Category pill — top-left, constrained so it never reaches scheme badge
+          ),
+          // ── Static overlays ───────────────────────────────────────────
+          Positioned(
+            left: 8,
+            top: 8,
+            right: _hasScheme(widget.product.id) ? 50 : 8,
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: _CategoryImagePill(
+                  text: prettyCategory(widget.product.category)),
+            ),
+          ),
+          if (_hasScheme(widget.product.id))
+            Positioned(right: 8, top: 8, child: _SchemePill(text: '5+1')),
+          if (widget.isBestSeller)
             Positioned(
               left: 8,
-              top: 8,
-              right: _hasScheme(widget.product.id) ? 50 : 8,
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: _CategoryImagePill(
-                    text: prettyCategory(widget.product.category)),
+              bottom: multi ? 24 : 8,
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFD97706),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.local_fire_department_rounded,
+                        size: 12, color: Colors.white),
+                    SizedBox(width: 4),
+                    Text(
+                      'Best Seller',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white,
+                        height: 1.0,
+                        leadingDistribution: TextLeadingDistribution.even,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
-            // Scheme badge — top-right (only when product has a scheme)
-            if (_hasScheme(widget.product.id))
-              Positioned(right: 8, top: 8, child: _SchemePill(text: '5+1')),
-            if (widget.isBestSeller)
-              Positioned(
-                left: 8,
-                bottom: multi ? 24 : 8,
-                child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFD97706),
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: const Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.local_fire_department_rounded,
-                          size: 12, color: Colors.white),
-                      SizedBox(width: 4),
-                      Text(
-                        'Best Seller',
-                        style: TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w700,
-                          color: Colors.white,
-                          height: 1.0,
-                          leadingDistribution: TextLeadingDistribution.even,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
+          // ── Dot nav (replaces arrows) ─────────────────────────────────
+          if (multi)
+            Positioned(
+              bottom: 6,
+              left: 0,
+              right: 0,
+              child: _DotNav(
+                count: images.length,
+                current: _page,
+                onSelect: _goTo,
               ),
-            // ── Carousel arrows ───────────────────────────────────────────
-            if (showArrows && _page > 0)
-              Positioned(
-                left: 4,
-                top: 0,
-                bottom: 0,
-                child: Center(
-                  child: _CarouselArrow(icon: Icons.chevron_left, onTap: _prev),
-                ),
-              ),
-            if (showArrows && _page < images.length - 1)
-              Positioned(
-                right: 4,
-                top: 0,
-                bottom: 0,
-                child: Center(
-                  child:
-                      _CarouselArrow(icon: Icons.chevron_right, onTap: _next),
-                ),
-              ),
-            // ── Dot indicators ────────────────────────────────────────────
-            if (multi)
-              Positioned(
-                bottom: 6,
-                left: 0,
-                right: 0,
-                child: _DotIndicators(count: images.length, current: _page),
-              ),
-          ],
-        ),
+            ),
+        ],
       ),
     );
   }
 }
 
-class _CarouselArrow extends StatelessWidget {
-  final IconData icon;
-  final VoidCallback onTap;
-  const _CarouselArrow({required this.icon, required this.onTap});
+// ─── Dot navigation ───────────────────────────────────────────────────────────
 
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: 28,
-        height: 28,
-        decoration: BoxDecoration(
-          color: Colors.black.withValues(alpha: 0.45),
-          shape: BoxShape.circle,
-        ),
-        child: Icon(icon, color: Colors.white, size: 18),
-      ),
-    );
-  }
-}
-
-class _DotIndicators extends StatelessWidget {
+class _DotNav extends StatelessWidget {
   final int count;
   final int current;
-  const _DotIndicators({required this.count, required this.current});
+  final ValueChanged<int> onSelect;
+  const _DotNav(
+      {required this.count, required this.current, required this.onSelect});
 
   @override
   Widget build(BuildContext context) {
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: List.generate(count, (i) {
-        return AnimatedContainer(
-          duration: const Duration(milliseconds: 200),
-          margin: const EdgeInsets.symmetric(horizontal: 2),
-          width: i == current ? 12.0 : 6.0,
-          height: 6,
-          decoration: BoxDecoration(
-            color: i == current
-                ? Colors.white
-                : Colors.white.withValues(alpha: 0.55),
-            borderRadius: BorderRadius.circular(3),
+        final active = i == current;
+        return MouseRegion(
+          cursor: SystemMouseCursors.click,
+          onEnter: (_) => onSelect(i),
+          child: GestureDetector(
+            onTap: () => onSelect(i),
+            // Extra padding enlarges the tap target without affecting dot size
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 6),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                curve: Curves.easeInOut,
+                width: active ? 10.0 : 6.0,
+                height: active ? 10.0 : 6.0,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: active
+                      ? const Color(0xFF1F2937)
+                      : const Color(0xFF9CA3AF),
+                ),
+              ),
+            ),
           ),
         );
       }),
+    );
+  }
+}
+
+// ─── Zoom dialog ──────────────────────────────────────────────────────────────
+
+class _ZoomDialog extends StatefulWidget {
+  final List<String> images;
+  final int initialPage;
+  const _ZoomDialog({required this.images, required this.initialPage});
+
+  @override
+  State<_ZoomDialog> createState() => _ZoomDialogState();
+}
+
+class _ZoomDialogState extends State<_ZoomDialog> {
+  late final PageController _ctrl;
+  int _page = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _page = widget.initialPage;
+    _ctrl = PageController(initialPage: widget.initialPage);
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  void _goTo(int i) {
+    setState(() => _page = i);
+    _ctrl.animateToPage(i,
+        duration: const Duration(milliseconds: 250), curve: Curves.easeInOut);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final multi = widget.images.length > 1;
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      insetPadding: EdgeInsets.zero,
+      child: SizedBox.expand(
+        child: GestureDetector(
+          onTap: () => Navigator.of(context).pop(),
+          child: Stack(
+            children: [
+              // ── Full-screen image (or carousel) ──────────────────────
+              Center(
+                child: GestureDetector(
+                  // Absorb taps on the image itself so they don't close the dialog
+                  onTap: () {},
+                  child: multi
+                      ? Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            SizedBox(
+                              height:
+                                  MediaQuery.sizeOf(context).height * 0.78,
+                              child: PageView.builder(
+                                controller: _ctrl,
+                                itemCount: widget.images.length,
+                                onPageChanged: (p) =>
+                                    setState(() => _page = p),
+                                itemBuilder: (_, i) => InteractiveViewer(
+                                  minScale: 0.8,
+                                  maxScale: 4.0,
+                                  child: Image.network(
+                                    widget.images[i],
+                                    fit: BoxFit.contain,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            _DotNav(
+                              count: widget.images.length,
+                              current: _page,
+                              onSelect: _goTo,
+                            ),
+                          ],
+                        )
+                      : InteractiveViewer(
+                          minScale: 0.8,
+                          maxScale: 4.0,
+                          child: Image.network(
+                            widget.images[0],
+                            fit: BoxFit.contain,
+                          ),
+                        ),
+                ),
+              ),
+              // ── Close button ─────────────────────────────────────────
+              Positioned(
+                top: MediaQuery.paddingOf(context).top + 12,
+                right: 16,
+                child: GestureDetector(
+                  onTap: () => Navigator.of(context).pop(),
+                  child: Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.55),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(Icons.close,
+                        color: Colors.white, size: 20),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

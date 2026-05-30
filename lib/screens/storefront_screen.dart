@@ -139,6 +139,10 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
     if (old.category != widget.category || old.query != widget.query) {
       _resetAndLoad();
     }
+    if (old.category != widget.category) {
+      WidgetsBinding.instance
+          .addPostFrameCallback((_) { if (mounted) _scrollToProducts(); });
+    }
     if (old.scrollTrigger != widget.scrollTrigger) {
       WidgetsBinding.instance
           .addPostFrameCallback((_) => _scrollToProducts());

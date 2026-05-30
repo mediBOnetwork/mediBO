@@ -134,7 +134,6 @@ class _HomeShellState extends State<HomeShell> {
       _searchCtrl.clear();
       _index = 0;
       _cartOpen = false;
-      _scrollToTopTrigger++; // scroll to top of product list on every category change
     });
     pushUrl(c == 'All' ? '/' : '/c/${_catToSlug(c)}');
   }

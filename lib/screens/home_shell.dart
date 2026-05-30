@@ -117,6 +117,17 @@ class _HomeShellState extends State<HomeShell> {
     pushUrl(_urlForState());
   }
 
+  void _goHome() {
+    setState(() {
+      _index = 0;
+      _category = 'All';
+      _query = '';
+      _cartOpen = false;
+    });
+    _searchCtrl.clear();
+    pushUrl('/');
+  }
+
   void _onMetaLoaded(CatalogMeta meta) {
     if (mounted) setState(() => _desktopMeta = meta);
   }
@@ -210,6 +221,7 @@ class _HomeShellState extends State<HomeShell> {
             children: [
               _LocationHeader(
                 onCart: () => setState(() => _cartOpen = true),
+                onHome: _goHome,
               ),
               _MobileSearchBar(
                 controller: _searchCtrl,
@@ -277,7 +289,7 @@ class _HomeShellState extends State<HomeShell> {
                   }
                 }),
                 onScrollToResults: () => setState(() => _scrollTrigger++),
-                onHome: () => _setIndex(0),
+                onHome: _goHome,
                 onBulk: () => _setIndex(2),
                 onOrders: () => _setIndex(1),
                 onCart: () => setState(() => _cartOpen = true),
@@ -357,7 +369,8 @@ class _HomeShellState extends State<HomeShell> {
 
 class _LocationHeader extends StatelessWidget {
   final VoidCallback onCart;
-  const _LocationHeader({required this.onCart});
+  final VoidCallback onHome;
+  const _LocationHeader({required this.onCart, required this.onHome});
 
   @override
   Widget build(BuildContext context) {
@@ -376,47 +389,53 @@ class _LocationHeader extends StatelessWidget {
           children: [
             // LEFT: profile avatar
             _MobileProfileAvatar(),
-            // CENTER: logo
+            // CENTER: logo — tapping navigates home
             Expanded(
               child: Center(
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      width: 28,
-                      height: 28,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF1B5E20),
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: const Icon(Icons.add, color: Colors.white, size: 17),
-                    ),
-                    const SizedBox(width: 7),
-                    RichText(
-                      text: const TextSpan(
-                        children: [
-                          TextSpan(
-                            text: 'medi',
-                            style: TextStyle(
-                              fontSize: 20,
-                              fontWeight: FontWeight.w700,
-                              color: Color(0xFF1B5E20),
-                              letterSpacing: -0.3,
-                            ),
+                child: MouseRegion(
+                  cursor: SystemMouseCursors.click,
+                  child: GestureDetector(
+                    onTap: onHome,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: 28,
+                          height: 28,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF1B5E20),
+                            borderRadius: BorderRadius.circular(6),
                           ),
-                          TextSpan(
-                            text: 'BO',
-                            style: TextStyle(
-                              fontSize: 20,
-                              fontWeight: FontWeight.w800,
-                              color: Color(0xFF4CAF50),
-                              letterSpacing: -0.3,
-                            ),
+                          child: const Icon(Icons.add, color: Colors.white, size: 17),
+                        ),
+                        const SizedBox(width: 7),
+                        RichText(
+                          text: const TextSpan(
+                            children: [
+                              TextSpan(
+                                text: 'medi',
+                                style: TextStyle(
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.w700,
+                                  color: Color(0xFF1B5E20),
+                                  letterSpacing: -0.3,
+                                ),
+                              ),
+                              TextSpan(
+                                text: 'BO',
+                                style: TextStyle(
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.w800,
+                                  color: Color(0xFF4CAF50),
+                                  letterSpacing: -0.3,
+                                ),
+                              ),
+                            ],
                           ),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
-                  ],
+                  ),
                 ),
               ),
             ),
@@ -2401,46 +2420,49 @@ class _DesktopHeaderState extends State<_DesktopHeader> {
             width: 250,
             child: Padding(
               padding: const EdgeInsets.only(left: 24),
-              child: GestureDetector(
-                onTap: widget.onHome,
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      width: 40,
-                      height: 40,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF1B5E20),
-                        borderRadius: BorderRadius.circular(8),
+              child: MouseRegion(
+                cursor: SystemMouseCursors.click,
+                child: GestureDetector(
+                  onTap: widget.onHome,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 40,
+                        height: 40,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF1B5E20),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: const Icon(Icons.add, color: Colors.white, size: 24),
                       ),
-                      child: const Icon(Icons.add, color: Colors.white, size: 24),
-                    ),
-                    const SizedBox(width: 10),
-                    RichText(
-                      text: const TextSpan(
-                        children: [
-                          TextSpan(
-                            text: 'medi',
-                            style: TextStyle(
-                              fontSize: 22,
-                              fontWeight: FontWeight.w700,
-                              color: Color(0xFF1B5E20),
-                              letterSpacing: -0.3,
+                      const SizedBox(width: 10),
+                      RichText(
+                        text: const TextSpan(
+                          children: [
+                            TextSpan(
+                              text: 'medi',
+                              style: TextStyle(
+                                fontSize: 22,
+                                fontWeight: FontWeight.w700,
+                                color: Color(0xFF1B5E20),
+                                letterSpacing: -0.3,
+                              ),
                             ),
-                          ),
-                          TextSpan(
-                            text: 'BO',
-                            style: TextStyle(
-                              fontSize: 22,
-                              fontWeight: FontWeight.w800,
-                              color: Color(0xFF4CAF50),
-                              letterSpacing: -0.3,
+                            TextSpan(
+                              text: 'BO',
+                              style: TextStyle(
+                                fontSize: 22,
+                                fontWeight: FontWeight.w800,
+                                color: Color(0xFF4CAF50),
+                                letterSpacing: -0.3,
+                              ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ),

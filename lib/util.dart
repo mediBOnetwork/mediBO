@@ -21,6 +21,9 @@ double cartDiscountPercent(double total) {
   return 0.0;
 }
 
+/// Returns the delivery fee: ₹0 when cart MRP total ≥ ₹999, else ₹49.
+double cartDeliveryFee(double total) => total >= 999 ? 0.0 : 49.0;
+
 /// Formats a value as Indian Rupees, e.g. 1234567.5 -> "₹12,34,567.50".
 String rupees(double value) {
   final negative = value < 0;

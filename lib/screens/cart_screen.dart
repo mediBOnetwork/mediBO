@@ -866,7 +866,8 @@ class _BillingSummary extends StatelessWidget {
     final discPct = cartDiscountPercent(cart.mrpTotal);
     final discAmt = cart.mrpTotal * discPct / 100;
     final netTaxable = cart.mrpTotal - discAmt;
-    final gstAmt = cart.netPayable - netTaxable;
+    final deliveryFee = cartDeliveryFee(cart.mrpTotal);
+    final gstAmt = cart.netPayable - deliveryFee - netTaxable;
 
     return Column(
       children: [
@@ -882,6 +883,12 @@ class _BillingSummary extends StatelessWidget {
           'GST Input Credit',
           rupees(gstAmt),
           valueColor: const Color(0xFFD97706),
+        ),
+        const SizedBox(height: 4),
+        _sRow(
+          'Delivery Fee',
+          deliveryFee > 0 ? rupees(deliveryFee) : 'FREE',
+          valueColor: deliveryFee == 0 ? const Color(0xFF16A34A) : null,
         ),
         const Padding(
           padding: EdgeInsets.symmetric(vertical: 6),
@@ -1070,6 +1077,7 @@ class _GstBillView extends StatelessWidget {
       final taxable = net - disc;
       finalPayables[rate] = taxable + taxable * rate / 100;
     }
+    final deliveryFee = cartDeliveryFee(totalMrp);
     // Use the shared CartModel getter as the single source of truth
     final grandTotal = cart.netPayable;
 
@@ -1179,6 +1187,31 @@ class _GstBillView extends StatelessWidget {
                           ),
                         ),
                       const Divider(height: 16),
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            const Text(
+                              'Delivery Fee',
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: Color(0xFF6B7280),
+                              ),
+                            ),
+                            Text(
+                              deliveryFee > 0 ? rupees(deliveryFee) : 'FREE',
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: deliveryFee == 0
+                                    ? const Color(0xFF16A34A)
+                                    : const Color(0xFF374151),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
@@ -1394,6 +1427,7 @@ class _OrderSummaryPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final discPct = cartDiscountPercent(cart.mrpTotal);
+    final deliveryFee = cartDeliveryFee(cart.mrpTotal);
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -1430,8 +1464,13 @@ class _OrderSummaryPanel extends StatelessWidget {
           ),
           _row(
             'GST Input Credit',
-            rupees(cart.netPayable - cart.mrpTotal * (1 - discPct / 100)),
+            rupees(cart.netPayable - deliveryFee - cart.mrpTotal * (1 - discPct / 100)),
             valueColor: const Color(0xFFD97706),
+          ),
+          _row(
+            'Delivery Fee',
+            deliveryFee > 0 ? rupees(deliveryFee) : 'FREE',
+            valueColor: deliveryFee == 0 ? const Color(0xFF16A34A) : null,
           ),
           const Divider(height: 24),
           _row('Net Payable Amount', rupees(cart.netPayable), bold: true),
@@ -1475,29 +1514,54 @@ class _OrderSummaryPanel extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 12),
-          Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            decoration: BoxDecoration(
-              color: const Color(0xFFF0FDF4),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: const Color(0xFFBBF7D0)),
+          if (deliveryFee == 0)
+            Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF0FDF4),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFFBBF7D0)),
+              ),
+              child: const Row(
+                children: [
+                  Icon(Icons.local_shipping_outlined,
+                      size: 15, color: Color(0xFF16A34A)),
+                  SizedBox(width: 7),
+                  Text(
+                    'Free delivery on this order',
+                    style: TextStyle(
+                        fontSize: 12,
+                        color: Color(0xFF15803D),
+                        fontWeight: FontWeight.w600),
+                  ),
+                ],
+              ),
+            )
+          else
+            Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFF7ED),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFFFED7AA)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.local_shipping_outlined,
+                      size: 15, color: Color(0xFFEA580C)),
+                  const SizedBox(width: 7),
+                  Text(
+                    'Add ₹${(999 - cart.mrpTotal).ceil()} more for free delivery',
+                    style: const TextStyle(
+                        fontSize: 12,
+                        color: Color(0xFF9A3412),
+                        fontWeight: FontWeight.w600),
+                  ),
+                ],
+              ),
             ),
-            child: Row(
-              children: const [
-                Icon(Icons.local_shipping_outlined,
-                    size: 15, color: Color(0xFF16A34A)),
-                SizedBox(width: 7),
-                Text(
-                  'Free delivery on this order',
-                  style: TextStyle(
-                      fontSize: 12,
-                      color: Color(0xFF15803D),
-                      fontWeight: FontWeight.w600),
-                ),
-              ],
-            ),
-          ),
           const SizedBox(height: 8),
           const Text(
             'Net 30 credit terms apply',

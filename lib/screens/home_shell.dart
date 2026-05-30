@@ -1137,6 +1137,7 @@ class _StickyCartBarState extends State<_StickyCartBar>
   static const _navy = Color(0xFF1B2B8C);
   static const _blue = Color(0xFF2563EB);
   static const _amber = Color(0xFFFBBF24);
+  static const _tierFreeDelivery = 999.0;
   static const _tier3pct = 2999.0;
   static const _tier5pct = 6999.0;
   static const _tier6pct = 8999.0;
@@ -1236,23 +1237,28 @@ class _StickyCartBarState extends State<_StickyCartBar>
       progress = (total - _tier6pct) / (_tier7pct - _tier6pct);
       barColor = _amber;
       final remaining = (_tier7pct - total).ceil();
-      leftContent = _UnlockedTierText(unlockedPct: 6, nextPct: 7, remaining: remaining);
+      leftContent = _UnlockedTierText(unlockedLabel: '6%', nextPct: 7, remaining: remaining);
     } else if (total >= _tier5pct) {
       progress = (total - _tier5pct) / (_tier6pct - _tier5pct);
       barColor = _amber;
       final remaining = (_tier6pct - total).ceil();
-      leftContent = _UnlockedTierText(unlockedPct: 5, nextPct: 6, remaining: remaining);
+      leftContent = _UnlockedTierText(unlockedLabel: '5%', nextPct: 6, remaining: remaining);
     } else if (total >= _tier3pct) {
       progress = (total - _tier3pct) / (_tier5pct - _tier3pct);
       barColor = _amber;
       final remaining = (_tier5pct - total).ceil();
-      leftContent = _UnlockedTierText(unlockedPct: 3, nextPct: 5, remaining: remaining);
-    } else {
-      progress = total > 0 ? total / _tier3pct : 0.0;
-      barColor = _blue;
+      leftContent = _UnlockedTierText(unlockedLabel: '3%', nextPct: 5, remaining: remaining);
+    } else if (total >= _tierFreeDelivery) {
+      progress = (total - _tierFreeDelivery) / (_tier3pct - _tierFreeDelivery);
+      barColor = _amber;
       final remaining = (_tier3pct - total).ceil();
+      leftContent = _UnlockedTierText(unlockedLabel: 'FREE delivery', nextPct: 3, remaining: remaining);
+    } else {
+      progress = total > 0 ? total / _tierFreeDelivery : 0.0;
+      barColor = _blue;
+      final remaining = (_tierFreeDelivery - total).ceil();
       leftContent = _DiscountText(
-          amount: '₹$remaining', suffix: ' more to get 3% off');
+          amount: '₹$remaining', suffix: ' more for FREE delivery');
     }
 
     return SlideTransition(
@@ -1351,11 +1357,11 @@ class _DiscountText extends StatelessWidget {
 }
 
 class _UnlockedTierText extends StatelessWidget {
-  final int unlockedPct;
+  final String unlockedLabel;
   final int nextPct;
   final int remaining;
   const _UnlockedTierText({
-    required this.unlockedPct,
+    required this.unlockedLabel,
     required this.nextPct,
     required this.remaining,
   });
@@ -1369,7 +1375,7 @@ class _UnlockedTierText extends StatelessWidget {
         style: const TextStyle(
             fontSize: 12, fontWeight: FontWeight.w500, color: Colors.white),
         children: [
-          TextSpan(text: '🎉 $unlockedPct% discount unlocked! Add '),
+          TextSpan(text: '🎉 $unlockedLabel unlocked! Add '),
           TextSpan(
             text: '₹$remaining',
             style: const TextStyle(

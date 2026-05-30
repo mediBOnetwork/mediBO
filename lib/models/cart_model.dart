@@ -302,7 +302,7 @@ class CartModel extends ChangeNotifier {
       final taxable = entry.value * (1 - discPct / 100);
       total += taxable * (1 + entry.key / 100);
     }
-    return total;
+    return total + cartDeliveryFee(mrpSum);
   }
 
   bool get hasSampleItems => _lines.values.any((l) => l.isSample);

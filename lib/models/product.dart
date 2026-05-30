@@ -85,8 +85,7 @@ class Product {
     final isPrescription = rxRequired == 'Rx';
     final status = (map['status'] as String?)?.trim() ?? '';
     final mrp = parseMrp(map['mrp']);
-    // Standard pharma B2B margin: 18% off MRP.
-    final b2bPrice = mrp > 0 ? double.parse((mrp * 0.82).toStringAsFixed(2)) : 0.0;
+    final b2bPrice = mrp;
 
     final allImages = [
       (map['image_url_1'] as String?)?.trim() ?? '',
@@ -114,7 +113,7 @@ class Product {
       stock: status == 'Available' ? 100 : 0,
       schedule: isPrescription ? 'Schedule H' : 'OTC',
       requiresPrescription: isPrescription,
-      discount: 18.0,
+      discount: 0.0,
     );
   }
 
@@ -192,7 +191,7 @@ class Product {
       stock: 100,
       schedule: 'OTC',
       requiresPrescription: false,
-      discount: 18.0,
+      discount: 0.0,
     );
   }
 

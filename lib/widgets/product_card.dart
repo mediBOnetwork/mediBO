@@ -17,9 +17,8 @@ class ProductCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final style = categoryStyle(product.category);
-    final discountPct = product.mrp > 0
-        ? ((product.mrp - product.b2bPrice) / product.mrp * 100).round()
-        : 0;
+    final cart = AppState.of(context);
+    final discountPct = cartDiscountPercent(cart.mrpTotal).round();
 
     return RepaintBoundary(
       child: HoverLift(
@@ -115,28 +114,57 @@ class _PriceRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.baseline,
-      textBaseline: TextBaseline.alphabetic,
+    final cart = AppState.of(context);
+    final discPct = cartDiscountPercent(cart.mrpTotal);
+    final salePrice = product.mrp * (1 - discPct / 100);
+    final gstAmt = salePrice * product.gstPercent / 100;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          rupees(product.b2bPrice),
-          style: const TextStyle(
-            fontWeight: FontWeight.w800,
-            fontSize: 18,
-            color: Color(0xFF111827),
-          ),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.baseline,
+          textBaseline: TextBaseline.alphabetic,
+          children: [
+            Text(
+              rupees(salePrice),
+              style: const TextStyle(
+                fontWeight: FontWeight.w800,
+                fontSize: 18,
+                color: Color(0xFF111827),
+              ),
+            ),
+            if (discPct > 0) ...[
+              const SizedBox(width: 6),
+              Text(
+                rupees(product.mrp),
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: Color(0xFF9CA3AF),
+                  fontWeight: FontWeight.w400,
+                  decoration: TextDecoration.lineThrough,
+                  decorationColor: Color(0xFF9CA3AF),
+                ),
+              ),
+            ],
+          ],
         ),
-        if (product.mrp > product.b2bPrice) ...[
-          const SizedBox(width: 6),
-          Text(
-            rupees(product.mrp),
-            style: const TextStyle(
-              fontSize: 12,
-              color: Color(0xFF9CA3AF),
-              fontWeight: FontWeight.w400,
-              decoration: TextDecoration.lineThrough,
-              decorationColor: Color(0xFF9CA3AF),
+        if (product.gstPercent > 0) ...[
+          const SizedBox(height: 3),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFEF9C3),
+              borderRadius: BorderRadius.circular(4),
+              border: Border.all(color: const Color(0xFFFDE047)),
+            ),
+            child: Text(
+              '${product.gstPercent.toStringAsFixed(0)}% GST (${rupees(gstAmt)} input credit)',
+              style: const TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+                color: Color(0xFF854D0E),
+              ),
             ),
           ),
         ],

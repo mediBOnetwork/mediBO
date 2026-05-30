@@ -432,6 +432,8 @@ class _CartItemCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = line.product;
+    final discPct = cartDiscountPercent(cart.mrpTotal);
+    final salePrice = p.mrp * (1 - discPct / 100);
 
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
@@ -550,7 +552,7 @@ class _CartItemCard extends StatelessWidget {
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    if (p.mrp > 0)
+                    if (p.mrp > 0 && discPct > 0)
                       Text(
                         'MRP ${rupees(p.mrp)}',
                         style: const TextStyle(
@@ -560,9 +562,9 @@ class _CartItemCard extends StatelessWidget {
                           decorationColor: Color(0xFF9CA3AF),
                         ),
                       ),
-                    const SizedBox(height: 2),
+                    if (discPct > 0) const SizedBox(height: 2),
                     Text(
-                      rupees(p.b2bPrice),
+                      rupees(salePrice),
                       style: const TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w800,
@@ -582,7 +584,7 @@ class _CartItemCard extends StatelessWidget {
                               Border.all(color: const Color(0xFFFDE047)),
                         ),
                         child: Text(
-                          '${p.gstPercent.toStringAsFixed(0)}% GST',
+                          '${p.gstPercent.toStringAsFixed(0)}% GST (${rupees(salePrice * p.gstPercent / 100)} input credit)',
                           style: const TextStyle(
                             fontSize: 10,
                             fontWeight: FontWeight.w700,

@@ -5,6 +5,7 @@ import '../app_state.dart';
 import '../data/medicine_repository.dart';
 import '../models/cart_model.dart';
 import '../theme.dart';
+import '../url_sync.dart';
 import '../user_state.dart';
 import '../util.dart';
 import '../widgets/animations.dart';
@@ -46,6 +47,80 @@ class _HomeShellState extends State<HomeShell> {
 
   // Desktop sidebar: populated once storefront loads its CatalogMeta
   CatalogMeta? _desktopMeta;
+
+  @override
+  void initState() {
+    super.initState();
+    _initFromUrl();
+    listenPopState(_applyPath);
+  }
+
+  // ── URL helpers ─────────────────────────────────────────────────────────────
+
+  static String _catToSlug(String cat) => cat.toLowerCase().replaceAll(' ', '-');
+  static String _slugToCat(String slug) => slug.toUpperCase().replaceAll('-', ' ');
+
+  String _urlForState() {
+    if (_index == 1) return '/orders';
+    if (_index == 2) return '/bulk-upload';
+    if (_category != 'All') return '/c/${_catToSlug(_category)}';
+    return '/';
+  }
+
+  // Read the URL on first load and set initial shell state.
+  void _initFromUrl() {
+    final query = currentSearch();
+    if (query.contains('code=')) {
+      // OAuth callback — strip the code once Supabase has processed it.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) replaceUrl('/');
+      });
+      return;
+    }
+    final path = currentPath();
+    if (path.startsWith('/c/')) {
+      _category = _slugToCat(path.substring(3));
+    } else if (path == '/orders') {
+      _index = 1;
+    } else if (path == '/bulk-upload') {
+      _index = 2;
+    }
+  }
+
+  // Respond to browser back / forward navigation.
+  void _applyPath(String path) {
+    if (!mounted) return;
+    setState(() {
+      if (path.startsWith('/c/')) {
+        _category = _slugToCat(path.substring(3));
+        _index = 0;
+        _cartOpen = false;
+        _scrollToTopTrigger++;
+      } else if (path == '/orders') {
+        _index = 1;
+        _cartOpen = false;
+      } else if (path == '/bulk-upload') {
+        _index = 2;
+        _cartOpen = false;
+      } else {
+        _category = 'All';
+        _index = 0;
+        _cartOpen = false;
+        _scrollToTopTrigger++;
+      }
+    });
+  }
+
+  // Change tab and push the matching URL to browser history.
+  void _setIndex(int i) {
+    setState(() {
+      _index = i;
+      _cartOpen = false;
+    });
+    pushUrl(_urlForState());
+  }
+
+  // ────────────────────────────────────────────────────────────────────────────
 
   @override
   void didChangeDependencies() {
@@ -91,13 +166,17 @@ class _HomeShellState extends State<HomeShell> {
     super.dispose();
   }
 
-  void _selectCategory(String c) => setState(() {
-        _category = c;
-        _query = '';
-        _searchCtrl.clear();
-        _index = 0;
-        _cartOpen = false;
-      });
+  void _selectCategory(String c) {
+    setState(() {
+      _category = c;
+      _query = '';
+      _searchCtrl.clear();
+      _index = 0;
+      _cartOpen = false;
+      _scrollToTopTrigger++; // scroll to top of product list on every category change
+    });
+    pushUrl(c == 'All' ? '/' : '/c/${_catToSlug(c)}');
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -128,14 +207,8 @@ class _HomeShellState extends State<HomeShell> {
             showCategoryTiles: false,
             onMetaLoaded: _onMetaLoaded,
             onFooterSearch: () => setState(() => _scrollToTopTrigger++),
-            onFooterBulkUpload: () => setState(() {
-              _index = 2;
-              _cartOpen = false;
-            }),
-            onFooterOrders: () => setState(() {
-              _index = 1;
-              _cartOpen = false;
-            }),
+            onFooterBulkUpload: () => _setIndex(2),
+            onFooterOrders: () => _setIndex(1),
             onFooterCart: () => setState(() => _cartOpen = true),
           ),
           const OrdersScreen(),
@@ -159,20 +232,17 @@ class _HomeShellState extends State<HomeShell> {
         index: _index,
         cartOpen: _cartOpen,
         onCartTap: () => setState(() => _cartOpen = true),
-        onNavTap: (i) => setState(() {
+        onNavTap: (i) {
           switch (i) {
             case 0:
             case 1:
-              _index = 0;
-              _cartOpen = false;
+              _setIndex(0);
             case 2:
-              _index = 1;
-              _cartOpen = false;
+              _setIndex(1);
             case 3:
-              _index = 2;
-              _cartOpen = false;
+              _setIndex(2);
           }
-        }),
+        },
       ),
       body: Stack(
         children: [
@@ -200,14 +270,7 @@ class _HomeShellState extends State<HomeShell> {
               _MobileCategoryChips(
                 meta: _desktopMeta,
                 selected: _category,
-                onCategoryTap: (key) => setState(() {
-                  _category = key;
-                  _query = '';
-                  _searchCtrl.clear();
-                  _index = 0;
-                  _cartOpen = false;
-                  _scrollTrigger++;
-                }),
+                onCategoryTap: (key) => _selectCategory(key),
               ),
               Expanded(
                 child: IndexedStack(
@@ -221,10 +284,7 @@ class _HomeShellState extends State<HomeShell> {
             child: CartPanel(
               open: _cartOpen,
               onClose: () => setState(() => _cartOpen = false),
-              onOrderPlaced: () => setState(() {
-                _cartOpen = false;
-                _index = 1;
-              }),
+              onOrderPlaced: () => _setIndex(1),
             ),
           ),
         ],
@@ -256,18 +316,9 @@ class _HomeShellState extends State<HomeShell> {
                   }
                 }),
                 onScrollToResults: () => setState(() => _scrollTrigger++),
-                onHome: () => setState(() {
-                  _index = 0;
-                  _cartOpen = false;
-                }),
-                onBulk: () => setState(() {
-                  _index = 2;
-                  _cartOpen = false;
-                }),
-                onOrders: () => setState(() {
-                  _index = 1;
-                  _cartOpen = false;
-                }),
+                onHome: () => _setIndex(0),
+                onBulk: () => _setIndex(2),
+                onOrders: () => _setIndex(1),
                 onCart: () => setState(() => _cartOpen = true),
                 index: _index,
                 cartOpen: _cartOpen,
@@ -339,10 +390,7 @@ class _HomeShellState extends State<HomeShell> {
             child: CartPanel(
               open: _cartOpen,
               onClose: () => setState(() => _cartOpen = false),
-              onOrderPlaced: () => setState(() {
-                _cartOpen = false;
-                _index = 1;
-              }),
+              onOrderPlaced: () => _setIndex(1),
             ),
           ),
         ],

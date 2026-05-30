@@ -1421,7 +1421,7 @@ class _Footer extends StatelessWidget {
                         return Row(
                           children: [
                             Text(
-                              '© 2026 Jai Mahakal Medical And Surgical | GSTIN: 22BXXPJ8518F1Z4 | All rights reserved',
+                              '© 2026 mediBO | All rights reserved',
                               style: TextStyle(
                                   color: Colors.white.withValues(alpha: 0.6),
                                   fontSize: 12),
@@ -1439,19 +1439,11 @@ class _Footer extends StatelessWidget {
                       return Column(
                         children: [
                           Text(
-                            '© 2026 Jai Mahakal Medical And Surgical',
+                            '© 2026 mediBO | All rights reserved',
                             textAlign: TextAlign.center,
                             style: TextStyle(
                                 color: Colors.white.withValues(alpha: 0.6),
                                 fontSize: 12),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            'GSTIN: 22BXXPJ8518F1Z4',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                                color: Colors.white.withValues(alpha: 0.5),
-                                fontSize: 11),
                           ),
                           const SizedBox(height: 4),
                           Text(

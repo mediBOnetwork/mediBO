@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_web_plugins/url_strategy.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'app_state.dart';
@@ -16,6 +17,7 @@ import 'widgets/animations.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  usePathUrlStrategy(); // clean URLs — no # in the address bar
   await Supabase.initialize(
     url: SupabaseConfig.url,
     anonKey: SupabaseConfig.anonKey,
@@ -53,6 +55,11 @@ class _PharmaB2BAppState extends State<PharmaB2BApp> {
           theme: buildTheme(),
           scrollBehavior: const SmoothScrollBehavior(),
           home: _AppRoot(auth: _auth),
+          // Unknown paths (e.g. /c/cardiac) fall through to home shell,
+          // which reads the URL in initState and sets the correct category.
+          onUnknownRoute: (_) => MaterialPageRoute(
+            builder: (_) => _AppRoot(auth: _auth),
+          ),
           routes: {
             '/login':        (_) => const LoginScreen(),
             '/register':     (_) => const LoginScreen(),

@@ -117,7 +117,6 @@ class _PriceRow extends StatelessWidget {
     final cart = AppState.of(context);
     final discPct = cartDiscountPercent(cart.mrpTotal);
     final salePrice = product.mrp * (1 - discPct / 100);
-    final gstAmt = salePrice * product.gstPercent / 100;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -149,25 +148,6 @@ class _PriceRow extends StatelessWidget {
             ],
           ],
         ),
-        if (product.gstPercent > 0) ...[
-          const SizedBox(height: 3),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-            decoration: BoxDecoration(
-              color: const Color(0xFFFEF9C3),
-              borderRadius: BorderRadius.circular(4),
-              border: Border.all(color: const Color(0xFFFDE047)),
-            ),
-            child: Text(
-              '${product.gstPercent.toStringAsFixed(0)}% GST (${rupees(gstAmt)} input credit)',
-              style: const TextStyle(
-                fontSize: 10,
-                fontWeight: FontWeight.w700,
-                color: Color(0xFF854D0E),
-              ),
-            ),
-          ),
-        ],
       ],
     );
   }

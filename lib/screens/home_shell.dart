@@ -258,9 +258,14 @@ class _HomeShellState extends State<HomeShell> {
               left: 16,
               right: 16,
               bottom: 16,
-              child: RepaintBoundary(
-                child: _StickyCartBar(
-                  onTap: () => setState(() => _cartOpen = true),
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 320),
+                  child: RepaintBoundary(
+                    child: _StickyCartBar(
+                      onTap: () => setState(() => _cartOpen = true),
+                    ),
+                  ),
                 ),
               ),
             ),
@@ -1839,7 +1844,6 @@ class _StickyCartBar extends StatefulWidget {
 class _StickyCartBarState extends State<_StickyCartBar>
     with TickerProviderStateMixin {
   static const _tierFreeDelivery = 999.0;
-  static const _bg = Color(0xFF16A34A);
   static const _tier3pct = 2999.0;
   static const _tier5pct = 6999.0;
   static const _tier6pct = 8999.0;
@@ -1961,7 +1965,11 @@ class _StickyCartBarState extends State<_StickyCartBar>
         child: Container(
           height: 64,
           decoration: BoxDecoration(
-            color: _bg,
+            gradient: const LinearGradient(
+              colors: [Color(0xFF4ADE80), Color(0xFF15803D)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
             borderRadius: BorderRadius.circular(16),
             boxShadow: [
               BoxShadow(
@@ -2144,8 +2152,6 @@ class _WebDiscountBar extends StatefulWidget {
 class _WebDiscountBarState extends State<_WebDiscountBar>
     with SingleTickerProviderStateMixin {
   static const _tierFreeDelivery = 999.0;
-
-  static const _bg = Color(0xFF16A34A);
   static const _tier3pct = 2999.0;
   static const _tier5pct = 6999.0;
   static const _tier6pct = 8999.0;
@@ -2253,7 +2259,11 @@ class _WebDiscountBarState extends State<_WebDiscountBar>
           curve: Curves.easeInOut,
           height: 64,
           decoration: BoxDecoration(
-            color: _bg,
+            gradient: const LinearGradient(
+              colors: [Color(0xFF4ADE80), Color(0xFF15803D)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
             borderRadius: BorderRadius.circular(14),
             boxShadow: [
               BoxShadow(

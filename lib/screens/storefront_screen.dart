@@ -176,7 +176,6 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
         _loadingFirst = false;
         _reachedEnd = page.length < MedicineRepository.pageSize;
       });
-      _maybeAutoFill();
       // After results arrive for a real search query, scroll to the grid.
       if (widget.query.trim().length >= 2) {
         WidgetsBinding.instance
@@ -219,7 +218,6 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
         _loadingMore = false;
         _reachedEnd = page.length < MedicineRepository.pageSize;
       });
-      _maybeAutoFill();
     } catch (e) {
       if (token != _loadToken || !mounted) return;
       setState(() => _loadingMore = false);
@@ -227,25 +225,11 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
   }
 
   void _onScroll() {
-    if (!_scroll.hasClients) return;
-    final pos = _scroll.position;
-    if (pos.pixels >= pos.maxScrollExtent - pos.viewportDimension * 0.7) _loadMore();
+    // Scroll listener kept for _scrollToProducts / _scrollToTop only;
+    // products are now loaded exclusively via the Load More button.
   }
 
-  /// If the freshly loaded content barely fills the viewport, pull another
-  /// page so there's always something to scroll into.
-  void _maybeAutoFill() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !_scroll.hasClients) return;
-      final pos = _scroll.position;
-      if (!_reachedEnd &&
-          !_loadingMore &&
-          !_loadingFirst &&
-          pos.maxScrollExtent <= pos.viewportDimension * 0.6) {
-        _loadMore();
-      }
-    });
-  }
+  // _maybeAutoFill removed — loading is now manual (Load More button only).
 
   Future<void> _onLoadMorePressed() async {
     if (_captchaLoading || _addingItems) return;
@@ -317,6 +301,15 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
     });
     js.context.callMethod('showRecaptcha', [jsCallback]);
     return completer.future;
+  }
+
+  // Unified Load More: non-captcha for first 100, captcha-gated beyond that.
+  void _handleLoadMore() {
+    if (_paginationPage == 1 && _items.length >= 100 && !_reachedEnd) {
+      _onLoadMorePressed();
+    } else {
+      _loadMore();
+    }
   }
 
   void _scrollToProducts() {
@@ -393,7 +386,7 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
                 onSuggestionTap: widget.onSuggestionTap,
                 paginationPage: _paginationPage,
                 captchaLoading: _captchaLoading,
-                onLoadMore: _onLoadMorePressed,
+                onLoadMore: _handleLoadMore,
                 addingItems: _addingItems,
                 animatedFrom: _animatedFrom,
               ),
@@ -1042,72 +1035,76 @@ class _ProductsSection extends StatelessWidget {
   }
 
   Widget _buildPaginationFooter() {
+    if (loadingFirst || items.isEmpty) return const SizedBox(height: 4);
+
+    final isSearch = query.trim().isNotEmpty;
+
+    // Show a spinner-inside-button while any loading is in progress.
     if (captchaLoading || loadingMore || addingItems) {
-      return const Padding(
-        padding: EdgeInsets.symmetric(vertical: 12),
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 20),
         child: Center(
-          child: SizedBox(
-            width: 26,
-            height: 26,
-            child: CircularProgressIndicator(strokeWidth: 2.6, color: Brand.green),
+          child: FilledButton(
+            onPressed: null,
+            style: FilledButton.styleFrom(
+              backgroundColor: Brand.green.withValues(alpha: 0.55),
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 14),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10)),
+            ),
+            child: const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(
+                  strokeWidth: 2.2, color: Colors.white),
+            ),
           ),
         ),
       );
     }
-    final isSearch = query.trim().isNotEmpty;
-    if (paginationPage == 2 && (reachedEnd || items.length >= 200)) {
-      final msg = isSearch
-          ? '🔍 Too many results? Try a more specific search term'
-          : '🔍 Use Search Feature For More Products';
+
+    // Hard cap at 200 items or reached end of catalogue.
+    if (reachedEnd || items.length >= 200) {
+      final msg = items.length >= 200
+          ? (isSearch
+              ? '🔍 Try a more specific search for more results'
+              : '🔍 Use Search for more products')
+          : (isSearch
+              ? 'All results shown for "${query.trim()}"'
+              : "You've reached the end of this category");
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 12),
         child: Center(
-          child: Text(
-            msg,
-            style: const TextStyle(
-              color: Colors.grey,
-              fontSize: 13,
-              fontStyle: FontStyle.italic,
-            ),
-          ),
+          child: Text(msg,
+              style: const TextStyle(
+                  color: Brand.inkMuted,
+                  fontSize: 12,
+                  fontStyle: FontStyle.italic)),
         ),
       );
     }
-    if (paginationPage == 1 && items.length >= 100 && !reachedEnd) {
-      final label = isSearch ? 'Load More Results' : 'Load More Products';
-      return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 16),
-        child: Center(
-          child: OutlinedButton(
-            onPressed: onLoadMore,
-            style: OutlinedButton.styleFrom(
-              foregroundColor: Brand.green,
-              side: const BorderSide(color: Brand.green),
-              padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 14),
-            ),
-            child: Text(
-              label,
-              style: const TextStyle(fontWeight: FontWeight.w600),
-            ),
+
+    // More products available — show Load More button.
+    final label = isSearch ? 'Load More Results' : 'Load More Products';
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 20),
+      child: Center(
+        child: FilledButton(
+          onPressed: onLoadMore,
+          style: FilledButton.styleFrom(
+            backgroundColor: Brand.green,
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 14),
+            textStyle:
+                const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10)),
           ),
+          child: Text(label),
         ),
-      );
-    }
-    if (reachedEnd && items.length > MedicineRepository.pageSize) {
-      final msg = isSearch
-          ? 'All results shown for "${query.trim()}"'
-          : "You've reached the end of this category";
-      return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        child: Center(
-          child: Text(
-            msg,
-            style: const TextStyle(color: Brand.inkMuted, fontSize: 12),
-          ),
-        ),
-      );
-    }
-    return const SizedBox(height: 4);
+      ),
+    );
   }
 
   Widget _gridBody() {

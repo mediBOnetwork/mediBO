@@ -496,8 +496,14 @@ class _DotNav extends StatelessWidget {
   final int count;
   final int current;
   final ValueChanged<int> onSelect;
-  const _DotNav(
-      {required this.count, required this.current, required this.onSelect});
+  // true when shown on a dark backdrop (zoom dialog) — uses white dots
+  final bool darkBackground;
+  const _DotNav({
+    required this.count,
+    required this.current,
+    required this.onSelect,
+    this.darkBackground = false,
+  });
 
   // Graduated size: active=6, distance-1=4, distance≥2=3
   static double _size(int dist) {
@@ -506,8 +512,13 @@ class _DotNav extends StatelessWidget {
     return 3.0;
   }
 
-  // Graduated colour: active=near-black, d1=mid-grey, d≥2=light-grey
-  static Color _color(int dist) {
+  // Graduated colour: white variants on dark, grey variants on light
+  Color _color(int dist) {
+    if (darkBackground) {
+      if (dist == 0) return Colors.white;
+      if (dist == 1) return Colors.white.withValues(alpha: 0.5);
+      return Colors.white.withValues(alpha: 0.25);
+    }
     if (dist == 0) return const Color(0xFF1F2937);
     if (dist == 1) return const Color(0xFF6B7280);
     return const Color(0xFFD1D5DB);
@@ -594,81 +605,90 @@ class _ZoomDialogState extends State<_ZoomDialog> {
     final images = widget.images;
     final count = images.length;
     final multi = count > 1;
+    final size = MediaQuery.sizeOf(context);
+    // Constrain image width so left/right backdrop strips remain tappable.
+    final imgWidth = size.width * 0.95;
+    final imgHeight = size.height * 0.78;
 
     return Dialog(
       backgroundColor: Colors.transparent,
       insetPadding: EdgeInsets.zero,
       child: SizedBox.expand(
-        child: GestureDetector(
-          // opaque so taps on the dark background always register
-          behavior: HitTestBehavior.opaque,
-          onTap: () => Navigator.of(context).pop(),
-          child: Stack(
-            children: [
-              // ── Full-screen image (or carousel) ──────────────────────
-              Center(
-                child: GestureDetector(
-                  onTap: () {},
-                  child: multi
-                      ? Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            SizedBox(
-                              height:
-                                  MediaQuery.sizeOf(context).height * 0.78,
-                              child: PageView.builder(
-                                controller: _ctrl,
-                                itemCount: count * 1000,
-                                onPageChanged: (p) =>
-                                    setState(() => _page = p % count),
-                                itemBuilder: (_, i) => InteractiveViewer(
-                                  minScale: 0.8,
-                                  maxScale: 4.0,
-                                  child: Image.network(
-                                    images[i % count],
-                                    fit: BoxFit.contain,
-                                  ),
+        child: Stack(
+          children: [
+            // ── Backdrop: full screen — tapping ANY part closes dialog ──
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => Navigator.of(context).pop(),
+              ),
+            ),
+            // ── Image content: absorbs taps within its constrained bounds ─
+            Center(
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () {},
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    SizedBox(
+                      width: imgWidth,
+                      height: imgHeight,
+                      child: multi
+                          ? PageView.builder(
+                              controller: _ctrl,
+                              itemCount: count * 1000,
+                              onPageChanged: (p) =>
+                                  setState(() => _page = p % count),
+                              itemBuilder: (_, i) => InteractiveViewer(
+                                minScale: 0.8,
+                                maxScale: 4.0,
+                                child: Image.network(
+                                  images[i % count],
+                                  fit: BoxFit.contain,
                                 ),
                               ),
+                            )
+                          : InteractiveViewer(
+                              minScale: 0.8,
+                              maxScale: 4.0,
+                              child: Image.network(
+                                images[0],
+                                fit: BoxFit.contain,
+                              ),
                             ),
-                            const SizedBox(height: 12),
-                            _DotNav(
-                              count: count,
-                              current: _page,
-                              onSelect: _goTo,
-                            ),
-                          ],
-                        )
-                      : InteractiveViewer(
-                          minScale: 0.8,
-                          maxScale: 4.0,
-                          child: Image.network(
-                            images[0],
-                            fit: BoxFit.contain,
-                          ),
-                        ),
-                ),
-              ),
-              // ── Close button ─────────────────────────────────────────
-              Positioned(
-                top: MediaQuery.paddingOf(context).top + 12,
-                right: 16,
-                child: GestureDetector(
-                  onTap: () => Navigator.of(context).pop(),
-                  child: Container(
-                    width: 40,
-                    height: 40,
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.55),
-                      shape: BoxShape.circle,
                     ),
-                    child: const Icon(Icons.close,
-                        color: Colors.white, size: 20),
-                  ),
+                    if (multi) ...[
+                      const SizedBox(height: 12),
+                      _DotNav(
+                        count: count,
+                        current: _page,
+                        onSelect: _goTo,
+                        darkBackground: true,
+                      ),
+                    ],
+                  ],
                 ),
               ),
-            ],
-          ),
+            ),
+            // ── Close button ─────────────────────────────────────────────
+            Positioned(
+              top: MediaQuery.paddingOf(context).top + 12,
+              right: 16,
+              child: GestureDetector(
+                onTap: () => Navigator.of(context).pop(),
+                child: Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.55),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.close, color: Colors.white, size: 20),
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -714,6 +734,8 @@ class _CategoryImagePill extends StatelessWidget {
 }
 
 // Scheme badge (top-right of image): solid amber, white bold text.
+// Padding and text style intentionally match _CategoryImagePill so both
+// badges are the same height when they appear on the same row.
 class _SchemePill extends StatelessWidget {
   final String text;
   const _SchemePill({required this.text});
@@ -721,7 +743,7 @@ class _SchemePill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
       decoration: BoxDecoration(
         color: const Color(0xFFFFB800),
         borderRadius: BorderRadius.circular(6),
@@ -733,6 +755,8 @@ class _SchemePill extends StatelessWidget {
           fontWeight: FontWeight.w700,
           color: Colors.white,
           letterSpacing: 0.2,
+          height: 1.0,
+          leadingDistribution: TextLeadingDistribution.even,
         ),
       ),
     );

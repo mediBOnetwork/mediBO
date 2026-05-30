@@ -253,7 +253,7 @@ class _HomeShellState extends State<HomeShell> {
               ),
             ],
           ),
-          if (_index == 0)
+          if (_index == 0 && AppState.of(context).distinctItems > 0)
             Positioned(
               left: 16,
               right: 16,
@@ -347,7 +347,7 @@ class _HomeShellState extends State<HomeShell> {
               ),
             ],
           ),
-          if (_index == 0)
+          if (_index == 0 && AppState.of(context).distinctItems > 0)
             Positioned(
               left: 0,
               right: 0,

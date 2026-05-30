@@ -1302,12 +1302,11 @@ class _GstGroup extends StatelessWidget {
             child: Column(
               children: [
                 _calcRow('Net Amount', rupees(netAmount)),
-                if (discPct > 0)
-                  _calcRow(
-                    'Discount (${discPct.toStringAsFixed(0)}%)',
-                    '− ${rupees(discountAmount)}',
-                    valueColor: const Color(0xFF16A34A),
-                  ),
+                _calcRow(
+                  'Discount (${discPct.toStringAsFixed(0)}%)',
+                  '− ${rupees(discountAmount)}',
+                  valueColor: const Color(0xFF16A34A),
+                ),
                 _calcRow('Net Taxable Amount', rupees(netTaxable),
                     bold: true),
                 _calcRow(

@@ -108905,14 +108905,7 @@ s=A.aJ(o,A.ae(h,o,o,o,o,B.a9X,o,o),B.m,o,o,B.JE,o,o,o,o,B.RN,o,o,o)
 r=t.p
 q=A.b([],r)
 for(n=m.gal(n);n.t();)B.b.G(q,A.b([new A.a1N(n.gO(n),o),B.l9],r))
-n=A.b2(q,B.r,B.j,B.n)
-m=A.b([p.akz("Net Amount",A.f1(l))],r)
-if(k>0)m.push(p.WA("Discount ("+B.d.an(k,0)+"%)","\u2212 "+A.f1(j),B.H))
-m.push(p.akA("Net Taxable Amount",A.f1(i),!0))
-m.push(p.WA(h,"+ "+A.f1(g),B.mQ))
-m.push(B.Qu)
-m.push(p.akB("Final Payable Amount",A.f1(i+g),!0,!0))
-return A.aJ(o,A.b2(A.b([s,new A.aR(B.RD,n,o),B.a2y,new A.aR(B.RC,A.b2(m,B.r,B.j,B.n),o)],r),B.ak,B.j,B.n),B.m,o,o,new A.aT(o,o,f,e,o,o,B.t),o,o,o,o,o,o,o,o)},
+return A.aJ(o,A.b2(A.b([s,new A.aR(B.RD,A.b2(q,B.r,B.j,B.n),o),B.a2y,new A.aR(B.RC,A.b2(A.b([p.akz("Net Amount",A.f1(l)),p.WA("Discount ("+B.d.an(k,0)+"%)","\u2212 "+A.f1(j),B.H),p.akA("Net Taxable Amount",A.f1(i),!0),p.WA(h,"+ "+A.f1(g),B.mQ),B.Qu,p.akB("Final Payable Amount",A.f1(i+g),!0,!0)],r),B.r,B.j,B.n),o)],r),B.ak,B.j,B.n),B.m,o,o,new A.aT(o,o,f,e,o,o,B.t),o,o,o,o,o,o,o,o)},
 Cl(a,b,c,d,e){var s,r=null,q=d?14:12,p=A.cY(r,r,B.b8,r,r,r,r,r,r,r,r,q,r,r,c?B.U:B.w,r,r,!0,r,r,r,r,r,r,r,r)
 q=A.ae(a,r,r,r,r,p,r,r)
 if(e==null)s=c?B.b1:B.b8

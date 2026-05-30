@@ -37,14 +37,6 @@ class _HomeShellState extends State<HomeShell> {
   int _scrollToTopTrigger = 0;
   bool _searchLoading = false;
 
-  // Cart milestone celebrations
-  CartModel? _cartModel;
-  double _prevSubtotal = 0;
-  bool _celebrateDelivery = false;
-  bool _celebrate3pct = false;
-  Timer? _deliveryTimer;
-  Timer? _discountTimer;
-
   // Desktop sidebar: populated once storefront loads its CatalogMeta
   CatalogMeta? _desktopMeta;
 
@@ -120,39 +112,6 @@ class _HomeShellState extends State<HomeShell> {
     pushUrl(_urlForState());
   }
 
-  // ────────────────────────────────────────────────────────────────────────────
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    final cart = AppState.of(context);
-    if (_cartModel != cart) {
-      _cartModel?.removeListener(_onCartChanged);
-      _cartModel = cart;
-      cart.addListener(_onCartChanged);
-    }
-  }
-
-  void _onCartChanged() {
-    if (!mounted) return;
-    final sub = _cartModel!.mrpTotal;
-    if (_prevSubtotal < 999 && sub >= 999) {
-      setState(() => _celebrateDelivery = true);
-      _deliveryTimer?.cancel();
-      _deliveryTimer = Timer(const Duration(seconds: 10), () {
-        if (mounted) setState(() => _celebrateDelivery = false);
-      });
-    }
-    if (_prevSubtotal < 2999 && sub >= 2999) {
-      setState(() => _celebrate3pct = true);
-      _discountTimer?.cancel();
-      _discountTimer = Timer(const Duration(seconds: 10), () {
-        if (mounted) setState(() => _celebrate3pct = false);
-      });
-    }
-    _prevSubtotal = sub;
-  }
-
   void _onMetaLoaded(CatalogMeta meta) {
     if (mounted) setState(() => _desktopMeta = meta);
   }
@@ -160,9 +119,6 @@ class _HomeShellState extends State<HomeShell> {
   @override
   void dispose() {
     _searchCtrl.dispose();
-    _cartModel?.removeListener(_onCartChanged);
-    _deliveryTimer?.cancel();
-    _discountTimer?.cancel();
     super.dispose();
   }
 
@@ -227,8 +183,6 @@ class _HomeShellState extends State<HomeShell> {
     return Scaffold(
       backgroundColor: Colors.white,
       bottomNavigationBar: _MobileBottomBar(
-        celebrateDelivery: _celebrateDelivery,
-        celebrate3pct: _celebrate3pct,
         index: _index,
         cartOpen: _cartOpen,
         onCartTap: () => setState(() => _cartOpen = true),
@@ -322,48 +276,6 @@ class _HomeShellState extends State<HomeShell> {
                 onCart: () => setState(() => _cartOpen = true),
                 index: _index,
                 cartOpen: _cartOpen,
-              ),
-              AnimatedSwitcher(
-                duration: const Duration(milliseconds: 550),
-                reverseDuration: const Duration(milliseconds: 300),
-                transitionBuilder: (child, anim) => SizeTransition(
-                  sizeFactor: CurvedAnimation(
-                    parent: anim,
-                    curve: Curves.easeOutBack,
-                    reverseCurve: Curves.easeIn,
-                  ),
-                  axisAlignment: -1.0,
-                  child: child,
-                ),
-                child: _celebrateDelivery
-                    ? _CelebrationBanner(
-                        key: const ValueKey('delivery'),
-                        message: '🎉 Awesome! You unlocked FREE delivery!',
-                        bgColor: const Color(0xFF15803D),
-                        textColor: Colors.white,
-                      )
-                    : const SizedBox.shrink(key: ValueKey('delivery-empty')),
-              ),
-              AnimatedSwitcher(
-                duration: const Duration(milliseconds: 550),
-                reverseDuration: const Duration(milliseconds: 300),
-                transitionBuilder: (child, anim) => SizeTransition(
-                  sizeFactor: CurvedAnimation(
-                    parent: anim,
-                    curve: Curves.easeOutBack,
-                    reverseCurve: Curves.easeIn,
-                  ),
-                  axisAlignment: -1.0,
-                  child: child,
-                ),
-                child: _celebrate3pct
-                    ? _CelebrationBanner(
-                        key: const ValueKey('3pct'),
-                        message: '🎉 Congratulations! You unlocked 3% discount!',
-                        bgColor: const Color(0xFFF59E0B),
-                        textColor: const Color(0xFF1C1917),
-                      )
-                    : const SizedBox.shrink(key: ValueKey('3pct-empty')),
               ),
               Expanded(
                 child: Row(
@@ -879,38 +791,6 @@ class _MobileCategoryChips extends StatelessWidget {
   }
 }
 
-// ─────────────────────── Celebration banner ───────────────────────
-
-class _CelebrationBanner extends StatelessWidget {
-  final String message;
-  final Color bgColor;
-  final Color textColor;
-  const _CelebrationBanner({
-    super.key,
-    required this.message,
-    required this.bgColor,
-    required this.textColor,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      color: bgColor,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      child: Text(
-        message,
-        textAlign: TextAlign.center,
-        style: TextStyle(
-          color: textColor,
-          fontSize: 13,
-          fontWeight: FontWeight.w700,
-        ),
-      ),
-    );
-  }
-}
-
 // ─────────────────────── Cart panel ───────────────────────
 
 class CartPanel extends StatefulWidget {
@@ -1072,20 +952,13 @@ class _CartPanelContent extends StatelessWidget {
 
 // ─────────────────────── Mobile bottom bar ───────────────────────
 
-/// Houses the celebration banners, sticky cart bar, and bottom nav.
-/// Reads cart from context so HomeShell.build() is not triggered on every
-/// cart change — only milestone banners and nav state changes rebuild the shell.
 class _MobileBottomBar extends StatelessWidget {
-  final bool celebrateDelivery;
-  final bool celebrate3pct;
   final int index;
   final bool cartOpen;
   final VoidCallback onCartTap;
   final ValueChanged<int> onNavTap;
 
   const _MobileBottomBar({
-    required this.celebrateDelivery,
-    required this.celebrate3pct,
     required this.index,
     required this.cartOpen,
     required this.onCartTap,
@@ -1099,48 +972,6 @@ class _MobileBottomBar extends StatelessWidget {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        AnimatedSwitcher(
-          duration: const Duration(milliseconds: 550),
-          reverseDuration: const Duration(milliseconds: 300),
-          transitionBuilder: (child, anim) => SizeTransition(
-            sizeFactor: CurvedAnimation(
-              parent: anim,
-              curve: Curves.easeOutBack,
-              reverseCurve: Curves.easeIn,
-            ),
-            axisAlignment: 1.0,
-            child: child,
-          ),
-          child: celebrateDelivery
-              ? _CelebrationBanner(
-                  key: const ValueKey('delivery'),
-                  message: '🎉 Awesome! You unlocked FREE delivery!',
-                  bgColor: const Color(0xFF15803D),
-                  textColor: Colors.white,
-                )
-              : const SizedBox.shrink(key: ValueKey('delivery-empty')),
-        ),
-        AnimatedSwitcher(
-          duration: const Duration(milliseconds: 550),
-          reverseDuration: const Duration(milliseconds: 300),
-          transitionBuilder: (child, anim) => SizeTransition(
-            sizeFactor: CurvedAnimation(
-              parent: anim,
-              curve: Curves.easeOutBack,
-              reverseCurve: Curves.easeIn,
-            ),
-            axisAlignment: 1.0,
-            child: child,
-          ),
-          child: celebrate3pct
-              ? _CelebrationBanner(
-                  key: const ValueKey('3pct'),
-                  message: '🎉 Congratulations! You unlocked 3% discount!',
-                  bgColor: const Color(0xFFF59E0B),
-                  textColor: const Color(0xFF1C1917),
-                )
-              : const SizedBox.shrink(key: ValueKey('3pct-empty')),
-        ),
         if (cart.distinctItems > 0)
           RepaintBoundary(
             child: _StickyCartBar(onTap: onCartTap),
@@ -1209,7 +1040,6 @@ class _StickyCartBarState extends State<_StickyCartBar>
   static const _navy = Color(0xFF1B2B8C);
   static const _blue = Color(0xFF2563EB);
   static const _amber = Color(0xFFFBBF24);
-  static const _freeThreshold = 999.0;
   static const _tier3pct = 2999.0;
   static const _tier5pct = 6999.0;
 
@@ -1291,7 +1121,7 @@ class _StickyCartBarState extends State<_StickyCartBar>
           SizedBox(width: 5),
           Flexible(
             child: Text(
-              'Max discount unlocked!',
+              'You unlocked 5% discount + FREE delivery!',
               style: TextStyle(
                 color: Colors.white,
                 fontSize: 12,
@@ -1307,20 +1137,13 @@ class _StickyCartBarState extends State<_StickyCartBar>
       progress = (total - _tier3pct) / (_tier5pct - _tier3pct);
       barColor = _amber;
       final remaining = (_tier5pct - total).ceil();
-      leftContent = _DiscountText(
-          amount: '₹$remaining', suffix: ' more to get 5% off');
-    } else if (total >= _freeThreshold) {
-      progress = (total - _freeThreshold) / (_tier3pct - _freeThreshold);
-      barColor = _amber;
+      leftContent = _Unlocked3PctText(remaining: remaining);
+    } else {
+      progress = total > 0 ? total / _tier3pct : 0.0;
+      barColor = _blue;
       final remaining = (_tier3pct - total).ceil();
       leftContent = _DiscountText(
           amount: '₹$remaining', suffix: ' more to get 3% off');
-    } else {
-      progress = total > 0 ? total / _freeThreshold : 0.0;
-      barColor = _blue;
-      final remaining = (_freeThreshold - total).ceil();
-      leftContent = _DiscountText(
-          amount: '₹$remaining', suffix: ' more for FREE delivery');
     }
 
     return SlideTransition(
@@ -1412,6 +1235,36 @@ class _DiscountText extends StatelessWidget {
             ),
           ),
           TextSpan(text: suffix),
+        ],
+      ),
+    );
+  }
+}
+
+class _Unlocked3PctText extends StatelessWidget {
+  final int remaining;
+  const _Unlocked3PctText({required this.remaining});
+
+  @override
+  Widget build(BuildContext context) {
+    return RichText(
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      text: TextSpan(
+        style: const TextStyle(
+            fontSize: 12, fontWeight: FontWeight.w500, color: Colors.white),
+        children: [
+          const TextSpan(
+            text: '🎉 3% discount unlocked! Add ',
+          ),
+          TextSpan(
+            text: '₹$remaining',
+            style: const TextStyle(
+              color: Color(0xFFFBBF24),
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const TextSpan(text: ' more to get 5% off'),
         ],
       ),
     );

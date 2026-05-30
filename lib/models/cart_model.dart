@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'product.dart';
+import '../util.dart';
 
 /// A single line in the cart: a product plus the ordered quantity (packs).
 class CartLine {
@@ -27,6 +28,7 @@ class Order {
   final DateTime placedAt;
   final List<CartLine> lines;
   final double grandTotal;
+  final double netPayable;
   String status;
 
   Order({
@@ -34,6 +36,7 @@ class Order {
     required this.placedAt,
     required this.lines,
     required this.grandTotal,
+    required this.netPayable,
     this.status = 'Pending',
   });
 
@@ -280,6 +283,28 @@ class CartModel extends ChangeNotifier {
   double get mrpTotal =>
       _lines.values.fold(0.0, (s, l) => s + l.product.mrp * l.quantity);
 
+  /// GST-categorized net payable amount — the single billing source used by
+  /// both the cart bar and the View Bill.
+  /// Formula per GST group: (MRP × qty) × (1 − discPct/100) × (1 + rate/100)
+  double get netPayable => _computeNetPayable(_lines.values.toList());
+
+  static double _computeNetPayable(List<CartLine> lines) {
+    if (lines.isEmpty) return 0.0;
+    final mrpSum = lines.fold(0.0, (s, l) => s + l.product.mrp * l.quantity);
+    final discPct = cartDiscountPercent(mrpSum);
+    final Map<int, double> groupMrp = {};
+    for (final l in lines) {
+      final rate = l.product.gstPercent.toInt();
+      groupMrp[rate] = (groupMrp[rate] ?? 0) + l.product.mrp * l.quantity;
+    }
+    double total = 0.0;
+    for (final entry in groupMrp.entries) {
+      final taxable = entry.value * (1 - discPct / 100);
+      total += taxable * (1 + entry.key / 100);
+    }
+    return total;
+  }
+
   bool get hasSampleItems => _lines.values.any((l) => l.isSample);
   int get sampleCountdown => _sampleCountdown;
 
@@ -395,11 +420,14 @@ class CartModel extends ChangeNotifier {
     _sampleTimer?.cancel();
     _sampleTimer = null;
     _sampleCountdown = 15;
+    final orderLines =
+        _lines.values.map((l) => CartLine(l.product, l.quantity)).toList();
     final order = Order(
       number: 'PO-${_orderSeq++}',
       placedAt: DateTime.now(),
-      lines: _lines.values.map((l) => CartLine(l.product, l.quantity)).toList(),
+      lines: orderLines,
       grandTotal: grandTotal,
+      netPayable: _computeNetPayable(orderLines),
     );
     _orders.add(order);
     _lines.clear();

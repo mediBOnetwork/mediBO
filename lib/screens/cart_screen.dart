@@ -65,7 +65,7 @@ class _CartScreenState extends State<CartScreen> {
 
     setState(() => _paymentInProgress = true);
     final cart = AppState.of(context);
-    final amount = cart.grandTotal;
+    final amount = cart.netPayable;
     final profile = UserState.read(context).profile;
 
     try {
@@ -95,7 +95,7 @@ class _CartScreenState extends State<CartScreen> {
           builder: (_) => _PaymentSuccessDialog(
             paymentId: result['payment_id'] ?? '',
             orderNumber: order.number,
-            amount: rupees(order.grandTotal),
+            amount: rupees(order.netPayable),
             onDone: () {
               Navigator.of(context).pop();
               widget.onOrderPlaced?.call();
@@ -154,7 +154,7 @@ class _CartScreenState extends State<CartScreen> {
                 'line_total': l.lineTotal,
               })
           .toList(),
-      'total_amount': order.grandTotal,
+      'total_amount': order.netPayable,
       'payment_id': paymentId,
       'status': 'paid',
     }).then((_) {}).catchError((_) {});
@@ -950,8 +950,16 @@ class _CheckoutBar extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
+                const Text(
+                  'Net Payable Amount',
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w500,
+                    color: Color(0xFF6B7280),
+                  ),
+                ),
                 Text(
-                  rupees(cart.grandTotal),
+                  rupees(cart.netPayable),
                   style: const TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.w800,
@@ -1070,7 +1078,8 @@ class _GstBillView extends StatelessWidget {
       final taxable = net - disc;
       finalPayables[rate] = taxable + taxable * rate / 100;
     }
-    final grandTotal = finalPayables.values.fold(0.0, (s, v) => s + v);
+    // Use the shared CartModel getter as the single source of truth
+    final grandTotal = cart.netPayable;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1182,7 +1191,7 @@ class _GstBillView extends StatelessWidget {
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
                           const Text(
-                            'Total Payable Amount',
+                            'Net Payable Amount',
                             style: TextStyle(
                               fontSize: 15,
                               fontWeight: FontWeight.w800,
@@ -1392,6 +1401,7 @@ class _OrderSummaryPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final discPct = cartDiscountPercent(cart.mrpTotal);
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -1420,10 +1430,16 @@ class _OrderSummaryPanel extends StatelessWidget {
           const SizedBox(height: 16),
           _row('Items',
               '${cart.distinctItems} SKU${cart.distinctItems == 1 ? '' : 's'} · ${cart.totalUnits} packs'),
-          _row('Subtotal', rupees(cart.subtotal)),
-          _row('Total GST', rupees(cart.totalGst)),
+          _row('MRP Value', rupees(cart.mrpTotal)),
+          if (discPct > 0)
+            _row(
+              'Discount (${discPct.toStringAsFixed(0)}%)',
+              '− ${rupees(cart.mrpTotal * discPct / 100)}',
+              valueColor: const Color(0xFF16A34A),
+            ),
+          _row('GST (incl.)', rupees(cart.netPayable - cart.mrpTotal * (1 - discPct / 100))),
           const Divider(height: 24),
-          _row('Grand total', rupees(cart.grandTotal), bold: true),
+          _row('Net Payable Amount', rupees(cart.netPayable), bold: true),
           const SizedBox(height: 6),
           GestureDetector(
             onTap: () => _showBillDialog(context),
@@ -1498,7 +1514,8 @@ class _OrderSummaryPanel extends StatelessWidget {
     );
   }
 
-  Widget _row(String label, String value, {bool bold = false}) {
+  Widget _row(String label, String value,
+      {bool bold = false, Color? valueColor}) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(
@@ -1516,9 +1533,10 @@ class _OrderSummaryPanel extends StatelessWidget {
               style: TextStyle(
                 fontSize: bold ? 15 : 13,
                 fontWeight: bold ? FontWeight.w700 : FontWeight.w400,
-                color: bold
-                    ? const Color(0xFF111827)
-                    : const Color(0xFF374151),
+                color: valueColor ??
+                    (bold
+                        ? const Color(0xFF111827)
+                        : const Color(0xFF374151)),
               )),
         ],
       ),

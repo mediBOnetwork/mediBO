@@ -64,7 +64,7 @@ class _OrderCard extends StatelessWidget {
           mainAxisAlignment: MainAxisAlignment.center,
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
-            Text(rupees(order.grandTotal),
+            Text(rupees(order.netPayable),
                 style: const TextStyle(fontWeight: FontWeight.bold)),
             _StatusChip(status: order.status),
           ],

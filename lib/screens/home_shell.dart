@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../app_state.dart';
 import '../data/medicine_repository.dart';
 import '../models/cart_model.dart';
@@ -33,6 +34,7 @@ class _HomeShellState extends State<HomeShell> {
   String _query = '';
   String _category = 'All';
   bool _cartOpen = false;
+  bool _loginOpen = false;
   int _scrollTrigger = 0;
   int _scrollToTopTrigger = 0;
   bool _searchLoading = false;
@@ -280,6 +282,7 @@ class _HomeShellState extends State<HomeShell> {
                 onBulk: () => _setIndex(2),
                 onOrders: () => _setIndex(1),
                 onCart: () => setState(() => _cartOpen = true),
+                onLogin: () => setState(() => _loginOpen = true),
                 index: _index,
                 cartOpen: _cartOpen,
               ),
@@ -325,6 +328,10 @@ class _HomeShellState extends State<HomeShell> {
                 onTap: () => setState(() => _cartOpen = true),
               ),
             ),
+          ),
+          LoginPanel(
+            open: _loginOpen,
+            onClose: () => setState(() => _loginOpen = false),
           ),
           RepaintBoundary(
             child: CartPanel(
@@ -1073,6 +1080,360 @@ class _CartPanelContentState extends State<_CartPanelContent> {
   }
 }
 
+// ─────────────────────── Login panel (web desktop) ───────────────────────
+
+class LoginPanel extends StatefulWidget {
+  final bool open;
+  final VoidCallback onClose;
+  const LoginPanel({super.key, required this.open, required this.onClose});
+
+  @override
+  State<LoginPanel> createState() => _LoginPanelState();
+}
+
+class _LoginPanelState extends State<LoginPanel>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 300),
+    reverseDuration: const Duration(milliseconds: 240),
+    value: widget.open ? 1 : 0,
+  );
+  late final Animation<double> _t = CurvedAnimation(
+    parent: _c,
+    curve: Curves.easeOutCubic,
+    reverseCurve: Curves.easeInCubic,
+  );
+
+  @override
+  void didUpdateWidget(LoginPanel old) {
+    super.didUpdateWidget(old);
+    if (widget.open && !old.open) _c.forward();
+    if (!widget.open && old.open) _c.reverse();
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final screenW = MediaQuery.sizeOf(context).width;
+    final panelW = screenW < 520 ? screenW : 420.0;
+
+    return AnimatedBuilder(
+      animation: _t,
+      builder: (context, _) {
+        final t = _t.value;
+        if (t == 0) return const SizedBox.shrink();
+        return Stack(
+          children: [
+            Positioned.fill(
+              child: GestureDetector(
+                onTap: widget.onClose,
+                child: ColoredBox(
+                  color: Colors.black.withValues(alpha: 0.45 * t),
+                ),
+              ),
+            ),
+            Positioned(
+              top: 0,
+              bottom: 0,
+              right: 0,
+              width: panelW,
+              child: Transform.translate(
+                offset: Offset(panelW * (1 - t), 0),
+                child: Material(
+                  elevation: 16,
+                  color: Colors.white,
+                  child: _LoginPanelContent(onClose: widget.onClose),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _LoginPanelContent extends StatefulWidget {
+  final VoidCallback onClose;
+  const _LoginPanelContent({required this.onClose});
+
+  @override
+  State<_LoginPanelContent> createState() => _LoginPanelContentState();
+}
+
+class _LoginPanelContentState extends State<_LoginPanelContent> {
+  final _emailCtrl = TextEditingController();
+  bool _loading = false;
+  bool _sent = false;
+  String? _error;
+  StreamSubscription<AuthState>? _authSub;
+
+  @override
+  void initState() {
+    super.initState();
+    if (Supabase.instance.client.auth.currentUser != null) {
+      WidgetsBinding.instance
+          .addPostFrameCallback((_) { if (mounted) widget.onClose(); });
+    }
+    _authSub = Supabase.instance.client.auth.onAuthStateChange.listen((s) {
+      if (s.event == AuthChangeEvent.signedIn && mounted) widget.onClose();
+    });
+  }
+
+  @override
+  void dispose() {
+    _emailCtrl.dispose();
+    _authSub?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _sendMagicLink() async {
+    final email = _emailCtrl.text.trim();
+    if (email.isEmpty) {
+      setState(() => _error = 'Please enter your email address.');
+      return;
+    }
+    setState(() { _loading = true; _error = null; });
+    try {
+      await Supabase.instance.client.auth.signInWithOtp(
+        email: email,
+        emailRedirectTo: 'https://medibo.in',
+      );
+      if (mounted) setState(() { _sent = true; _loading = false; });
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _error = 'Could not send link. Please check your email and try again.';
+          _loading = false;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 8, 0),
+          child: Row(
+            children: [
+              const Spacer(),
+              IconButton(
+                icon: const Icon(Icons.close, size: 22),
+                color: const Color(0xFF6B7280),
+                onPressed: widget.onClose,
+                tooltip: 'Close',
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Center(child: _LoginPanelLogo()),
+                const SizedBox(height: 28),
+                const Text(
+                  'Welcome to mediBO',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 26,
+                    fontWeight: FontWeight.w800,
+                    color: Color(0xFF111827),
+                    letterSpacing: -0.5,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                const Text(
+                  'B2B Pharmacy Platform',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 15, color: Color(0xFF6B7280)),
+                ),
+                const SizedBox(height: 40),
+                if (_sent) ...[
+                  Container(
+                    padding: const EdgeInsets.all(20),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF0FDF4),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: const Color(0xFF86EFAC)),
+                    ),
+                    child: Column(
+                      children: [
+                        const Icon(Icons.mark_email_read_outlined,
+                            size: 40, color: Color(0xFF16A34A)),
+                        const SizedBox(height: 12),
+                        const Text(
+                          'Check your email',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w700,
+                            color: Color(0xFF111827),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'We sent a login link to\n${_emailCtrl.text.trim()}',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                              fontSize: 14, color: Color(0xFF6B7280), height: 1.5),
+                        ),
+                        const SizedBox(height: 16),
+                        TextButton(
+                          onPressed: () => setState(() { _sent = false; }),
+                          child: const Text(
+                            'Use a different email',
+                            style: TextStyle(
+                                color: Color(0xFF1B5E20),
+                                fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ] else ...[
+                  TextField(
+                    controller: _emailCtrl,
+                    keyboardType: TextInputType.emailAddress,
+                    autofillHints: const [AutofillHints.email],
+                    textInputAction: TextInputAction.go,
+                    onSubmitted: (_) => _sendMagicLink(),
+                    decoration: InputDecoration(
+                      labelText: 'Email address',
+                      hintText: 'you@example.com',
+                      prefixIcon: const Icon(Icons.email_outlined,
+                          color: Color(0xFF9CA3AF)),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: const BorderSide(color: Color(0xFFE5E7EB)),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: const BorderSide(color: Color(0xFFE5E7EB)),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: const BorderSide(
+                            color: Color(0xFF1B5E20), width: 1.5),
+                      ),
+                      filled: true,
+                      fillColor: const Color(0xFFF9FAFB),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    height: 54,
+                    child: FilledButton(
+                      onPressed: _loading ? null : _sendMagicLink,
+                      style: FilledButton.styleFrom(
+                        backgroundColor: const Color(0xFF1B5E20),
+                        disabledBackgroundColor:
+                            const Color(0xFF1B5E20).withValues(alpha: 0.5),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10)),
+                        textStyle: const TextStyle(
+                            fontSize: 16, fontWeight: FontWeight.w700),
+                      ),
+                      child: _loading
+                          ? const SizedBox(
+                              width: 22,
+                              height: 22,
+                              child: CircularProgressIndicator(
+                                  color: Colors.white, strokeWidth: 2.5),
+                            )
+                          : const Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(Icons.send_outlined, size: 18),
+                                SizedBox(width: 10),
+                                Text('Send Magic Link'),
+                              ],
+                            ),
+                    ),
+                  ),
+                  if (_error != null) ...[
+                    const SizedBox(height: 12),
+                    Text(
+                      _error!,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                          fontSize: 12, color: Color(0xFFDC2626)),
+                    ),
+                  ],
+                ],
+                const SizedBox(height: 40),
+                const Text(
+                  'By continuing you agree to our Terms & Privacy Policy',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                      fontSize: 11, color: Color(0xFF9CA3AF), height: 1.5),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _LoginPanelLogo extends StatelessWidget {
+  const _LoginPanelLogo();
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 48,
+          height: 48,
+          decoration: BoxDecoration(
+            color: const Color(0xFF1B5E20),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: const Icon(Icons.add, color: Colors.white, size: 28),
+        ),
+        const SizedBox(width: 10),
+        RichText(
+          text: const TextSpan(
+            children: [
+              TextSpan(
+                text: 'medi',
+                style: TextStyle(
+                  fontSize: 30,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFF1B5E20),
+                  letterSpacing: -0.3,
+                ),
+              ),
+              TextSpan(
+                text: 'BO',
+                style: TextStyle(
+                  fontSize: 30,
+                  fontWeight: FontWeight.w800,
+                  color: Color(0xFF4CAF50),
+                  letterSpacing: -0.3,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 // ─────────────────────── Mobile bottom bar ───────────────────────
 
 class _MobileBottomBar extends StatelessWidget {
@@ -1663,6 +2024,7 @@ class _DesktopHeader extends StatefulWidget {
   final VoidCallback onBulk;
   final VoidCallback onOrders;
   final VoidCallback onCart;
+  final VoidCallback onLogin;
   final int index;
   final bool cartOpen;
 
@@ -1675,6 +2037,7 @@ class _DesktopHeader extends StatefulWidget {
     required this.onBulk,
     required this.onOrders,
     required this.onCart,
+    required this.onLogin,
     required this.index,
     required this.cartOpen,
     this.scrolled = false,
@@ -1940,7 +2303,7 @@ class _DesktopHeaderState extends State<_DesktopHeader> {
           ),
           const SizedBox(width: 16),
           // 6. Auth button (Login or profile dropdown) — far right
-          _DesktopProfileButton(),
+          _DesktopProfileButton(onLogin: widget.onLogin),
           const SizedBox(width: 24),
         ],
       ),
@@ -1953,6 +2316,9 @@ class _DesktopHeaderState extends State<_DesktopHeader> {
 /// Desktop: solid green "Login" button when logged out;
 /// "Hello [name]" avatar pill with dropdown when logged in.
 class _DesktopProfileButton extends StatelessWidget {
+  final VoidCallback onLogin;
+  const _DesktopProfileButton({required this.onLogin});
+
   @override
   Widget build(BuildContext context) {
     final auth = UserState.of(context);
@@ -1960,10 +2326,7 @@ class _DesktopProfileButton extends StatelessWidget {
     if (!auth.isAuthenticated) {
       return PressEffect(
         child: InkWell(
-          onTap: () => Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => const LoginScreen()),
-          ),
+          onTap: onLogin,
           borderRadius: BorderRadius.circular(8),
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),

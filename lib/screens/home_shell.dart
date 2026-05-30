@@ -1139,6 +1139,8 @@ class _StickyCartBarState extends State<_StickyCartBar>
   static const _amber = Color(0xFFFBBF24);
   static const _tier3pct = 2999.0;
   static const _tier5pct = 6999.0;
+  static const _tier6pct = 8999.0;
+  static const _tier7pct = 18999.0;
 
   late final AnimationController _slideCtrl;
   late final Animation<Offset> _slideAnim;
@@ -1202,13 +1204,13 @@ class _StickyCartBarState extends State<_StickyCartBar>
     final total = cart.mrpTotal;
     final uniqueItems = cart.distinctItems;
 
-    final bool unlocked = total >= _tier5pct;
+    final bool unlocked = total >= _tier7pct;
 
     final double progress;
     final Color barColor;
     final Widget leftContent;
 
-    if (total >= _tier5pct) {
+    if (total >= _tier7pct) {
       progress = 1.0;
       barColor = Colors.white;
       leftContent = const Row(
@@ -1218,7 +1220,7 @@ class _StickyCartBarState extends State<_StickyCartBar>
           SizedBox(width: 5),
           Flexible(
             child: Text(
-              'You unlocked 5% discount + FREE delivery!',
+              '7% discount unlocked! (maximum)',
               style: TextStyle(
                 color: Colors.white,
                 fontSize: 12,
@@ -1230,11 +1232,21 @@ class _StickyCartBarState extends State<_StickyCartBar>
           ),
         ],
       );
+    } else if (total >= _tier6pct) {
+      progress = (total - _tier6pct) / (_tier7pct - _tier6pct);
+      barColor = _amber;
+      final remaining = (_tier7pct - total).ceil();
+      leftContent = _UnlockedTierText(unlockedPct: 6, nextPct: 7, remaining: remaining);
+    } else if (total >= _tier5pct) {
+      progress = (total - _tier5pct) / (_tier6pct - _tier5pct);
+      barColor = _amber;
+      final remaining = (_tier6pct - total).ceil();
+      leftContent = _UnlockedTierText(unlockedPct: 5, nextPct: 6, remaining: remaining);
     } else if (total >= _tier3pct) {
       progress = (total - _tier3pct) / (_tier5pct - _tier3pct);
       barColor = _amber;
       final remaining = (_tier5pct - total).ceil();
-      leftContent = _Unlocked3PctText(remaining: remaining);
+      leftContent = _UnlockedTierText(unlockedPct: 3, nextPct: 5, remaining: remaining);
     } else {
       progress = total > 0 ? total / _tier3pct : 0.0;
       barColor = _blue;
@@ -1338,9 +1350,15 @@ class _DiscountText extends StatelessWidget {
   }
 }
 
-class _Unlocked3PctText extends StatelessWidget {
+class _UnlockedTierText extends StatelessWidget {
+  final int unlockedPct;
+  final int nextPct;
   final int remaining;
-  const _Unlocked3PctText({required this.remaining});
+  const _UnlockedTierText({
+    required this.unlockedPct,
+    required this.nextPct,
+    required this.remaining,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1351,9 +1369,7 @@ class _Unlocked3PctText extends StatelessWidget {
         style: const TextStyle(
             fontSize: 12, fontWeight: FontWeight.w500, color: Colors.white),
         children: [
-          const TextSpan(
-            text: '🎉 3% discount unlocked! Add ',
-          ),
+          TextSpan(text: '🎉 $unlockedPct% discount unlocked! Add '),
           TextSpan(
             text: '₹$remaining',
             style: const TextStyle(
@@ -1361,7 +1377,7 @@ class _Unlocked3PctText extends StatelessWidget {
               fontWeight: FontWeight.w800,
             ),
           ),
-          const TextSpan(text: ' more to get 5% off'),
+          TextSpan(text: ' more to get $nextPct% off'),
         ],
       ),
     );

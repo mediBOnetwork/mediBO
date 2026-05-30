@@ -1193,7 +1193,7 @@ class _ProductsSection extends StatelessWidget {
           addRepaintBoundaries: true,
           gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
             crossAxisCount: count,
-            mainAxisExtent: 375,
+            mainAxisExtent: 355,
             crossAxisSpacing: 14,
             mainAxisSpacing: 14,
           ),
@@ -1673,7 +1673,7 @@ class _SkeletonGrid extends StatelessWidget {
             addRepaintBoundaries: true,
             gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
               crossAxisCount: count,
-              mainAxisExtent: 375,
+              mainAxisExtent: 355,
               crossAxisSpacing: 14,
               mainAxisSpacing: 14,
             ),

@@ -37,6 +37,10 @@ class _HomeShellState extends State<HomeShell> {
   int _scrollToTopTrigger = 0;
   bool _searchLoading = false;
 
+  // Desktop scroll state (progress bar + back-to-top + header shadow)
+  double _desktopScrollProgress = 0;
+  bool _desktopScrolled = false;
+
   // Desktop sidebar: populated once storefront loads its CatalogMeta
   CatalogMeta? _desktopMeta;
 
@@ -260,6 +264,7 @@ class _HomeShellState extends State<HomeShell> {
               _DesktopHeader(
                 searchCtrl: _searchCtrl,
                 isLoading: _searchLoading,
+                scrolled: _desktopScrolled,
                 onSearch: (v) => setState(() {
                   final q = v.trim();
                   _category = 'All';
@@ -280,26 +285,66 @@ class _HomeShellState extends State<HomeShell> {
                 cartOpen: _cartOpen,
               ),
               Expanded(
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (_index == 0)
-                      _DesktopCategorySidebar(
-                        meta: _desktopMeta,
-                        selected: _category,
-                        onCategorySelected: _selectCategory,
+                child: NotificationListener<ScrollNotification>(
+                  onNotification: (n) {
+                    if (_index != 0) return false;
+                    final max = n.metrics.maxScrollExtent;
+                    final offset = n.metrics.pixels;
+                    if (max > 0) {
+                      final newProgress = (offset / max).clamp(0.0, 1.0);
+                      final newScrolled = offset > 400;
+                      if ((newProgress - _desktopScrollProgress).abs() > 0.001 ||
+                          newScrolled != _desktopScrolled) {
+                        setState(() {
+                          _desktopScrollProgress = newProgress;
+                          _desktopScrolled = newScrolled;
+                        });
+                      }
+                    } else if (_desktopScrollProgress != 0 || _desktopScrolled) {
+                      setState(() {
+                        _desktopScrollProgress = 0;
+                        _desktopScrolled = false;
+                      });
+                    }
+                    return false;
+                  },
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (_index == 0)
+                        _DesktopCategorySidebar(
+                          meta: _desktopMeta,
+                          selected: _category,
+                          onCategorySelected: _selectCategory,
+                        ),
+                      Expanded(
+                        child: IndexedStack(
+                          index: _index,
+                          children: pages,
+                        ),
                       ),
-                    Expanded(
-                      child: IndexedStack(
-                        index: _index,
-                        children: pages,
-                      ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ],
           ),
+          // Back-to-top button (desktop only, storefront tab, not when cart is open)
+          if (_index == 0 && !_cartOpen)
+            Positioned(
+              bottom: 28,
+              right: 28,
+              child: AnimatedOpacity(
+                opacity: _desktopScrolled ? 1.0 : 0.0,
+                duration: const Duration(milliseconds: 300),
+                child: IgnorePointer(
+                  ignoring: !_desktopScrolled,
+                  child: _BackToTopButton(
+                    onTap: () => setState(() => _scrollToTopTrigger++),
+                  ),
+                ),
+              ),
+            ),
           RepaintBoundary(
             child: CartPanel(
               open: _cartOpen,
@@ -307,6 +352,18 @@ class _HomeShellState extends State<HomeShell> {
               onOrderPlaced: () => _setIndex(1),
             ),
           ),
+          // Scroll progress bar — always on top, pointer-transparent
+          if (_index == 0)
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              height: 3,
+              child: IgnorePointer(
+                child: _DesktopScrollProgressBar(
+                    progress: _desktopScrollProgress),
+              ),
+            ),
         ],
       ),
     );
@@ -1439,6 +1496,7 @@ class _CartChip extends StatelessWidget {
 class _DesktopHeader extends StatefulWidget {
   final TextEditingController searchCtrl;
   final bool isLoading;
+  final bool scrolled;
   final ValueChanged<String> onSearch;
   final VoidCallback onScrollToResults;
   final VoidCallback onHome;
@@ -1459,6 +1517,7 @@ class _DesktopHeader extends StatefulWidget {
     required this.onCart,
     required this.index,
     required this.cartOpen,
+    this.scrolled = false,
   });
 
   @override
@@ -1516,17 +1575,18 @@ class _DesktopHeaderState extends State<_DesktopHeader> {
     final isBulk = widget.index == 2 && !widget.cartOpen;
     final isOrders = widget.index == 1 && !widget.cartOpen;
 
-    return Container(
+    final shadow = BoxShadow(
+      color: Colors.black.withValues(
+          alpha: widget.scrolled ? 0.11 : 0.04),
+      blurRadius: widget.scrolled ? 14.0 : 4.0,
+      offset: widget.scrolled ? const Offset(0, 4) : const Offset(0, 1),
+    );
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 220),
       height: 76,
       decoration: BoxDecoration(
         color: Colors.white,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.07),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
+        boxShadow: [shadow],
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
@@ -2169,6 +2229,71 @@ class _SidebarCategoryRow extends StatelessWidget {
               ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────── Desktop scroll helpers ───────────────────────
+
+/// Floating back-to-top button (desktop only). Fades in after 400 px scroll.
+class _BackToTopButton extends StatelessWidget {
+  final VoidCallback onTap;
+  const _BackToTopButton({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          width: 46,
+          height: 46,
+          decoration: BoxDecoration(
+            color: Brand.green,
+            shape: BoxShape.circle,
+            boxShadow: [
+              BoxShadow(
+                color: Brand.green.withValues(alpha: 0.38),
+                blurRadius: 14,
+                offset: const Offset(0, 5),
+              ),
+            ],
+          ),
+          child: const Icon(Icons.keyboard_arrow_up_rounded,
+              color: Colors.white, size: 26),
+        ),
+      ),
+    );
+  }
+}
+
+/// Thin horizontal progress bar showing how far down the storefront the
+/// user has scrolled. Rendered at the very top of the desktop Stack.
+class _DesktopScrollProgressBar extends StatelessWidget {
+  final double progress;
+  const _DesktopScrollProgressBar({required this.progress});
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (_, constraints) => Stack(
+        children: [
+          const SizedBox.expand(),
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 80),
+            height: 3,
+            width: constraints.maxWidth * progress.clamp(0.0, 1.0),
+            decoration: const BoxDecoration(
+              color: Brand.green,
+              borderRadius: BorderRadius.only(
+                topRight: Radius.circular(3),
+                bottomRight: Radius.circular(3),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

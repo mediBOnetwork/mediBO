@@ -1,6 +1,11 @@
 import 'dart:async';
 // ignore: avoid_web_libraries_in_flutter, deprecated_member_use
 import 'dart:js' as js;
+// ignore: avoid_web_libraries_in_flutter, deprecated_member_use
+import 'dart:html' as html;
+
+import 'package:flutter/services.dart'
+    show KeyDownEvent, KeyRepeatEvent, LogicalKeyboardKey;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -79,6 +84,10 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
       kIsWeb ? ScrollController() : MomentumScrollController();
   final GlobalKey _productsKey = GlobalKey();
 
+  // Keyboard scroll (desktop web only)
+  final FocusNode _focusNode = FocusNode();
+  static bool _scrollbarCssInjected = false;
+
   // Category metadata (tiles + counts).
   CatalogMeta? _meta;
   Object? _metaError;
@@ -106,6 +115,22 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
     _scroll.addListener(_onScroll);
     _loadMeta();
     _resetAndLoad();
+    _injectScrollbarCss();
+  }
+
+  void _injectScrollbarCss() {
+    if (!kIsWeb || _scrollbarCssInjected) return;
+    _scrollbarCssInjected = true;
+    try {
+      final style = html.StyleElement()
+        ..text = '''
+          ::-webkit-scrollbar { width: 5px; height: 5px; }
+          ::-webkit-scrollbar-track { background: transparent; }
+          ::-webkit-scrollbar-thumb { background: rgba(22,163,74,0.45); border-radius: 8px; }
+          ::-webkit-scrollbar-thumb:hover { background: #16A34A; }
+        ''';
+      html.document.head!.append(style);
+    } catch (_) {}
   }
 
   @override
@@ -128,7 +153,45 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
   void dispose() {
     _scroll.removeListener(_onScroll);
     _scroll.dispose();
+    _focusNode.dispose();
     super.dispose();
+  }
+
+  KeyEventResult _onKeyEvent(FocusNode node, KeyEvent event) {
+    if (!kIsWeb) return KeyEventResult.ignored;
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+      return KeyEventResult.ignored;
+    }
+    if (!_scroll.hasClients) return KeyEventResult.ignored;
+
+    final key = event.logicalKey;
+    final viewportH = _scroll.position.viewportDimension;
+    double? delta;
+
+    if (key == LogicalKeyboardKey.arrowDown) {
+      delta = 80;
+    } else if (key == LogicalKeyboardKey.arrowUp) {
+      delta = -80;
+    } else if (key == LogicalKeyboardKey.pageDown) {
+      delta = viewportH * 0.85;
+    } else if (key == LogicalKeyboardKey.pageUp) {
+      delta = -viewportH * 0.85;
+    } else if (key == LogicalKeyboardKey.space) {
+      delta = viewportH * 0.6;
+    }
+
+    if (delta == null) return KeyEventResult.ignored;
+
+    final target = (_scroll.offset + delta).clamp(
+      _scroll.position.minScrollExtent,
+      _scroll.position.maxScrollExtent,
+    );
+    _scroll.animateTo(
+      target,
+      duration: const Duration(milliseconds: 240),
+      curve: Curves.easeOut,
+    );
+    return KeyEventResult.handled;
   }
 
   Future<void> _loadMeta() async {
@@ -342,7 +405,12 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
+    return MouseRegion(
+      onEnter: (_) { if (kIsWeb) _focusNode.requestFocus(); },
+      child: Focus(
+        focusNode: _focusNode,
+        onKeyEvent: _onKeyEvent,
+        child: SingleChildScrollView(
       controller: _scroll,
       physics: platformScrollPhysics(),
       child: Column(
@@ -402,6 +470,8 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
             onCart: widget.onFooterCart,
           ),
         ],
+      ),
+        ),
       ),
     );
   }

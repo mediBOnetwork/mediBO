@@ -275,6 +275,11 @@ class CartModel extends ChangeNotifier {
   double get totalGst => _cachedTotalGst;
   double get grandTotal => _cachedSubtotal + _cachedTotalGst;
 
+  /// Sum of MRP × qty for all lines. Used as the single source of truth
+  /// for discount tier thresholds (₹2999 = 3%, ₹6999 = 5%).
+  double get mrpTotal =>
+      _lines.values.fold(0.0, (s, l) => s + l.product.mrp * l.quantity);
+
   bool get hasSampleItems => _lines.values.any((l) => l.isSample);
   int get sampleCountdown => _sampleCountdown;
 

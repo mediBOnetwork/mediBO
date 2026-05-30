@@ -135,7 +135,7 @@ class _HomeShellState extends State<HomeShell> {
 
   void _onCartChanged() {
     if (!mounted) return;
-    final sub = _cartModel!.subtotal;
+    final sub = _cartModel!.mrpTotal;
     if (_prevSubtotal < 999 && sub >= 999) {
       setState(() => _celebrateDelivery = true);
       _deliveryTimer?.cancel();
@@ -1272,7 +1272,7 @@ class _StickyCartBarState extends State<_StickyCartBar>
   @override
   Widget build(BuildContext context) {
     final cart = AppState.of(context);
-    final total = cart.subtotal;
+    final total = cart.mrpTotal;
     final uniqueItems = cart.distinctItems;
 
     final bool unlocked = total >= _tier5pct;

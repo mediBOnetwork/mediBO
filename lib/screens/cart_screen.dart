@@ -1049,9 +1049,8 @@ class _GstBillView extends StatelessWidget {
   Widget build(BuildContext context) {
     final lines = cart.lines;
 
-    // Total MRP-based cart value → determines discount tier
-    final totalMrp =
-        lines.fold(0.0, (s, l) => s + l.product.mrp * l.quantity);
+    // MRP total — single source of truth for discount tier (matches cart bar)
+    final totalMrp = cart.mrpTotal;
     final discPct = cartDiscountPercent(totalMrp);
 
     // Group lines by GST rate, ascending

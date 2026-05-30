@@ -316,6 +316,16 @@ class _HomeShellState extends State<HomeShell> {
               ),
             ],
           ),
+          Positioned(
+            left: 16,
+            right: 16,
+            bottom: 16,
+            child: RepaintBoundary(
+              child: _WebDiscountBar(
+                onTap: () => setState(() => _cartOpen = true),
+              ),
+            ),
+          ),
           RepaintBoundary(
             child: CartPanel(
               open: _cartOpen,
@@ -1444,6 +1454,197 @@ class _CartChip extends StatelessWidget {
         const SizedBox(width: 2),
         const Icon(Icons.chevron_right, color: Colors.white, size: 20),
       ],
+    );
+  }
+}
+
+// ─────────────────────── Web discount progress bar ───────────────────────
+
+/// Floating rounded-rectangle version of _StickyCartBar for desktop web.
+/// Fixed at the bottom of the viewport via Positioned in _buildDesktop's Stack.
+/// Slides up when the cart becomes non-empty, slides down when emptied.
+class _WebDiscountBar extends StatefulWidget {
+  final VoidCallback onTap;
+  const _WebDiscountBar({required this.onTap});
+
+  @override
+  State<_WebDiscountBar> createState() => _WebDiscountBarState();
+}
+
+class _WebDiscountBarState extends State<_WebDiscountBar>
+    with SingleTickerProviderStateMixin {
+  static const _navy = Color(0xFF1B2B8C);
+  static const _blue = Color(0xFF2563EB);
+  static const _amber = Color(0xFFFBBF24);
+  static const _tierFreeDelivery = 999.0;
+  static const _tier3pct = 2999.0;
+  static const _tier5pct = 6999.0;
+  static const _tier6pct = 8999.0;
+  static const _tier7pct = 18999.0;
+
+  late final AnimationController _slideCtrl;
+  late final Animation<Offset> _slideAnim;
+  bool _wasVisible = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _slideCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 420),
+    );
+    _slideAnim = Tween<Offset>(
+      begin: const Offset(0, 2.5),
+      end: Offset.zero,
+    ).animate(CurvedAnimation(parent: _slideCtrl, curve: Curves.easeOutCubic));
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final visible = AppState.of(context).distinctItems > 0;
+    if (visible && !_wasVisible) {
+      _slideCtrl.forward(from: 0);
+    } else if (!visible && _wasVisible) {
+      _slideCtrl.reverse();
+    }
+    _wasVisible = visible;
+  }
+
+  @override
+  void dispose() {
+    _slideCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cart = AppState.of(context);
+    final total = cart.mrpTotal;
+    final uniqueItems = cart.distinctItems;
+
+    if (uniqueItems == 0 && !_slideCtrl.isAnimating) {
+      return const SizedBox.shrink();
+    }
+
+    final bool unlocked = total >= _tier7pct;
+    final double progress;
+    final Color barColor;
+    final Widget leftContent;
+
+    if (total >= _tier7pct) {
+      progress = 1.0;
+      barColor = Colors.white;
+      leftContent = const Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text('🎉', style: TextStyle(fontSize: 13)),
+          SizedBox(width: 5),
+          Flexible(
+            child: Text(
+              '7% discount unlocked! (maximum)',
+              style: TextStyle(
+                  color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      );
+    } else if (total >= _tier6pct) {
+      progress = (total - _tier6pct) / (_tier7pct - _tier6pct);
+      barColor = _amber;
+      final remaining = (_tier7pct - total).ceil();
+      leftContent =
+          _UnlockedTierText(unlockedLabel: '6%', nextPct: 7, remaining: remaining);
+    } else if (total >= _tier5pct) {
+      progress = (total - _tier5pct) / (_tier6pct - _tier5pct);
+      barColor = _amber;
+      final remaining = (_tier6pct - total).ceil();
+      leftContent =
+          _UnlockedTierText(unlockedLabel: '5%', nextPct: 6, remaining: remaining);
+    } else if (total >= _tier3pct) {
+      progress = (total - _tier3pct) / (_tier5pct - _tier3pct);
+      barColor = _amber;
+      final remaining = (_tier5pct - total).ceil();
+      leftContent =
+          _UnlockedTierText(unlockedLabel: '3%', nextPct: 5, remaining: remaining);
+    } else if (total >= _tierFreeDelivery) {
+      progress = (total - _tierFreeDelivery) / (_tier3pct - _tierFreeDelivery);
+      barColor = _amber;
+      final remaining = (_tier3pct - total).ceil();
+      leftContent = _UnlockedTierText(
+          unlockedLabel: 'FREE delivery', nextPct: 3, remaining: remaining);
+    } else {
+      progress = total > 0 ? total / _tierFreeDelivery : 0.0;
+      barColor = _blue;
+      final remaining = (_tierFreeDelivery - total).ceil();
+      leftContent =
+          _DiscountText(amount: '₹$remaining', suffix: ' more for FREE delivery');
+    }
+
+    return SlideTransition(
+      position: _slideAnim,
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: Container(
+          height: 64,
+          decoration: BoxDecoration(
+            color: unlocked ? const Color(0xFF15803D) : _navy,
+            borderRadius: BorderRadius.circular(14),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.22),
+                blurRadius: 18,
+                offset: const Offset(0, 6),
+              ),
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 10, 12, 0),
+                  child: Row(
+                    children: [
+                      Expanded(child: leftContent),
+                      _CartChip(uniqueItems: uniqueItems),
+                    ],
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+                child: LayoutBuilder(
+                  builder: (_, constraints) => Stack(
+                    children: [
+                      Container(
+                        height: 4,
+                        width: constraints.maxWidth,
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.20),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                      ),
+                      AnimatedContainer(
+                        duration: const Duration(milliseconds: 500),
+                        curve: Curves.easeOut,
+                        height: 4,
+                        width: constraints.maxWidth * progress.clamp(0.0, 1.0),
+                        decoration: BoxDecoration(
+                          color: barColor,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

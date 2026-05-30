@@ -109,6 +109,7 @@ class Product {
       packSize: (map['pack_qty'] as String?) ?? (map['pack_size'] as String?) ?? '',
       mrp: mrp,
       b2bPrice: b2bPrice,
+      gstPercent: (map['gst_percent'] as num?)?.toDouble() ?? 12.0,
       moq: 1,
       stock: status == 'Available' ? 100 : 0,
       schedule: isPrescription ? 'Schedule H' : 'OTC',
@@ -172,6 +173,7 @@ class Product {
     String manufacturer = '',
     String packSize = '',
     String category = 'Other',
+    double gstPercent = 12.0,
   }) {
     return Product(
       id: id,
@@ -185,6 +187,7 @@ class Product {
       packSize: packSize,
       mrp: mrp,
       b2bPrice: b2bPrice,
+      gstPercent: gstPercent,
       moq: 1,
       stock: 100,
       schedule: 'OTC',

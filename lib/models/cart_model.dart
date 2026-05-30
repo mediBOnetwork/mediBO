@@ -108,6 +108,7 @@ class CartModel extends ChangeNotifier {
           manufacturer: (row['manufacturer'] as String?) ?? '',
           packSize: (row['pack_size'] as String?) ?? '',
           category: (row['category'] as String?) ?? 'Other',
+          gstPercent: (row['gst_percent'] as num?)?.toDouble() ?? 12.0,
         );
         _lines[product.id] = CartLine(product, row['quantity'] as int);
       }
@@ -132,6 +133,7 @@ class CartModel extends ChangeNotifier {
           'manufacturer': product.manufacturer,
           'pack_size': product.packSize,
           'category': product.category,
+          'gst_percent': product.gstPercent.toInt(),
           'updated_at': DateTime.now().toIso8601String(),
         },
         onConflict: 'user_id,product_id',
@@ -180,6 +182,7 @@ class CartModel extends ChangeNotifier {
           manufacturer: (map['manufacturer'] as String?) ?? '',
           packSize: (map['pack_size'] as String?) ?? '',
           category: (map['category'] as String?) ?? 'Other',
+          gstPercent: (map['gst_percent'] as num?)?.toDouble() ?? 12.0,
         );
         _lines[product.id] = CartLine(product, map['quantity'] as int);
       }
@@ -202,6 +205,7 @@ class CartModel extends ChangeNotifier {
                 'manufacturer': l.product.manufacturer,
                 'pack_size': l.product.packSize,
                 'category': l.product.category,
+                'gst_percent': l.product.gstPercent,
               })
           .toList();
       html.window.localStorage[_guestKey] = jsonEncode(list);

@@ -11,6 +11,14 @@ String prettyCategory(String raw) {
   return titled.replaceAll('Cns', 'CNS');
 }
 
+/// Returns the discount percentage applicable for the given total cart value.
+/// ≥ ₹6999 → 5%, ≥ ₹2999 → 3%, else → 0%.
+double cartDiscountPercent(double total) {
+  if (total >= 6999) return 5.0;
+  if (total >= 2999) return 3.0;
+  return 0.0;
+}
+
 /// Formats a value as Indian Rupees, e.g. 1234567.5 -> "₹12,34,567.50".
 String rupees(double value) {
   final negative = value < 0;

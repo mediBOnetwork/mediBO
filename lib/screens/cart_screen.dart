@@ -1015,110 +1015,372 @@ class _CheckoutBar extends StatelessWidget {
   void _showBill(BuildContext context) {
     showModalBottomSheet(
       context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      backgroundColor: Colors.white,
-      builder: (_) => _BillSheet(cart: cart),
+      builder: (ctx) {
+        final h = MediaQuery.of(ctx).size.height;
+        return ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: h * 0.92),
+          child: _GstBillView(cart: cart),
+        );
+      },
     );
   }
 }
 
-// ─── Bill bottom sheet ────────────────────────────────────────────────────────
+// ─── GST-categorized bill view ────────────────────────────────────────────────
 
-class _BillSheet extends StatelessWidget {
+class _GstBillView extends StatelessWidget {
   final CartModel cart;
-  const _BillSheet({required this.cart});
+  const _GstBillView({required this.cart});
+
+  static const String _estimateNote =
+      'Please note that all prices, quantities, taxes, shipping charges, and '
+      'other details shown on the website are estimates only. We will send you '
+      'the actual bill when we process your order, which will include the final '
+      'amount along with other details such as batch number, expiry date, and '
+      'any additional information. The final invoice will be considered the '
+      'binding amount.';
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 16, 20, 36),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Center(
-            child: Container(
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                color: const Color(0xFFD1D5DB),
-                borderRadius: BorderRadius.circular(2),
+    final lines = cart.lines;
+
+    // Total MRP-based cart value → determines discount tier
+    final totalMrp =
+        lines.fold(0.0, (s, l) => s + l.product.mrp * l.quantity);
+    final discPct = cartDiscountPercent(totalMrp);
+
+    // Group lines by GST rate, ascending
+    final Map<int, List<CartLine>> groups = {};
+    for (final l in lines) {
+      groups.putIfAbsent(l.product.gstPercent.toInt(), () => []).add(l);
+    }
+    final sortedRates = groups.keys.toList()..sort();
+
+    // Pre-compute each group's Final Payable for the summary section
+    final Map<int, double> finalPayables = {};
+    for (final rate in sortedRates) {
+      final gLines = groups[rate]!;
+      final net =
+          gLines.fold(0.0, (s, l) => s + l.product.mrp * l.quantity);
+      final disc = net * discPct / 100;
+      final taxable = net - disc;
+      finalPayables[rate] = taxable + taxable * rate / 100;
+    }
+    final grandTotal = finalPayables.values.fold(0.0, (s, v) => s + v);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // ── Fixed header ──
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 14, 8, 10),
+          child: Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  'Bill Details',
+                  style: TextStyle(
+                    fontSize: 17,
+                    fontWeight: FontWeight.w800,
+                    color: Color(0xFF111827),
+                  ),
+                ),
+              ),
+              IconButton(
+                icon: const Icon(Icons.close, size: 20),
+                color: const Color(0xFF6B7280),
+                onPressed: () => Navigator.of(context).pop(),
+              ),
+            ],
+          ),
+        ),
+        if (discPct > 0)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+            child: Text(
+              '${discPct.toStringAsFixed(0)}% discount applied '
+              '(cart MRP value ${rupees(totalMrp)})',
+              style: const TextStyle(
+                fontSize: 12,
+                color: Color(0xFF16A34A),
+                fontWeight: FontWeight.w500,
               ),
             ),
           ),
-          const SizedBox(height: 20),
-          const Text(
-            'Bill details',
-            style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w800,
-                color: Color(0xFF111827)),
-          ),
-          const SizedBox(height: 16),
-          _billRow('Subtotal', rupees(cart.subtotal)),
-          _billRow('GST (12%)', rupees(cart.totalGst)),
-          const Divider(height: 24),
-          _billRow('Grand total', rupees(cart.grandTotal), bold: true),
-          const SizedBox(height: 10),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            decoration: BoxDecoration(
-              color: const Color(0xFFF0FDF4),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: const Color(0xFFBBF7D0)),
-            ),
-            child: Row(
-              children: const [
-                Icon(Icons.local_shipping_outlined,
-                    size: 16, color: Color(0xFF16A34A)),
-                SizedBox(width: 8),
-                Text(
-                  'Free delivery on this order',
-                  style: TextStyle(
-                      fontSize: 12,
-                      color: Color(0xFF15803D),
-                      fontWeight: FontWeight.w600),
+        const Divider(height: 1, color: Color(0xFFE5E7EB)),
+
+        // ── Scrollable body ──
+        Expanded(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 36),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // GST groups in ascending order
+                for (final rate in sortedRates) ...[
+                  _GstGroup(
+                    rate: rate,
+                    lines: groups[rate]!,
+                    discPct: discPct,
+                  ),
+                  const SizedBox(height: 16),
+                ],
+
+                // Summary
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF9FAFB),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: const Color(0xFFE5E7EB)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Summary',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFF374151),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      for (final rate in sortedRates)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 5),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  '$rate% category product final payable amount',
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    color: Color(0xFF6B7280),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                rupees(finalPayables[rate]!),
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: Color(0xFF374151),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      const Divider(height: 16),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            'Total Payable Amount',
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w800,
+                              color: Color(0xFF111827),
+                            ),
+                          ),
+                          Text(
+                            rupees(grandTotal),
+                            style: const TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w800,
+                              color: Color(0xFF1B5E20),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
+
+                // Estimate note box
+                Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFFFBEB),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: const Color(0xFFD1D5DB)),
+                  ),
+                  child: const Text(
+                    _estimateNote,
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: Color(0xFF6B7280),
+                      height: 1.55,
+                    ),
+                  ),
                 ),
               ],
             ),
           ),
-          const SizedBox(height: 10),
-          const Text(
-            'Net 30 credit terms apply',
-            textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 11, color: Color(0xFF9CA3AF)),
+        ),
+      ],
+    );
+  }
+}
+
+// ─── GST group block ──────────────────────────────────────────────────────────
+
+class _GstGroup extends StatelessWidget {
+  final int rate;
+  final List<CartLine> lines;
+  final double discPct;
+  const _GstGroup(
+      {required this.rate, required this.lines, required this.discPct});
+
+  @override
+  Widget build(BuildContext context) {
+    final netAmount =
+        lines.fold(0.0, (s, l) => s + l.product.mrp * l.quantity);
+    final discountAmount = netAmount * discPct / 100;
+    final netTaxable = netAmount - discountAmount;
+    final gstAmount = netTaxable * rate / 100;
+    final finalPayable = netTaxable + gstAmount;
+
+    return Container(
+      decoration: BoxDecoration(
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Group header
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+            decoration: const BoxDecoration(
+              color: Color(0xFFF3F4F6),
+              borderRadius: BorderRadius.only(
+                topLeft: Radius.circular(9),
+                topRight: Radius.circular(9),
+              ),
+            ),
+            child: Text(
+              'GST $rate%',
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                color: Color(0xFF111827),
+              ),
+            ),
+          ),
+
+          // Product lines
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+            child: Column(
+              children: [
+                for (final l in lines) ...[
+                  _BillProductLine(line: l),
+                  const SizedBox(height: 5),
+                ],
+              ],
+            ),
+          ),
+
+          // Divider
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 12),
+            child: Divider(height: 16),
+          ),
+
+          // Calculation rows
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+            child: Column(
+              children: [
+                _calcRow('Net Amount', rupees(netAmount)),
+                if (discPct > 0)
+                  _calcRow(
+                    'Discount (${discPct.toStringAsFixed(0)}%)',
+                    '− ${rupees(discountAmount)}',
+                    valueColor: const Color(0xFF16A34A),
+                  ),
+                _calcRow('Net Taxable Amount', rupees(netTaxable),
+                    bold: true),
+                _calcRow(
+                  'GST $rate%',
+                  '+ ${rupees(gstAmount)}',
+                  valueColor: const Color(0xFFD97706),
+                ),
+                const Divider(height: 12),
+                _calcRow('Final Payable Amount', rupees(finalPayable),
+                    bold: true, large: true),
+              ],
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _billRow(String label, String value, {bool bold = false}) {
+  Widget _calcRow(String label, String value,
+      {bool bold = false, bool large = false, Color? valueColor}) {
+    final ts = TextStyle(
+      fontSize: large ? 14 : 12,
+      fontWeight: bold ? FontWeight.w700 : FontWeight.w400,
+      color: const Color(0xFF374151),
+    );
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 5),
+      padding: const EdgeInsets.symmetric(vertical: 2),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(label,
-              style: TextStyle(
-                fontSize: bold ? 15 : 13,
-                fontWeight: bold ? FontWeight.w700 : FontWeight.w400,
-                color: bold
-                    ? const Color(0xFF111827)
-                    : const Color(0xFF374151),
-              )),
-          Text(value,
-              style: TextStyle(
-                fontSize: bold ? 15 : 13,
-                fontWeight: bold ? FontWeight.w700 : FontWeight.w400,
-                color: bold
-                    ? const Color(0xFF111827)
-                    : const Color(0xFF374151),
-              )),
+          Text(label, style: ts),
+          Text(
+            value,
+            style: ts.copyWith(
+              color: valueColor ??
+                  (bold
+                      ? const Color(0xFF111827)
+                      : const Color(0xFF374151)),
+            ),
+          ),
         ],
       ),
+    );
+  }
+}
+
+class _BillProductLine extends StatelessWidget {
+  final CartLine line;
+  const _BillProductLine({required this.line});
+
+  @override
+  Widget build(BuildContext context) {
+    final p = line.product;
+    final lineAmt = p.mrp * line.quantity;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(width: 4),
+        Expanded(
+          child: Text(
+            p.name,
+            style: const TextStyle(fontSize: 12, color: Color(0xFF374151)),
+            overflow: TextOverflow.ellipsis,
+            maxLines: 2,
+          ),
+        ),
+        const SizedBox(width: 8),
+        Text(
+          '${rupees(p.mrp)} × ${line.quantity} = ${rupees(lineAmt)}',
+          style:
+              const TextStyle(fontSize: 12, color: Color(0xFF374151)),
+        ),
+      ],
     );
   }
 }
@@ -1161,10 +1423,22 @@ class _OrderSummaryPanel extends StatelessWidget {
           _row('Items',
               '${cart.distinctItems} SKU${cart.distinctItems == 1 ? '' : 's'} · ${cart.totalUnits} packs'),
           _row('Subtotal', rupees(cart.subtotal)),
-          _row('GST (12%)', rupees(cart.totalGst)),
+          _row('Total GST', rupees(cart.totalGst)),
           const Divider(height: 24),
           _row('Grand total', rupees(cart.grandTotal), bold: true),
-          const SizedBox(height: 20),
+          const SizedBox(height: 6),
+          GestureDetector(
+            onTap: () => _showBillDialog(context),
+            child: const Text(
+              'View detailed bill →',
+              style: TextStyle(
+                fontSize: 12,
+                color: Color(0xFF1D4ED8),
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          const SizedBox(height: 14),
           GestureDetector(
             onTap: onMakePayment,
             child: Container(
@@ -1249,6 +1523,22 @@ class _OrderSummaryPanel extends StatelessWidget {
                     : const Color(0xFF374151),
               )),
         ],
+      ),
+    );
+  }
+
+  void _showBillDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (_) => Dialog(
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        backgroundColor: Colors.white,
+        child: SizedBox(
+          width: 620,
+          height: MediaQuery.of(context).size.height * 0.85,
+          child: _GstBillView(cart: cart),
+        ),
       ),
     );
   }

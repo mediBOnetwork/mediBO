@@ -1457,8 +1457,11 @@ class _MobileBottomBar extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         if (cart.distinctItems > 0)
-          RepaintBoundary(
-            child: _StickyCartBar(onTap: onCartTap),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+            child: RepaintBoundary(
+              child: _StickyCartBar(onTap: onCartTap),
+            ),
           ),
         BottomNavigationBar(
           currentIndex: bottomNavIndex,
@@ -1522,15 +1525,7 @@ class _StickyCartBar extends StatefulWidget {
 class _StickyCartBarState extends State<_StickyCartBar>
     with TickerProviderStateMixin {
   static const _tierFreeDelivery = 999.0;
-
-  static Color _tierBgColor(double total) {
-    if (total >= 18999) return const Color(0xFF052E16);
-    if (total >= 8999) return const Color(0xFF14532D);
-    if (total >= 6999) return const Color(0xFF166534);
-    if (total >= 2999) return const Color(0xFF15803D);
-    if (total >= 999) return const Color(0xFF16A34A);
-    return const Color(0xFF22C55E);
-  }
+  static const _bg = Color(0xFF14532D);
   static const _tier3pct = 2999.0;
   static const _tier5pct = 6999.0;
   static const _tier6pct = 8999.0;
@@ -1649,16 +1644,18 @@ class _StickyCartBarState extends State<_StickyCartBar>
       position: _slideAnim,
       child: GestureDetector(
         onTap: widget.onTap,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 600),
-          curve: Curves.easeInOut,
+        child: Container(
           height: 64,
           decoration: BoxDecoration(
-            color: _tierBgColor(total),
-            borderRadius: const BorderRadius.only(
-              topLeft: Radius.circular(14),
-              topRight: Radius.circular(14),
-            ),
+            color: _bg,
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.20),
+                blurRadius: 16,
+                offset: const Offset(0, 4),
+              ),
+            ],
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1696,7 +1693,7 @@ class _StickyCartBarState extends State<_StickyCartBar>
                         height: 4,
                         width: constraints.maxWidth * progress.clamp(0.0, 1.0),
                         decoration: BoxDecoration(
-                          color: Colors.white,
+                          color: const Color(0xFF4ADE80),
                           borderRadius: BorderRadius.circular(4),
                         ),
                       ),
@@ -1834,14 +1831,7 @@ class _WebDiscountBarState extends State<_WebDiscountBar>
     with SingleTickerProviderStateMixin {
   static const _tierFreeDelivery = 999.0;
 
-  static Color _tierBgColor(double total) {
-    if (total >= 18999) return const Color(0xFF052E16);
-    if (total >= 8999) return const Color(0xFF14532D);
-    if (total >= 6999) return const Color(0xFF166534);
-    if (total >= 2999) return const Color(0xFF15803D);
-    if (total >= 999) return const Color(0xFF16A34A);
-    return const Color(0xFF22C55E);
-  }
+  static const _bg = Color(0xFF14532D);
   static const _tier3pct = 2999.0;
   static const _tier5pct = 6999.0;
   static const _tier6pct = 8999.0;
@@ -1949,7 +1939,7 @@ class _WebDiscountBarState extends State<_WebDiscountBar>
           curve: Curves.easeInOut,
           height: 64,
           decoration: BoxDecoration(
-            color: _tierBgColor(total),
+            color: _bg,
             borderRadius: BorderRadius.circular(14),
             boxShadow: [
               BoxShadow(
@@ -1992,7 +1982,7 @@ class _WebDiscountBarState extends State<_WebDiscountBar>
                         height: 4,
                         width: constraints.maxWidth * progress.clamp(0.0, 1.0),
                         decoration: BoxDecoration(
-                          color: Colors.white,
+                          color: const Color(0xFF4ADE80),
                           borderRadius: BorderRadius.circular(4),
                         ),
                       ),

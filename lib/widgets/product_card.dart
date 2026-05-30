@@ -499,11 +499,11 @@ class _DotNav extends StatelessWidget {
   const _DotNav(
       {required this.count, required this.current, required this.onSelect});
 
-  // Graduated size: active=11, distance-1=8, distance≥2=6
+  // Graduated size: active=6, distance-1=4, distance≥2=3
   static double _size(int dist) {
-    if (dist == 0) return 11.0;
-    if (dist == 1) return 8.0;
-    return 6.0;
+    if (dist == 0) return 6.0;
+    if (dist == 1) return 4.0;
+    return 3.0;
   }
 
   // Graduated colour: active=near-black, d1=mid-grey, d≥2=light-grey
@@ -526,7 +526,7 @@ class _DotNav extends StatelessWidget {
           child: GestureDetector(
             onTap: () => onSelect(i),
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 6),
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 220),
                 curve: Curves.easeInOut,
@@ -608,8 +608,6 @@ class _ZoomDialogState extends State<_ZoomDialog> {
               // ── Full-screen image (or carousel) ──────────────────────
               Center(
                 child: GestureDetector(
-                  // opaque so taps on the image are absorbed (don't close)
-                  behavior: HitTestBehavior.opaque,
                   onTap: () {},
                   child: multi
                       ? Column(

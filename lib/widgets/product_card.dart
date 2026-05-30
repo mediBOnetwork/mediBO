@@ -58,10 +58,10 @@ class ProductCard extends StatelessWidget {
                           ),
                         ),
                         const SizedBox(height: 3),
-                        // Line 2 — product name (2 lines)
+                        // Line 2 — product name (1 line, ellipsis)
                         Text(
                           product.name,
-                          maxLines: 2,
+                          maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
                             fontWeight: FontWeight.w700,

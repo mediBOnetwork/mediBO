@@ -411,9 +411,9 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
         focusNode: _focusNode,
         onKeyEvent: _onKeyEvent,
         child: SingleChildScrollView(
-      controller: _scroll,
-      physics: platformScrollPhysics(),
-      child: Column(
+          controller: _scroll,
+          physics: platformScrollPhysics(),
+          child: Column(
         children: [
           _Hero(
             onShopNow: _scrollToProducts,
@@ -470,7 +470,7 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
             onCart: widget.onFooterCart,
           ),
         ],
-      ),
+          ),
         ),
       ),
     );

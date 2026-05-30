@@ -444,7 +444,8 @@ class _ImageBlockState extends State<_ImageBlock> {
             child: Align(
               alignment: Alignment.centerLeft,
               child: _CategoryImagePill(
-                  text: prettyCategory(widget.product.category)),
+                  text: prettyCategory(widget.product.category),
+                  style: widget.style),
             ),
           ),
           if (_hasScheme(widget.product.id))
@@ -715,14 +716,15 @@ bool _hasScheme(String productId) {
 // Category overlay pill (top-left of image): semi-transparent dark background.
 class _CategoryImagePill extends StatelessWidget {
   final String text;
-  const _CategoryImagePill({required this.text});
+  final CategoryStyle style;
+  const _CategoryImagePill({required this.text, required this.style});
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.52),
+        color: style.fg,
         borderRadius: BorderRadius.circular(6),
       ),
       child: Text(
@@ -730,8 +732,8 @@ class _CategoryImagePill extends StatelessWidget {
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
         style: const TextStyle(
-          fontSize: 9,
-          fontWeight: FontWeight.w600,
+          fontSize: 10,
+          fontWeight: FontWeight.w700,
           color: Colors.white,
           height: 1.0,
           leadingDistribution: TextLeadingDistribution.even,
@@ -751,7 +753,7 @@ class _SchemePill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
         color: const Color(0xFFFFB800),
         borderRadius: BorderRadius.circular(6),
@@ -759,7 +761,7 @@ class _SchemePill extends StatelessWidget {
       child: Text(
         text,
         style: const TextStyle(
-          fontSize: 9,
+          fontSize: 10,
           fontWeight: FontWeight.w700,
           color: Colors.white,
           letterSpacing: 0.2,

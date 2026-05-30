@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 import '../app_state.dart';
@@ -337,6 +340,7 @@ class _ImageBlockState extends State<_ImageBlock> {
   late final PageController _pageCtrl;
   late final int _rawInitial;
   int _page = 0;
+  Timer? _hoverTimer;
 
   @override
   void initState() {
@@ -348,8 +352,25 @@ class _ImageBlockState extends State<_ImageBlock> {
 
   @override
   void dispose() {
+    _hoverTimer?.cancel();
     _pageCtrl.dispose();
     super.dispose();
+  }
+
+  void _startHoverCycle() {
+    if (!kIsWeb) return;
+    final count = widget.product.imageUrls.length;
+    if (count < 2) return;
+    _hoverTimer?.cancel();
+    _hoverTimer = Timer.periodic(const Duration(milliseconds: 900), (_) {
+      if (mounted) _goTo((_page + 1) % count);
+    });
+  }
+
+  void _stopHoverCycle() {
+    _hoverTimer?.cancel();
+    _hoverTimer = null;
+    if (widget.product.imageUrls.length > 1) _goTo(0);
   }
 
   // Navigate to a logical index, choosing the closest raw page (supports loop).
@@ -404,7 +425,10 @@ class _ImageBlockState extends State<_ImageBlock> {
     final count = images.length;
     final multi = count > 1;
 
-    return SizedBox(
+    return MouseRegion(
+      onEnter: kIsWeb && multi ? (_) => _startHoverCycle() : null,
+      onExit: kIsWeb && multi ? (_) => _stopHoverCycle() : null,
+      child: SizedBox(
       height: 180,
       width: double.infinity,
       child: Stack(
@@ -495,6 +519,7 @@ class _ImageBlockState extends State<_ImageBlock> {
             ),
         ],
       ),
+    ),
     );
   }
 }
@@ -580,6 +605,7 @@ class _ZoomDialogState extends State<_ZoomDialog> {
   late final PageController _ctrl;
   late final int _rawInitial;
   int _page = 0;
+  Timer? _hoverTimer;
 
   @override
   void initState() {
@@ -592,8 +618,25 @@ class _ZoomDialogState extends State<_ZoomDialog> {
 
   @override
   void dispose() {
+    _hoverTimer?.cancel();
     _ctrl.dispose();
     super.dispose();
+  }
+
+  void _startHoverCycle() {
+    if (!kIsWeb) return;
+    final count = widget.images.length;
+    if (count < 2) return;
+    _hoverTimer?.cancel();
+    _hoverTimer = Timer.periodic(const Duration(milliseconds: 900), (_) {
+      if (mounted) _goTo((_page + 1) % count);
+    });
+  }
+
+  void _stopHoverCycle() {
+    _hoverTimer?.cancel();
+    _hoverTimer = null;
+    if (widget.images.length > 1) _goTo(0);
   }
 
   void _goTo(int logical) {
@@ -640,32 +683,36 @@ class _ZoomDialogState extends State<_ZoomDialog> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    SizedBox(
-                      width: imgWidth,
-                      height: imgHeight,
-                      child: multi
-                          ? PageView.builder(
-                              controller: _ctrl,
-                              itemCount: count * 1000,
-                              onPageChanged: (p) =>
-                                  setState(() => _page = p % count),
-                              itemBuilder: (_, i) => InteractiveViewer(
+                    MouseRegion(
+                      onEnter: kIsWeb && multi ? (_) => _startHoverCycle() : null,
+                      onExit: kIsWeb && multi ? (_) => _stopHoverCycle() : null,
+                      child: SizedBox(
+                        width: imgWidth,
+                        height: imgHeight,
+                        child: multi
+                            ? PageView.builder(
+                                controller: _ctrl,
+                                itemCount: count * 1000,
+                                onPageChanged: (p) =>
+                                    setState(() => _page = p % count),
+                                itemBuilder: (_, i) => InteractiveViewer(
+                                  minScale: 0.8,
+                                  maxScale: 4.0,
+                                  child: Image.network(
+                                    images[i % count],
+                                    fit: BoxFit.contain,
+                                  ),
+                                ),
+                              )
+                            : InteractiveViewer(
                                 minScale: 0.8,
                                 maxScale: 4.0,
                                 child: Image.network(
-                                  images[i % count],
+                                  images[0],
                                   fit: BoxFit.contain,
                                 ),
                               ),
-                            )
-                          : InteractiveViewer(
-                              minScale: 0.8,
-                              maxScale: 4.0,
-                              child: Image.network(
-                                images[0],
-                                fit: BoxFit.contain,
-                              ),
-                            ),
+                      ),
                     ),
                     if (multi) ...[
                       const SizedBox(height: 12),

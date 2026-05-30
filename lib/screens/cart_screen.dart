@@ -13,7 +13,8 @@ import 'auth/login_screen.dart';
 
 class CartScreen extends StatefulWidget {
   final VoidCallback? onOrderPlaced;
-  const CartScreen({super.key, this.onOrderPlaced});
+  final String? externalSearchQuery;
+  const CartScreen({super.key, this.onOrderPlaced, this.externalSearchQuery});
 
   @override
   State<CartScreen> createState() => _CartScreenState();
@@ -190,7 +191,11 @@ class _CartScreenState extends State<CartScreen> {
                         children: [
                           Expanded(
                             flex: 3,
-                            child: _ItemList(cart: cart),
+                            child: _ItemList(
+                              cart: cart,
+                              externalSearchQuery:
+                                  widget.externalSearchQuery,
+                            ),
                           ),
                           const SizedBox(width: 16),
                           Expanded(
@@ -214,7 +219,12 @@ class _CartScreenState extends State<CartScreen> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             if (banner != null) banner,
-            Expanded(child: _ItemList(cart: cart)),
+            Expanded(
+              child: _ItemList(
+                cart: cart,
+                externalSearchQuery: widget.externalSearchQuery,
+              ),
+            ),
             _CheckoutBar(cart: cart, onMakePayment: _openPayment),
           ],
         );
@@ -266,24 +276,19 @@ class _SampleBanner extends StatelessWidget {
 
 class _ItemList extends StatefulWidget {
   final CartModel cart;
-  const _ItemList({required this.cart});
+  final String? externalSearchQuery;
+  const _ItemList({required this.cart, this.externalSearchQuery});
 
   @override
   State<_ItemList> createState() => _ItemListState();
 }
 
 class _ItemListState extends State<_ItemList> {
-  final TextEditingController _searchCtrl = TextEditingController();
-  String _query = '';
-
-  @override
-  void dispose() {
-    _searchCtrl.dispose();
-    super.dispose();
-  }
+  String get _effectiveQuery =>
+      widget.externalSearchQuery ?? '';
 
   List<CartLine> get _filteredLines {
-    final q = _query.trim().toLowerCase();
+    final q = _effectiveQuery.trim().toLowerCase();
     if (q.isEmpty) return widget.cart.lines;
     return widget.cart.lines.where((l) {
       final name = l.product.name.toLowerCase();
@@ -322,93 +327,63 @@ class _ItemListState extends State<_ItemList> {
   @override
   Widget build(BuildContext context) {
     final filtered = _filteredLines;
-    final searchActive = _query.trim().isNotEmpty;
+    final searchActive = _effectiveQuery.trim().isNotEmpty;
 
     return ListView(
       physics: platformScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
       cacheExtent: 400,
       children: [
-        // ── Header: item count box + clear button + search ──
+        // ── Header: item count box + clear button ──
         Padding(
           padding: const EdgeInsets.fromLTRB(4, 0, 4, 12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+          child: Row(
             children: [
-              // Boxed item count + Clear Cart button
-              Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 7),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFF9FAFB),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: const Color(0xFFE5E7EB)),
-                    ),
-                    child: Text(
-                      '${widget.cart.distinctItems} product${widget.cart.distinctItems == 1 ? '' : 's'} in cart',
-                      style: const TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: Color(0xFF374151),
-                      ),
-                    ),
+              // Boxed item count
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF9FAFB),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: const Color(0xFFE5E7EB)),
+                ),
+                child: Text(
+                  '${widget.cart.distinctItems} product${widget.cart.distinctItems == 1 ? '' : 's'} in cart',
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF374151),
                   ),
-                  const Spacer(),
-                  TextButton.icon(
-                    onPressed: _confirmClear,
-                    icon: const Icon(Icons.delete_outline_rounded, size: 16),
-                    label: const Text('Clear Cart',
-                        style: TextStyle(fontWeight: FontWeight.w600)),
-                    style: TextButton.styleFrom(
-                      foregroundColor: const Color(0xFFDC2626),
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 10, vertical: 7),
-                    ),
-                  ),
-                ],
+                ),
               ),
-              const SizedBox(height: 10),
-              // Search bar — filters within cart items
-              TextField(
-                controller: _searchCtrl,
-                onChanged: (v) => setState(() => _query = v),
-                decoration: InputDecoration(
-                  hintText: 'Search in cart…',
-                  hintStyle:
-                      const TextStyle(color: Color(0xFF9CA3AF), fontSize: 13),
-                  prefixIcon: const Icon(Icons.search,
-                      size: 18, color: Color(0xFF9CA3AF)),
-                  suffixIcon: _query.isNotEmpty
-                      ? IconButton(
-                          icon: const Icon(Icons.close,
-                              size: 16, color: Color(0xFF9CA3AF)),
-                          onPressed: () => setState(() {
-                            _searchCtrl.clear();
-                            _query = '';
-                          }),
-                        )
-                      : null,
-                  isDense: true,
-                  contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 12, vertical: 10),
-                  filled: true,
-                  fillColor: Colors.white,
-                  border: OutlineInputBorder(
+              const Spacer(),
+              // Boxed Clear Cart button
+              GestureDetector(
+                onTap: _confirmClear,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 12, vertical: 7),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFFF1F2),
                     borderRadius: BorderRadius.circular(8),
-                    borderSide:
-                        const BorderSide(color: Color(0xFFE5E7EB)),
+                    border: Border.all(color: const Color(0xFFDC2626)),
                   ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8),
-                    borderSide:
-                        const BorderSide(color: Color(0xFFE5E7EB)),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8),
-                    borderSide:
-                        const BorderSide(color: Brand.green, width: 1.5),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.delete_outline_rounded,
+                          size: 14, color: Color(0xFFDC2626)),
+                      SizedBox(width: 5),
+                      Text(
+                        'Clear Cart',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFFDC2626),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),
@@ -427,7 +402,7 @@ class _ItemListState extends State<_ItemList> {
                       size: 40, color: Color(0xFF9CA3AF)),
                   const SizedBox(height: 12),
                   Text(
-                    'No ${_query.trim()} were added in cart',
+                    'No ${_effectiveQuery.trim()} were added in cart',
                     textAlign: TextAlign.center,
                     style: const TextStyle(
                       fontSize: 14,
@@ -920,6 +895,63 @@ class _CartStepperState extends State<_CartStepper> {
   }
 }
 
+// ─── 4-line billing summary ───────────────────────────────────────────────────
+
+class _BillingSummary extends StatelessWidget {
+  final CartModel cart;
+  const _BillingSummary({required this.cart});
+
+  @override
+  Widget build(BuildContext context) {
+    final discPct = cartDiscountPercent(cart.mrpTotal);
+    final discAmt = cart.mrpTotal * discPct / 100;
+    final netTaxable = cart.mrpTotal - discAmt;
+    final gstAmt = cart.netPayable - netTaxable;
+
+    return Column(
+      children: [
+        _sRow('Net Total', rupees(cart.mrpTotal)),
+        const SizedBox(height: 4),
+        _sRow(
+          'Discount (${discPct.toStringAsFixed(0)}%)',
+          '− ${rupees(discAmt)}',
+          valueColor: const Color(0xFF16A34A),
+        ),
+        const SizedBox(height: 4),
+        _sRow(
+          'GST Input Credit',
+          rupees(gstAmt),
+          valueColor: const Color(0xFFD97706),
+        ),
+        const Padding(
+          padding: EdgeInsets.symmetric(vertical: 6),
+          child: Divider(height: 1, color: Color(0xFFE5E7EB)),
+        ),
+        _sRow('Net Payable Amount', rupees(cart.netPayable), bold: true),
+      ],
+    );
+  }
+
+  Widget _sRow(String label, String value,
+      {bool bold = false, Color? valueColor}) {
+    final color = bold ? const Color(0xFF111827) : const Color(0xFF374151);
+    final weight = bold ? FontWeight.w700 : FontWeight.w500;
+    final size = bold ? 14.0 : 12.0;
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(label,
+            style: TextStyle(fontSize: size, fontWeight: weight, color: color)),
+        Text(value,
+            style: TextStyle(
+                fontSize: size,
+                fontWeight: weight,
+                color: valueColor ?? color)),
+      ],
+    );
+  }
+}
+
 // ─── Fixed checkout bar (narrow layout) ──────────────────────────────────────
 
 class _CheckoutBar extends StatelessWidget {
@@ -930,7 +962,6 @@ class _CheckoutBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 28),
       decoration: BoxDecoration(
         color: Colors.white,
         boxShadow: [
@@ -941,78 +972,79 @@ class _CheckoutBar extends StatelessWidget {
           ),
         ],
       ),
-      child: Row(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Total + "View bill" link
-          GestureDetector(
-            onTap: () => _showBill(context),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
+          // 4-line billing summary
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+            child: _BillingSummary(cart: cart),
+          ),
+          const Divider(height: 1, color: Color(0xFFE5E7EB)),
+          // Net Payable + Make Payment row
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 28),
+            child: Row(
               children: [
-                const Text(
-                  'Net Payable Amount',
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w500,
-                    color: Color(0xFF6B7280),
+                // Net Payable + "View bill" link
+                GestureDetector(
+                  onTap: () => _showBill(context),
+                  child: const Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            'View bill',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Color(0xFF1D4ED8),
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          SizedBox(width: 2),
+                          Icon(Icons.keyboard_arrow_up,
+                              size: 14, color: Color(0xFF1D4ED8)),
+                        ],
+                      ),
+                    ],
                   ),
                 ),
-                Text(
-                  rupees(cart.netPayable),
-                  style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w800,
-                    color: Color(0xFF111827),
-                  ),
-                ),
-                const Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      'View bill',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Color(0xFF1D4ED8),
-                        fontWeight: FontWeight.w600,
+                const SizedBox(width: 14),
+                // Make Payment button
+                Expanded(
+                  child: GestureDetector(
+                    onTap: onMakePayment,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 15),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF1B5E20),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.payment_rounded,
+                              color: Colors.white, size: 18),
+                          SizedBox(width: 8),
+                          Text(
+                            'Make Payment',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 0.2,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                    SizedBox(width: 2),
-                    Icon(Icons.keyboard_arrow_up,
-                        size: 14, color: Color(0xFF1D4ED8)),
-                  ],
+                  ),
                 ),
               ],
-            ),
-          ),
-          const SizedBox(width: 14),
-          // Make Payment button
-          Expanded(
-            child: GestureDetector(
-              onTap: onMakePayment,
-              child: Container(
-                padding: const EdgeInsets.symmetric(vertical: 15),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF1B5E20),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: const Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(Icons.payment_rounded, color: Colors.white, size: 18),
-                    SizedBox(width: 8),
-                    Text(
-                      'Make Payment',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 0.2,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
             ),
           ),
         ],
@@ -1430,14 +1462,17 @@ class _OrderSummaryPanel extends StatelessWidget {
           const SizedBox(height: 16),
           _row('Items',
               '${cart.distinctItems} SKU${cart.distinctItems == 1 ? '' : 's'} · ${cart.totalUnits} packs'),
-          _row('MRP Value', rupees(cart.mrpTotal)),
-          if (discPct > 0)
-            _row(
-              'Discount (${discPct.toStringAsFixed(0)}%)',
-              '− ${rupees(cart.mrpTotal * discPct / 100)}',
-              valueColor: const Color(0xFF16A34A),
-            ),
-          _row('GST (incl.)', rupees(cart.netPayable - cart.mrpTotal * (1 - discPct / 100))),
+          _row('Net Total', rupees(cart.mrpTotal)),
+          _row(
+            'Discount (${discPct.toStringAsFixed(0)}%)',
+            '− ${rupees(cart.mrpTotal * discPct / 100)}',
+            valueColor: const Color(0xFF16A34A),
+          ),
+          _row(
+            'GST Input Credit',
+            rupees(cart.netPayable - cart.mrpTotal * (1 - discPct / 100)),
+            valueColor: const Color(0xFFD97706),
+          ),
           const Divider(height: 24),
           _row('Net Payable Amount', rupees(cart.netPayable), bold: true),
           const SizedBox(height: 6),

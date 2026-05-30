@@ -969,10 +969,7 @@ class _CartPanelContentState extends State<_CartPanelContent> {
       builder: (_) => _ClearCartPopover(
         link: _clearCartLink,
         onDismissed: () { if (mounted) _closeClearCartPopover(); },
-        onClearedAndDismissed: () {
-          appState.clear();
-          if (mounted) _closeClearCartPopover();
-        },
+        onClear: () { appState.clear(); },
       ),
     );
     _clearCartOverlay = entry;
@@ -1209,12 +1206,12 @@ class _CartPanelContentState extends State<_CartPanelContent> {
 class _ClearCartPopover extends StatefulWidget {
   final LayerLink link;
   final VoidCallback onDismissed;
-  final VoidCallback onClearedAndDismissed;
+  final VoidCallback onClear;
 
   const _ClearCartPopover({
     required this.link,
     required this.onDismissed,
-    required this.onClearedAndDismissed,
+    required this.onClear,
   });
 
   @override
@@ -1226,7 +1223,6 @@ class _ClearCartPopoverState extends State<_ClearCartPopover>
   late final AnimationController _ctrl;
   late final Animation<double> _scale;
   late final Animation<double> _fade;
-  bool _showSuccess = false;
   bool _dismissing = false;
 
   @override
@@ -1257,13 +1253,11 @@ class _ClearCartPopoverState extends State<_ClearCartPopover>
 
   Future<void> _handleClearAll() async {
     if (_dismissing) return;
-    setState(() => _showSuccess = true);
-    await Future.delayed(const Duration(milliseconds: 700));
-    if (!mounted) return;
     _dismissing = true;
+    widget.onClear(); // clear immediately, synchronously
     await _ctrl.animateTo(0,
         duration: const Duration(milliseconds: 180), curve: Curves.easeIn);
-    widget.onClearedAndDismissed();
+    widget.onDismissed();
   }
 
   @override
@@ -1294,7 +1288,7 @@ class _ClearCartPopoverState extends State<_ClearCartPopover>
                 color: Colors.transparent,
                 elevation: 0,
                 child: Container(
-                  width: 250,
+                  width: 272,
                   padding: const EdgeInsets.all(14),
                   decoration: BoxDecoration(
                     color: Colors.white,
@@ -1307,15 +1301,9 @@ class _ClearCartPopoverState extends State<_ClearCartPopover>
                       ),
                     ],
                   ),
-                  child: AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 200),
-                    child: _showSuccess
-                        ? _SuccessContent(key: const ValueKey('success'))
-                        : _ConfirmContent(
-                            key: const ValueKey('confirm'),
-                            onCancel: _dismiss,
-                            onClearAll: _handleClearAll,
-                          ),
+                  child: _ConfirmContent(
+                    onCancel: _dismiss,
+                    onClearAll: _handleClearAll,
                   ),
                 ),
               ),
@@ -1340,90 +1328,54 @@ class _ConfirmContent extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Text(
-          'Clear cart?',
+          'This will clear all items',
+          maxLines: 1,
+          softWrap: false,
+          overflow: TextOverflow.ellipsis,
           style: TextStyle(
-            fontSize: 15,
-            fontWeight: FontWeight.w600,
-            color: Color(0xFF1E293B),
-          ),
-        ),
-        const SizedBox(height: 6),
-        const Text(
-          'This will remove all items from your cart.',
-          style: TextStyle(
-            fontSize: 12,
+            fontSize: 13,
             color: Color(0xFF6B7280),
-            height: 1.4,
           ),
         ),
-        const SizedBox(height: 14),
+        const SizedBox(height: 12),
         Row(
-          mainAxisAlignment: MainAxisAlignment.end,
           children: [
-            TextButton(
-              onPressed: onCancel,
-              style: TextButton.styleFrom(
-                foregroundColor: const Color(0xFF6B7280),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                minimumSize: Size.zero,
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            Expanded(
+              child: FilledButton(
+                onPressed: onCancel,
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFFDCFCE7),
+                  foregroundColor: const Color(0xFF15803D),
+                  minimumSize: const Size(0, 44),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10)),
+                  elevation: 0,
+                  shadowColor: Colors.transparent,
+                ),
+                child: const Text('Cancel',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
               ),
-              child: const Text('Cancel',
-                  style:
-                      TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
             ),
-            const SizedBox(width: 6),
-            FilledButton(
-              onPressed: onClearAll,
-              style: FilledButton.styleFrom(
-                backgroundColor: const Color(0xFFDC2626),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                minimumSize: Size.zero,
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10)),
+            const SizedBox(width: 8),
+            Expanded(
+              child: FilledButton(
+                onPressed: onClearAll,
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFFDC2626),
+                  foregroundColor: Colors.white,
+                  minimumSize: const Size(0, 44),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10)),
+                ),
+                child: const Text('Clear all',
+                    style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600)),
               ),
-              child: const Text('Clear all',
-                  style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: Colors.white)),
             ),
           ],
-        ),
-      ],
-    );
-  }
-}
-
-class _SuccessContent extends StatelessWidget {
-  const _SuccessContent({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          width: 28,
-          height: 28,
-          decoration: const BoxDecoration(
-            color: Color(0xFFDCFCE7),
-            shape: BoxShape.circle,
-          ),
-          child:
-              const Icon(Icons.check, size: 16, color: Color(0xFF16A34A)),
-        ),
-        const SizedBox(width: 10),
-        const Text(
-          'Cart cleared',
-          style: TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.w600,
-            color: Color(0xFF15803D),
-          ),
         ),
       ],
     );

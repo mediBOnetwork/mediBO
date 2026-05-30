@@ -997,191 +997,189 @@ class _CartPanelContentState extends State<_CartPanelContent> {
           Container(
             decoration: const BoxDecoration(
               color: Colors.white,
-              border: Border(bottom: BorderSide(color: Color(0xFFF3F4F6))),
+              border: Border(bottom: BorderSide(color: Color(0xFFEEF0F2))),
             ),
             child: Padding(
               padding: const EdgeInsets.fromLTRB(4, 8, 8, 8),
               child: Row(
                 children: [
-                  // Back arrow
+                  // Back arrow — always visible in both states
                   IconButton(
                     onPressed: widget.onClose,
                     icon: const Icon(Icons.arrow_back_ios_new,
                         size: 18, color: Color(0xFF111827)),
                     tooltip: 'Close cart',
                   ),
-                  // Animated inline: count chip ↔ search field
-                  // Search field slides in from the right (search-icon side).
+                  // Animated area: full-width search field OR collapsed toolbar.
+                  // LayoutBuilder provides the exact available width so the
+                  // collapsed Row (which has Expanded children) lays out correctly
+                  // inside the AnimatedSwitcher's Stack layout.
                   Expanded(
-                    child: ClipRect(
-                      child: AnimatedSwitcher(
-                        duration: const Duration(milliseconds: 280),
-                        switchInCurve: Curves.easeOut,
-                        switchOutCurve: Curves.easeIn,
-                        // Left-align children so count chip hugs the back arrow.
-                        layoutBuilder: (cur, prev) => Stack(
-                          alignment: Alignment.centerLeft,
-                          children: [...prev, if (cur != null) cur],
-                        ),
-                        transitionBuilder: (child, anim) {
-                          // Search field: slides from right + fades in/out.
-                          if (child.key == const ValueKey('search')) {
-                            return SlideTransition(
-                              position: Tween<Offset>(
-                                begin: const Offset(0.4, 0),
-                                end: Offset.zero,
-                              ).animate(anim),
-                              child: FadeTransition(
-                                  opacity: anim, child: child),
-                            );
-                          }
-                          // Count chip: just fades.
-                          return FadeTransition(opacity: anim, child: child);
-                        },
-                        child: _searchActive
-                            ? TextField(
-                                key: const ValueKey('search'),
-                                controller: _searchCtrl,
-                                autofocus: true,
-                                onChanged: (v) =>
-                                    setState(() => _searchQuery = v),
-                                decoration: InputDecoration(
-                                  hintText: 'Search in cart…',
-                                  hintStyle: const TextStyle(
-                                      color: Color(0xFF9CA3AF),
-                                      fontSize: 13),
-                                  isDense: true,
-                                  contentPadding:
-                                      const EdgeInsets.symmetric(
-                                          horizontal: 10, vertical: 9),
-                                  filled: true,
-                                  fillColor: const Color(0xFFF9FAFB),
-                                  border: OutlineInputBorder(
-                                    borderRadius: BorderRadius.circular(8),
-                                    borderSide: const BorderSide(
-                                        color: Color(0xFFE5E7EB)),
-                                  ),
-                                  enabledBorder: OutlineInputBorder(
-                                    borderRadius: BorderRadius.circular(8),
-                                    borderSide: const BorderSide(
-                                        color: Color(0xFFE5E7EB)),
-                                  ),
-                                  focusedBorder: OutlineInputBorder(
-                                    borderRadius: BorderRadius.circular(8),
-                                    borderSide: const BorderSide(
-                                        color: Color(0xFF1B5E20),
-                                        width: 1.5),
-                                  ),
-                                  // Single X: clears text if present,
-                                  // closes search if field is already empty.
-                                  suffixIcon: IconButton(
-                                    icon: const Icon(Icons.close,
-                                        size: 16,
-                                        color: Color(0xFF9CA3AF)),
-                                    onPressed: () {
-                                      if (_searchQuery.isNotEmpty) {
-                                        setState(() {
-                                          _searchCtrl.clear();
-                                          _searchQuery = '';
-                                        });
-                                      } else {
-                                        _toggleSearch();
-                                      }
-                                    },
-                                  ),
-                                ),
-                              )
-                            : Container(
-                                key: const ValueKey('count'),
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 10, vertical: 6),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFECFDF5),
-                                  borderRadius: BorderRadius.circular(10),
-                                  border: Border.all(
-                                      color: const Color(0xFFBBF7D0)),
-                                ),
-                                child: Text(
-                                  '$itemCount product${itemCount == 1 ? '' : 's'} in cart',
-                                  style: const TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w600,
-                                    color: Color(0xFF15803D),
-                                  ),
-                                ),
-                              ),
-                      ),
-                    ),
-                  ),
-                  // Clear Cart button — hidden while search is open
-                  AnimatedSize(
-                    duration: const Duration(milliseconds: 280),
-                    curve: Curves.easeInOut,
-                    child: _searchActive
-                        ? const SizedBox.shrink()
-                        : Padding(
-                            padding: const EdgeInsets.only(left: 8),
-                            child: GestureDetector(
-                              onTap: _confirmClear,
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 10, vertical: 7),
-                                decoration: BoxDecoration(
-                                  borderRadius:
-                                      BorderRadius.circular(10),
-                                  border: Border.all(
-                                      color: const Color(0xFFDC2626)),
-                                ),
-                                child: const Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Icon(Icons.remove_shopping_cart,
-                                        size: 13,
-                                        color: Color(0xFFDC2626)),
-                                    SizedBox(width: 5),
-                                    Text(
-                                      'Clear Cart',
-                                      style: TextStyle(
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.w600,
-                                        color: Color(0xFFDC2626),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
+                    child: LayoutBuilder(
+                      builder: (ctx, bc) => ClipRect(
+                        child: AnimatedSwitcher(
+                          duration: const Duration(milliseconds: 280),
+                          switchInCurve: Curves.easeInOut,
+                          switchOutCurve: Curves.easeInOut,
+                          layoutBuilder: (cur, prev) => Stack(
+                            alignment: Alignment.centerLeft,
+                            children: [...prev, if (cur != null) cur],
                           ),
-                  ),
-                  // Search icon — always the magnifying glass; tapping opens
-                  // search; stays visible as the right anchor when open.
-                  const SizedBox(width: 6),
-                  GestureDetector(
-                    onTap: _searchActive ? null : _toggleSearch,
-                    child: Container(
-                      width: 34,
-                      height: 34,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: _searchActive
-                            ? const Color(0xFFECFDF5)
-                            : Colors.transparent,
-                        border: Border.all(
-                          color: _searchActive
-                              ? const Color(0xFF16A34A)
-                              : const Color(0xFFE5E7EB),
+                          transitionBuilder: (child, anim) {
+                            // Search field slides in from right + fades.
+                            if (child.key == const ValueKey('search')) {
+                              return SlideTransition(
+                                position: Tween<Offset>(
+                                  begin: const Offset(0.25, 0),
+                                  end: Offset.zero,
+                                ).animate(anim),
+                                child: FadeTransition(
+                                    opacity: anim, child: child),
+                              );
+                            }
+                            // Collapsed toolbar just fades.
+                            return FadeTransition(
+                                opacity: anim, child: child);
+                          },
+                          child: _searchActive
+                              // ── Search-open: back arrow + full-width field ──
+                              ? TextField(
+                                  key: const ValueKey('search'),
+                                  controller: _searchCtrl,
+                                  autofocus: true,
+                                  onChanged: (v) =>
+                                      setState(() => _searchQuery = v),
+                                  decoration: InputDecoration(
+                                    hintText: 'Search in cart…',
+                                    hintStyle: const TextStyle(
+                                        color: Color(0xFF9CA3AF),
+                                        fontSize: 13),
+                                    isDense: true,
+                                    contentPadding:
+                                        const EdgeInsets.symmetric(
+                                            horizontal: 8, vertical: 9),
+                                    filled: true,
+                                    fillColor: const Color(0xFFF9FAFB),
+                                    // Search icon lives inside field as prefix
+                                    prefixIcon: const Icon(Icons.search,
+                                        size: 18, color: Color(0xFF9CA3AF)),
+                                    prefixIconConstraints:
+                                        const BoxConstraints(
+                                            minWidth: 36, minHeight: 36),
+                                    border: OutlineInputBorder(
+                                      borderRadius:
+                                          BorderRadius.circular(8),
+                                      borderSide: const BorderSide(
+                                          color: Color(0xFFE5E7EB)),
+                                    ),
+                                    enabledBorder: OutlineInputBorder(
+                                      borderRadius:
+                                          BorderRadius.circular(8),
+                                      borderSide: const BorderSide(
+                                          color: Color(0xFFE5E7EB)),
+                                    ),
+                                    focusedBorder: OutlineInputBorder(
+                                      borderRadius:
+                                          BorderRadius.circular(8),
+                                      borderSide: const BorderSide(
+                                          color: Color(0xFF1B5E20),
+                                          width: 1.5),
+                                    ),
+                                    // Single X: clear text → close search
+                                    suffixIcon: IconButton(
+                                      icon: const Icon(Icons.close,
+                                          size: 16,
+                                          color: Color(0xFF9CA3AF)),
+                                      onPressed: () {
+                                        if (_searchQuery.isNotEmpty) {
+                                          setState(() {
+                                            _searchCtrl.clear();
+                                            _searchQuery = '';
+                                          });
+                                        } else {
+                                          _toggleSearch();
+                                        }
+                                      },
+                                    ),
+                                  ),
+                                )
+                              // ── Collapsed: title + Clear Cart + search btn ──
+                              : SizedBox(
+                                  key: const ValueKey('collapsed'),
+                                  width: bc.maxWidth,
+                                  child: Row(
+                                    children: [
+                                      const SizedBox(width: 4),
+                                      Expanded(
+                                        child: Text(
+                                          '$itemCount product${itemCount == 1 ? '' : 's'} in cart',
+                                          style: const TextStyle(
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.w600,
+                                            color: Color(0xFF1E293B),
+                                          ),
+                                          overflow: TextOverflow.ellipsis,
+                                          maxLines: 1,
+                                        ),
+                                      ),
+                                      GestureDetector(
+                                        onTap: _confirmClear,
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(
+                                              horizontal: 10, vertical: 7),
+                                          decoration: BoxDecoration(
+                                            borderRadius:
+                                                BorderRadius.circular(10),
+                                            border: Border.all(
+                                                color: const Color(
+                                                    0xFFDC2626)),
+                                          ),
+                                          child: const Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Icon(
+                                                Icons.remove_shopping_cart,
+                                                size: 13,
+                                                color: Color(0xFFDC2626),
+                                              ),
+                                              SizedBox(width: 5),
+                                              Text(
+                                                'Clear Cart',
+                                                style: TextStyle(
+                                                  fontSize: 11,
+                                                  fontWeight:
+                                                      FontWeight.w600,
+                                                  color: Color(0xFFDC2626),
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      GestureDetector(
+                                        onTap: _toggleSearch,
+                                        child: Container(
+                                          width: 34,
+                                          height: 34,
+                                          decoration: BoxDecoration(
+                                            shape: BoxShape.circle,
+                                            border: Border.all(
+                                                color: const Color(
+                                                    0xFFE5E7EB)),
+                                          ),
+                                          child: const Icon(Icons.search,
+                                              size: 17,
+                                              color: Color(0xFF374151)),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
                         ),
-                      ),
-                      child: Icon(
-                        Icons.search,
-                        size: 17,
-                        color: _searchActive
-                            ? const Color(0xFF16A34A)
-                            : const Color(0xFF374151),
                       ),
                     ),
                   ),
-                  const SizedBox(width: 4),
                 ],
               ),
             ),

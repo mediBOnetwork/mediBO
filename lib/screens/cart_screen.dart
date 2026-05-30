@@ -273,6 +273,50 @@ class _SampleBanner extends StatelessWidget {
   }
 }
 
+// ─── Fuzzy cart search ────────────────────────────────────────────────────────
+
+bool _cartFuzzyMatch(String text, String query) {
+  final hay = text.toLowerCase();
+  final tokens = query.toLowerCase().trim().split(RegExp(r'\s+'));
+  for (final token in tokens) {
+    if (token.isEmpty) continue;
+    if (hay.contains(token)) continue; // fast path: substring match
+    // Typo-tolerance: check edit-distance ≤ 1 against any word in haystack
+    final words = hay.split(RegExp(r'[\s,.\-/()]+'));
+    bool hit = false;
+    for (final word in words) {
+      if (token.length >= 3 && word.length >= 3 &&
+          _editDistance(token, word) <= 1) {
+        hit = true;
+        break;
+      }
+    }
+    if (!hit) return false;
+  }
+  return true;
+}
+
+int _editDistance(String a, String b) {
+  if (a == b) return 0;
+  if (a.isEmpty) return b.length;
+  if (b.isEmpty) return a.length;
+  if ((a.length - b.length).abs() > 2) return 3;
+  final d = List.generate(
+      a.length + 1, (i) => List.filled(b.length + 1, 0));
+  for (int i = 0; i <= a.length; i++) d[i][0] = i;
+  for (int j = 0; j <= b.length; j++) d[0][j] = j;
+  for (int i = 1; i <= a.length; i++) {
+    for (int j = 1; j <= b.length; j++) {
+      d[i][j] = a[i - 1] == b[j - 1]
+          ? d[i - 1][j - 1]
+          : 1 +
+              [d[i - 1][j], d[i][j - 1], d[i - 1][j - 1]]
+                  .reduce((x, y) => x < y ? x : y);
+    }
+  }
+  return d[a.length][b.length];
+}
+
 // ─── Item list ────────────────────────────────────────────────────────────────
 
 class _ItemList extends StatefulWidget {
@@ -290,13 +334,12 @@ class _ItemListState extends State<_ItemList> {
       widget.externalSearchQuery ?? '';
 
   List<CartLine> get _filteredLines {
-    final q = _effectiveQuery.trim().toLowerCase();
+    final q = _effectiveQuery.trim();
     if (q.isEmpty) return widget.cart.lines;
     return widget.cart.lines.where((l) {
-      final name = l.product.name.toLowerCase();
-      final generic = l.product.genericName.toLowerCase();
-      final mfr = l.product.manufacturer.toLowerCase();
-      return name.contains(q) || generic.contains(q) || mfr.contains(q);
+      final text =
+          '${l.product.name} ${l.product.genericName} ${l.product.manufacturer}';
+      return _cartFuzzyMatch(text, q);
     }).toList();
   }
 
@@ -322,7 +365,7 @@ class _ItemListState extends State<_ItemList> {
                       size: 40, color: Color(0xFF9CA3AF)),
                   const SizedBox(height: 12),
                   Text(
-                    'No products match "${_effectiveQuery.trim()}"',
+                    'No items found for "${_effectiveQuery.trim()}"',
                     textAlign: TextAlign.center,
                     style: const TextStyle(
                       fontSize: 14,

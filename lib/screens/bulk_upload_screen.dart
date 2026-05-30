@@ -1563,9 +1563,7 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
     setState(() => _expandedIndex = _expandedIndex == index ? null : index);
   }
 
-  void _onRowChanged() {
-    setState(() {});
-  }
+  void _onRowChanged() => setState(() {});
 
   @override
   Widget build(BuildContext context) {
@@ -1573,9 +1571,120 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
     final manuallyMatched = widget.rows.where((r) => r.status == _MatchStatus.manuallyMatched).length;
     final partial = widget.rows.where((r) => r.status == _MatchStatus.partial).length;
     final unrecognized = widget.rows.where((r) => r.status == _MatchStatus.unrecognized).length;
+    final canAdd = (matched + manuallyMatched) > 0 && !widget.addingToCart && !widget.isLoading;
 
-    final canAdd = (matched + manuallyMatched) > 0 &&
-        !widget.addingToCart && !widget.isLoading;
+    return LayoutBuilder(builder: (ctx, lc) {
+      if (lc.maxWidth < 600) return _buildMobile(matched, manuallyMatched, partial, unrecognized, canAdd);
+      return _buildWeb(matched, manuallyMatched, partial, unrecognized, canAdd);
+    });
+  }
+
+  Widget _buildMobile(int matched, int manuallyMatched, int partial, int unrecognized, bool canAdd) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Smart match preview',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    if (matched > 0)
+                      _StatusPillBadge(label: '✓ $matched Matched', bg: const Color(0xFFDCFCE7), fg: const Color(0xFF15803D)),
+                    if (partial > 0)
+                      _StatusPillBadge(label: '~ $partial Partial', bg: const Color(0xFFFEF3C7), fg: const Color(0xFF92400E)),
+                    if (unrecognized > 0)
+                      _StatusPillBadge(label: '✗ $unrecognized Unrecognized', bg: const Color(0xFFFEE2E2), fg: const Color(0xFFDC2626)),
+                    if (manuallyMatched > 0)
+                      _StatusPillBadge(label: '● $manuallyMatched Manually Matched', bg: const Color(0xFFE0E7FF), fg: const Color(0xFF3730A3)),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  height: 48,
+                  child: FilledButton(
+                    onPressed: canAdd ? () => widget.onAddToCart() : null,
+                    style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFF16A34A),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      elevation: 0,
+                    ),
+                    child: widget.addingToCart
+                        ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                        : const Text('Add matched to cart', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+                  ),
+                ),
+                const SizedBox(height: 12),
+              ],
+            ),
+          ),
+          if (widget.isLoading)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (widget.matchTotal > 0) ...[
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(4),
+                      child: LinearProgressIndicator(
+                        value: widget.matchProgress / widget.matchTotal,
+                        backgroundColor: const Color(0xFFE5E7EB),
+                        valueColor: const AlwaysStoppedAnimation(Color(0xFF16A34A)),
+                        minHeight: 6,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Text('${widget.matchProgress} of ${widget.matchTotal} medicines matched',
+                        style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+                  ] else
+                    const Center(
+                      child: Padding(
+                        padding: EdgeInsets.symmetric(vertical: 24),
+                        child: SizedBox(width: 32, height: 32, child: CircularProgressIndicator(strokeWidth: 2.5)),
+                      ),
+                    ),
+                ],
+              ),
+            )
+          else
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+              child: Column(
+                children: [
+                  for (int i = 0; i < widget.rows.length; i++)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: _MobileMatchCard(
+                        key: ValueKey('mob-$i'),
+                        row: widget.rows[i],
+                        isExpanded: _expandedIndex == i,
+                        onToggle: () => _toggleRow(i),
+                        onRowChanged: _onRowChanged,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildWeb(int matched, int manuallyMatched, int partial, int unrecognized, bool canAdd) {
     final badge = widget.isFromFile
         ? (widget.fileName != null && widget.fileName!.length > 20
             ? '${widget.fileName!.substring(0, 17)}…'
@@ -1598,35 +1707,21 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
                 final narrow = lc.maxWidth < 460;
                 final badgeWidget = Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFF3F4F6),
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: Text(
-                    badge,
-                    style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280)),
-                  ),
+                  decoration: BoxDecoration(color: const Color(0xFFF3F4F6), borderRadius: BorderRadius.circular(4)),
+                  child: Text(badge, style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
                 );
                 final addButton = FilledButton(
                   onPressed: canAdd ? () => widget.onAddToCart() : null,
                   style: FilledButton.styleFrom(
                     backgroundColor: const Color(0xFF16A34A),
-                    padding: EdgeInsets.symmetric(
-                        horizontal: narrow ? 12 : 18, vertical: 10),
-                    textStyle: TextStyle(
-                        fontWeight: FontWeight.w600,
-                        fontSize: narrow ? 12 : 13),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8)),
+                    padding: EdgeInsets.symmetric(horizontal: narrow ? 12 : 18, vertical: 10),
+                    textStyle: TextStyle(fontWeight: FontWeight.w600, fontSize: narrow ? 12 : 13),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                     elevation: 0,
                   ),
                   child: Text(narrow ? 'Add to cart' : 'Add matched to cart'),
                 );
-                final spinner = const SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                );
+                final spinner = const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2));
                 final statsText = Text(
                   widget.isLoading
                       ? widget.loadingMessage
@@ -1637,54 +1732,35 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Row(
-                        children: [
-                          const Flexible(
-                            child: Text(
-                              'Smart match preview',
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w700,
-                                color: Color(0xFF111827),
-                              ),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          badgeWidget,
-                        ],
-                      ),
+                      Row(children: [
+                        const Flexible(
+                          child: Text('Smart match preview',
+                              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827)),
+                              overflow: TextOverflow.ellipsis),
+                        ),
+                        const SizedBox(width: 8),
+                        badgeWidget,
+                      ]),
                       const SizedBox(height: 8),
-                      Row(
-                        children: [
-                          Expanded(child: statsText),
-                          const SizedBox(width: 8),
-                          widget.addingToCart ? spinner : addButton,
-                        ],
-                      ),
+                      Row(children: [
+                        Expanded(child: statsText),
+                        const SizedBox(width: 8),
+                        widget.addingToCart ? spinner : addButton,
+                      ]),
                     ],
                   );
                 }
                 return Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.center,
-                      children: [
-                        const Text(
-                          'Smart match preview',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w700,
-                            color: Color(0xFF111827),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        badgeWidget,
-                        const Spacer(),
-                        widget.addingToCart ? spinner : addButton,
-                      ],
-                    ),
+                    Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+                      const Text('Smart match preview',
+                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+                      const SizedBox(width: 8),
+                      badgeWidget,
+                      const Spacer(),
+                      widget.addingToCart ? spinner : addButton,
+                    ]),
                     const SizedBox(height: 4),
                     statsText,
                   ],
@@ -1703,30 +1779,20 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
                     ClipRRect(
                       borderRadius: BorderRadius.circular(4),
                       child: LinearProgressIndicator(
-                        value: widget.matchTotal > 0
-                            ? widget.matchProgress / widget.matchTotal
-                            : null,
+                        value: widget.matchTotal > 0 ? widget.matchProgress / widget.matchTotal : null,
                         backgroundColor: const Color(0xFFE5E7EB),
-                        valueColor:
-                            const AlwaysStoppedAnimation(Color(0xFF16A34A)),
+                        valueColor: const AlwaysStoppedAnimation(Color(0xFF16A34A)),
                         minHeight: 6,
                       ),
                     ),
                     const SizedBox(height: 10),
-                    Text(
-                      '${widget.matchProgress} of ${widget.matchTotal} medicines matched',
-                      style: const TextStyle(
-                          fontSize: 12, color: Color(0xFF6B7280)),
-                    ),
+                    Text('${widget.matchProgress} of ${widget.matchTotal} medicines matched',
+                        style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
                   ] else
                     const Center(
                       child: Padding(
                         padding: EdgeInsets.symmetric(vertical: 24),
-                        child: SizedBox(
-                          width: 32,
-                          height: 32,
-                          child: CircularProgressIndicator(strokeWidth: 2.5),
-                        ),
+                        child: SizedBox(width: 32, height: 32, child: CircularProgressIndicator(strokeWidth: 2.5)),
                       ),
                     ),
                 ],
@@ -1846,24 +1912,30 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
     switch (row.status) {
       case _MatchStatus.matched:
         badgeColor = const Color(0xFFDCFCE7);
-        badgeText = const Color(0xFF16A34A);
+        badgeText = const Color(0xFF15803D);
         label = 'Matched';
-        leftBorderColor = const Color(0xFF16A34A);
+        leftBorderColor = const Color(0xFF15803D);
       case _MatchStatus.manuallyMatched:
-        badgeColor = const Color(0xFFEFF6FF);
-        badgeText = const Color(0xFF2563EB);
-        label = 'Manually matched';
-        leftBorderColor = const Color(0xFF2563EB);
+        badgeColor = const Color(0xFFE0E7FF);
+        badgeText = const Color(0xFF3730A3);
+        label = 'Manually Matched';
+        leftBorderColor = const Color(0xFF3730A3);
       case _MatchStatus.partial:
-        badgeColor = const Color(0xFFFFF7ED);
-        badgeText = const Color(0xFFEA580C);
+        badgeColor = const Color(0xFFFEF3C7);
+        badgeText = const Color(0xFF92400E);
         label = 'Partial';
         leftBorderColor = const Color(0xFFEA580C);
       case _MatchStatus.unrecognized:
         badgeColor = const Color(0xFFFEE2E2);
         badgeText = const Color(0xFFDC2626);
-        label = 'Not found';
+        label = 'Unrecognized';
         leftBorderColor = const Color(0xFFDC2626);
+    }
+
+    // Top 4 alternates excluding the currently selected candidate
+    final alts = <(int, Product)>[];
+    for (int i = 0; i < row.candidates.length && alts.length < 4; i++) {
+      if (i != row.selectedIndex) alts.add((i, row.candidates[i]));
     }
 
     final bottomBorder = (!widget.last || widget.isExpanded)
@@ -1936,23 +2008,38 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
                 ),
                 Expanded(
                   flex: 14,
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: Container(
-                      padding:
-                          const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
-                      decoration: BoxDecoration(
-                        color: badgeColor,
-                        borderRadius: BorderRadius.circular(20),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: badgeColor,
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Text(label,
+                            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: badgeText)),
                       ),
-                      child: Text(
-                        label,
-                        style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
-                            color: badgeText),
-                      ),
-                    ),
+                      if (hasCandidates) ...[
+                        const SizedBox(height: 3),
+                        GestureDetector(
+                          onTap: widget.onToggle,
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Text('Change match',
+                                  style: TextStyle(fontSize: 10, color: Color(0xFF3B82F6), fontWeight: FontWeight.w500)),
+                              AnimatedRotation(
+                                turns: widget.isExpanded ? 0.5 : 0,
+                                duration: const Duration(milliseconds: 250),
+                                child: const Icon(Icons.expand_more, size: 12, color: Color(0xFF3B82F6)),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
                 ),
               ],
@@ -1969,20 +2056,15 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                for (int i = 0; i < row.candidates.length; i++)
+                for (int k = 0; k < alts.length; k++)
                   _AlternativeRow(
-                    product: row.candidates[i],
-                    isSelected: i == row.selectedIndex,
-                    isLast: i == row.candidates.length - 1,
+                    product: alts[k].$2,
+                    isSelected: false,
+                    isLast: k == alts.length - 1,
                     onTap: () {
-                      final prevIdx = row.selectedIndex;
-                      final wasMatched = row.status == _MatchStatus.matched;
                       setState(() {
-                        row.selectedIndex = i;
-                        // Keep "matched" only when re-tapping the same top candidate
-                        if (!(wasMatched && i == prevIdx)) {
-                          row.status = _MatchStatus.manuallyMatched;
-                        }
+                        row.selectedIndex = alts[k].$1;
+                        row.status = _MatchStatus.manuallyMatched;
                       });
                       widget.onToggle();
                       widget.onRowChanged();
@@ -1993,6 +2075,238 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
           ),
         ),
       ],
+    );
+  }
+}
+
+// ─── Status pill badge (mobile header) ───────────────────────────────────────
+
+class _StatusPillBadge extends StatelessWidget {
+  final String label;
+  final Color bg;
+  final Color fg;
+  const _StatusPillBadge({required this.label, required this.bg, required this.fg});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(20)),
+      child: Text(label, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: fg)),
+    );
+  }
+}
+
+// ─── Mobile match card ────────────────────────────────────────────────────────
+
+class _MobileMatchCard extends StatefulWidget {
+  final _MatchRow row;
+  final bool isExpanded;
+  final VoidCallback onToggle;
+  final VoidCallback onRowChanged;
+
+  const _MobileMatchCard({
+    super.key,
+    required this.row,
+    required this.isExpanded,
+    required this.onToggle,
+    required this.onRowChanged,
+  });
+
+  @override
+  State<_MobileMatchCard> createState() => _MobileMatchCardState();
+}
+
+class _MobileMatchCardState extends State<_MobileMatchCard>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  late final Animation<double> _anim;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 220),
+      value: widget.isExpanded ? 1.0 : 0.0,
+    );
+    _anim = CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut);
+  }
+
+  @override
+  void didUpdateWidget(_MobileMatchCard old) {
+    super.didUpdateWidget(old);
+    if (widget.isExpanded != old.isExpanded) {
+      widget.isExpanded ? _ctrl.forward() : _ctrl.reverse();
+    }
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final row = widget.row;
+    final canChange = row.candidates.isNotEmpty && row.status != _MatchStatus.unrecognized;
+
+    Color badgeColor, badgeText, accentColor;
+    String label;
+    switch (row.status) {
+      case _MatchStatus.matched:
+        badgeColor = const Color(0xFFDCFCE7);
+        badgeText = const Color(0xFF15803D);
+        accentColor = const Color(0xFF15803D);
+        label = 'Matched';
+      case _MatchStatus.manuallyMatched:
+        badgeColor = const Color(0xFFE0E7FF);
+        badgeText = const Color(0xFF3730A3);
+        accentColor = const Color(0xFF3730A3);
+        label = 'Manually Matched';
+      case _MatchStatus.partial:
+        badgeColor = const Color(0xFFFEF3C7);
+        badgeText = const Color(0xFF92400E);
+        accentColor = const Color(0xFFEA580C);
+        label = 'Partial';
+      case _MatchStatus.unrecognized:
+        badgeColor = const Color(0xFFFEE2E2);
+        badgeText = const Color(0xFFDC2626);
+        accentColor = const Color(0xFFDC2626);
+        label = 'Unrecognized';
+    }
+
+    final alts = <(int, Product)>[];
+    for (int i = 0; i < row.candidates.length && alts.length < 4; i++) {
+      if (i != row.selectedIndex) alts.add((i, row.candidates[i]));
+    }
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(10),
+          boxShadow: [
+            BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 6, offset: const Offset(0, 2)),
+          ],
+          border: Border(left: BorderSide(color: accentColor, width: 3)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text('YOUR ITEM',
+                                style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: Color(0xFF9CA3AF), letterSpacing: 0.5)),
+                            const SizedBox(height: 2),
+                            Text(row.lineItem,
+                                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                        decoration: BoxDecoration(color: badgeColor, borderRadius: BorderRadius.circular(20)),
+                        child: Text(label,
+                            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: badgeText)),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  const Divider(height: 1, color: Color(0xFFE5E7EB)),
+                  const SizedBox(height: 8),
+                  const Text('MATCHED TO',
+                      style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: Color(0xFF9CA3AF), letterSpacing: 0.5)),
+                  const SizedBox(height: 2),
+                  Text(
+                    row.status != _MatchStatus.unrecognized ? row.matchedSku : 'No match found',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: row.status != _MatchStatus.unrecognized ? const Color(0xFF111827) : const Color(0xFF9CA3AF),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Text('Qty: ${row.qty}',
+                          style: const TextStyle(fontSize: 13, color: Color(0xFF374151))),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          'Price: ${row.price}',
+                          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF15803D)),
+                          overflow: TextOverflow.ellipsis,
+                          maxLines: 1,
+                        ),
+                      ),
+                      if (canChange)
+                        GestureDetector(
+                          onTap: widget.onToggle,
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Text('Change match',
+                                  style: TextStyle(fontSize: 11, color: Color(0xFF3B82F6), fontWeight: FontWeight.w600)),
+                              AnimatedRotation(
+                                turns: widget.isExpanded ? 0.5 : 0,
+                                duration: const Duration(milliseconds: 220),
+                                child: const Icon(Icons.expand_more, size: 14, color: Color(0xFF3B82F6)),
+                              ),
+                            ],
+                          ),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            SizeTransition(
+              sizeFactor: _anim,
+              child: Container(
+                decoration: const BoxDecoration(
+                  color: Color(0xFFF3F4F6),
+                  border: Border(top: BorderSide(color: Color(0xFFE5E7EB))),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    for (int k = 0; k < alts.length; k++)
+                      _AlternativeRow(
+                        product: alts[k].$2,
+                        isSelected: false,
+                        isLast: k == alts.length - 1,
+                        onTap: () {
+                          setState(() {
+                            row.selectedIndex = alts[k].$1;
+                            row.status = _MatchStatus.manuallyMatched;
+                          });
+                          widget.onToggle();
+                          widget.onRowChanged();
+                        },
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

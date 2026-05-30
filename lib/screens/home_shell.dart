@@ -123,6 +123,7 @@ class _HomeShellState extends State<HomeShell> {
       _category = 'All';
       _query = '';
       _cartOpen = false;
+      _scrollToTopTrigger++;
     });
     _searchCtrl.clear();
     pushUrl('/');

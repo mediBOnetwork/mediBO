@@ -1139,99 +1139,194 @@ class _GstBillView extends StatelessWidget {
                   const SizedBox(height: 16),
                 ],
 
-                // Summary
+                // Summary card
                 Container(
-                  padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFF9FAFB),
-                    borderRadius: BorderRadius.circular(10),
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
                     border: Border.all(color: const Color(0xFFE5E7EB)),
+                    boxShadow: const [
+                      BoxShadow(
+                        color: Color(0x08000000),
+                        blurRadius: 6,
+                        offset: Offset(0, 2),
+                      ),
+                    ],
                   ),
                   child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      const Text(
-                        'Summary',
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w700,
-                          color: Color(0xFF374151),
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      for (final rate in sortedRates)
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 5),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  '$rate% category product final payable amount',
-                                  style: const TextStyle(
-                                    fontSize: 12,
-                                    color: Color(0xFF6B7280),
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Text(
-                                rupees(finalPayables[rate]!),
-                                style: const TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w600,
-                                  color: Color(0xFF374151),
-                                ),
-                              ),
-                            ],
+                      // Header bar
+                      Container(
+                        padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+                        decoration: const BoxDecoration(
+                          color: Color(0xFFF9FAFB),
+                          borderRadius: BorderRadius.only(
+                            topLeft: Radius.circular(11),
+                            topRight: Radius.circular(11),
                           ),
                         ),
-                      const Divider(height: 16),
+                        child: const Text(
+                          'ORDER SUMMARY',
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w800,
+                            color: Color(0xFF6B7280),
+                            letterSpacing: 0.8,
+                          ),
+                        ),
+                      ),
+                      const Divider(height: 1, color: Color(0xFFE5E7EB)),
+
+                      // Per-GST-group rows
                       Padding(
-                        padding: const EdgeInsets.only(bottom: 8),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        padding: const EdgeInsets.fromLTRB(14, 10, 14, 4),
+                        child: Column(
                           children: [
-                            const Text(
-                              'Delivery Fee',
-                              style: TextStyle(
-                                fontSize: 13,
-                                color: Color(0xFF6B7280),
+                            for (final rate in sortedRates)
+                              Padding(
+                                padding: const EdgeInsets.only(bottom: 7),
+                                child: Row(
+                                  mainAxisAlignment:
+                                      MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(
+                                              horizontal: 6, vertical: 2),
+                                          decoration: BoxDecoration(
+                                            color: const Color(0xFFF0FDF4),
+                                            borderRadius:
+                                                BorderRadius.circular(4),
+                                            border: Border.all(
+                                                color:
+                                                    const Color(0xFFBBF7D0)),
+                                          ),
+                                          child: Text(
+                                            '$rate% GST',
+                                            style: const TextStyle(
+                                              fontSize: 9.5,
+                                              fontWeight: FontWeight.w700,
+                                              color: Color(0xFF15803D),
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        const Text(
+                                          'products',
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            color: Color(0xFF6B7280),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    Text(
+                                      rupees(finalPayables[rate]!),
+                                      style: const TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w600,
+                                        color: Color(0xFF374151),
+                                      ),
+                                    ),
+                                  ],
+                                ),
                               ),
-                            ),
-                            Text(
-                              deliveryFee > 0 ? rupees(deliveryFee) : 'FREE',
-                              style: TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
-                                color: deliveryFee == 0
-                                    ? const Color(0xFF16A34A)
-                                    : const Color(0xFF374151),
+
+                            // Delivery Fee row
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 7),
+                              child: Row(
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
+                                children: [
+                                  const Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(Icons.local_shipping_outlined,
+                                          size: 13, color: Color(0xFF9CA3AF)),
+                                      SizedBox(width: 6),
+                                      Text(
+                                        'Delivery Fee',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: Color(0xFF6B7280),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  Text(
+                                    deliveryFee > 0
+                                        ? rupees(deliveryFee)
+                                        : 'FREE',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600,
+                                      color: deliveryFee == 0
+                                          ? const Color(0xFF16A34A)
+                                          : const Color(0xFF374151),
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
                           ],
                         ),
                       ),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          const Text(
-                            'Net Payable Amount',
-                            style: TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.w800,
-                              color: Color(0xFF111827),
+
+                      const Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 14),
+                        child: Divider(height: 1, color: Color(0xFFE5E7EB)),
+                      ),
+
+                      // Net Payable Amount — prominent highlighted row
+                      Container(
+                        margin: const EdgeInsets.all(12),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 14),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFECFDF5),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: const Color(0xFFBBF7D0)),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            const Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'NET PAYABLE AMOUNT',
+                                  style: TextStyle(
+                                    fontSize: 9.5,
+                                    fontWeight: FontWeight.w700,
+                                    color: Color(0xFF15803D),
+                                    letterSpacing: 0.6,
+                                  ),
+                                ),
+                                SizedBox(height: 3),
+                                Text(
+                                  'incl. GST + delivery',
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    color: Color(0xFF6EE7B7),
+                                  ),
+                                ),
+                              ],
                             ),
-                          ),
-                          Text(
-                            rupees(grandTotal),
-                            style: const TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.w800,
-                              color: Color(0xFF1B5E20),
+                            Text(
+                              rupees(grandTotal),
+                              style: const TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.w900,
+                                color: Color(0xFF065F46),
+                                height: 1,
+                              ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ],
                   ),
@@ -1264,7 +1359,7 @@ class _GstBillView extends StatelessWidget {
   }
 }
 
-// ─── GST group block ──────────────────────────────────────────────────────────
+// ─── GST group card (table layout) ───────────────────────────────────────────
 
 class _GstGroup extends StatelessWidget {
   final int rate;
@@ -1272,6 +1367,11 @@ class _GstGroup extends StatelessWidget {
   final double discPct;
   const _GstGroup(
       {required this.rate, required this.lines, required this.discPct});
+
+  static const double _mrpW = 62.0;
+  static const double _qtyW = 30.0;
+  static const double _amtW = 74.0;
+  static const double _gap = 8.0;
 
   @override
   Widget build(BuildContext context) {
@@ -1284,72 +1384,250 @@ class _GstGroup extends StatelessWidget {
 
     return Container(
       decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(color: const Color(0xFFE5E7EB)),
-        borderRadius: BorderRadius.circular(10),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x08000000),
+            blurRadius: 6,
+            offset: Offset(0, 2),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Group header
+          // ── Group header bar ──────────────────────────────────────────
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+            padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
             decoration: const BoxDecoration(
-              color: Color(0xFFF3F4F6),
+              color: Color(0xFFF0FDF4),
               borderRadius: BorderRadius.only(
-                topLeft: Radius.circular(9),
-                topRight: Radius.circular(9),
+                topLeft: Radius.circular(11),
+                topRight: Radius.circular(11),
               ),
             ),
-            child: Text(
-              'GST $rate%',
-              style: const TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w700,
-                color: Color(0xFF111827),
-              ),
-            ),
-          ),
-
-          // Product lines
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
-            child: Column(
+            child: Row(
               children: [
-                for (final l in lines) ...[
-                  _BillProductLine(line: l),
-                  const SizedBox(height: 5),
-                ],
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF16A34A),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(
+                    'GST $rate%',
+                    style: const TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w800,
+                      color: Colors.white,
+                      letterSpacing: 0.3,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Text(
+                  '${lines.length} product${lines.length == 1 ? '' : 's'}',
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: Color(0xFF6B7280),
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
               ],
             ),
           ),
 
-          // Divider
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 12),
-            child: Divider(height: 16),
+          // ── Column header row ─────────────────────────────────────────
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+            child: Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    'PRODUCT',
+                    style: TextStyle(
+                      fontSize: 9.5,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF9CA3AF),
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                ),
+                SizedBox(
+                  width: _mrpW,
+                  child: const Text(
+                    'MRP',
+                    textAlign: TextAlign.right,
+                    style: TextStyle(
+                      fontSize: 9.5,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF9CA3AF),
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: _gap),
+                SizedBox(
+                  width: _qtyW,
+                  child: const Text(
+                    'QTY',
+                    textAlign: TextAlign.right,
+                    style: TextStyle(
+                      fontSize: 9.5,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF9CA3AF),
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: _gap),
+                SizedBox(
+                  width: _amtW,
+                  child: const Text(
+                    'AMOUNT',
+                    textAlign: TextAlign.right,
+                    style: TextStyle(
+                      fontSize: 9.5,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF9CA3AF),
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
 
-          // Calculation rows
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 12),
+            child: Divider(height: 1, color: Color(0xFFE5E7EB)),
+          ),
+
+          // ── Product rows (zebra-striped, single-line names) ───────────
+          for (int i = 0; i < lines.length; i++)
+            Container(
+              decoration: BoxDecoration(
+                color: i.isEven ? const Color(0xFFF9FAFB) : Colors.white,
+                border: i < lines.length - 1
+                    ? const Border(
+                        bottom: BorderSide(color: Color(0xFFF0F0F0)))
+                    : null,
+              ),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Expanded(
+                    child: Text(
+                      lines[i].product.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Color(0xFF111827),
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                  SizedBox(
+                    width: _mrpW,
+                    child: Text(
+                      rupees(lines[i].product.mrp),
+                      textAlign: TextAlign.right,
+                      style: const TextStyle(
+                        fontSize: 11.5,
+                        color: Color(0xFF6B7280),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: _gap),
+                  SizedBox(
+                    width: _qtyW,
+                    child: Text(
+                      '${lines[i].quantity}',
+                      textAlign: TextAlign.right,
+                      style: const TextStyle(
+                        fontSize: 11.5,
+                        color: Color(0xFF6B7280),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: _gap),
+                  SizedBox(
+                    width: _amtW,
+                    child: Text(
+                      rupees(lines[i].product.mrp * lines[i].quantity),
+                      textAlign: TextAlign.right,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFF111827),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+          // ── Group totals ──────────────────────────────────────────────
+          const Padding(
+            padding: EdgeInsets.fromLTRB(12, 8, 12, 0),
+            child: Divider(height: 1, color: Color(0xFFE5E7EB)),
+          ),
           Padding(
-            padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
             child: Column(
               children: [
-                _calcRow('Net Amount', rupees(netAmount)),
-                _calcRow(
+                _totRow('Net Amount', rupees(netAmount)),
+                _totRow(
                   'Discount (${discPct.toStringAsFixed(0)}%)',
                   '− ${rupees(discountAmount)}',
                   valueColor: const Color(0xFF16A34A),
                 ),
-                _calcRow('Net Taxable Amount', rupees(netTaxable),
+                _totRow('Net Taxable Amount', rupees(netTaxable),
                     bold: true),
-                _calcRow(
+                _totRow(
                   'GST $rate%',
                   '+ ${rupees(gstAmount)}',
                   valueColor: const Color(0xFFD97706),
                 ),
-                const Divider(height: 12),
-                _calcRow('Final Payable Amount', rupees(finalPayable),
-                    bold: true, large: true),
+              ],
+            ),
+          ),
+
+          // ── Final Payable Amount (highlighted) ────────────────────────
+          Container(
+            margin: const EdgeInsets.all(12),
+            padding:
+                const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+            decoration: BoxDecoration(
+              color: const Color(0xFFECFDF5),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0xFFBBF7D0)),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text(
+                  'Final Payable Amount',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF065F46),
+                  ),
+                ),
+                Text(
+                  rupees(finalPayable),
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
+                    color: Color(0xFF065F46),
+                  ),
+                ),
               ],
             ),
           ),
@@ -1358,22 +1636,28 @@ class _GstGroup extends StatelessWidget {
     );
   }
 
-  Widget _calcRow(String label, String value,
-      {bool bold = false, bool large = false, Color? valueColor}) {
-    final ts = TextStyle(
-      fontSize: large ? 14 : 12,
-      fontWeight: bold ? FontWeight.w700 : FontWeight.w400,
-      color: const Color(0xFF374151),
-    );
+  Widget _totRow(String label, String value,
+      {bool bold = false, Color? valueColor}) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2),
+      padding: const EdgeInsets.symmetric(vertical: 3),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(label, style: ts),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: bold ? FontWeight.w600 : FontWeight.w400,
+              color: bold
+                  ? const Color(0xFF111827)
+                  : const Color(0xFF6B7280),
+            ),
+          ),
           Text(
             value,
-            style: ts.copyWith(
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: bold ? FontWeight.w700 : FontWeight.w500,
               color: valueColor ??
                   (bold
                       ? const Color(0xFF111827)
@@ -1382,37 +1666,6 @@ class _GstGroup extends StatelessWidget {
           ),
         ],
       ),
-    );
-  }
-}
-
-class _BillProductLine extends StatelessWidget {
-  final CartLine line;
-  const _BillProductLine({required this.line});
-
-  @override
-  Widget build(BuildContext context) {
-    final p = line.product;
-    final lineAmt = p.mrp * line.quantity;
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const SizedBox(width: 4),
-        Expanded(
-          child: Text(
-            p.name,
-            style: const TextStyle(fontSize: 12, color: Color(0xFF374151)),
-            overflow: TextOverflow.ellipsis,
-            maxLines: 2,
-          ),
-        ),
-        const SizedBox(width: 8),
-        Text(
-          '${rupees(p.mrp)} × ${line.quantity} = ${rupees(lineAmt)}',
-          style:
-              const TextStyle(fontSize: 12, color: Color(0xFF374151)),
-        ),
-      ],
     );
   }
 }

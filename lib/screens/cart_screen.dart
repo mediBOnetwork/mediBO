@@ -403,178 +403,196 @@ class _CartItemCard extends StatelessWidget {
     final discPct = cartDiscountPercent(cart.mrpTotal);
     final salePrice = p.mrp * (1 - discPct / 100);
 
-    return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x06000000),
-            blurRadius: 4,
-            offset: Offset(0, 1),
+    return LayoutBuilder(
+      builder: (ctx, constraints) {
+        // compact = mobile / narrow cart panel (<480px card width)
+        // wide   = web side-by-side item list (≥480px)
+        final compact = constraints.maxWidth < 480;
+        final imgSize = compact ? 56.0 : 64.0;
+        final hGap = compact ? 8.0 : 10.0;
+
+        return Container(
+          margin: const EdgeInsets.only(bottom: 8),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: const Color(0xFFE5E7EB)),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x06000000),
+                blurRadius: 4,
+                offset: Offset(0, 1),
+              ),
+            ],
           ),
-        ],
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(10),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // ── TOP ROW: image | name + pack size + manufacturer | remove ──
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
+          child: Padding(
+            padding: const EdgeInsets.all(10),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                _ProductImage(product: p, size: 64),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Expanded(
-                            child: Text(
-                              p.name,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w700,
-                                fontSize: 13,
-                                color: Color(0xFF111827),
-                                height: 1.3,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 6),
-                          GestureDetector(
-                            onTap: () => cart.remove(p),
-                            child: Container(
-                              width: 22,
-                              height: 22,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                border: Border.all(
-                                    color: const Color(0xFFD1D5DB)),
-                                color: const Color(0xFFF9FAFB),
-                              ),
-                              child: const Center(
-                                child: Icon(Icons.close,
-                                    size: 11, color: Color(0xFF6B7280)),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 3),
-                      Text(
-                        p.packSize.isNotEmpty ? p.packSize : '—',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 11,
-                          color: Color(0xFF374151),
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        p.manufacturer,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 11,
-                          color: Color(0xFF9CA3AF),
-                        ),
-                      ),
-                      if (line.isSample) ...[
-                        const SizedBox(height: 3),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 5, vertical: 1),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFFFF7ED),
-                            borderRadius: BorderRadius.circular(4),
-                            border:
-                                Border.all(color: const Color(0xFFFED7AA)),
-                          ),
-                          child: const Text('sample',
-                              style: TextStyle(
-                                  fontSize: 9, color: Color(0xFFEA580C))),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-              ],
-            ),
-
-            const SizedBox(height: 10),
-
-            // ── BOTTOM ROW: MRP/price/GST (left) | qty selector (right) ──
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                // Left: struck MRP, sale price, GST badge
-                Column(
+                // ── TOP ROW ────────────────────────────────────────────
+                Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    if (p.mrp > 0 && discPct > 0)
-                      Text(
-                        'MRP ${rupees(p.mrp)}',
-                        style: const TextStyle(
-                          fontSize: 11,
-                          color: Color(0xFF9CA3AF),
-                          decoration: TextDecoration.lineThrough,
-                          decorationColor: Color(0xFF9CA3AF),
-                        ),
-                      ),
-                    if (discPct > 0) const SizedBox(height: 2),
-                    Text(
-                      rupees(salePrice),
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w800,
-                        color: Color(0xFF111827),
-                        height: 1.1,
+                    _ProductImage(product: p, size: imgSize),
+                    SizedBox(width: hGap),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  p.name,
+                                  maxLines: compact ? 2 : 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: compact ? 14 : 13,
+                                    color: const Color(0xFF111827),
+                                    height: 1.3,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              GestureDetector(
+                                onTap: () => cart.remove(p),
+                                child: Container(
+                                  width: 22,
+                                  height: 22,
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    border: Border.all(
+                                        color: const Color(0xFFD1D5DB)),
+                                    color: const Color(0xFFF9FAFB),
+                                  ),
+                                  child: const Center(
+                                    child: Icon(Icons.close,
+                                        size: 11,
+                                        color: Color(0xFF6B7280)),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 3),
+                          Text(
+                            p.packSize.isNotEmpty ? p.packSize : '—',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: compact ? 12 : 11,
+                              color: const Color(0xFF374151),
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            p.manufacturer,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: compact ? 12 : 11,
+                              color: const Color(0xFF9CA3AF),
+                            ),
+                          ),
+                          if (line.isSample) ...[
+                            const SizedBox(height: 3),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 5, vertical: 1),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFFFF7ED),
+                                borderRadius: BorderRadius.circular(4),
+                                border: Border.all(
+                                    color: const Color(0xFFFED7AA)),
+                              ),
+                              child: const Text('sample',
+                                  style: TextStyle(
+                                      fontSize: 9,
+                                      color: Color(0xFFEA580C))),
+                            ),
+                          ],
+                        ],
                       ),
                     ),
-                    if (p.gstPercent > 0) ...[
-                      const SizedBox(height: 4),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFFEF9C3),
-                          borderRadius: BorderRadius.circular(4),
-                          border:
-                              Border.all(color: const Color(0xFFFDE047)),
-                        ),
-                        child: Text(
-                          '${p.gstPercent.toStringAsFixed(0)}% GST (${rupees(salePrice * p.gstPercent / 100)} input credit)',
-                          style: const TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.w700,
-                            color: Color(0xFF854D0E),
-                          ),
-                        ),
-                      ),
-                    ],
                   ],
                 ),
-                const Spacer(),
-                // Right: qty stepper (unchanged — 150×56, 3-zone)
-                _CartStepper(
-                  product: p,
-                  quantity: line.quantity,
-                  cart: cart,
+
+                SizedBox(height: compact ? 8 : 10),
+
+                // ── BOTTOM ROW ─────────────────────────────────────────
+                // compact: [Flexible price col] [10px] [compact stepper]
+                // wide:    [price col] [Spacer] [full stepper]
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Flexible(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          if (p.mrp > 0 && discPct > 0)
+                            Text(
+                              'MRP ${rupees(p.mrp)}',
+                              style: const TextStyle(
+                                fontSize: 11,
+                                color: Color(0xFF9CA3AF),
+                                decoration: TextDecoration.lineThrough,
+                                decorationColor: Color(0xFF9CA3AF),
+                              ),
+                            ),
+                          if (discPct > 0) const SizedBox(height: 2),
+                          Text(
+                            rupees(salePrice),
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w800,
+                              color: Color(0xFF111827),
+                              height: 1.1,
+                            ),
+                          ),
+                          if (p.gstPercent > 0) ...[
+                            const SizedBox(height: 4),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFFEF9C3),
+                                borderRadius: BorderRadius.circular(4),
+                                border: Border.all(
+                                    color: const Color(0xFFFDE047)),
+                              ),
+                              child: Text(
+                                compact
+                                    ? '${p.gstPercent.toStringAsFixed(0)}% GST · ${rupees(salePrice * p.gstPercent / 100)}'
+                                    : '${p.gstPercent.toStringAsFixed(0)}% GST (${rupees(salePrice * p.gstPercent / 100)} input credit)',
+                                style: const TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w700,
+                                  color: Color(0xFF854D0E),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                    if (!compact) const Spacer(),
+                    SizedBox(width: compact ? 10 : 0),
+                    _CartStepper(
+                      product: p,
+                      quantity: line.quantity,
+                      cart: cart,
+                      compact: compact,
+                    ),
+                  ],
                 ),
               ],
             ),
-          ],
-        ),
-      ),
+          ),
+        );
+      },
     );
   }
 }
@@ -635,10 +653,12 @@ class _CartStepper extends StatefulWidget {
   final Product product;
   final int quantity;
   final CartModel cart;
+  final bool compact;
   const _CartStepper({
     required this.product,
     required this.quantity,
     required this.cart,
+    this.compact = false,
   });
 
   static String _unit(String packSize) {
@@ -674,10 +694,20 @@ class _CartStepperState extends State<_CartStepper> {
     final unit = _CartStepper._unit(widget.product.packSize);
     final qty = widget.quantity;
     final increasing = _increasing;
+    final c = widget.compact;
+
+    // Compact (mobile) dims: 118×44, zones 34px, smaller text
+    // Full (web) dims:       150×56, zones 44px, standard text
+    final double w = c ? 118.0 : 150.0;
+    final double h = c ? 44.0 : 56.0;
+    final double zone = c ? 34.0 : 44.0;
+    final double signFs = c ? 18.0 : 22.0;
+    final double qtyFs = c ? 13.0 : 15.0;
+    final double unitFs = c ? 11.0 : 13.0;
 
     return SizedBox(
-      width: 150,
-      height: 56,
+      width: w,
+      height: h,
       child: Stack(
         children: [
           // Visual layer
@@ -692,14 +722,14 @@ class _CartStepperState extends State<_CartStepper> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   // Minus visual
-                  const SizedBox(
-                    width: 44,
+                  SizedBox(
+                    width: zone,
                     child: Center(
                       child: Text(
                         '−',
                         style: TextStyle(
-                          color: Color(0xFF1a1a1a),
-                          fontSize: 22,
+                          color: const Color(0xFF1a1a1a),
+                          fontSize: signFs,
                           fontWeight: FontWeight.w600,
                           height: 1,
                         ),
@@ -736,10 +766,10 @@ class _CartStepperState extends State<_CartStepper> {
                               child: Text(
                                 '$qty',
                                 key: ValueKey<int>(qty),
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontWeight: FontWeight.w700,
-                                  color: Color(0xFF1a1a1a),
-                                  fontSize: 15,
+                                  color: const Color(0xFF1a1a1a),
+                                  fontSize: qtyFs,
                                   height: 1,
                                 ),
                               ),
@@ -748,9 +778,9 @@ class _CartStepperState extends State<_CartStepper> {
                           const SizedBox(width: 4),
                           Text(
                             unit,
-                            style: const TextStyle(
-                              fontSize: 13,
-                              color: Color(0xFF1a1a1a),
+                            style: TextStyle(
+                              fontSize: unitFs,
+                              color: const Color(0xFF1a1a1a),
                               fontWeight: FontWeight.w600,
                               height: 1,
                             ),
@@ -761,7 +791,7 @@ class _CartStepperState extends State<_CartStepper> {
                   ),
                   // Plus visual — green right side
                   Container(
-                    width: 44,
+                    width: zone,
                     decoration: const BoxDecoration(
                       color: Brand.green,
                       borderRadius: BorderRadius.only(
@@ -769,12 +799,12 @@ class _CartStepperState extends State<_CartStepper> {
                         bottomRight: Radius.circular(7),
                       ),
                     ),
-                    child: const Center(
+                    child: Center(
                       child: Text(
                         '+',
                         style: TextStyle(
                           color: Colors.white,
-                          fontSize: 22,
+                          fontSize: signFs,
                           fontWeight: FontWeight.w600,
                           height: 1,
                         ),
@@ -790,9 +820,9 @@ class _CartStepperState extends State<_CartStepper> {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // Zone 1: minus (44px)
+                // Zone 1: minus
                 SizedBox(
-                  width: 44,
+                  width: zone,
                   child: MouseRegion(
                     cursor: SystemMouseCursors.click,
                     child: GestureDetector(
@@ -803,9 +833,9 @@ class _CartStepperState extends State<_CartStepper> {
                 ),
                 // Zone 2: center display (no action)
                 const Expanded(child: SizedBox()),
-                // Zone 3: plus (44px)
+                // Zone 3: plus
                 SizedBox(
-                  width: 44,
+                  width: zone,
                   child: MouseRegion(
                     cursor: SystemMouseCursors.click,
                     child: GestureDetector(

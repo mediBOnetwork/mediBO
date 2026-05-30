@@ -1142,10 +1142,10 @@ class _CartPanelContentState extends State<_CartPanelContent> {
                                               children: [
                                                 Icon(
                                                   Icons.remove_shopping_cart,
-                                                  size: 13,
+                                                  size: 16,
                                                   color: Color(0xFFDC2626),
                                                 ),
-                                                SizedBox(width: 5),
+                                                SizedBox(width: 6),
                                                 Text(
                                                   'Clear Cart',
                                                   style: TextStyle(

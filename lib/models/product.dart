@@ -51,6 +51,9 @@ class Product {
   /// Distributor discount percentage off MRP.
   final double discount;
 
+  /// Promotional scheme, e.g. "5+1" (buy 5 get 1 free). Empty when none.
+  final String scheme;
+
   const Product({
     required this.id,
     required this.name,
@@ -69,6 +72,7 @@ class Product {
     required this.requiresPrescription,
     required this.discount,
     this.gstPercent = 12,
+    this.scheme = '',
   });
 
   /// Builds a [Product] from a `MEDICINE` row returned by Supabase.
@@ -114,6 +118,7 @@ class Product {
       schedule: isPrescription ? 'Schedule H' : 'OTC',
       requiresPrescription: isPrescription,
       discount: 0.0,
+      scheme: (map['scheme'] as String?)?.trim() ?? '',
     );
   }
 
@@ -135,6 +140,7 @@ class Product {
         'schedule': schedule,
         'requiresPrescription': requiresPrescription,
         'discount': discount,
+        'scheme': scheme,
       };
 
   factory Product.fromJson(Map<String, dynamic> map) {
@@ -159,6 +165,7 @@ class Product {
       schedule: (map['schedule'] as String?) ?? 'OTC',
       requiresPrescription: (map['requiresPrescription'] as bool?) ?? false,
       discount: (map['discount'] as num?)?.toDouble() ?? 0.0,
+      scheme: (map['scheme'] as String?) ?? '',
     );
   }
 

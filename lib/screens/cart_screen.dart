@@ -403,6 +403,13 @@ class _CartItemCard extends StatelessWidget {
     final discPct = cartDiscountPercent(cart.mrpTotal);
     final salePrice = p.mrp * (1 - discPct / 100);
 
+    // Parse scheme "X+Y" for free-qty calculation
+    final schemeParts = p.scheme.split('+');
+    final int buyX = schemeParts.length == 2 ? (int.tryParse(schemeParts[0]) ?? 0) : 0;
+    final int getY = schemeParts.length == 2 ? (int.tryParse(schemeParts[1]) ?? 0) : 0;
+    final int freeQty = (buyX > 0 && getY > 0) ? (line.quantity ~/ buyX) * getY : 0;
+    final String unit = _CartStepper._unit(p.packSize);
+
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       decoration: BoxDecoration(
@@ -433,7 +440,7 @@ class _CartItemCard extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                        crossAxisAlignment: CrossAxisAlignment.center,
                         children: [
                           Expanded(
                             child: Text(
@@ -448,6 +455,24 @@ class _CartItemCard extends StatelessWidget {
                               ),
                             ),
                           ),
+                          if (p.scheme.isNotEmpty) ...[
+                            const SizedBox(width: 6),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFFEF08A),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Text(
+                                p.scheme,
+                                style: const TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                  color: Color(0xFF92400E),
+                                ),
+                              ),
+                            ),
+                          ],
                           const SizedBox(width: 6),
                           GestureDetector(
                             onTap: () => cart.remove(p),
@@ -564,11 +589,35 @@ class _CartItemCard extends StatelessWidget {
                   ],
                 ),
                 const Spacer(),
-                // Right: qty stepper (unchanged — 150×56, 3-zone)
-                _CartStepper(
-                  product: p,
-                  quantity: line.quantity,
-                  cart: cart,
+                // Right: free-qty label (when earned) + qty stepper
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (freeQty > 0) ...[
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFDCFCE7),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          '+$freeQty $unit${freeQty == 1 ? '' : 's'} free',
+                          style: const TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF15803D),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                    ],
+                    _CartStepper(
+                      product: p,
+                      quantity: line.quantity,
+                      cart: cart,
+                    ),
+                  ],
                 ),
               ],
             ),

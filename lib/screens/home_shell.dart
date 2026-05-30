@@ -948,6 +948,7 @@ class _CartPanelContentState extends State<_CartPanelContent> {
   }
 
   void _toggleSearch() {
+    if (_searchActive) FocusManager.instance.primaryFocus?.unfocus();
     setState(() {
       _searchActive = !_searchActive;
       if (!_searchActive) {
@@ -992,7 +993,7 @@ class _CartPanelContentState extends State<_CartPanelContent> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // ── Cart header: ← | count/search | Clear | 🔍 ──────────────────
+          // ── Cart header ──────────────────────────────────────────────
           Container(
             decoration: const BoxDecoration(
               color: Colors.white,
@@ -1009,97 +1010,137 @@ class _CartPanelContentState extends State<_CartPanelContent> {
                         size: 18, color: Color(0xFF111827)),
                     tooltip: 'Close cart',
                   ),
-                  // Animated inline: count text ↔ search field
+                  // Animated inline: count chip ↔ search field
+                  // Search field slides in from the right (search-icon side).
                   Expanded(
-                    child: AnimatedSwitcher(
-                      duration: const Duration(milliseconds: 260),
-                      switchInCurve: Curves.easeOut,
-                      switchOutCurve: Curves.easeIn,
-                      transitionBuilder: (child, anim) =>
-                          FadeTransition(opacity: anim, child: child),
-                      child: _searchActive
-                          ? TextField(
-                              key: const ValueKey('search'),
-                              controller: _searchCtrl,
-                              autofocus: true,
-                              onChanged: (v) =>
-                                  setState(() => _searchQuery = v),
-                              decoration: InputDecoration(
-                                hintText: 'Search in cart…',
-                                hintStyle: const TextStyle(
-                                    color: Color(0xFF9CA3AF), fontSize: 13),
-                                isDense: true,
-                                contentPadding:
-                                    const EdgeInsets.symmetric(
-                                        horizontal: 10, vertical: 9),
-                                filled: true,
-                                fillColor: const Color(0xFFF9FAFB),
-                                border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(8),
-                                  borderSide: const BorderSide(
-                                      color: Color(0xFFE5E7EB)),
-                                ),
-                                enabledBorder: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(8),
-                                  borderSide: const BorderSide(
-                                      color: Color(0xFFE5E7EB)),
-                                ),
-                                focusedBorder: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(8),
-                                  borderSide: const BorderSide(
-                                      color: Color(0xFF1B5E20), width: 1.5),
-                                ),
-                                suffixIcon: _searchQuery.isNotEmpty
-                                    ? IconButton(
-                                        icon: const Icon(Icons.close,
-                                            size: 16,
-                                            color: Color(0xFF9CA3AF)),
-                                        onPressed: () => setState(() {
+                    child: ClipRect(
+                      child: AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 280),
+                        switchInCurve: Curves.easeOut,
+                        switchOutCurve: Curves.easeIn,
+                        // Left-align children so count chip hugs the back arrow.
+                        layoutBuilder: (cur, prev) => Stack(
+                          alignment: Alignment.centerLeft,
+                          children: [...prev, if (cur != null) cur],
+                        ),
+                        transitionBuilder: (child, anim) {
+                          // Search field: slides from right + fades in/out.
+                          if (child.key == const ValueKey('search')) {
+                            return SlideTransition(
+                              position: Tween<Offset>(
+                                begin: const Offset(0.4, 0),
+                                end: Offset.zero,
+                              ).animate(anim),
+                              child: FadeTransition(
+                                  opacity: anim, child: child),
+                            );
+                          }
+                          // Count chip: just fades.
+                          return FadeTransition(opacity: anim, child: child);
+                        },
+                        child: _searchActive
+                            ? TextField(
+                                key: const ValueKey('search'),
+                                controller: _searchCtrl,
+                                autofocus: true,
+                                onChanged: (v) =>
+                                    setState(() => _searchQuery = v),
+                                decoration: InputDecoration(
+                                  hintText: 'Search in cart…',
+                                  hintStyle: const TextStyle(
+                                      color: Color(0xFF9CA3AF),
+                                      fontSize: 13),
+                                  isDense: true,
+                                  contentPadding:
+                                      const EdgeInsets.symmetric(
+                                          horizontal: 10, vertical: 9),
+                                  filled: true,
+                                  fillColor: const Color(0xFFF9FAFB),
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(8),
+                                    borderSide: const BorderSide(
+                                        color: Color(0xFFE5E7EB)),
+                                  ),
+                                  enabledBorder: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(8),
+                                    borderSide: const BorderSide(
+                                        color: Color(0xFFE5E7EB)),
+                                  ),
+                                  focusedBorder: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(8),
+                                    borderSide: const BorderSide(
+                                        color: Color(0xFF1B5E20),
+                                        width: 1.5),
+                                  ),
+                                  // Single X: clears text if present,
+                                  // closes search if field is already empty.
+                                  suffixIcon: IconButton(
+                                    icon: const Icon(Icons.close,
+                                        size: 16,
+                                        color: Color(0xFF9CA3AF)),
+                                    onPressed: () {
+                                      if (_searchQuery.isNotEmpty) {
+                                        setState(() {
                                           _searchCtrl.clear();
                                           _searchQuery = '';
-                                        }),
-                                      )
-                                    : null,
+                                        });
+                                      } else {
+                                        _toggleSearch();
+                                      }
+                                    },
+                                  ),
+                                ),
+                              )
+                            : Container(
+                                key: const ValueKey('count'),
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 10, vertical: 6),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFECFDF5),
+                                  borderRadius: BorderRadius.circular(10),
+                                  border: Border.all(
+                                      color: const Color(0xFFBBF7D0)),
+                                ),
+                                child: Text(
+                                  '$itemCount product${itemCount == 1 ? '' : 's'} in cart',
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                    color: Color(0xFF15803D),
+                                  ),
+                                ),
                               ),
-                            )
-                          : Text(
-                              key: const ValueKey('count'),
-                              '$itemCount product${itemCount == 1 ? '' : 's'} in cart',
-                              style: const TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w600,
-                                color: Color(0xFF374151),
-                              ),
-                            ),
+                      ),
                     ),
                   ),
-                  // Clear Cart button — hidden when search is open
+                  // Clear Cart button — hidden while search is open
                   AnimatedSize(
-                    duration: const Duration(milliseconds: 260),
+                    duration: const Duration(milliseconds: 280),
                     curve: Curves.easeInOut,
                     child: _searchActive
                         ? const SizedBox.shrink()
                         : Padding(
-                            padding: const EdgeInsets.only(left: 6),
+                            padding: const EdgeInsets.only(left: 8),
                             child: GestureDetector(
                               onTap: _confirmClear,
                               child: Container(
                                 padding: const EdgeInsets.symmetric(
                                     horizontal: 10, vertical: 7),
                                 decoration: BoxDecoration(
-                                  color: const Color(0xFFFFF1F2),
-                                  borderRadius: BorderRadius.circular(7),
+                                  borderRadius:
+                                      BorderRadius.circular(10),
                                   border: Border.all(
                                       color: const Color(0xFFDC2626)),
                                 ),
                                 child: const Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
-                                    Icon(Icons.delete_outline_rounded,
-                                        size: 13, color: Color(0xFFDC2626)),
-                                    SizedBox(width: 4),
+                                    Icon(Icons.remove_shopping_cart,
+                                        size: 13,
+                                        color: Color(0xFFDC2626)),
+                                    SizedBox(width: 5),
                                     Text(
-                                      'Clear',
+                                      'Clear Cart',
                                       style: TextStyle(
                                         fontSize: 11,
                                         fontWeight: FontWeight.w600,
@@ -1112,29 +1153,30 @@ class _CartPanelContentState extends State<_CartPanelContent> {
                             ),
                           ),
                   ),
-                  // Search toggle icon
+                  // Search icon — always the magnifying glass; tapping opens
+                  // search; stays visible as the right anchor when open.
                   const SizedBox(width: 6),
                   GestureDetector(
-                    onTap: _toggleSearch,
+                    onTap: _searchActive ? null : _toggleSearch,
                     child: Container(
                       width: 34,
                       height: 34,
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
                         color: _searchActive
-                            ? const Color(0xFFEFF6FF)
+                            ? const Color(0xFFECFDF5)
                             : Colors.transparent,
                         border: Border.all(
                           color: _searchActive
-                              ? const Color(0xFF3B82F6)
+                              ? const Color(0xFF16A34A)
                               : const Color(0xFFE5E7EB),
                         ),
                       ),
                       child: Icon(
-                        _searchActive ? Icons.close : Icons.search,
+                        Icons.search,
                         size: 17,
                         color: _searchActive
-                            ? const Color(0xFF3B82F6)
+                            ? const Color(0xFF16A34A)
                             : const Color(0xFF374151),
                       ),
                     ),

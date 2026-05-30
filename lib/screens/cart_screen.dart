@@ -322,7 +322,7 @@ class _ItemListState extends State<_ItemList> {
                       size: 40, color: Color(0xFF9CA3AF)),
                   const SizedBox(height: 12),
                   Text(
-                    'No ${_effectiveQuery.trim()} were added in cart',
+                    'No products match "${_effectiveQuery.trim()}"',
                     textAlign: TextAlign.center,
                     style: const TextStyle(
                       fontSize: 14,

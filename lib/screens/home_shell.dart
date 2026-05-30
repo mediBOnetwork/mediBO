@@ -320,12 +320,20 @@ class _HomeShellState extends State<HomeShell> {
             ],
           ),
           Positioned(
-            left: 16,
-            right: 16,
+            left: 0,
+            right: 0,
             bottom: 16,
-            child: RepaintBoundary(
-              child: _WebDiscountBar(
-                onTap: () => setState(() => _cartOpen = true),
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 560),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: RepaintBoundary(
+                    child: _WebDiscountBar(
+                      onTap: () => setState(() => _cartOpen = true),
+                    ),
+                  ),
+                ),
               ),
             ),
           ),
@@ -1521,10 +1529,16 @@ class _StickyCartBar extends StatefulWidget {
 
 class _StickyCartBarState extends State<_StickyCartBar>
     with TickerProviderStateMixin {
-  static const _navy = Color(0xFF1B2B8C);
-  static const _blue = Color(0xFF2563EB);
-  static const _amber = Color(0xFFFBBF24);
   static const _tierFreeDelivery = 999.0;
+
+  static Color _tierBgColor(double total) {
+    if (total >= 18999) return const Color(0xFF052E16);
+    if (total >= 8999) return const Color(0xFF14532D);
+    if (total >= 6999) return const Color(0xFF166534);
+    if (total >= 2999) return const Color(0xFF15803D);
+    if (total >= 999) return const Color(0xFF16A34A);
+    return const Color(0xFF22C55E);
+  }
   static const _tier3pct = 2999.0;
   static const _tier5pct = 6999.0;
   static const _tier6pct = 8999.0;
@@ -1592,15 +1606,11 @@ class _StickyCartBarState extends State<_StickyCartBar>
     final total = cart.mrpTotal;
     final uniqueItems = cart.distinctItems;
 
-    final bool unlocked = total >= _tier7pct;
-
     final double progress;
-    final Color barColor;
     final Widget leftContent;
 
     if (total >= _tier7pct) {
       progress = 1.0;
-      barColor = Colors.white;
       leftContent = const Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -1622,27 +1632,22 @@ class _StickyCartBarState extends State<_StickyCartBar>
       );
     } else if (total >= _tier6pct) {
       progress = (total - _tier6pct) / (_tier7pct - _tier6pct);
-      barColor = _amber;
       final remaining = (_tier7pct - total).ceil();
       leftContent = _UnlockedTierText(unlockedLabel: '6%', nextPct: 7, remaining: remaining);
     } else if (total >= _tier5pct) {
       progress = (total - _tier5pct) / (_tier6pct - _tier5pct);
-      barColor = _amber;
       final remaining = (_tier6pct - total).ceil();
       leftContent = _UnlockedTierText(unlockedLabel: '5%', nextPct: 6, remaining: remaining);
     } else if (total >= _tier3pct) {
       progress = (total - _tier3pct) / (_tier5pct - _tier3pct);
-      barColor = _amber;
       final remaining = (_tier5pct - total).ceil();
       leftContent = _UnlockedTierText(unlockedLabel: '3%', nextPct: 5, remaining: remaining);
     } else if (total >= _tierFreeDelivery) {
       progress = (total - _tierFreeDelivery) / (_tier3pct - _tierFreeDelivery);
-      barColor = _amber;
       final remaining = (_tier3pct - total).ceil();
       leftContent = _UnlockedTierText(unlockedLabel: 'FREE delivery', nextPct: 3, remaining: remaining);
     } else {
       progress = total > 0 ? total / _tierFreeDelivery : 0.0;
-      barColor = _blue;
       final remaining = (_tierFreeDelivery - total).ceil();
       leftContent = _DiscountText(
           amount: '₹$remaining', suffix: ' more for FREE delivery');
@@ -1652,10 +1657,12 @@ class _StickyCartBarState extends State<_StickyCartBar>
       position: _slideAnim,
       child: GestureDetector(
         onTap: widget.onTap,
-        child: Container(
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 600),
+          curve: Curves.easeInOut,
           height: 64,
           decoration: BoxDecoration(
-            color: unlocked ? const Color(0xFF15803D) : _navy,
+            color: _tierBgColor(total),
             borderRadius: const BorderRadius.only(
               topLeft: Radius.circular(14),
               topRight: Radius.circular(14),
@@ -1687,7 +1694,7 @@ class _StickyCartBarState extends State<_StickyCartBar>
                         height: 4,
                         width: constraints.maxWidth,
                         decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.20),
+                          color: Colors.white.withValues(alpha: 0.25),
                           borderRadius: BorderRadius.circular(4),
                         ),
                       ),
@@ -1695,10 +1702,9 @@ class _StickyCartBarState extends State<_StickyCartBar>
                         duration: const Duration(milliseconds: 500),
                         curve: Curves.easeOut,
                         height: 4,
-                        width: constraints.maxWidth *
-                            progress.clamp(0.0, 1.0),
+                        width: constraints.maxWidth * progress.clamp(0.0, 1.0),
                         decoration: BoxDecoration(
-                          color: barColor,
+                          color: Colors.white,
                           borderRadius: BorderRadius.circular(4),
                         ),
                       ),
@@ -1834,10 +1840,16 @@ class _WebDiscountBar extends StatefulWidget {
 
 class _WebDiscountBarState extends State<_WebDiscountBar>
     with SingleTickerProviderStateMixin {
-  static const _navy = Color(0xFF1B2B8C);
-  static const _blue = Color(0xFF2563EB);
-  static const _amber = Color(0xFFFBBF24);
   static const _tierFreeDelivery = 999.0;
+
+  static Color _tierBgColor(double total) {
+    if (total >= 18999) return const Color(0xFF052E16);
+    if (total >= 8999) return const Color(0xFF14532D);
+    if (total >= 6999) return const Color(0xFF166534);
+    if (total >= 2999) return const Color(0xFF15803D);
+    if (total >= 999) return const Color(0xFF16A34A);
+    return const Color(0xFF22C55E);
+  }
   static const _tier3pct = 2999.0;
   static const _tier5pct = 6999.0;
   static const _tier6pct = 8999.0;
@@ -1888,14 +1900,11 @@ class _WebDiscountBarState extends State<_WebDiscountBar>
       return const SizedBox.shrink();
     }
 
-    final bool unlocked = total >= _tier7pct;
     final double progress;
-    final Color barColor;
     final Widget leftContent;
 
     if (total >= _tier7pct) {
       progress = 1.0;
-      barColor = Colors.white;
       leftContent = const Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -1914,31 +1923,26 @@ class _WebDiscountBarState extends State<_WebDiscountBar>
       );
     } else if (total >= _tier6pct) {
       progress = (total - _tier6pct) / (_tier7pct - _tier6pct);
-      barColor = _amber;
       final remaining = (_tier7pct - total).ceil();
       leftContent =
           _UnlockedTierText(unlockedLabel: '6%', nextPct: 7, remaining: remaining);
     } else if (total >= _tier5pct) {
       progress = (total - _tier5pct) / (_tier6pct - _tier5pct);
-      barColor = _amber;
       final remaining = (_tier6pct - total).ceil();
       leftContent =
           _UnlockedTierText(unlockedLabel: '5%', nextPct: 6, remaining: remaining);
     } else if (total >= _tier3pct) {
       progress = (total - _tier3pct) / (_tier5pct - _tier3pct);
-      barColor = _amber;
       final remaining = (_tier5pct - total).ceil();
       leftContent =
           _UnlockedTierText(unlockedLabel: '3%', nextPct: 5, remaining: remaining);
     } else if (total >= _tierFreeDelivery) {
       progress = (total - _tierFreeDelivery) / (_tier3pct - _tierFreeDelivery);
-      barColor = _amber;
       final remaining = (_tier3pct - total).ceil();
       leftContent = _UnlockedTierText(
           unlockedLabel: 'FREE delivery', nextPct: 3, remaining: remaining);
     } else {
       progress = total > 0 ? total / _tierFreeDelivery : 0.0;
-      barColor = _blue;
       final remaining = (_tierFreeDelivery - total).ceil();
       leftContent =
           _DiscountText(amount: '₹$remaining', suffix: ' more for FREE delivery');
@@ -1948,10 +1952,12 @@ class _WebDiscountBarState extends State<_WebDiscountBar>
       position: _slideAnim,
       child: GestureDetector(
         onTap: widget.onTap,
-        child: Container(
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 600),
+          curve: Curves.easeInOut,
           height: 64,
           decoration: BoxDecoration(
-            color: unlocked ? const Color(0xFF15803D) : _navy,
+            color: _tierBgColor(total),
             borderRadius: BorderRadius.circular(14),
             boxShadow: [
               BoxShadow(
@@ -1984,7 +1990,7 @@ class _WebDiscountBarState extends State<_WebDiscountBar>
                         height: 4,
                         width: constraints.maxWidth,
                         decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.20),
+                          color: Colors.white.withValues(alpha: 0.25),
                           borderRadius: BorderRadius.circular(4),
                         ),
                       ),
@@ -1994,7 +2000,7 @@ class _WebDiscountBarState extends State<_WebDiscountBar>
                         height: 4,
                         width: constraints.maxWidth * progress.clamp(0.0, 1.0),
                         decoration: BoxDecoration(
-                          color: barColor,
+                          color: Colors.white,
                           borderRadius: BorderRadius.circular(4),
                         ),
                       ),

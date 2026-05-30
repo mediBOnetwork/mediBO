@@ -264,34 +264,185 @@ class _SampleBanner extends StatelessWidget {
 
 // ─── Item list ────────────────────────────────────────────────────────────────
 
-class _ItemList extends StatelessWidget {
+class _ItemList extends StatefulWidget {
   final CartModel cart;
   const _ItemList({required this.cart});
 
   @override
+  State<_ItemList> createState() => _ItemListState();
+}
+
+class _ItemListState extends State<_ItemList> {
+  final TextEditingController _searchCtrl = TextEditingController();
+  String _query = '';
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  List<CartLine> get _filteredLines {
+    final q = _query.trim().toLowerCase();
+    if (q.isEmpty) return widget.cart.lines;
+    return widget.cart.lines.where((l) {
+      final name = l.product.name.toLowerCase();
+      final generic = l.product.genericName.toLowerCase();
+      final mfr = l.product.manufacturer.toLowerCase();
+      return name.contains(q) || generic.contains(q) || mfr.contains(q);
+    }).toList();
+  }
+
+  Future<void> _confirmClear() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Clear cart?',
+            style: TextStyle(fontWeight: FontWeight.w700)),
+        content:
+            const Text('This will remove all items from your cart.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFFDC2626)),
+            child: const Text('Clear all'),
+          ),
+        ],
+      ),
+    );
+    if (ok == true && mounted) widget.cart.clear();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final lines = cart.lines;
-    return ListView.builder(
+    final filtered = _filteredLines;
+    final searchActive = _query.trim().isNotEmpty;
+
+    return ListView(
       physics: platformScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
       cacheExtent: 400,
-      itemCount: lines.length + 1,
-      itemBuilder: (_, i) {
-        if (i == 0) {
-          return Padding(
-            padding: const EdgeInsets.fromLTRB(4, 0, 4, 12),
-            child: Text(
-              '${cart.distinctItems} item${cart.distinctItems == 1 ? '' : 's'} in your cart',
-              style: const TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                color: Color(0xFF374151),
+      children: [
+        // ── Header: item count box + clear button + search ──
+        Padding(
+          padding: const EdgeInsets.fromLTRB(4, 0, 4, 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Boxed item count + Clear Cart button
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 7),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF9FAFB),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: const Color(0xFFE5E7EB)),
+                    ),
+                    child: Text(
+                      '${widget.cart.distinctItems} product${widget.cart.distinctItems == 1 ? '' : 's'} in cart',
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF374151),
+                      ),
+                    ),
+                  ),
+                  const Spacer(),
+                  TextButton.icon(
+                    onPressed: _confirmClear,
+                    icon: const Icon(Icons.delete_outline_rounded, size: 16),
+                    label: const Text('Clear Cart',
+                        style: TextStyle(fontWeight: FontWeight.w600)),
+                    style: TextButton.styleFrom(
+                      foregroundColor: const Color(0xFFDC2626),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 7),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              // Search bar — filters within cart items
+              TextField(
+                controller: _searchCtrl,
+                onChanged: (v) => setState(() => _query = v),
+                decoration: InputDecoration(
+                  hintText: 'Search in cart…',
+                  hintStyle:
+                      const TextStyle(color: Color(0xFF9CA3AF), fontSize: 13),
+                  prefixIcon: const Icon(Icons.search,
+                      size: 18, color: Color(0xFF9CA3AF)),
+                  suffixIcon: _query.isNotEmpty
+                      ? IconButton(
+                          icon: const Icon(Icons.close,
+                              size: 16, color: Color(0xFF9CA3AF)),
+                          onPressed: () => setState(() {
+                            _searchCtrl.clear();
+                            _query = '';
+                          }),
+                        )
+                      : null,
+                  isDense: true,
+                  contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 12, vertical: 10),
+                  filled: true,
+                  fillColor: Colors.white,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide:
+                        const BorderSide(color: Color(0xFFE5E7EB)),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide:
+                        const BorderSide(color: Color(0xFFE5E7EB)),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide:
+                        const BorderSide(color: Brand.green, width: 1.5),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        // ── No results message ──
+        if (searchActive && filtered.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 32),
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.search_off,
+                      size: 40, color: Color(0xFF9CA3AF)),
+                  const SizedBox(height: 12),
+                  Text(
+                    'No ${_query.trim()} were added in cart',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF374151),
+                    ),
+                  ),
+                ],
               ),
             ),
-          );
-        }
-        return _CartItemCard(line: lines[i - 1], cart: cart);
-      },
+          )
+        else
+          for (final line in filtered)
+            _CartItemCard(line: line, cart: widget.cart),
+      ],
     );
   }
 }
@@ -416,93 +567,109 @@ class _CartItemCard extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // MRP + discount %
-                if (p.mrp > 0 && discountPct > 0)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 4),
-                    child: Row(
-                      children: [
-                        Text(
-                          'MRP ${rupees(p.mrp)}',
-                          style: const TextStyle(
-                            fontSize: 12,
-                            color: Color(0xFF9CA3AF),
-                            decoration: TextDecoration.lineThrough,
-                            decorationColor: Color(0xFF9CA3AF),
-                          ),
+                // Row: sale price | /pack | spacer | MRP struck | GST badge
+                IntrinsicHeight(
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      // Sale price
+                      Text(
+                        rupees(p.b2bPrice),
+                        style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w800,
+                          color: Color(0xFF111827),
+                          height: 1.1,
                         ),
-                        const SizedBox(width: 6),
-                        Text(
-                          '$discountPct% OFF',
-                          style: const TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w700,
-                            color: Color(0xFF16A34A),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-
-                // Sale price + /pack
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.baseline,
-                  textBaseline: TextBaseline.alphabetic,
-                  children: [
-                    Text(
-                      rupees(p.b2bPrice),
-                      style: const TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w800,
-                        color: Color(0xFF111827),
-                        height: 1.1,
                       ),
-                    ),
-                    const SizedBox(width: 5),
-                    const Text(
-                      '/pack',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: Color(0xFF9CA3AF),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-
-                // Pack size pill + qty dropdown
-                Row(
-                  children: [
-                    if (p.packSize.isNotEmpty)
-                      Flexible(
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 10, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFF3F4F6),
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: Text(
-                            p.packSize,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
+                      const SizedBox(width: 4),
+                      // /pack
+                      Align(
+                        alignment: Alignment.bottomCenter,
+                        child: Padding(
+                          padding: const EdgeInsets.only(bottom: 2),
+                          child: const Text(
+                            '/pack',
+                            style: TextStyle(
                               fontSize: 11,
-                              color: Color(0xFF6B7280),
-                              fontWeight: FontWeight.w500,
+                              color: Color(0xFF9CA3AF),
                             ),
                           ),
                         ),
-                      )
-                    else
-                      const SizedBox(),
-                    const Spacer(),
-                    _CartStepper(
-                      product: p,
-                      quantity: line.quantity,
-                      cart: cart,
+                      ),
+                      const Spacer(),
+                      // Struck MRP
+                      if (p.mrp > 0 && discountPct > 0) ...[
+                        Align(
+                          alignment: Alignment.center,
+                          child: Text(
+                            'MRP ${rupees(p.mrp)}',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: Color(0xFF9CA3AF),
+                              decoration: TextDecoration.lineThrough,
+                              decorationColor: Color(0xFF9CA3AF),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                      ],
+                      // Yellow GST badge — stretches to row height via IntrinsicHeight
+                      if (p.gstPercent > 0)
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFFEF9C3),
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(color: const Color(0xFFFDE047)),
+                          ),
+                          child: Center(
+                            child: Text(
+                              '${p.gstPercent.toStringAsFixed(0)}% GST',
+                              style: const TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w700,
+                                color: Color(0xFF854D0E),
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 8),
+
+                // Pack size on its own full-width row
+                if (p.packSize.isNotEmpty) ...[
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF3F4F6),
+                      borderRadius: BorderRadius.circular(20),
                     ),
-                  ],
+                    child: Text(
+                      p.packSize,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: Color(0xFF6B7280),
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                ],
+
+                // Qty stepper right-aligned on its own row
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: _CartStepper(
+                    product: p,
+                    quantity: line.quantity,
+                    cart: cart,
+                  ),
                 ),
               ],
             ),
@@ -607,120 +774,147 @@ class _CartStepperState extends State<_CartStepper> {
 
     return SizedBox(
       width: 150,
-      height: 40,
-      child: Container(
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: const Color(0xFFE5E7EB)),
-        ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // Minus button
-            MouseRegion(
-              cursor: SystemMouseCursors.click,
-              child: GestureDetector(
-                onTap: () => widget.cart.decrement(widget.product),
-                child: const SizedBox(
-                  width: 40,
-                  child: Center(
-                    child: Text(
-                      '−',
-                      style: TextStyle(
-                        color: Color(0xFF1a1a1a),
-                        fontSize: 20,
-                        fontWeight: FontWeight.w600,
-                        height: 1,
-                      ),
-                    ),
-                  ),
-                ),
+      height: 56,
+      child: Stack(
+        children: [
+          // Visual layer
+          Positioned.fill(
+            child: Container(
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFFE5E7EB)),
               ),
-            ),
-            // Center: qty + unit with slide animation
-            Expanded(
-              child: Center(
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    ClipRect(
-                      child: AnimatedSwitcher(
-                        duration: const Duration(milliseconds: 200),
-                        transitionBuilder: (child, anim) {
-                          final isNew =
-                              (child.key as ValueKey<int>).value == qty;
-                          final begin = isNew
-                              ? (increasing
-                                  ? const Offset(0, -1)
-                                  : const Offset(0, 1))
-                              : (increasing
-                                  ? const Offset(0, 1)
-                                  : const Offset(0, -1));
-                          return SlideTransition(
-                            position: Tween<Offset>(
-                                    begin: begin, end: Offset.zero)
-                                .animate(anim),
-                            child: child,
-                          );
-                        },
-                        child: Text(
-                          '$qty',
-                          key: ValueKey<int>(qty),
-                          style: const TextStyle(
-                            fontWeight: FontWeight.w700,
-                            color: Color(0xFF1a1a1a),
-                            fontSize: 14,
-                            height: 1,
-                          ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // Minus visual
+                  const SizedBox(
+                    width: 44,
+                    child: Center(
+                      child: Text(
+                        '−',
+                        style: TextStyle(
+                          color: Color(0xFF1a1a1a),
+                          fontSize: 22,
+                          fontWeight: FontWeight.w600,
+                          height: 1,
                         ),
                       ),
                     ),
-                    const SizedBox(width: 4),
-                    Text(
-                      unit,
-                      style: const TextStyle(
-                        fontSize: 13,
-                        color: Color(0xFF1a1a1a),
-                        fontWeight: FontWeight.w600,
-                        height: 1,
+                  ),
+                  // Center: qty + unit with slide animation
+                  Expanded(
+                    child: Center(
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          ClipRect(
+                            child: AnimatedSwitcher(
+                              duration: const Duration(milliseconds: 200),
+                              transitionBuilder: (child, anim) {
+                                final isNew =
+                                    (child.key as ValueKey<int>).value == qty;
+                                final begin = isNew
+                                    ? (increasing
+                                        ? const Offset(0, -1)
+                                        : const Offset(0, 1))
+                                    : (increasing
+                                        ? const Offset(0, 1)
+                                        : const Offset(0, -1));
+                                return SlideTransition(
+                                  position: Tween<Offset>(
+                                          begin: begin, end: Offset.zero)
+                                      .animate(anim),
+                                  child: child,
+                                );
+                              },
+                              child: Text(
+                                '$qty',
+                                key: ValueKey<int>(qty),
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                  color: Color(0xFF1a1a1a),
+                                  fontSize: 15,
+                                  height: 1,
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            unit,
+                            style: const TextStyle(
+                              fontSize: 13,
+                              color: Color(0xFF1a1a1a),
+                              fontWeight: FontWeight.w600,
+                              height: 1,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                  ],
-                ),
-              ),
-            ),
-            // Plus button — green
-            MouseRegion(
-              cursor: SystemMouseCursors.click,
-              child: GestureDetector(
-                onTap: () => widget.cart.increment(widget.product),
-                child: Container(
-                  width: 40,
-                  decoration: const BoxDecoration(
-                    color: Brand.green,
-                    borderRadius: BorderRadius.only(
-                      topRight: Radius.circular(7),
-                      bottomRight: Radius.circular(7),
-                    ),
                   ),
-                  child: const Center(
-                    child: Text(
-                      '+',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 20,
-                        fontWeight: FontWeight.w600,
-                        height: 1,
+                  // Plus visual — green right side
+                  Container(
+                    width: 44,
+                    decoration: const BoxDecoration(
+                      color: Brand.green,
+                      borderRadius: BorderRadius.only(
+                        topRight: Radius.circular(7),
+                        bottomRight: Radius.circular(7),
+                      ),
+                    ),
+                    child: const Center(
+                      child: Text(
+                        '+',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 22,
+                          fontWeight: FontWeight.w600,
+                          height: 1,
+                        ),
                       ),
                     ),
                   ),
-                ),
+                ],
               ),
             ),
-          ],
-        ),
+          ),
+          // Invisible 3-zone tap overlay
+          Positioned.fill(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // Zone 1: minus (44px)
+                SizedBox(
+                  width: 44,
+                  child: MouseRegion(
+                    cursor: SystemMouseCursors.click,
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () => widget.cart.decrement(widget.product),
+                    ),
+                  ),
+                ),
+                // Zone 2: center display (no action)
+                const Expanded(child: SizedBox()),
+                // Zone 3: plus (44px)
+                SizedBox(
+                  width: 44,
+                  child: MouseRegion(
+                    cursor: SystemMouseCursors.click,
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () => widget.cart.increment(widget.product),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

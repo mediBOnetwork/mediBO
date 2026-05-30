@@ -349,187 +349,238 @@ class _ItemListState extends State<_ItemList> {
 
 // ─── Cart item card ───────────────────────────────────────────────────────────
 
-class _CartItemCard extends StatelessWidget {
+class _CartItemCard extends StatefulWidget {
   final CartLine line;
   final CartModel cart;
   const _CartItemCard({required this.line, required this.cart});
 
   @override
-  Widget build(BuildContext context) {
-    final p = line.product;
-    final discPct = cartDiscountPercent(cart.mrpTotal);
-    final salePrice = p.mrp * (1 - discPct / 100);
+  State<_CartItemCard> createState() => _CartItemCardState();
+}
 
-    return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x06000000),
-            blurRadius: 4,
-            offset: Offset(0, 1),
+class _CartItemCardState extends State<_CartItemCard> {
+  bool _pressed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = widget.line.product;
+    final discPct = cartDiscountPercent(widget.cart.mrpTotal);
+    final salePrice = p.mrp * (1 - discPct / 100);
+    final gstCredit = salePrice * p.gstPercent / 100;
+
+    return GestureDetector(
+      onTapDown: (_) => setState(() => _pressed = true),
+      onTapUp: (_) => setState(() => _pressed = false),
+      onTapCancel: () => setState(() => _pressed = false),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 120),
+        margin: const EdgeInsets.only(bottom: 12),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: _pressed ? const Color(0xFFD1FAE5) : const Color(0xFFEEF0F2),
           ),
-        ],
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(10),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // ── TOP ROW: image | name + pack size + manufacturer | remove ──
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _ProductImage(product: p, size: 64),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Expanded(
-                            child: Text(
-                              p.name,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w700,
-                                fontSize: 13,
-                                color: Color(0xFF111827),
-                                height: 1.3,
-                              ),
+          boxShadow: [
+            BoxShadow(
+              color: _pressed ? const Color(0x04000000) : const Color(0x0A000000),
+              blurRadius: _pressed ? 4 : 12,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _ProductImage(product: p, size: 64),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Name + remove X
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: Text(
+                            p.name,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w600,
+                              color: Color(0xFF1F2937),
+                              height: 1.3,
                             ),
                           ),
-                          const SizedBox(width: 6),
-                          GestureDetector(
-                            onTap: () => cart.remove(p),
-                            child: Container(
-                              width: 22,
-                              height: 22,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                border: Border.all(
-                                    color: const Color(0xFFD1D5DB)),
-                                color: const Color(0xFFF9FAFB),
-                              ),
-                              child: const Center(
-                                child: Icon(Icons.close,
-                                    size: 11, color: Color(0xFF6B7280)),
+                        ),
+                        const SizedBox(width: 6),
+                        _RemoveButton(onTap: () => widget.cart.remove(p)),
+                      ],
+                    ),
+                    if (p.packSize.isNotEmpty) ...[
+                      const SizedBox(height: 3),
+                      Text(
+                        p.packSize,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            fontSize: 12, color: Color(0xFF6B7280)),
+                      ),
+                    ],
+                    const SizedBox(height: 2),
+                    Text(
+                      p.manufacturer,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          fontSize: 12, color: Color(0xFF9CA3AF)),
+                    ),
+                    const SizedBox(height: 8),
+                    // Price row — wraps gracefully on narrow cards
+                    Wrap(
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      spacing: 6,
+                      runSpacing: 3,
+                      children: [
+                        Text(
+                          rupees(salePrice),
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                            color: Color(0xFF111827),
+                            height: 1.1,
+                          ),
+                        ),
+                        if (discPct > 0) ...[
+                          Text(
+                            'MRP ${rupees(p.mrp)}',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: Color(0xFF9CA3AF),
+                              decoration: TextDecoration.lineThrough,
+                              decorationColor: Color(0xFF9CA3AF),
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 5, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFDCFCE7),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              '${discPct.toStringAsFixed(0)}% OFF',
+                              style: const TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w700,
+                                color: Color(0xFF16A34A),
                               ),
                             ),
                           ),
                         ],
-                      ),
-                      const SizedBox(height: 3),
-                      Text(
-                        p.packSize.isNotEmpty ? p.packSize : '—',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 11,
-                          color: Color(0xFF374151),
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        p.manufacturer,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 11,
-                          color: Color(0xFF9CA3AF),
-                        ),
-                      ),
-                      if (line.isSample) ...[
-                        const SizedBox(height: 3),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 5, vertical: 1),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFFFF7ED),
-                            borderRadius: BorderRadius.circular(4),
-                            border:
-                                Border.all(color: const Color(0xFFFED7AA)),
-                          ),
-                          child: const Text('sample',
-                              style: TextStyle(
-                                  fontSize: 9, color: Color(0xFFEA580C))),
-                        ),
                       ],
-                    ],
-                  ),
-                ),
-              ],
-            ),
-
-            const SizedBox(height: 10),
-
-            // ── BOTTOM ROW: MRP/price/GST (left) | qty selector (right) ──
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                // Left: struck MRP, sale price, GST badge
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (p.mrp > 0 && discPct > 0)
-                      Text(
-                        'MRP ${rupees(p.mrp)}',
-                        style: const TextStyle(
-                          fontSize: 11,
-                          color: Color(0xFF9CA3AF),
-                          decoration: TextDecoration.lineThrough,
-                          decorationColor: Color(0xFF9CA3AF),
-                        ),
-                      ),
-                    if (discPct > 0) const SizedBox(height: 2),
-                    Text(
-                      rupees(salePrice),
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w800,
-                        color: Color(0xFF111827),
-                        height: 1.1,
-                      ),
                     ),
+                    // GST chip
                     if (p.gstPercent > 0) ...[
-                      const SizedBox(height: 4),
+                      const SizedBox(height: 6),
                       Container(
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 6, vertical: 2),
+                            horizontal: 7, vertical: 3),
                         decoration: BoxDecoration(
-                          color: const Color(0xFFFEF9C3),
-                          borderRadius: BorderRadius.circular(4),
-                          border:
-                              Border.all(color: const Color(0xFFFDE047)),
+                          color: const Color(0xFFFEF3C7),
+                          borderRadius: BorderRadius.circular(8),
                         ),
                         child: Text(
-                          '${p.gstPercent.toStringAsFixed(0)}% GST (${rupees(salePrice * p.gstPercent / 100)} input credit)',
+                          '${p.gstPercent.toStringAsFixed(0)}% GST · ${rupees(gstCredit)} credit',
                           style: const TextStyle(
                             fontSize: 10,
-                            fontWeight: FontWeight.w700,
-                            color: Color(0xFF854D0E),
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF92400E),
                           ),
                         ),
+                      ),
+                    ],
+                    // Sample badge
+                    if (widget.line.isSample) ...[
+                      const SizedBox(height: 5),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 5, vertical: 1),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFFF7ED),
+                          borderRadius: BorderRadius.circular(4),
+                          border: Border.all(color: const Color(0xFFFED7AA)),
+                        ),
+                        child: const Text('sample',
+                            style: TextStyle(
+                                fontSize: 9, color: Color(0xFFEA580C))),
                       ),
                     ],
                   ],
                 ),
-                const Spacer(),
-                // Right: qty stepper (unchanged — 150×56, 3-zone)
-                _CartStepper(
-                  product: p,
-                  quantity: line.quantity,
-                  cart: cart,
-                ),
-              ],
+              ),
+              const SizedBox(width: 12),
+              // Qty stepper — untouched (150×56, 3-zone)
+              _CartStepper(
+                product: p,
+                quantity: widget.line.quantity,
+                cart: widget.cart,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _RemoveButton extends StatefulWidget {
+  final VoidCallback onTap;
+  const _RemoveButton({required this.onTap});
+
+  @override
+  State<_RemoveButton> createState() => _RemoveButtonState();
+}
+
+class _RemoveButtonState extends State<_RemoveButton> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          width: 24,
+          height: 24,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: _hovered
+                ? const Color(0xFFFEE2E2)
+                : const Color(0xFFF3F4F6),
+            border: Border.all(
+              color: _hovered
+                  ? const Color(0xFFFCA5A5)
+                  : const Color(0xFFE5E7EB),
             ),
-          ],
+          ),
+          child: Center(
+            child: Icon(
+              Icons.close,
+              size: 12,
+              color: _hovered
+                  ? const Color(0xFFDC2626)
+                  : const Color(0xFF6B7280),
+            ),
+          ),
         ),
       ),
     );

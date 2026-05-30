@@ -223,6 +223,7 @@ class _CartScreenState extends State<CartScreen> {
               child: _ItemList(
                 cart: cart,
                 externalSearchQuery: widget.externalSearchQuery,
+                showBreakdown: true,
               ),
             ),
             _CheckoutBar(cart: cart, onMakePayment: _openPayment),
@@ -277,7 +278,8 @@ class _SampleBanner extends StatelessWidget {
 class _ItemList extends StatefulWidget {
   final CartModel cart;
   final String? externalSearchQuery;
-  const _ItemList({required this.cart, this.externalSearchQuery});
+  final bool showBreakdown;
+  const _ItemList({required this.cart, this.externalSearchQuery, this.showBreakdown = false});
 
   @override
   State<_ItemList> createState() => _ItemListState();
@@ -298,32 +300,6 @@ class _ItemListState extends State<_ItemList> {
     }).toList();
   }
 
-  Future<void> _confirmClear() async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('Clear cart?',
-            style: TextStyle(fontWeight: FontWeight.w700)),
-        content:
-            const Text('This will remove all items from your cart.'),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            style: FilledButton.styleFrom(
-                backgroundColor: const Color(0xFFDC2626)),
-            child: const Text('Clear all'),
-          ),
-        ],
-      ),
-    );
-    if (ok == true && mounted) widget.cart.clear();
-  }
-
   @override
   Widget build(BuildContext context) {
     final filtered = _filteredLines;
@@ -334,62 +310,6 @@ class _ItemListState extends State<_ItemList> {
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
       cacheExtent: 400,
       children: [
-        // ── Header: item count box + clear button ──
-        Padding(
-          padding: const EdgeInsets.fromLTRB(4, 0, 4, 12),
-          child: Row(
-            children: [
-              // Boxed item count
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF9FAFB),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: const Color(0xFFE5E7EB)),
-                ),
-                child: Text(
-                  '${widget.cart.distinctItems} product${widget.cart.distinctItems == 1 ? '' : 's'} in cart',
-                  style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: Color(0xFF374151),
-                  ),
-                ),
-              ),
-              const Spacer(),
-              // Boxed Clear Cart button
-              GestureDetector(
-                onTap: _confirmClear,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 12, vertical: 7),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFFFF1F2),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: const Color(0xFFDC2626)),
-                  ),
-                  child: const Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.delete_outline_rounded,
-                          size: 14, color: Color(0xFFDC2626)),
-                      SizedBox(width: 5),
-                      Text(
-                        'Clear Cart',
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: Color(0xFFDC2626),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
         // ── No results message ──
         if (searchActive && filtered.isEmpty)
           Padding(
@@ -417,6 +337,11 @@ class _ItemListState extends State<_ItemList> {
         else
           for (final line in filtered)
             _CartItemCard(line: line, cart: widget.cart),
+        // ── Billing breakdown (scrolls with products, narrow layout only) ──
+        if (widget.showBreakdown && !searchActive) ...[
+          const SizedBox(height: 4),
+          _BillingBreakdownSection(cart: widget.cart),
+        ],
       ],
     );
   }
@@ -855,11 +780,11 @@ class _CartStepperState extends State<_CartStepper> {
   }
 }
 
-// ─── 4-line billing summary ───────────────────────────────────────────────────
+// ─── Billing breakdown section (scrolls with products) ───────────────────────
 
-class _BillingSummary extends StatelessWidget {
+class _BillingBreakdownSection extends StatelessWidget {
   final CartModel cart;
-  const _BillingSummary({required this.cart});
+  const _BillingBreakdownSection({required this.cart});
 
   @override
   Widget build(BuildContext context) {
@@ -869,51 +794,68 @@ class _BillingSummary extends StatelessWidget {
     final deliveryFee = cartDeliveryFee(cart.mrpTotal);
     final gstAmt = cart.netPayable - deliveryFee - netTaxable;
 
-    return Column(
-      children: [
-        _sRow('Net Total', rupees(cart.mrpTotal)),
-        const SizedBox(height: 4),
-        _sRow(
-          'Discount (${discPct.toStringAsFixed(0)}%)',
-          '− ${rupees(discAmt)}',
-          valueColor: const Color(0xFF16A34A),
-        ),
-        const SizedBox(height: 4),
-        _sRow(
-          'GST Input Credit',
-          rupees(gstAmt),
-          valueColor: const Color(0xFFD97706),
-        ),
-        const SizedBox(height: 4),
-        _sRow(
-          'Delivery Fee',
-          deliveryFee > 0 ? rupees(deliveryFee) : 'FREE',
-          valueColor: deliveryFee == 0 ? const Color(0xFF16A34A) : null,
-        ),
-        const Padding(
-          padding: EdgeInsets.symmetric(vertical: 6),
-          child: Divider(height: 1, color: Color(0xFFE5E7EB)),
-        ),
-        _sRow('Net Payable Amount', rupees(cart.netPayable), bold: true),
-      ],
+    return Container(
+      margin: const EdgeInsets.only(bottom: 4),
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+        boxShadow: const [
+          BoxShadow(
+              color: Color(0x06000000), blurRadius: 4, offset: Offset(0, 1)),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            'Price Breakdown',
+            style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                color: Color(0xFF6B7280),
+                letterSpacing: 0.3),
+          ),
+          const SizedBox(height: 10),
+          _bRow('Net Total', rupees(cart.mrpTotal)),
+          const SizedBox(height: 6),
+          _bRow(
+            'Discount (${discPct.toStringAsFixed(0)}%)',
+            '− ${rupees(discAmt)}',
+            valueColor: const Color(0xFF16A34A),
+          ),
+          const SizedBox(height: 6),
+          _bRow(
+            'GST Input Credit',
+            rupees(gstAmt),
+            valueColor: const Color(0xFFD97706),
+          ),
+          const SizedBox(height: 6),
+          _bRow(
+            'Delivery Fee',
+            deliveryFee > 0 ? rupees(deliveryFee) : 'FREE',
+            valueColor: deliveryFee == 0 ? const Color(0xFF16A34A) : null,
+          ),
+        ],
+      ),
     );
   }
 
-  Widget _sRow(String label, String value,
-      {bool bold = false, Color? valueColor}) {
-    final color = bold ? const Color(0xFF111827) : const Color(0xFF374151);
-    final weight = bold ? FontWeight.w700 : FontWeight.w500;
-    final size = bold ? 14.0 : 12.0;
+  Widget _bRow(String label, String value, {Color? valueColor}) {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
         Text(label,
-            style: TextStyle(fontSize: size, fontWeight: weight, color: color)),
+            style: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+                color: Color(0xFF374151))),
         Text(value,
             style: TextStyle(
-                fontSize: size,
-                fontWeight: weight,
-                color: valueColor ?? color)),
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+                color: valueColor ?? const Color(0xFF374151))),
       ],
     );
   }
@@ -943,73 +885,95 @@ class _CheckoutBar extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // 4-line billing summary
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-            child: _BillingSummary(cart: cart),
-          ),
           const Divider(height: 1, color: Color(0xFFE5E7EB)),
-          // Net Payable + Make Payment row
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 10, 16, 28),
-            child: Row(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // Net Payable + "View bill" link
-                GestureDetector(
-                  onTap: () => _showBill(context),
-                  child: const Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Row(
+                // Pinned Net Payable row
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text(
+                      'Net Payable Amount',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFF111827),
+                      ),
+                    ),
+                    Text(
+                      rupees(cart.netPayable),
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFF111827),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                // View bill + Make Payment
+                Row(
+                  children: [
+                    GestureDetector(
+                      onTap: () => _showBill(context),
+                      child: const Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Text(
-                            'View bill',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Color(0xFF1D4ED8),
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                          SizedBox(width: 2),
-                          Icon(Icons.keyboard_arrow_up,
-                              size: 14, color: Color(0xFF1D4ED8)),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 14),
-                // Make Payment button
-                Expanded(
-                  child: GestureDetector(
-                    onTap: onMakePayment,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(vertical: 15),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF1B5E20),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: const Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(Icons.payment_rounded,
-                              color: Colors.white, size: 18),
-                          SizedBox(width: 8),
-                          Text(
-                            'Make Payment',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 14,
-                              fontWeight: FontWeight.w700,
-                              letterSpacing: 0.2,
-                            ),
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                'View bill',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Color(0xFF1D4ED8),
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              SizedBox(width: 2),
+                              Icon(Icons.keyboard_arrow_up,
+                                  size: 14, color: Color(0xFF1D4ED8)),
+                            ],
                           ),
                         ],
                       ),
                     ),
-                  ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: GestureDetector(
+                        onTap: onMakePayment,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(vertical: 15),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF1B5E20),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: const Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.payment_rounded,
+                                  color: Colors.white, size: 18),
+                              SizedBox(width: 8),
+                              Text(
+                                'Make Payment',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w700,
+                                  letterSpacing: 0.2,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),

@@ -958,118 +958,191 @@ class _CartPanelContentState extends State<_CartPanelContent> {
     });
   }
 
+  Future<void> _confirmClear() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Clear cart?',
+            style: TextStyle(fontWeight: FontWeight.w700)),
+        content: const Text('This will remove all items from your cart.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFFDC2626)),
+            child: const Text('Clear all'),
+          ),
+        ],
+      ),
+    );
+    if (ok == true && mounted) AppState.of(context).clear();
+  }
+
   @override
   Widget build(BuildContext context) {
+    final cart = AppState.of(context);
     final mq = MediaQuery.of(context);
+    final itemCount = cart.distinctItems;
+
     return SafeArea(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Cart panel header: ← Cart · search toggle
+          // ── Cart header: ← | count/search | Clear | 🔍 ──────────────────
           Container(
             decoration: const BoxDecoration(
               color: Colors.white,
               border: Border(bottom: BorderSide(color: Color(0xFFF3F4F6))),
             ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(4, 8, 8, 8),
-                  child: Row(
-                    children: [
-                      IconButton(
-                        onPressed: widget.onClose,
-                        icon: const Icon(Icons.arrow_back_ios_new,
-                            size: 18, color: Color(0xFF111827)),
-                        tooltip: 'Close cart',
-                      ),
-                      const Expanded(
-                        child: Text(
-                          'Cart',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w800,
-                            color: Color(0xFF111827),
-                          ),
-                        ),
-                      ),
-                      GestureDetector(
-                        onTap: _toggleSearch,
-                        child: Container(
-                          width: 36,
-                          height: 36,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: _searchActive
-                                ? const Color(0xFFEFF6FF)
-                                : Colors.transparent,
-                            border: Border.all(
-                              color: _searchActive
-                                  ? const Color(0xFF3B82F6)
-                                  : const Color(0xFFE5E7EB),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(4, 8, 8, 8),
+              child: Row(
+                children: [
+                  // Back arrow
+                  IconButton(
+                    onPressed: widget.onClose,
+                    icon: const Icon(Icons.arrow_back_ios_new,
+                        size: 18, color: Color(0xFF111827)),
+                    tooltip: 'Close cart',
+                  ),
+                  // Animated inline: count text ↔ search field
+                  Expanded(
+                    child: AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 260),
+                      switchInCurve: Curves.easeOut,
+                      switchOutCurve: Curves.easeIn,
+                      transitionBuilder: (child, anim) =>
+                          FadeTransition(opacity: anim, child: child),
+                      child: _searchActive
+                          ? TextField(
+                              key: const ValueKey('search'),
+                              controller: _searchCtrl,
+                              autofocus: true,
+                              onChanged: (v) =>
+                                  setState(() => _searchQuery = v),
+                              decoration: InputDecoration(
+                                hintText: 'Search in cart…',
+                                hintStyle: const TextStyle(
+                                    color: Color(0xFF9CA3AF), fontSize: 13),
+                                isDense: true,
+                                contentPadding:
+                                    const EdgeInsets.symmetric(
+                                        horizontal: 10, vertical: 9),
+                                filled: true,
+                                fillColor: const Color(0xFFF9FAFB),
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                  borderSide: const BorderSide(
+                                      color: Color(0xFFE5E7EB)),
+                                ),
+                                enabledBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                  borderSide: const BorderSide(
+                                      color: Color(0xFFE5E7EB)),
+                                ),
+                                focusedBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                  borderSide: const BorderSide(
+                                      color: Color(0xFF1B5E20), width: 1.5),
+                                ),
+                                suffixIcon: _searchQuery.isNotEmpty
+                                    ? IconButton(
+                                        icon: const Icon(Icons.close,
+                                            size: 16,
+                                            color: Color(0xFF9CA3AF)),
+                                        onPressed: () => setState(() {
+                                          _searchCtrl.clear();
+                                          _searchQuery = '';
+                                        }),
+                                      )
+                                    : null,
+                              ),
+                            )
+                          : Text(
+                              key: const ValueKey('count'),
+                              '$itemCount product${itemCount == 1 ? '' : 's'} in cart',
+                              style: const TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                                color: Color(0xFF374151),
+                              ),
+                            ),
+                    ),
+                  ),
+                  // Clear Cart button — hidden when search is open
+                  AnimatedSize(
+                    duration: const Duration(milliseconds: 260),
+                    curve: Curves.easeInOut,
+                    child: _searchActive
+                        ? const SizedBox.shrink()
+                        : Padding(
+                            padding: const EdgeInsets.only(left: 6),
+                            child: GestureDetector(
+                              onTap: _confirmClear,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 10, vertical: 7),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFFFF1F2),
+                                  borderRadius: BorderRadius.circular(7),
+                                  border: Border.all(
+                                      color: const Color(0xFFDC2626)),
+                                ),
+                                child: const Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(Icons.delete_outline_rounded,
+                                        size: 13, color: Color(0xFFDC2626)),
+                                    SizedBox(width: 4),
+                                    Text(
+                                      'Clear',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w600,
+                                        color: Color(0xFFDC2626),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
                             ),
                           ),
-                          child: Icon(
-                            _searchActive ? Icons.close : Icons.search,
-                            size: 18,
-                            color: _searchActive
-                                ? const Color(0xFF3B82F6)
-                                : const Color(0xFF374151),
-                          ),
+                  ),
+                  // Search toggle icon
+                  const SizedBox(width: 6),
+                  GestureDetector(
+                    onTap: _toggleSearch,
+                    child: Container(
+                      width: 34,
+                      height: 34,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: _searchActive
+                            ? const Color(0xFFEFF6FF)
+                            : Colors.transparent,
+                        border: Border.all(
+                          color: _searchActive
+                              ? const Color(0xFF3B82F6)
+                              : const Color(0xFFE5E7EB),
                         ),
                       ),
-                      const SizedBox(width: 4),
-                    ],
-                  ),
-                ),
-                if (_searchActive)
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
-                    child: TextField(
-                      controller: _searchCtrl,
-                      autofocus: true,
-                      onChanged: (v) => setState(() => _searchQuery = v),
-                      decoration: InputDecoration(
-                        hintText: 'Search in cart…',
-                        hintStyle: const TextStyle(
-                            color: Color(0xFF9CA3AF), fontSize: 13),
-                        prefixIcon: const Icon(Icons.search,
-                            size: 18, color: Color(0xFF9CA3AF)),
-                        suffixIcon: _searchQuery.isNotEmpty
-                            ? IconButton(
-                                icon: const Icon(Icons.close,
-                                    size: 16, color: Color(0xFF9CA3AF)),
-                                onPressed: () => setState(() {
-                                  _searchCtrl.clear();
-                                  _searchQuery = '';
-                                }),
-                              )
-                            : null,
-                        isDense: true,
-                        contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 10),
-                        filled: true,
-                        fillColor: Colors.white,
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8),
-                          borderSide:
-                              const BorderSide(color: Color(0xFFE5E7EB)),
-                        ),
-                        enabledBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8),
-                          borderSide:
-                              const BorderSide(color: Color(0xFFE5E7EB)),
-                        ),
-                        focusedBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8),
-                          borderSide: const BorderSide(
-                              color: Color(0xFF1B5E20), width: 1.5),
-                        ),
+                      child: Icon(
+                        _searchActive ? Icons.close : Icons.search,
+                        size: 17,
+                        color: _searchActive
+                            ? const Color(0xFF3B82F6)
+                            : const Color(0xFF374151),
                       ),
                     ),
                   ),
-              ],
+                  const SizedBox(width: 4),
+                ],
+              ),
             ),
           ),
           const Divider(height: 1),

@@ -253,6 +253,17 @@ class _HomeShellState extends State<HomeShell> {
               ),
             ],
           ),
+          if (_index == 0)
+            Positioned(
+              left: 16,
+              right: 16,
+              bottom: 16,
+              child: RepaintBoundary(
+                child: _StickyCartBar(
+                  onTap: () => setState(() => _cartOpen = true),
+                ),
+              ),
+            ),
           RepaintBoundary(
             child: CartPanel(
               open: _cartOpen,
@@ -331,24 +342,25 @@ class _HomeShellState extends State<HomeShell> {
               ),
             ],
           ),
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 16,
-            child: Center(
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 560),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: RepaintBoundary(
-                    child: _WebDiscountBar(
-                      onTap: () => setState(() => _cartOpen = true),
+          if (_index == 0)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 16,
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 560),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: RepaintBoundary(
+                      child: _WebDiscountBar(
+                        onTap: () => setState(() => _cartOpen = true),
+                      ),
                     ),
                   ),
                 ),
               ),
             ),
-          ),
           LoginPanel(
             open: _loginOpen,
             onClose: () => setState(() => _loginOpen = false),
@@ -1767,17 +1779,7 @@ class _MobileBottomBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final cart = AppState.of(context);
     final bottomNavIndex = index == 1 ? 2 : index == 2 ? 3 : 0;
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        if (cart.distinctItems > 0)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-            child: RepaintBoundary(
-              child: _StickyCartBar(onTap: onCartTap),
-            ),
-          ),
-        BottomNavigationBar(
+    return BottomNavigationBar(
           currentIndex: bottomNavIndex,
           type: BottomNavigationBarType.fixed,
           selectedItemColor: Brand.green,
@@ -1816,8 +1818,6 @@ class _MobileBottomBar extends StatelessWidget {
               label: 'Bulk',
             ),
           ],
-        ),
-      ],
     );
   }
 }
@@ -1839,7 +1839,7 @@ class _StickyCartBar extends StatefulWidget {
 class _StickyCartBarState extends State<_StickyCartBar>
     with TickerProviderStateMixin {
   static const _tierFreeDelivery = 999.0;
-  static const _bg = Color(0xFF14532D);
+  static const _bg = Color(0xFF16A34A);
   static const _tier3pct = 2999.0;
   static const _tier5pct = 6999.0;
   static const _tier6pct = 8999.0;
@@ -2145,7 +2145,7 @@ class _WebDiscountBarState extends State<_WebDiscountBar>
     with SingleTickerProviderStateMixin {
   static const _tierFreeDelivery = 999.0;
 
-  static const _bg = Color(0xFF14532D);
+  static const _bg = Color(0xFF16A34A);
   static const _tier3pct = 2999.0;
   static const _tier5pct = 6999.0;
   static const _tier6pct = 8999.0;

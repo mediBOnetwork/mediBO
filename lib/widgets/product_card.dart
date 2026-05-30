@@ -341,6 +341,8 @@ class _ImageBlockState extends State<_ImageBlock> {
   late final int _rawInitial;
   int _page = 0;
   Timer? _hoverTimer;
+  bool _manualOverride = false;
+  bool _programmaticNav = false;
 
   @override
   void initState() {
@@ -359,6 +361,7 @@ class _ImageBlockState extends State<_ImageBlock> {
 
   void _startHoverCycle() {
     if (!kIsWeb) return;
+    if (_manualOverride) return;
     final count = widget.product.imageUrls.length;
     if (count < 2) return;
     _hoverTimer?.cancel();
@@ -370,6 +373,7 @@ class _ImageBlockState extends State<_ImageBlock> {
   void _stopHoverCycle() {
     _hoverTimer?.cancel();
     _hoverTimer = null;
+    _manualOverride = false;
     if (widget.product.imageUrls.length > 1) _goTo(0);
   }
 
@@ -382,9 +386,18 @@ class _ImageBlockState extends State<_ImageBlock> {
     var target = base + logical;
     if (target - raw > count / 2) target -= count;
     if (raw - target > count / 2) target += count;
+    _programmaticNav = true;
     setState(() => _page = logical);
     _pageCtrl.animateToPage(target,
         duration: const Duration(milliseconds: 250), curve: Curves.easeInOut);
+  }
+
+  // Manual nav (dot click/hover) — stops auto-cycle for the rest of this hover.
+  void _manualGoTo(int logical) {
+    _manualOverride = true;
+    _hoverTimer?.cancel();
+    _hoverTimer = null;
+    _goTo(logical);
   }
 
   void _openZoom(BuildContext context, List<String> images) {
@@ -451,8 +464,16 @@ class _ImageBlockState extends State<_ImageBlock> {
                           controller: _pageCtrl,
                           // Large virtual count → seamless infinite loop
                           itemCount: count * 1000,
-                          onPageChanged: (p) =>
-                              setState(() => _page = p % count),
+                          onPageChanged: (p) {
+                            final logical = p % count;
+                            if (!_programmaticNav) {
+                              _manualOverride = true;
+                              _hoverTimer?.cancel();
+                              _hoverTimer = null;
+                            }
+                            _programmaticNav = false;
+                            setState(() => _page = logical);
+                          },
                           itemBuilder: (_, i) => Padding(
                             padding: const EdgeInsets.all(4),
                             child: _netImage(images[i % count]),
@@ -514,7 +535,7 @@ class _ImageBlockState extends State<_ImageBlock> {
               child: _DotNav(
                 count: images.length,
                 current: _page,
-                onSelect: _goTo,
+                onSelect: _manualGoTo,
               ),
             ),
         ],
@@ -605,7 +626,6 @@ class _ZoomDialogState extends State<_ZoomDialog> {
   late final PageController _ctrl;
   late final int _rawInitial;
   int _page = 0;
-  Timer? _hoverTimer;
 
   @override
   void initState() {
@@ -618,25 +638,8 @@ class _ZoomDialogState extends State<_ZoomDialog> {
 
   @override
   void dispose() {
-    _hoverTimer?.cancel();
     _ctrl.dispose();
     super.dispose();
-  }
-
-  void _startHoverCycle() {
-    if (!kIsWeb) return;
-    final count = widget.images.length;
-    if (count < 2) return;
-    _hoverTimer?.cancel();
-    _hoverTimer = Timer.periodic(const Duration(milliseconds: 900), (_) {
-      if (mounted) _goTo((_page + 1) % count);
-    });
-  }
-
-  void _stopHoverCycle() {
-    _hoverTimer?.cancel();
-    _hoverTimer = null;
-    if (widget.images.length > 1) _goTo(0);
   }
 
   void _goTo(int logical) {
@@ -683,36 +686,32 @@ class _ZoomDialogState extends State<_ZoomDialog> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    MouseRegion(
-                      onEnter: kIsWeb && multi ? (_) => _startHoverCycle() : null,
-                      onExit: kIsWeb && multi ? (_) => _stopHoverCycle() : null,
-                      child: SizedBox(
-                        width: imgWidth,
-                        height: imgHeight,
-                        child: multi
-                            ? PageView.builder(
-                                controller: _ctrl,
-                                itemCount: count * 1000,
-                                onPageChanged: (p) =>
-                                    setState(() => _page = p % count),
-                                itemBuilder: (_, i) => InteractiveViewer(
-                                  minScale: 0.8,
-                                  maxScale: 4.0,
-                                  child: Image.network(
-                                    images[i % count],
-                                    fit: BoxFit.contain,
-                                  ),
-                                ),
-                              )
-                            : InteractiveViewer(
+                    SizedBox(
+                      width: imgWidth,
+                      height: imgHeight,
+                      child: multi
+                          ? PageView.builder(
+                              controller: _ctrl,
+                              itemCount: count * 1000,
+                              onPageChanged: (p) =>
+                                  setState(() => _page = p % count),
+                              itemBuilder: (_, i) => InteractiveViewer(
                                 minScale: 0.8,
                                 maxScale: 4.0,
                                 child: Image.network(
-                                  images[0],
+                                  images[i % count],
                                   fit: BoxFit.contain,
                                 ),
                               ),
-                      ),
+                            )
+                          : InteractiveViewer(
+                              minScale: 0.8,
+                              maxScale: 4.0,
+                              child: Image.network(
+                                images[0],
+                                fit: BoxFit.contain,
+                              ),
+                            ),
                     ),
                     if (multi) ...[
                       const SizedBox(height: 12),

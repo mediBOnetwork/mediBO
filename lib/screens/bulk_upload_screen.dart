@@ -131,15 +131,24 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       setState(() => _step = _LoadStep.aiAnalyzing);
       final isBinary = rawContent.startsWith('PDF_BYTES:') ||
           rawContent.startsWith('IMAGE_BYTES:');
+      // Structured spreadsheets have unambiguous column layout; parse locally
+      // to avoid Gemini misidentifying the qty column as rate/amount/mrp.
+      final fileExt = file.name.toLowerCase().split('.').last;
+      final isStructuredSheet =
+          const {'xlsx', 'xls', 'ods', 'csv', 'tsv'}.contains(fileExt);
       List<Map<String, dynamic>> extracted;
-      try {
-        extracted = await _extractWithGeminiAI(rawContent, file.name);
-      } catch (_) {
-        if (isBinary) {
-          throw Exception(
-              'Could not extract medicines from this file. For image-based PDFs or photos, ensure the content is clear and legible, or use a typed CSV/Excel/text file instead.');
-        }
+      if (isStructuredSheet) {
         extracted = _extractWithFallback(rawContent);
+      } else {
+        try {
+          extracted = await _extractWithGeminiAI(rawContent, file.name);
+        } catch (_) {
+          if (isBinary) {
+            throw Exception(
+                'Could not extract medicines from this file. For image-based PDFs or photos, ensure the content is clear and legible, or use a typed CSV/Excel/text file instead.');
+          }
+          extracted = _extractWithFallback(rawContent);
+        }
       }
 
       if (extracted.isEmpty) throw Exception('No medicine rows found in file');
@@ -551,12 +560,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         {'text': _geminiPrompt},
       ];
     } else {
-      parts = [
-        {
-          'text':
-              'You are an expert Indian pharmacy assistant. Below is raw content from a medicine order file. The file may have any structure, any column order, any headers.\n\nExtract ALL medicine names and quantities. Rules:\n1. Identify which column contains medicine/product names\n2. Identify which column contains quantities\n3. Skip header rows\n4. Skip rows that are totals or serial numbers\n5. Fix spelling mistakes in medicine names\n6. Decode abbreviations: PCM=Paracetamol, Aug=Augmentin, MTF=Metformin\n7. If quantity missing use 1\n\nFile content:\n\n$rawContent\n\nReturn ONLY valid JSON array:\n[{"name":"Paracetamol 500mg","qty":10}]',
-        }
-      ];
+      parts = [{'text': _geminiTextPrompt(rawContent)}];
     }
 
     final response = await http.post(
@@ -588,8 +592,8 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     return (jsonDecode(match.group(0)!) as List).cast<Map<String, dynamic>>();
   }
 
-  // Header-name fallback: works on any CSV / TSV / tab-separated XLSX dump
-  // when AI is unavailable. Detects name + qty columns by common header words.
+  // Fallback parser for structured files (CSV/TSV/XLSX/ODS) and typed-PDF text.
+  // Detects name + qty columns by header keywords, then by type inference.
   List<Map<String, dynamic>> _extractWithFallback(String rawContent) {
     final lines =
         rawContent.split('\n').where((l) => l.trim().isNotEmpty).toList();
@@ -609,23 +613,35 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       'salt', 'brand', 'particular', 'detail', 'dawa',
     ];
     const qtyPatterns = [
-      'qty', 'quantity', 'count', 'units', 'pack', 'no.', 'nos',
-      'pieces', 'strips', 'boxes', 'tablet',
+      'qty', 'quantity', 'count', 'units', 'pcs', 'pack',
+      'nos', 'pieces', 'strips', 'boxes', 'tablet', 'req', 'demand',
+    ];
+    // Columns with these headers hold prices, not quantities — exclude them.
+    const pricePatterns = [
+      'rate', 'price', 'mrp', 'amount', 'value', 'total', 'cost',
+      'discount', 'disc', 'net', 'tax', 'gst',
     ];
     const skipWords = ['total', 'subtotal', 'grand', 's.no', 'sl.', 'serial'];
 
-    int nameCol = 0;
+    int nameCol = -1;
     int qtyCol = -1;
     int headerRow = -1;
+    final priceColIndices = <int>{};
 
-    for (int r = 0; r < rows.length.clamp(0, 3); r++) {
+    // Scan up to first 5 rows to find the header row.
+    for (int r = 0; r < rows.length.clamp(0, 5); r++) {
       int foundName = -1, foundQty = -1;
       for (int c = 0; c < rows[r].length; c++) {
-        final cell = rows[r][c].toLowerCase();
+        final cell = rows[r][c].toLowerCase().trim();
+        if (cell.isEmpty) continue;
+        if (pricePatterns.any((p) => cell.contains(p))) priceColIndices.add(c);
         if (foundName == -1 && namePatterns.any((p) => cell.contains(p))) {
           foundName = c;
         }
-        if (foundQty == -1 && qtyPatterns.any((p) => cell.contains(p))) {
+        // Accept as qty only if not also a price-like header.
+        if (foundQty == -1 &&
+            qtyPatterns.any((p) => cell.contains(p)) &&
+            !pricePatterns.any((p) => cell.contains(p))) {
           foundQty = c;
         }
       }
@@ -637,21 +653,31 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       }
     }
 
-    // No structured header — treat as plain text / WhatsApp export
-    if (headerRow == -1) {
+    // No structured header — fall back to line-by-line plain-text parsing.
+    if (headerRow == -1 || nameCol == -1) {
       return _extractFromPlainTextLines(lines);
     }
 
-    final result = <Map<String, dynamic>>[];
-    final startRow = headerRow >= 0 ? headerRow + 1 : 0;
+    // If no qty column found by header name, try type inference on data rows.
+    if (qtyCol == -1) {
+      final dataRows = rows.length > headerRow + 1
+          ? rows.sublist(headerRow + 1)
+          : <List<String>>[];
+      qtyCol = _inferQtyColumn(dataRows, nameCol, priceColIndices);
+    }
 
-    for (int r = startRow; r < rows.length; r++) {
+    final result = <Map<String, dynamic>>[];
+    for (int r = headerRow + 1; r < rows.length; r++) {
       final row = rows[r];
       if (row.length <= nameCol) continue;
       final name = row[nameCol].trim();
       if (name.isEmpty || name.length < 2) continue;
-      if (skipWords.any((s) => name.toLowerCase().contains(s))) continue;
-      if (RegExp(r'^\d+\.?$').hasMatch(name)) continue;
+      final nameLower = name.toLowerCase();
+      // Skip total/serial/header rows.
+      if (skipWords.any((s) => nameLower.contains(s))) continue;
+      if (namePatterns.any((p) => nameLower == p)) continue;
+      if (qtyPatterns.any((p) => nameLower == p)) continue;
+      if (RegExp(r'^\d+\.?\s*$').hasMatch(name)) continue;
 
       int qty = 1;
       if (qtyCol >= 0 && qtyCol < row.length) {
@@ -697,6 +723,8 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       if (skipPrefixes.any((s) => work.toLowerCase().startsWith(s))) continue;
       if (work.contains('end-to-end encrypted')) continue;
       if (RegExp(r'^\d+\.?\s*$').hasMatch(work)) continue; // bare number
+      // Skip header-like lines that contain 2+ column-header keywords
+      if (_isColumnHeaderLine(work)) continue;
 
       String name = work;
       int qty = 1;
@@ -722,14 +750,82 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     return result;
   }
 
+  /// Returns true when a line looks like a column header row (≥2 header keywords).
+  /// Used to prevent "Product Name  Qty  Rate  Amount" from being ingested as a product.
+  static bool _isColumnHeaderLine(String line) {
+    const keywords = [
+      'product', 'medicine', 'item', 'drug', 'description',
+      'qty', 'quantity', 'rate', 'mrp', 'price', 'amount',
+      's.no', 'serial', 'sr.', 'units', 'pack', 'strips',
+    ];
+    final lower = line.toLowerCase();
+    final hits = keywords.where((k) => lower.contains(k)).length;
+    return hits >= 2;
+  }
+
+  /// Identifies the quantity column by type inference when header matching fails.
+  /// Prefers columns of small integers (1–9999) that are not price/rate columns.
+  int _inferQtyColumn(
+      List<List<String>> dataRows, int nameCol, Set<int> priceColIndices) {
+    if (dataRows.isEmpty) return -1;
+    final maxCols =
+        dataRows.fold(0, (m, r) => r.length > m ? r.length : m);
+
+    final smallIntCount = List.filled(maxCols, 0);
+    final decimalCount = List.filled(maxCols, 0);
+    final largeCount = List.filled(maxCols, 0);
+
+    for (final row in dataRows) {
+      for (int c = 0; c < row.length; c++) {
+        if (c == nameCol) continue;
+        final cell = row[c].replaceAll(',', '').trim();
+        if (cell.isEmpty) continue;
+        final num = double.tryParse(cell);
+        if (num == null) continue;
+        final isWhole = num == num.truncateToDouble();
+        if (isWhole && num >= 1 && num <= 9999) {
+          smallIntCount[c]++;
+        } else {
+          if (!isWhole) decimalCount[c]++;
+          if (num > 9999) largeCount[c]++;
+        }
+      }
+    }
+
+    int bestCol = -1;
+    int bestScore = 0;
+    for (int c = 0; c < maxCols; c++) {
+      if (c == nameCol) continue;
+      if (priceColIndices.contains(c)) continue;
+      if (smallIntCount[c] == 0) continue;
+      // Penalise columns with many decimals or very large numbers.
+      final score = smallIntCount[c] - decimalCount[c] * 2 - largeCount[c];
+      if (score > bestScore) {
+        bestScore = score;
+        bestCol = c;
+      }
+    }
+    return bestCol;
+  }
+
   static const _geminiPrompt =
       'You are an expert Indian pharmacy procurement assistant. '
-      'Extract ALL medicine/product names and their quantities from this order document. '
+      'Extract ALL medicine/product names and their quantities from this order document.\n'
       'Return ONLY a valid JSON array — no explanation, no markdown:\n'
-      '[{"name": "medicine name exactly as written", "qty": 5}]\n'
-      'Rules: skip header rows, empty rows, total/subtotal rows. '
-      'Keep medicine names with dosage (e.g. "Paracetamol 500mg"). '
-      'Use 1 if quantity is missing. Return EVERY medicine found.';
+      '[{"name": "medicine name exactly as written", "qty": 5}]\n\n'
+      'CRITICAL RULES:\n'
+      '- SKIP the header row: any row whose cells are column labels like '
+      '"Product", "Medicine", "Item", "Name", "Qty", "Quantity", "Rate", '
+      '"MRP", "Price", "Amount", "S.No", "Serial", "Units", "Pack". '
+      'Never return a header keyword as a medicine name.\n'
+      '- SKIP total, subtotal, and grand total rows.\n'
+      '- SKIP serial-number-only rows.\n'
+      '- The QTY column contains small integers (1–9999). '
+      'Do NOT confuse it with the Rate/MRP/Price/Amount column (larger values or decimals). '
+      'Read each row\'s actual quantity from the qty/quantity column.\n'
+      '- Keep medicine names with dosage (e.g. "Paracetamol 500mg").\n'
+      '- Use qty=1 only when no quantity column exists at all.\n'
+      '- Return EVERY medicine found.';
 
   static const _geminiImagePrompt =
       'This is a handwritten medicine order list from a pharmacy. '
@@ -748,6 +844,30 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       'If no number is visible use 1. '
       'Respond with ONLY this JSON — nothing else:\n'
       '[{"name": "drug name", "qty": 1}]';
+
+  static String _geminiTextPrompt(String content) =>
+      'You are an expert Indian pharmacy procurement assistant.\n'
+      'Below is raw content from a medicine order file (PDF, text, or Word document).\n'
+      'Extract ALL medicine/product names and their actual quantities.\n\n'
+      'CRITICAL RULES — follow exactly:\n'
+      '1. HEADER ROW: Any row whose cells are column labels such as "Product", '
+      '"Medicine", "Item", "Name", "Description", "Qty", "Quantity", "Rate", '
+      '"MRP", "Price", "Amount", "Sr", "S.No", "Serial", "Units", "Pack" is a '
+      'HEADER ROW. Do NOT include it. Never return a header keyword as a medicine name.\n'
+      '2. SKIP these rows entirely: header rows, blank rows, total / subtotal / '
+      'grand total rows, and serial-number-only rows.\n'
+      '3. QTY vs PRICE: The quantity column holds small integers (typically 1–500). '
+      'The rate / MRP / price / amount column holds larger numbers or decimals. '
+      'Read qty ONLY from the quantity column — never from rate, MRP, price, or '
+      'amount columns. A medicine ordered "5 times" has qty=5 even if its MRP is ₹210.\n'
+      '4. If a Qty column exists, read each row\'s actual value — do NOT return '
+      'qty=1 for every row unless quantities are truly absent from the file.\n'
+      '5. Keep medicine names with their dosage (e.g. "Paracetamol 500mg", '
+      '"Augmentin 625 Duo").\n'
+      '6. Decode common abbreviations: PCM=Paracetamol, Aug=Augmentin, MTF=Metformin.\n\n'
+      'File content:\n\n$content\n\n'
+      'Return ONLY a valid JSON array, no markdown fences:\n'
+      '[{"name":"Augmentin 625 Duo","qty":5},{"name":"Pan 40mg","qty":10}]';
 
   // ── Supabase matching ──────────────────────────────────────────────────────
 

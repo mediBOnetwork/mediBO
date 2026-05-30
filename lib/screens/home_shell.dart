@@ -258,14 +258,9 @@ class _HomeShellState extends State<HomeShell> {
               left: 16,
               right: 16,
               bottom: 16,
-              child: Center(
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 320),
-                  child: RepaintBoundary(
-                    child: _StickyCartBar(
-                      onTap: () => setState(() => _cartOpen = true),
-                    ),
-                  ),
+              child: RepaintBoundary(
+                child: _StickyCartBar(
+                  onTap: () => setState(() => _cartOpen = true),
                 ),
               ),
             ),
@@ -1916,24 +1911,13 @@ class _StickyCartBarState extends State<_StickyCartBar>
 
     if (total >= _tier7pct) {
       progress = 1.0;
-      leftContent = const Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text('🎉', style: TextStyle(fontSize: 13)),
-          SizedBox(width: 5),
-          Flexible(
-            child: Text(
-              '7% discount unlocked! (maximum)',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-              ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-        ],
+      leftContent = const Text(
+        '🎉 7% discount unlocked! (maximum)',
+        style: TextStyle(
+          color: Colors.white,
+          fontSize: 12,
+          fontWeight: FontWeight.w700,
+        ),
       );
     } else if (total >= _tier6pct) {
       progress = (total - _tier6pct) / (_tier7pct - _tier6pct);
@@ -1963,13 +1947,8 @@ class _StickyCartBarState extends State<_StickyCartBar>
       child: GestureDetector(
         onTap: widget.onTap,
         child: Container(
-          height: 64,
           decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              colors: [Color(0xFF4ADE80), Color(0xFF15803D)],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
+            color: const Color(0xFF1B5E20),
             borderRadius: BorderRadius.circular(16),
             boxShadow: [
               BoxShadow(
@@ -1980,24 +1959,23 @@ class _StickyCartBarState extends State<_StickyCartBar>
             ],
           ),
           child: Column(
+            mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(14, 10, 10, 0),
-                  child: Row(
-                    children: [
-                      Expanded(child: leftContent),
-                      ScaleTransition(
-                        scale: _pulseAnim,
-                        child: _CartChip(uniqueItems: uniqueItems),
-                      ),
-                    ],
-                  ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
+                child: Row(
+                  children: [
+                    Expanded(child: leftContent),
+                    ScaleTransition(
+                      scale: _pulseAnim,
+                      child: _CartChip(uniqueItems: uniqueItems),
+                    ),
+                  ],
                 ),
               ),
               Padding(
-                padding: const EdgeInsets.fromLTRB(14, 4, 14, 8),
+                padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
                 child: LayoutBuilder(
                   builder: (_, constraints) => Stack(
                     children: [
@@ -2015,7 +1993,7 @@ class _StickyCartBarState extends State<_StickyCartBar>
                         height: 4,
                         width: constraints.maxWidth * progress.clamp(0.0, 1.0),
                         decoration: BoxDecoration(
-                          color: const Color(0xFF4ADE80),
+                          color: Colors.white,
                           borderRadius: BorderRadius.circular(4),
                         ),
                       ),
@@ -2039,8 +2017,6 @@ class _DiscountText extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return RichText(
-      maxLines: 1,
-      overflow: TextOverflow.ellipsis,
       text: TextSpan(
         style: const TextStyle(
             fontSize: 12, fontWeight: FontWeight.w500, color: Colors.white),
@@ -2073,8 +2049,6 @@ class _UnlockedTierText extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return RichText(
-      maxLines: 1,
-      overflow: TextOverflow.ellipsis,
       text: TextSpan(
         style: const TextStyle(
             fontSize: 12, fontWeight: FontWeight.w500, color: Colors.white),
@@ -2094,12 +2068,26 @@ class _UnlockedTierText extends StatelessWidget {
   }
 }
 
-class _CartChip extends StatelessWidget {
+class _CartChip extends StatefulWidget {
   final int uniqueItems;
   const _CartChip({required this.uniqueItems});
 
   @override
+  State<_CartChip> createState() => _CartChipState();
+}
+
+class _CartChipState extends State<_CartChip> {
+  bool _increasing = true;
+
+  @override
+  void didUpdateWidget(_CartChip old) {
+    super.didUpdateWidget(old);
+    _increasing = widget.uniqueItems >= old.uniqueItems;
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final uniqueItems = widget.uniqueItems;
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -2117,13 +2105,29 @@ class _CartChip extends StatelessWidget {
               const Icon(Icons.shopping_cart,
                   color: Colors.white, size: 13),
               const SizedBox(width: 5),
-              Text(
-                '$uniqueItems item${uniqueItems == 1 ? '' : 's'}',
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 0.2,
+              ClipRect(
+                child: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 250),
+                  transitionBuilder: (child, animation) {
+                    final offset = _increasing
+                        ? Tween<Offset>(begin: const Offset(0, -1), end: Offset.zero)
+                        : Tween<Offset>(begin: const Offset(0, 1), end: Offset.zero);
+                    return SlideTransition(
+                      position: offset.animate(
+                          CurvedAnimation(parent: animation, curve: Curves.easeOut)),
+                      child: FadeTransition(opacity: animation, child: child),
+                    );
+                  },
+                  child: Text(
+                    '$uniqueItems item${uniqueItems == 1 ? '' : 's'}',
+                    key: ValueKey(uniqueItems),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.2,
+                    ),
+                  ),
                 ),
               ),
             ],
@@ -2207,21 +2211,10 @@ class _WebDiscountBarState extends State<_WebDiscountBar>
 
     if (total >= _tier7pct) {
       progress = 1.0;
-      leftContent = const Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text('🎉', style: TextStyle(fontSize: 13)),
-          SizedBox(width: 5),
-          Flexible(
-            child: Text(
-              '7% discount unlocked! (maximum)',
-              style: TextStyle(
-                  color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-        ],
+      leftContent = const Text(
+        '🎉 7% discount unlocked! (maximum)',
+        style: TextStyle(
+            color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700),
       );
     } else if (total >= _tier6pct) {
       progress = (total - _tier6pct) / (_tier7pct - _tier6pct);
@@ -2254,16 +2247,9 @@ class _WebDiscountBarState extends State<_WebDiscountBar>
       position: _slideAnim,
       child: GestureDetector(
         onTap: widget.onTap,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 600),
-          curve: Curves.easeInOut,
-          height: 64,
+        child: Container(
           decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              colors: [Color(0xFF4ADE80), Color(0xFF15803D)],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
+            color: const Color(0xFF1B5E20),
             borderRadius: BorderRadius.circular(14),
             boxShadow: [
               BoxShadow(
@@ -2274,21 +2260,20 @@ class _WebDiscountBarState extends State<_WebDiscountBar>
             ],
           ),
           child: Column(
+            mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 10, 12, 0),
-                  child: Row(
-                    children: [
-                      Expanded(child: leftContent),
-                      _CartChip(uniqueItems: uniqueItems),
-                    ],
-                  ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 10, 12, 10),
+                child: Row(
+                  children: [
+                    Expanded(child: leftContent),
+                    _CartChip(uniqueItems: uniqueItems),
+                  ],
                 ),
               ),
               Padding(
-                padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
                 child: LayoutBuilder(
                   builder: (_, constraints) => Stack(
                     children: [
@@ -2306,7 +2291,7 @@ class _WebDiscountBarState extends State<_WebDiscountBar>
                         height: 4,
                         width: constraints.maxWidth * progress.clamp(0.0, 1.0),
                         decoration: BoxDecoration(
-                          color: const Color(0xFF4ADE80),
+                          color: Colors.white,
                           borderRadius: BorderRadius.circular(4),
                         ),
                       ),

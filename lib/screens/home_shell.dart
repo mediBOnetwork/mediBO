@@ -182,22 +182,24 @@ class _HomeShellState extends State<HomeShell> {
   Widget _buildMobile(List<Widget> pages) {
     return Scaffold(
       backgroundColor: Colors.white,
-      bottomNavigationBar: _MobileBottomBar(
-        index: _index,
-        cartOpen: _cartOpen,
-        onCartTap: () => setState(() => _cartOpen = true),
-        onNavTap: (i) {
-          switch (i) {
-            case 0:
-            case 1:
-              _setIndex(0);
-            case 2:
-              _setIndex(1);
-            case 3:
-              _setIndex(2);
-          }
-        },
-      ),
+      bottomNavigationBar: _cartOpen
+          ? null
+          : _MobileBottomBar(
+              index: _index,
+              cartOpen: _cartOpen,
+              onCartTap: () => setState(() => _cartOpen = true),
+              onNavTap: (i) {
+                switch (i) {
+                  case 0:
+                  case 1:
+                    _setIndex(0);
+                  case 2:
+                    _setIndex(1);
+                  case 3:
+                    _setIndex(2);
+                }
+              },
+            ),
       body: Stack(
         children: [
           Column(

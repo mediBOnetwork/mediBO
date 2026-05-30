@@ -432,61 +432,58 @@ class _CartItemCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = line.product;
-    final discountPct =
-        p.mrp > 0 ? ((p.mrp - p.b2bPrice) / p.mrp * 100).round() : 0;
 
     return Container(
-      margin: const EdgeInsets.only(bottom: 12),
+      margin: const EdgeInsets.only(bottom: 8),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(10),
         border: Border.all(color: const Color(0xFFE5E7EB)),
         boxShadow: const [
           BoxShadow(
-            color: Color(0x0A000000),
-            blurRadius: 8,
-            offset: Offset(0, 2),
+            color: Color(0x06000000),
+            blurRadius: 4,
+            offset: Offset(0, 1),
           ),
         ],
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // ── Top: image + name + remove ──
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 12, 10, 12),
-            child: Row(
+      child: Padding(
+        padding: const EdgeInsets.all(10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // ── TOP ROW: image | name + pack size + manufacturer | remove ──
+            Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _ProductImage(product: p),
-                const SizedBox(width: 12),
+                _ProductImage(product: p, size: 64),
+                const SizedBox(width: 10),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const SizedBox(height: 2),
                       Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Expanded(
                             child: Text(
                               p.name,
-                              maxLines: 2,
+                              maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: const TextStyle(
                                 fontWeight: FontWeight.w700,
-                                fontSize: 14,
+                                fontSize: 13,
                                 color: Color(0xFF111827),
                                 height: 1.3,
                               ),
                             ),
                           ),
-                          const SizedBox(width: 8),
+                          const SizedBox(width: 6),
                           GestureDetector(
                             onTap: () => cart.remove(p),
                             child: Container(
-                              width: 26,
-                              height: 26,
+                              width: 22,
+                              height: 22,
                               decoration: BoxDecoration(
                                 shape: BoxShape.circle,
                                 border: Border.all(
@@ -495,27 +492,37 @@ class _CartItemCard extends StatelessWidget {
                               ),
                               child: const Center(
                                 child: Icon(Icons.close,
-                                    size: 13, color: Color(0xFF6B7280)),
+                                    size: 11, color: Color(0xFF6B7280)),
                               ),
                             ),
                           ),
                         ],
                       ),
-                      const SizedBox(height: 5),
+                      const SizedBox(height: 3),
+                      Text(
+                        p.packSize.isNotEmpty ? p.packSize : '—',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 11,
+                          color: Color(0xFF374151),
+                        ),
+                      ),
+                      const SizedBox(height: 2),
                       Text(
                         p.manufacturer,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
-                          fontSize: 12,
-                          color: Color(0xFF6B7280),
+                          fontSize: 11,
+                          color: Color(0xFF9CA3AF),
                         ),
                       ),
                       if (line.isSample) ...[
-                        const SizedBox(height: 4),
+                        const SizedBox(height: 3),
                         Container(
                           padding: const EdgeInsets.symmetric(
-                              horizontal: 6, vertical: 2),
+                              horizontal: 5, vertical: 1),
                           decoration: BoxDecoration(
                             color: const Color(0xFFFFF7ED),
                             borderRadius: BorderRadius.circular(4),
@@ -524,7 +531,7 @@ class _CartItemCard extends StatelessWidget {
                           ),
                           child: const Text('sample',
                               style: TextStyle(
-                                  fontSize: 10, color: Color(0xFFEA580C))),
+                                  fontSize: 9, color: Color(0xFFEA580C))),
                         ),
                       ],
                     ],
@@ -532,124 +539,71 @@ class _CartItemCard extends StatelessWidget {
                 ),
               ],
             ),
-          ),
 
-          const Divider(height: 1, thickness: 1, color: Color(0xFFF3F4F6)),
+            const SizedBox(height: 10),
 
-          // ── Bottom: pricing + qty selector ──
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            // ── BOTTOM ROW: MRP/price/GST (left) | qty selector (right) ──
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
               children: [
-                // Row: sale price | /pack | spacer | MRP struck | GST badge
-                IntrinsicHeight(
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      // Sale price
+                // Left: struck MRP, sale price, GST badge
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (p.mrp > 0)
                       Text(
-                        rupees(p.b2bPrice),
+                        'MRP ${rupees(p.mrp)}',
                         style: const TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w800,
-                          color: Color(0xFF111827),
-                          height: 1.1,
+                          fontSize: 11,
+                          color: Color(0xFF9CA3AF),
+                          decoration: TextDecoration.lineThrough,
+                          decorationColor: Color(0xFF9CA3AF),
                         ),
                       ),
-                      const SizedBox(width: 4),
-                      // /pack
-                      Align(
-                        alignment: Alignment.bottomCenter,
-                        child: Padding(
-                          padding: const EdgeInsets.only(bottom: 2),
-                          child: const Text(
-                            '/pack',
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: Color(0xFF9CA3AF),
-                            ),
-                          ),
-                        ),
-                      ),
-                      const Spacer(),
-                      // Struck MRP
-                      if (p.mrp > 0 && discountPct > 0) ...[
-                        Align(
-                          alignment: Alignment.center,
-                          child: Text(
-                            'MRP ${rupees(p.mrp)}',
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: Color(0xFF9CA3AF),
-                              decoration: TextDecoration.lineThrough,
-                              decorationColor: Color(0xFF9CA3AF),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                      ],
-                      // Yellow GST badge — stretches to row height via IntrinsicHeight
-                      if (p.gstPercent > 0)
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 6),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFFEF9C3),
-                            borderRadius: BorderRadius.circular(4),
-                            border: Border.all(color: const Color(0xFFFDE047)),
-                          ),
-                          child: Center(
-                            child: Text(
-                              '${p.gstPercent.toStringAsFixed(0)}% GST',
-                              style: const TextStyle(
-                                fontSize: 10,
-                                fontWeight: FontWeight.w700,
-                                color: Color(0xFF854D0E),
-                              ),
-                            ),
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 8),
-
-                // Pack size on its own full-width row
-                if (p.packSize.isNotEmpty) ...[
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 10, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFF3F4F6),
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Text(
-                      p.packSize,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+                    const SizedBox(height: 2),
+                    Text(
+                      rupees(p.b2bPrice),
                       style: const TextStyle(
-                        fontSize: 11,
-                        color: Color(0xFF6B7280),
-                        fontWeight: FontWeight.w500,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                        color: Color(0xFF111827),
+                        height: 1.1,
                       ),
                     ),
-                  ),
-                  const SizedBox(height: 8),
-                ],
-
-                // Qty stepper right-aligned on its own row
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: _CartStepper(
-                    product: p,
-                    quantity: line.quantity,
-                    cart: cart,
-                  ),
+                    if (p.gstPercent > 0) ...[
+                      const SizedBox(height: 4),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFEF9C3),
+                          borderRadius: BorderRadius.circular(4),
+                          border:
+                              Border.all(color: const Color(0xFFFDE047)),
+                        ),
+                        child: Text(
+                          '${p.gstPercent.toStringAsFixed(0)}% GST',
+                          style: const TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
+                            color: Color(0xFF854D0E),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+                const Spacer(),
+                // Right: qty stepper (unchanged — 150×56, 3-zone)
+                _CartStepper(
+                  product: p,
+                  quantity: line.quantity,
+                  cart: cart,
                 ),
               ],
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -659,39 +613,43 @@ class _CartItemCard extends StatelessWidget {
 
 class _ProductImage extends StatelessWidget {
   final Product product;
-  const _ProductImage({required this.product});
+  final double size;
+  const _ProductImage({required this.product, this.size = 64});
 
   @override
   Widget build(BuildContext context) {
     final style = categoryStyle(product.therapeuticClass);
+    final iconSize = size * 0.45;
+    final radius = size * 0.125;
     final Widget fallback = Container(
-      width: 80,
-      height: 80,
+      width: size,
+      height: size,
       decoration: BoxDecoration(
         color: style.bg,
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(radius),
       ),
       alignment: Alignment.center,
-      child: Icon(style.icon, size: 36,
+      child: Icon(style.icon, size: iconSize,
           color: style.fg.withValues(alpha: 0.6)),
     );
 
     if (product.imageUrl.isEmpty) return fallback;
 
+    final cache = (size * 2).round();
     return ClipRRect(
-      borderRadius: BorderRadius.circular(10),
+      borderRadius: BorderRadius.circular(radius),
       child: Container(
-        width: 80,
-        height: 80,
+        width: size,
+        height: size,
         color: const Color(0xFFF9FAFB),
         child: Image.network(
           product.imageUrl,
-          width: 80,
-          height: 80,
+          width: size,
+          height: size,
           fit: BoxFit.contain,
           gaplessPlayback: true,
-          cacheWidth: 160,
-          cacheHeight: 160,
+          cacheWidth: cache,
+          cacheHeight: cache,
           loadingBuilder: (_, child, progress) =>
               progress == null ? child : fallback,
           errorBuilder: (_, __, ___) => fallback,

@@ -2390,6 +2390,7 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
     with SingleTickerProviderStateMixin {
   late final AnimationController _ctrl;
   late final Animation<double> _anim;
+  _MatchStatus? _preApprovalStatus;
 
   @override
   void initState() {
@@ -2418,6 +2419,20 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
   void dispose() {
     _ctrl.dispose();
     super.dispose();
+  }
+
+  void _toggleApproval() {
+    final row = widget.row;
+    setState(() {
+      if (row.status == _MatchStatus.manuallyMatched) {
+        row.status = _preApprovalStatus ?? _MatchStatus.partial;
+        _preApprovalStatus = null;
+      } else {
+        _preApprovalStatus = row.status;
+        row.status = _MatchStatus.manuallyMatched;
+      }
+    });
+    widget.onRowChanged();
   }
 
   @override
@@ -2471,6 +2486,8 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
     final bottomBorder = (!widget.last || widget.isExpanded)
         ? const BorderSide(color: Color(0xFFEEEEEE))
         : BorderSide.none;
+
+    final isApproved = row.status == _MatchStatus.manuallyMatched;
 
     return Opacity(
       opacity: row.isHidden ? 0.45 : 1.0,
@@ -2546,38 +2563,76 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
                           fontWeight: FontWeight.w500,
                           color: Color(0xFF374151))),
                 ),
+                // STATUS: [fixed-width badge] [hide-eye] [approval checkbox at far right]
                 Expanded(
                   flex: 14,
                   child: Row(
                     children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
-                        decoration: BoxDecoration(
-                          color: badgeColor,
-                          borderRadius: BorderRadius.circular(20),
+                      // Status badge — fixed width fits "Manually Matched"
+                      SizedBox(
+                        width: 120,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: badgeColor,
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Text(label,
+                              textAlign: TextAlign.center,
+                              overflow: TextOverflow.ellipsis,
+                              maxLines: 1,
+                              style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                  color: badgeText)),
                         ),
-                        child: Text(label,
-                            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: badgeText)),
                       ),
-                      if (hasCandidates && !row.isHidden) ...[
-                        const SizedBox(width: 6),
-                        AnimatedRotation(
-                          turns: widget.isExpanded ? 0.5 : 0,
-                          duration: const Duration(milliseconds: 250),
-                          child: const Icon(Icons.expand_more, size: 14, color: Color(0xFF9CA3AF)),
-                        ),
-                      ],
-                      const SizedBox(width: 8),
+                      const SizedBox(width: 6),
+                      // Hide/show eye icon
                       GestureDetector(
                         onTap: widget.onHideToggle,
                         behavior: HitTestBehavior.opaque,
                         child: Padding(
                           padding: const EdgeInsets.all(3),
                           child: Icon(
-                            row.isHidden ? Icons.visibility_outlined : Icons.visibility_off_outlined,
+                            row.isHidden
+                                ? Icons.visibility_outlined
+                                : Icons.visibility_off_outlined,
                             size: 16,
                             color: const Color(0xFF6B7280),
                           ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      // Approval checkbox — far-right element, stops tap propagation
+                      GestureDetector(
+                        onTap: row.isHidden ? null : _toggleApproval,
+                        behavior: HitTestBehavior.opaque,
+                        child: Padding(
+                          padding: const EdgeInsets.all(3),
+                          child: isApproved
+                              ? Container(
+                                  width: 18,
+                                  height: 18,
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF16A34A),
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                  child: const Icon(Icons.check,
+                                      size: 13, color: Colors.white),
+                                )
+                              : Container(
+                                  width: 18,
+                                  height: 18,
+                                  decoration: BoxDecoration(
+                                    color: Colors.white,
+                                    borderRadius: BorderRadius.circular(4),
+                                    border: Border.all(
+                                        color: const Color(0xFF9CA3AF), width: 1.5),
+                                  ),
+                                  child: const Icon(Icons.check,
+                                      size: 13, color: Color(0xFFD1D5DB)),
+                                ),
                         ),
                       ),
                     ],
@@ -3188,7 +3243,7 @@ class _AlternativeRow extends StatelessWidget {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.fromLTRB(17, 8, 20, 8),
+        padding: const EdgeInsets.fromLTRB(17, 8, 12, 8),
         decoration: BoxDecoration(
           color: isSelected ? const Color(0xFFDCFCE7) : const Color(0xFFF3F4F6),
           border: isLast
@@ -3198,33 +3253,20 @@ class _AlternativeRow extends StatelessWidget {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            // LINE ITEM column — blank spacer (aligns with main row)
+            // LINE ITEM column — blank spacer
             const Expanded(flex: 18, child: SizedBox()),
-            // MATCHED SKU column — product name + company subtitle
+            // MATCHED SKU column — product name only (company goes to COMPANY column)
             Expanded(
               flex: 26,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    product.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
-                      color: nameColor,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    product.manufacturer,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
-                  ),
-                ],
+              child: Text(
+                product.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                  color: nameColor,
+                ),
               ),
             ),
             // PACK column
@@ -3237,11 +3279,19 @@ class _AlternativeRow extends StatelessWidget {
                 style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280)),
               ),
             ),
-            // COMPANY column — blank (company shown as subtitle in SKU cell)
-            const Expanded(flex: 12, child: SizedBox()),
+            // COMPANY column — aligned under main row's company cell, ellipsis if long
+            Expanded(
+              flex: 12,
+              child: Text(
+                product.manufacturer,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+              ),
+            ),
             // QTY column — blank spacer
             const Expanded(flex: 5, child: SizedBox()),
-            // MRP column
+            // MRP column — aligned under main row's MRP cell
             Expanded(
               flex: 9,
               child: Text(
@@ -3249,16 +3299,8 @@ class _AlternativeRow extends StatelessWidget {
                 style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: priceColor),
               ),
             ),
-            // STATUS column — checkmark or blank
-            Expanded(
-              flex: 14,
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: isSelected
-                    ? const Icon(Icons.check_circle, size: 16, color: Color(0xFF16A34A))
-                    : const SizedBox(width: 16),
-              ),
-            ),
+            // STATUS column — blank (no badge/checkbox for alternate rows)
+            const Expanded(flex: 14, child: SizedBox()),
           ],
         ),
       ),

@@ -645,7 +645,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
     final response = await http.post(
       Uri.parse(
-          'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=$geminiApiKey'),
+          'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=$geminiApiKey'),
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({
         'contents': [
@@ -1114,23 +1114,45 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
   Future<List<Map<String, dynamic>>> _searchMedicineTop5(String name) async {
     final sb = Supabase.instance.client;
+    List<Map<String, dynamic>> list = [];
     try {
       final rows = await sb.rpc('search_medicines_priority', params: {
         'search_term': name,
         'category_filter': 'All',
         'page_offset': 0,
-        'page_limit': 5,
+        'page_limit': 20,
       });
-      final list = List<Map<String, dynamic>>.from(rows as List);
-      if (list.isNotEmpty) return list;
+      list = List<Map<String, dynamic>>.from(rows as List);
     } catch (_) {}
-    final results = await sb
-        .from('MEDICINE')
-        .select()
-        .or('product_name.ilike.%$name%,salt_composition.ilike.%$name%,marketer.ilike.%$name%')
-        .order('sales_count', ascending: false)
-        .limit(5);
-    return List<Map<String, dynamic>>.from(results);
+    if (list.isEmpty) {
+      final results = await sb
+          .from('MEDICINE')
+          .select()
+          .or('product_name.ilike.%$name%,salt_composition.ilike.%$name%,marketer.ilike.%$name%')
+          .order('sales_count', ascending: false)
+          .limit(20);
+      list = List<Map<String, dynamic>>.from(results);
+    }
+    if (list.isEmpty) return list;
+
+    // Client-side re-ranking: 3-letter chunk scoring + dosage form filter.
+    final chunks = _buildQueryChunks(name);
+    final form = _detectDosageForm(name);
+
+    List<Map<String, dynamic>> candidates = list;
+    if (form != null) {
+      final filtered = list
+          .where((m) => _isFormCompatible((m['product_name'] as String?) ?? '', form))
+          .toList();
+      if (filtered.isNotEmpty) candidates = filtered;
+    }
+
+    candidates.sort((a, b) {
+      final sa = _scoreByChunks((a['product_name'] as String?) ?? '', chunks);
+      final sb2 = _scoreByChunks((b['product_name'] as String?) ?? '', chunks);
+      return sb2.compareTo(sa);
+    });
+    return candidates.take(5).toList();
   }
 
   // ── Error messages ─────────────────────────────────────────────────────────
@@ -2192,10 +2214,12 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
               ),
               child: const Row(
                 children: [
-                  Expanded(flex: 20, child: Text('YOUR LINE ITEM', style: _kTh)),
-                  Expanded(flex: 30, child: Text('MATCHED SKU', style: _kTh)),
+                  Expanded(flex: 18, child: Text('LINE ITEM', style: _kTh)),
+                  Expanded(flex: 22, child: Text('MATCHED SKU', style: _kTh)),
+                  Expanded(flex: 8, child: Text('PACK', style: _kTh)),
+                  Expanded(flex: 14, child: Text('COMPANY', style: _kTh)),
                   Expanded(flex: 6, child: Text('QTY', style: _kTh)),
-                  Expanded(flex: 12, child: Text('PRICE', style: _kTh)),
+                  Expanded(flex: 10, child: Text('MRP', style: _kTh)),
                   Expanded(flex: 14, child: Text('STATUS', style: _kTh)),
                 ],
               ),
@@ -2342,29 +2366,46 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
             child: Row(
               children: [
                 Expanded(
-                  flex: 20,
+                  flex: 18,
                   child: Text(row.lineItem,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
                 ),
                 Expanded(
-                  flex: 30,
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          row.matchedSku,
-                          style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: row.status != _MatchStatus.unrecognized
-                                ? FontWeight.w600
-                                : FontWeight.normal,
-                            color: row.status != _MatchStatus.unrecognized
-                                ? const Color(0xFF111827)
-                                : const Color(0xFF9CA3AF),
-                          ),
-                        ),
-                      ),
-                    ],
+                  flex: 22,
+                  child: Text(
+                    row.selectedProduct?.name ??
+                        (row.status != _MatchStatus.unrecognized ? row.matchedSku : '—'),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: row.status != _MatchStatus.unrecognized
+                          ? FontWeight.w600
+                          : FontWeight.normal,
+                      color: row.status != _MatchStatus.unrecognized
+                          ? const Color(0xFF111827)
+                          : const Color(0xFF9CA3AF),
+                    ),
+                  ),
+                ),
+                Expanded(
+                  flex: 8,
+                  child: Text(
+                    row.selectedProduct != null ? _packShort(row.selectedProduct!) : '',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 12, color: Color(0xFF374151)),
+                  ),
+                ),
+                Expanded(
+                  flex: 14,
+                  child: Text(
+                    row.selectedProduct?.manufacturer ?? '',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
                   ),
                 ),
                 Expanded(
@@ -2373,7 +2414,7 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
                       style: const TextStyle(fontSize: 13, color: Color(0xFF374151))),
                 ),
                 Expanded(
-                  flex: 12,
+                  flex: 10,
                   child: Text(row.price,
                       style: const TextStyle(
                           fontSize: 13,
@@ -2545,6 +2586,21 @@ class _MobileMatchCardState extends State<_MobileMatchCard>
     }
     alts.sort((a, b) => a.$2.mrp.compareTo(b.$2.mrp));
 
+    final selectedProduct = row.selectedProduct;
+    final String matchedSingleLine;
+    if (selectedProduct != null) {
+      final pack = _packShort(selectedProduct);
+      final parts = <String>[
+        selectedProduct.name,
+        if (pack.isNotEmpty) pack,
+        if (selectedProduct.manufacturer.isNotEmpty) selectedProduct.manufacturer,
+        rupees(selectedProduct.mrp),
+      ];
+      matchedSingleLine = parts.join(' · ');
+    } else {
+      matchedSingleLine = row.status != _MatchStatus.unrecognized ? row.matchedSku : 'No match found';
+    }
+
     return GestureDetector(
       onTap: canChange ? widget.onToggle : null,
       child: ClipRRect(
@@ -2605,31 +2661,18 @@ class _MobileMatchCardState extends State<_MobileMatchCard>
                       style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: Color(0xFF9CA3AF), letterSpacing: 0.5)),
                   const SizedBox(height: 2),
                   Text(
-                    row.status != _MatchStatus.unrecognized ? row.matchedSku : 'No match found',
-                    maxLines: 2,
+                    matchedSingleLine,
+                    maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
-                      fontSize: 14,
+                      fontSize: 13,
                       fontWeight: FontWeight.w600,
                       color: row.status != _MatchStatus.unrecognized ? const Color(0xFF111827) : const Color(0xFF9CA3AF),
                     ),
                   ),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      Text('Qty: ${row.qty}',
-                          style: const TextStyle(fontSize: 13, color: Color(0xFF374151))),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Text(
-                          'Price: ${row.price}',
-                          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF15803D)),
-                          overflow: TextOverflow.ellipsis,
-                          maxLines: 1,
-                        ),
-                      ),
-                    ],
-                  ),
+                  const SizedBox(height: 6),
+                  Text('Qty: ${row.qty}',
+                      style: const TextStyle(fontSize: 13, color: Color(0xFF374151))),
                 ],
               ),
             ),
@@ -2671,18 +2714,110 @@ class _MobileMatchCardState extends State<_MobileMatchCard>
 }
 
 /// Converts a product's packSize (sourced from pack_qty) into a short code.
-/// "10 tablets in 1 strip" → "10'T", "10 capsule sr in 1 strip" → "10'C",
-/// "30 gm in 1 tube" → "30'G". Falls back to raw packSize on parse failure.
+/// "10 tablets in 1 strip" → "10'T", "10 tab sr in 1 strip" → "10'T-SR",
+/// "10 ml in 1 bottle" → "10ml", "30 gm in 1 tube" → "30'G".
+/// Falls back to raw packSize on parse failure.
 String _packShort(Product p) {
   final raw = p.packSize.trim();
   if (raw.isEmpty) return '';
   final inIdx = raw.toLowerCase().indexOf(' in ');
   final leading = (inIdx >= 0 ? raw.substring(0, inIdx) : raw).trim();
   final parts = leading.split(RegExp(r'\s+'));
-  if (parts.length >= 2 && double.tryParse(parts[0]) != null && parts[1].isNotEmpty) {
-    return "${parts[0]}'${parts[1][0].toUpperCase()}";
+  if (parts.length < 2 || double.tryParse(parts[0]) == null || parts[1].isEmpty) return raw;
+
+  final num = parts[0];
+  final unit = parts[1].toLowerCase();
+
+  // Liquid forms: concatenate number + unit directly, no apostrophe.
+  if (unit == 'ml') return '${num}ml';
+  if (unit == 'l' || unit == 'litre' || unit == 'liter' ||
+      unit == 'litres' || unit == 'liters') return '${num}L';
+
+  // Solid/semi-solid: apostrophe notation with optional SR/XR/ER modifier.
+  final String typeCode;
+  switch (unit) {
+    case 'tablet':
+    case 'tablets':
+    case 'tab':
+    case 'tabs':
+      typeCode = 'T';
+    case 'capsule':
+    case 'capsules':
+    case 'cap':
+    case 'caps':
+      typeCode = 'C';
+    case 'gm':
+    case 'g':
+    case 'gram':
+    case 'grams':
+      typeCode = 'G';
+    default:
+      typeCode = parts[1][0].toUpperCase();
   }
-  return raw;
+
+  if (parts.length >= 3) {
+    final mod = parts[2].toUpperCase();
+    if (mod == 'SR' || mod == 'XR' || mod == 'ER' || mod == 'CR' || mod == 'MR') {
+      return "$num'$typeCode-$mod";
+    }
+  }
+  return "$num'$typeCode";
+}
+
+// ── Fuzzy-match helpers (client-side re-ranking) ──────────────────────────────
+
+/// Build sequential non-overlapping 3-letter chunks from a query string.
+/// Lowercases and strips everything except a-z0-9 before chunking.
+List<String> _buildQueryChunks(String query) {
+  final clean = query.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+  final chunks = <String>[];
+  for (int i = 0; i + 3 <= clean.length; i += 3) {
+    chunks.add(clean.substring(i, i + 3));
+  }
+  return chunks;
+}
+
+/// Count how many of [chunks] appear in [productName].
+int _scoreByChunks(String productName, List<String> chunks) {
+  if (chunks.isEmpty) return 0;
+  final name = productName.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+  return chunks.where((c) => name.contains(c)).length;
+}
+
+/// Detect the primary dosage form in a query string.
+/// Returns 'tablet', 'syrup', 'capsule', 'injection', 'topical', or null.
+String? _detectDosageForm(String query) {
+  final q = query.toLowerCase();
+  if (RegExp(r"\btab\b|\btablet\b|\btabs\b").hasMatch(q)) return 'tablet';
+  if (q.contains('syrup') || q.contains('syp') || q.contains('susp')) return 'syrup';
+  if (RegExp(r'\bcap\b|\bcapsule\b|\bcaps\b').hasMatch(q)) return 'capsule';
+  if (q.contains('inj') || q.contains('injection')) return 'injection';
+  if (q.contains('cream') || q.contains('ointment') || q.contains('gel')) return 'topical';
+  return null;
+}
+
+/// Returns true when [productName] is compatible with the given [form].
+/// Drops obviously mismatched forms (e.g. syrup candidates for a tablet query).
+bool _isFormCompatible(String productName, String form) {
+  final n = productName.toLowerCase();
+  switch (form) {
+    case 'tablet':
+      return !n.contains('syrup') && !n.contains(' syp') && !n.contains('susp') &&
+          !n.contains('suspension') && !n.contains('drops') && !n.contains('solution');
+    case 'syrup':
+      return n.contains('syrup') || n.contains('syp') || n.contains('susp') ||
+          n.contains('suspension') || n.contains('oral') || n.contains('liquid');
+    case 'capsule':
+      return !n.contains('syrup') && !n.contains(' syp') && !n.contains('susp') &&
+          !n.contains('suspension');
+    case 'injection':
+      return n.contains('inj') || n.contains('vial') || n.contains('ampoule');
+    case 'topical':
+      return n.contains('cream') || n.contains('ointment') || n.contains('gel') ||
+          n.contains('lotion') || n.contains('spray');
+    default:
+      return true;
+  }
 }
 
 class _AlternativeRow extends StatelessWidget {
@@ -2720,58 +2855,41 @@ class _AlternativeRow extends StatelessWidget {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            const Expanded(flex: 20, child: SizedBox()),
+            const Expanded(flex: 18, child: SizedBox()),
             Expanded(
-              flex: 30,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          product.name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
-                            color: nameColor,
-                          ),
-                        ),
-                      ),
-                      if (packShort.isNotEmpty) ...[
-                        const SizedBox(width: 5),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFE5E7EB),
-                            borderRadius: BorderRadius.circular(3),
-                          ),
-                          child: Text(
-                            packShort,
-                            style: const TextStyle(fontSize: 10, color: Color(0xFF6B7280)),
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-                  if (product.manufacturer.isNotEmpty) ...[
-                    const SizedBox(height: 2),
-                    Text(
-                      product.manufacturer,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF)),
-                    ),
-                  ],
-                ],
+              flex: 22,
+              child: Text(
+                product.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                  color: nameColor,
+                ),
+              ),
+            ),
+            Expanded(
+              flex: 8,
+              child: Text(
+                packShort,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280)),
+              ),
+            ),
+            Expanded(
+              flex: 14,
+              child: Text(
+                product.manufacturer,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF)),
               ),
             ),
             const Expanded(flex: 6, child: SizedBox()),
             Expanded(
-              flex: 12,
+              flex: 10,
               child: Text(
                 rupees(product.mrp),
                 style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: priceColor),
@@ -2793,9 +2911,14 @@ class _AlternativeRow extends StatelessWidget {
   }
 
   Widget _buildMobile() {
-    final nameColor = isSelected ? const Color(0xFF16A34A) : const Color(0xFF374151);
-    final priceColor = isSelected ? const Color(0xFF16A34A) : const Color(0xFF6B7280);
+    final textColor = isSelected ? const Color(0xFF16A34A) : const Color(0xFF374151);
     final packShort = _packShort(product);
+    final lineParts = <String>[
+      product.name,
+      if (packShort.isNotEmpty) packShort,
+      if (product.manufacturer.isNotEmpty) product.manufacturer,
+      rupees(product.mrp),
+    ];
     return GestureDetector(
       onTap: onTap,
       child: Container(
@@ -2809,51 +2932,15 @@ class _AlternativeRow extends StatelessWidget {
         child: Row(
           children: [
             Expanded(
-              flex: 5,
               child: Text(
-                product.name,
+                lineParts.join(' · '),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
                   fontSize: 12,
                   fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
-                  color: nameColor,
+                  color: textColor,
                 ),
-              ),
-            ),
-            if (packShort.isNotEmpty) ...[
-              const SizedBox(width: 4),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFE5E7EB),
-                  borderRadius: BorderRadius.circular(3),
-                ),
-                child: Text(
-                  packShort,
-                  style: const TextStyle(fontSize: 10, color: Color(0xFF6B7280)),
-                ),
-              ),
-            ],
-            const SizedBox(width: 4),
-            Expanded(
-              flex: 3,
-              child: Text(
-                product.manufacturer,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF)),
-              ),
-            ),
-            const SizedBox(width: 6),
-            SizedBox(
-              width: 64,
-              child: Text(
-                rupees(product.mrp),
-                textAlign: TextAlign.right,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: priceColor),
               ),
             ),
             if (isSelected) ...[

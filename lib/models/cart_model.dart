@@ -369,6 +369,11 @@ class CartModel extends ChangeNotifier {
     _persistDelete(product.id);
   }
 
+  void removeById(String productId) {
+    final line = _lines[productId];
+    if (line != null) remove(line.product);
+  }
+
   void clear() {
     _sampleTimer?.cancel();
     _sampleTimer = null;

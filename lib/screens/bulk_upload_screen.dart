@@ -110,6 +110,9 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
   bool _isFromFile = false;
   String? _fileName;
   bool _addingToCart = false;
+  // Product IDs that were added to cart via "Add matched to cart" (bulk-owned).
+  // Persisted with the bulk session so re-sync works after page refresh.
+  Set<String> _bulkCartProductIds = {};
 
   bool get _isLoading => _step != _LoadStep.idle;
 
@@ -131,11 +134,16 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       final rows = (m['rows'] as List<dynamic>)
           .map((e) => _MatchRow.fromJson(e as Map<String, dynamic>))
           .toList();
+      final bulkIds = (m['bulkCartProductIds'] as List<dynamic>?)
+              ?.map((e) => e as String)
+              .toSet() ??
+          {};
       if (rows.isNotEmpty && mounted) {
         setState(() {
           _rows = rows;
           _fileName = fileName;
           _isFromFile = true;
+          _bulkCartProductIds = bulkIds;
         });
       }
     } catch (_) {}
@@ -145,7 +153,11 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(
       _kSessionKey,
-      jsonEncode({'fileName': _fileName, 'rows': _rows.map((r) => r.toJson()).toList()}),
+      jsonEncode({
+        'fileName': _fileName,
+        'rows': _rows.map((r) => r.toJson()).toList(),
+        'bulkCartProductIds': _bulkCartProductIds.toList(),
+      }),
     );
   }
 
@@ -240,6 +252,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         _rows = rows;
         _isFromFile = true;
         _step = _LoadStep.idle;
+        _bulkCartProductIds = {};
       });
       _saveSession();
     } catch (e) {
@@ -248,6 +261,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         _step = _LoadStep.idle;
         _isFromFile = false;
         _fileName = null;
+        _bulkCartProductIds = {};
       });
       _clearSession();
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1143,24 +1157,9 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
   Future<void> _addMatchedToCart() async {
     final cart = AppState.of(context);
-    if (_isFromFile) {
-      final toAdd = _rows
-          .where((r) =>
-              (r.status == _MatchStatus.matched ||
-               r.status == _MatchStatus.manuallyMatched) &&
-              r.selectedProduct != null)
-          .toList();
-      for (final row in toAdd) {
-        cart.setQuantity(row.selectedProduct!, row.qty);
-      }
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('${toAdd.length} medicines added to cart'),
-          backgroundColor: const Color(0xFF16A34A),
-          behavior: SnackBarBehavior.floating,
-        ));
-      }
-    } else {
+
+    if (!_isFromFile) {
+      // Sample demo flow — unchanged.
       setState(() => _addingToCart = true);
       try {
         final matchedRows = await Future.wait(
@@ -1179,6 +1178,63 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       } finally {
         if (mounted) setState(() => _addingToCart = false);
       }
+      return;
+    }
+
+    // ── Real-file re-sync ──────────────────────────────────────────────────
+    // Build new matched set: productId → (product, qty).
+    final newSet = <String, (Product, int)>{};
+    for (final row in _rows) {
+      if ((row.status == _MatchStatus.matched ||
+              row.status == _MatchStatus.manuallyMatched) &&
+          row.selectedProduct != null) {
+        final p = row.selectedProduct!;
+        newSet[p.id] = (p, row.qty);
+      }
+    }
+    if (newSet.isEmpty) return;
+
+    // 1. Remove bulk-owned items that are no longer matched.
+    final toRemoveIds = _bulkCartProductIds.difference(newSet.keys.toSet());
+    for (final productId in toRemoveIds) {
+      cart.removeById(productId);
+    }
+
+    // 2. Add products not yet in cart; preserve qty for already-in-cart items
+    //    (covers both manual qty edits and items already present from browsing).
+    int addedCount = 0;
+    final updatedBulkIds = <String>{};
+    for (final entry in newSet.entries) {
+      final productId = entry.key;
+      final (product, qty) = entry.value;
+      if (cart.quantityOf(productId) == 0) {
+        cart.setQuantity(product, qty);
+        addedCount++;
+      }
+      // Track as bulk-owned regardless (new add OR already-in-cart bulk item).
+      updatedBulkIds.add(productId);
+    }
+
+    setState(() => _bulkCartProductIds = updatedBulkIds);
+    _saveSession();
+
+    if (mounted) {
+      final removedCount = toRemoveIds.length;
+      final String msg;
+      if (addedCount > 0 && removedCount > 0) {
+        msg = '$addedCount added, $removedCount removed from cart';
+      } else if (addedCount > 0) {
+        msg = '$addedCount medicines added to cart';
+      } else if (removedCount > 0) {
+        msg = '$removedCount medicines removed from cart';
+      } else {
+        msg = 'Cart is already up to date';
+      }
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(msg),
+        backgroundColor: const Color(0xFF16A34A),
+        behavior: SnackBarBehavior.floating,
+      ));
     }
   }
 

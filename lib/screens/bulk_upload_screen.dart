@@ -2308,11 +2308,12 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
         leftBorderColor = const Color(0xFFDC2626);
     }
 
-    // Top 4 alternates excluding the currently selected candidate
+    // Top 4 alternates excluding the currently selected candidate, sorted by MRP asc
     final alts = <(int, Product)>[];
     for (int i = 0; i < row.candidates.length && alts.length < 4; i++) {
       if (i != row.selectedIndex) alts.add((i, row.candidates[i]));
     }
+    alts.sort((a, b) => a.$2.mrp.compareTo(b.$2.mrp));
 
     final bottomBorder = (!widget.last || widget.isExpanded)
         ? const BorderSide(color: Color(0xFFEEEEEE))
@@ -2536,6 +2537,7 @@ class _MobileMatchCardState extends State<_MobileMatchCard>
     for (int i = 0; i < row.candidates.length && alts.length < 4; i++) {
       if (i != row.selectedIndex) alts.add((i, row.candidates[i]));
     }
+    alts.sort((a, b) => a.$2.mrp.compareTo(b.$2.mrp));
 
     return GestureDetector(
       onTap: canChange ? widget.onToggle : null,
@@ -2662,6 +2664,21 @@ class _MobileMatchCardState extends State<_MobileMatchCard>
   }
 }
 
+/// Converts a product's packSize (sourced from pack_qty) into a short code.
+/// "10 tablets in 1 strip" → "10'T", "10 capsule sr in 1 strip" → "10'C",
+/// "30 gm in 1 tube" → "30'G". Falls back to raw packSize on parse failure.
+String _packShort(Product p) {
+  final raw = p.packSize.trim();
+  if (raw.isEmpty) return '';
+  final inIdx = raw.toLowerCase().indexOf(' in ');
+  final leading = (inIdx >= 0 ? raw.substring(0, inIdx) : raw).trim();
+  final parts = leading.split(RegExp(r'\s+'));
+  if (parts.length >= 2 && double.tryParse(parts[0]) != null && parts[1].isNotEmpty) {
+    return "${parts[0]}'${parts[1][0].toUpperCase()}";
+  }
+  return raw;
+}
+
 class _AlternativeRow extends StatelessWidget {
   final Product product;
   final bool isSelected;
@@ -2683,6 +2700,7 @@ class _AlternativeRow extends StatelessWidget {
   Widget _buildWeb() {
     final nameColor = isSelected ? const Color(0xFF16A34A) : const Color(0xFF374151);
     final priceColor = isSelected ? const Color(0xFF16A34A) : const Color(0xFF6B7280);
+    final packShort = _packShort(product);
     return GestureDetector(
       onTap: onTap,
       child: Container(
@@ -2703,15 +2721,35 @@ class _AlternativeRow extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text(
-                    product.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
-                      color: nameColor,
-                    ),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          product.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                            color: nameColor,
+                          ),
+                        ),
+                      ),
+                      if (packShort.isNotEmpty) ...[
+                        const SizedBox(width: 5),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFE5E7EB),
+                            borderRadius: BorderRadius.circular(3),
+                          ),
+                          child: Text(
+                            packShort,
+                            style: const TextStyle(fontSize: 10, color: Color(0xFF6B7280)),
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
                   if (product.manufacturer.isNotEmpty) ...[
                     const SizedBox(height: 2),
@@ -2729,7 +2767,7 @@ class _AlternativeRow extends StatelessWidget {
             Expanded(
               flex: 12,
               child: Text(
-                rupees(product.b2bPrice),
+                rupees(product.mrp),
                 style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: priceColor),
               ),
             ),
@@ -2751,6 +2789,7 @@ class _AlternativeRow extends StatelessWidget {
   Widget _buildMobile() {
     final nameColor = isSelected ? const Color(0xFF16A34A) : const Color(0xFF374151);
     final priceColor = isSelected ? const Color(0xFF16A34A) : const Color(0xFF6B7280);
+    final packShort = _packShort(product);
     return GestureDetector(
       onTap: onTap,
       child: Container(
@@ -2776,7 +2815,21 @@ class _AlternativeRow extends StatelessWidget {
                 ),
               ),
             ),
-            const SizedBox(width: 6),
+            if (packShort.isNotEmpty) ...[
+              const SizedBox(width: 4),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFE5E7EB),
+                  borderRadius: BorderRadius.circular(3),
+                ),
+                child: Text(
+                  packShort,
+                  style: const TextStyle(fontSize: 10, color: Color(0xFF6B7280)),
+                ),
+              ),
+            ],
+            const SizedBox(width: 4),
             Expanded(
               flex: 3,
               child: Text(
@@ -2790,7 +2843,7 @@ class _AlternativeRow extends StatelessWidget {
             SizedBox(
               width: 64,
               child: Text(
-                rupees(product.b2bPrice),
+                rupees(product.mrp),
                 textAlign: TextAlign.right,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,

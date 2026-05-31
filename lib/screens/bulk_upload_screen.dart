@@ -2314,13 +2314,15 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
               child: const Row(
                 children: [
                   Expanded(flex: 18, child: Text('LINE ITEM', style: _kTh)),
-                  Expanded(flex: 26, child: Text('MATCHED SKU', style: _kTh)),
+                  Expanded(flex: 20, child: Text('MATCHED SKU', style: _kTh)),
                   Expanded(flex: 8, child: Text('PACK', style: _kTh)),
                   Expanded(flex: 12, child: Text('COMPANY', style: _kTh)),
                   Expanded(flex: 5, child: Text('QTY', style: _kTh)),
                   Expanded(flex: 9, child: Text('MRP', style: _kTh)),
-                  Expanded(flex: 10, child: Text('STATUS', style: _kTh)),
+                  Expanded(flex: 10, child: Text('STATUS', textAlign: TextAlign.center, style: _kTh)),
+                  SizedBox(width: 12),
                   Expanded(flex: 3, child: Text('HIDE', textAlign: TextAlign.center, style: _kTh)),
+                  SizedBox(width: 12),
                   Expanded(flex: 5, child: Text('APPROVE', textAlign: TextAlign.center, style: _kTh)),
                 ],
               ),
@@ -2502,7 +2504,7 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
                       style: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
                 ),
                 Expanded(
-                  flex: 26,
+                  flex: 20,
                   child: Text(
                     row.selectedProduct?.name ??
                         (row.status != _MatchStatus.unrecognized ? row.matchedSku : '—'),
@@ -2570,6 +2572,7 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
                   ),
                 ),
                 // HIDE column — eye icon centered under its header
+                const SizedBox(width: 12),
                 Expanded(
                   flex: 3,
                   child: Center(
@@ -2590,6 +2593,7 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
                   ),
                 ),
                 // APPROVE column — checkbox centered under its header
+                const SizedBox(width: 12),
                 Expanded(
                   flex: 5,
                   child: Center(
@@ -3275,7 +3279,7 @@ class _AlternativeRow extends StatelessWidget {
             const Expanded(flex: 18, child: SizedBox()),
             // MATCHED SKU column — product name only (company goes to COMPANY column)
             Expanded(
-              flex: 26,
+              flex: 20,
               child: Text(
                 product.name,
                 maxLines: 1,
@@ -3319,7 +3323,9 @@ class _AlternativeRow extends StatelessWidget {
             ),
             // STATUS / HIDE / APPROVE columns — blank for alternate rows
             const Expanded(flex: 10, child: SizedBox()),
+            const SizedBox(width: 12),
             const Expanded(flex: 3, child: SizedBox()),
+            const SizedBox(width: 12),
             const Expanded(flex: 5, child: SizedBox()),
           ],
         ),

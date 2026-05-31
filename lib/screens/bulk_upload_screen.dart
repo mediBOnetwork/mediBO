@@ -1228,13 +1228,13 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
           removedCount++;
         }
 
-        // Always verify the product is actually present in the cart — re-add
-        // with original row qty if missing or qty == 0, regardless of map state.
+        // Always call setBulkQuantity for every matched row so the item is
+        // guaranteed in the cart regardless of any stale-reload or race.
+        // Count as "added" only when the product was genuinely absent (qty==0).
         // Uses row index so bulk ordering is preserved on re-add.
-        if (cart.quantityOf(newProductId) == 0) {
-          cart.setBulkQuantity(product, row.qty, i);
-          addedCount++;
-        }
+        final priorQty = cart.quantityOf(newProductId);
+        cart.setBulkQuantity(product, row.qty, i);
+        if (priorQty == 0) addedCount++;
         newLineItemMap[key] = newProductId;
 
       } else if (oldProductId != null) {

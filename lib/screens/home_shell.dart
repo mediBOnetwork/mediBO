@@ -260,7 +260,7 @@ class _HomeShellState extends State<HomeShell> {
               bottom: 16,
               child: Center(
                 child: FractionallySizedBox(
-                  widthFactor: 0.72,
+                  widthFactor: 0.8,
                   child: RepaintBoundary(
                     child: _StickyCartBar(
                       onTap: () => setState(() => _cartOpen = true),
@@ -1968,7 +1968,7 @@ class _StickyCartBarState extends State<_StickyCartBar>
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Padding(
-                padding: const EdgeInsets.fromLTRB(8, 7, 6, 7),
+                padding: const EdgeInsets.fromLTRB(10, 8, 8, 8),
                 child: Row(
                   children: [
                     Expanded(child: leftContent),
@@ -1980,7 +1980,7 @@ class _StickyCartBarState extends State<_StickyCartBar>
                 ),
               ),
               Padding(
-                padding: const EdgeInsets.fromLTRB(8, 0, 8, 7),
+                padding: const EdgeInsets.fromLTRB(10, 0, 10, 8),
                 child: LayoutBuilder(
                   builder: (_, constraints) => Stack(
                     children: [

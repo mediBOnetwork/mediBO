@@ -1130,7 +1130,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       }
       final products = rawMatches.map((m) => Product.fromMap(m)).toList();
       final form = _detectDosageForm(term);
-      double topScore = _trigramScore(term, products[0].name);
+      double topScore = _stage2Score(term, products[0].name);
       if (form != null && _formMatches(products[0].name, form)) topScore += 0.08;
       return _MatchRow(
         lineItem: name,
@@ -1188,16 +1188,24 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       return list;
     }
 
-    // ── 3. Detect dosage form for soft bonus ─────────────────────────────────
+    // ── 3. Detect dosage form for Stage-2 soft bonus ─────────────────────────
     final form = _detectDosageForm(name);
     debugPrint('[FuzzyMatch] query="$name" form=$form active=${list.length}');
 
-    // ── 4. Score by trigram Dice + optional form bonus; sort descending ───────
+    // ── 4. Stage 1 — shortlist top 5 by positional 3-letter-chunk priority ───
     list.sort((a, b) {
       final na = (a['product_name'] as String?) ?? '';
       final nb = (b['product_name'] as String?) ?? '';
-      double sa = _trigramScore(name, na);
-      double sb = _trigramScore(name, nb);
+      return _positionalChunkScore(name, nb).compareTo(_positionalChunkScore(name, na));
+    });
+    final shortlist = list.take(5).toList();
+
+    // ── 5. Stage 2 — rank shortlist by full-name similarity + form bonus ──────
+    shortlist.sort((a, b) {
+      final na = (a['product_name'] as String?) ?? '';
+      final nb = (b['product_name'] as String?) ?? '';
+      double sa = _stage2Score(name, na);
+      double sb = _stage2Score(name, nb);
       if (form != null) {
         if (_formMatches(na, form)) sa += 0.08;
         if (_formMatches(nb, form)) sb += 0.08;
@@ -1205,17 +1213,16 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       return sb.compareTo(sa);
     });
 
-    final top5 = list.take(5).toList();
-
-    // ── 5. Debug: show final ranked list ─────────────────────────────────────
-    for (int i = 0; i < top5.length; i++) {
-      final pName = (top5[i]['product_name'] as String?) ?? '?';
-      double score = _trigramScore(name, pName);
-      if (form != null && _formMatches(pName, form)) score += 0.08;
-      debugPrint('[FuzzyMatch]  #${i + 1} score=${score.toStringAsFixed(3)}  "$pName"');
+    // ── 6. Debug ──────────────────────────────────────────────────────────────
+    for (int i = 0; i < shortlist.length; i++) {
+      final pName = (shortlist[i]['product_name'] as String?) ?? '?';
+      final s1 = _positionalChunkScore(name, pName);
+      double s2 = _stage2Score(name, pName);
+      if (form != null && _formMatches(pName, form)) s2 += 0.08;
+      debugPrint('[FuzzyMatch]  #${i + 1} s1=${s1.toStringAsFixed(2)} s2=${s2.toStringAsFixed(3)}  "$pName"');
     }
 
-    return top5;
+    return shortlist;
   }
 
   // ── Error messages ─────────────────────────────────────────────────────────
@@ -3149,27 +3156,68 @@ String _normStr(String s) => s
     .trim()
     .replaceAll(RegExp(r'\s+'), ' ');
 
-/// Build the set of all 3-character substrings of [s].
-Set<String> _trigramSet(String s) {
-  final result = <String>{};
-  for (int i = 0; i + 3 <= s.length; i++) result.add(s.substring(i, i + 3));
-  return result;
+/// Stage 1 — Positional 3-letter chunk score.
+/// Query is split into sequential 3-char chunks (spaces stripped). Each chunk
+/// that appears in the candidate earns weight 0.5^i (i = chunk index), so
+/// chunk 0 always dominates any combination of later chunks.
+/// A small positional bonus (+10 % of the chunk weight) is added when the chunk
+/// appears within 4 chars of its expected offset in the candidate.
+double _positionalChunkScore(String query, String candidate) {
+  final q = _normStr(query).replaceAll(' ', '');
+  final c = _normStr(candidate).replaceAll(' ', '');
+  if (q.isEmpty || c.isEmpty) return 0.0;
+  double score = 0.0;
+  double weight = 1.0;
+  for (int start = 0; start < q.length; start += 3) {
+    final end = start + 3 < q.length ? start + 3 : q.length;
+    final chunk = q.substring(start, end);
+    if (chunk.isNotEmpty && c.contains(chunk)) {
+      score += weight;
+      final pos = c.indexOf(chunk);
+      if ((pos - start).abs() <= 4) score += weight * 0.1;
+    }
+    weight *= 0.5;
+  }
+  return score;
 }
 
-/// Dice coefficient over character trigrams, range 0..1.
-/// Strings shorter than 3 chars use exact equality as a fallback.
-double _trigramScore(String query, String target) {
-  final q = _normStr(query);
-  final t = _normStr(target);
-  if (q.isEmpty || t.isEmpty) return 0.0;
-  final qSet = _trigramSet(q);
-  final tSet = _trigramSet(t);
-  if (qSet.isEmpty || tSet.isEmpty) return q == t ? 1.0 : 0.0;
-  int shared = 0;
-  for (final g in qSet) {
-    if (tSet.contains(g)) shared++;
+/// Levenshtein edit distance.
+int _editDistance(String s, String t) {
+  final m = s.length, n = t.length;
+  if (m == 0) return n;
+  if (n == 0) return m;
+  final dp = List.generate(m + 1, (i) => List.filled(n + 1, 0));
+  for (int i = 0; i <= m; i++) dp[i][0] = i;
+  for (int j = 0; j <= n; j++) dp[0][j] = j;
+  for (int i = 1; i <= m; i++) {
+    for (int j = 1; j <= n; j++) {
+      if (s[i - 1] == t[j - 1]) {
+        dp[i][j] = dp[i - 1][j - 1];
+      } else {
+        final a = dp[i - 1][j];
+        final b = dp[i][j - 1];
+        final cc = dp[i - 1][j - 1];
+        dp[i][j] = 1 + (a < b ? (a < cc ? a : cc) : (b < cc ? b : cc));
+      }
+    }
   }
-  return (2 * shared) / (qSet.length + tSet.length);
+  return dp[m][n];
+}
+
+/// Stage 2 — Full-name accuracy score.
+/// Average of (1 − normalised edit-distance ratio) and token-set Jaccard similarity.
+double _stage2Score(String query, String candidate) {
+  final q = _normStr(query);
+  final c = _normStr(candidate);
+  if (q.isEmpty || c.isEmpty) return 0.0;
+  final maxLen = q.length > c.length ? q.length : c.length;
+  final editRatio = 1.0 - _editDistance(q, c) / maxLen;
+  final qTokens = q.split(' ').where((t) => t.isNotEmpty).toSet();
+  final cTokens = c.split(' ').where((t) => t.isNotEmpty).toSet();
+  final intersection = qTokens.intersection(cTokens).length;
+  final union = qTokens.union(cTokens).length;
+  final tokenScore = union == 0 ? 0.0 : intersection / union;
+  return (editRatio + tokenScore) / 2.0;
 }
 
 /// Detect dosage form keyword in a query string.

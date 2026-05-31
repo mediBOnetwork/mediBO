@@ -2327,11 +2327,11 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
               child: const Row(
                 children: [
                   Expanded(flex: 18, child: Text('LINE ITEM', style: _kTh)),
-                  Expanded(flex: 22, child: Text('MATCHED SKU', style: _kTh)),
+                  Expanded(flex: 26, child: Text('MATCHED SKU', style: _kTh)),
                   Expanded(flex: 8, child: Text('PACK', style: _kTh)),
-                  Expanded(flex: 14, child: Text('COMPANY', style: _kTh)),
-                  Expanded(flex: 6, child: Text('QTY', style: _kTh)),
-                  Expanded(flex: 10, child: Text('MRP', style: _kTh)),
+                  Expanded(flex: 12, child: Text('COMPANY', style: _kTh)),
+                  Expanded(flex: 5, child: Text('QTY', style: _kTh)),
+                  Expanded(flex: 9, child: Text('MRP', style: _kTh)),
                   Expanded(flex: 14, child: Text('STATUS', style: _kTh)),
                 ],
               ),
@@ -2497,7 +2497,7 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
                       style: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
                 ),
                 Expanded(
-                  flex: 22,
+                  flex: 26,
                   child: Text(
                     row.selectedProduct?.name ??
                         (row.status != _MatchStatus.unrecognized ? row.matchedSku : '—'),
@@ -2524,7 +2524,7 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
                   ),
                 ),
                 Expanded(
-                  flex: 14,
+                  flex: 12,
                   child: Text(
                     row.selectedProduct?.manufacturer ?? '',
                     maxLines: 1,
@@ -2533,12 +2533,12 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
                   ),
                 ),
                 Expanded(
-                  flex: 6,
+                  flex: 5,
                   child: Text('${row.qty}',
                       style: const TextStyle(fontSize: 13, color: Color(0xFF374151))),
                 ),
                 Expanded(
-                  flex: 10,
+                  flex: 9,
                   child: Text(row.price,
                       style: const TextStyle(
                           fontSize: 13,
@@ -2695,7 +2695,7 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
   Widget _altRow(Product p, int origIndex, bool isLast) {
     final row = widget.row;
     final isSelected = row.selectedIndex == origIndex;
-    final pack = _packShort(p);
+    final nameColor = isSelected ? const Color(0xFF16A34A) : const Color(0xFF374151);
     return GestureDetector(
       onTap: () {
         setState(() {
@@ -2706,54 +2706,45 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
         widget.onRowChanged();
       },
       child: Container(
-        padding: const EdgeInsets.fromLTRB(8, 7, 8, 7),
+        // Left pad matches card content (10px) so name starts flush, not indented
+        padding: const EdgeInsets.fromLTRB(10, 7, 8, 7),
         decoration: BoxDecoration(
           color: isSelected ? const Color(0xFFDCFCE7) : Colors.transparent,
           border: const Border(top: BorderSide(color: Color(0xFFE5E7EB))),
         ),
         child: Row(
           children: [
+            // Product name — takes most of the flexible space
             Expanded(
+              flex: 5,
               child: Text(p.name,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     fontSize: 12,
                     fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
-                    color: isSelected ? const Color(0xFF16A34A) : const Color(0xFF374151),
+                    color: nameColor,
                   )),
             ),
-            const SizedBox(width: 5),
-            SizedBox(
-              width: 38,
-              child: Text(pack,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
-            ),
-            const SizedBox(width: 5),
-            SizedBox(
-              width: 66,
+            const SizedBox(width: 6),
+            // Company name — smaller flexible space, ellipsis before MRP
+            Expanded(
+              flex: 3,
               child: Text(p.manufacturer,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
             ),
-            const SizedBox(width: 5),
+            const SizedBox(width: 4),
+            // MRP — fixed width, right-aligned, never pushed off screen
             SizedBox(
-              width: 24,
-              child: Text('${row.qty}',
-                  style: const TextStyle(fontSize: 11, color: Color(0xFF374151))),
-            ),
-            const SizedBox(width: 5),
-            SizedBox(
-              width: 48,
+              width: 52,
               child: Text(rupees(p.mrp),
                   textAlign: TextAlign.right,
                   style: TextStyle(
                     fontSize: 11,
                     fontWeight: FontWeight.w500,
-                    color: isSelected ? const Color(0xFF16A34A) : const Color(0xFF374151),
+                    color: nameColor,
                   )),
             ),
           ],
@@ -3136,7 +3127,7 @@ class _AlternativeRow extends StatelessWidget {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.fromLTRB(17, 10, 20, 10),
+        padding: const EdgeInsets.fromLTRB(17, 8, 20, 8),
         decoration: BoxDecoration(
           color: isSelected ? const Color(0xFFDCFCE7) : const Color(0xFFF3F4F6),
           border: isLast
@@ -3146,20 +3137,36 @@ class _AlternativeRow extends StatelessWidget {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
+            // LINE ITEM column — blank spacer (aligns with main row)
             const Expanded(flex: 18, child: SizedBox()),
+            // MATCHED SKU column — product name + company subtitle
             Expanded(
-              flex: 22,
-              child: Text(
-                product.name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
-                  color: nameColor,
-                ),
+              flex: 26,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    product.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                      color: nameColor,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    product.manufacturer,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+                  ),
+                ],
               ),
             ),
+            // PACK column
             Expanded(
               flex: 8,
               child: Text(
@@ -3169,23 +3176,19 @@ class _AlternativeRow extends StatelessWidget {
                 style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280)),
               ),
             ),
+            // COMPANY column — blank (company shown as subtitle in SKU cell)
+            const Expanded(flex: 12, child: SizedBox()),
+            // QTY column — blank spacer
+            const Expanded(flex: 5, child: SizedBox()),
+            // MRP column
             Expanded(
-              flex: 14,
-              child: Text(
-                product.manufacturer,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF)),
-              ),
-            ),
-            const Expanded(flex: 6, child: SizedBox()),
-            Expanded(
-              flex: 10,
+              flex: 9,
               child: Text(
                 rupees(product.mrp),
                 style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: priceColor),
               ),
             ),
+            // STATUS column — checkmark or blank
             Expanded(
               flex: 14,
               child: Align(

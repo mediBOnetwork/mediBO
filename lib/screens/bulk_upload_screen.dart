@@ -31,7 +31,8 @@ class _MatchRow {
   _MatchStatus status;
   final List<Product> candidates;
   int selectedIndex;
-  // Display-only fallbacks for hardcoded sample rows (no live candidates)
+  bool isHidden;
+  _MatchStatus? _preHideStatus; // saved on hide, restored on unhide
   final String _displaySku;
   final String _displayPrice;
 
@@ -41,10 +42,28 @@ class _MatchRow {
     required this.status,
     required this.candidates,
     this.selectedIndex = 0,
+    this.isHidden = false,
+    _MatchStatus? preHideStatus,
     String displaySku = 'No match found',
     String displayPrice = '-',
-  })  : _displaySku = displaySku,
+  })  : _preHideStatus = preHideStatus,
+        _displaySku = displaySku,
         _displayPrice = displayPrice;
+
+  void hide() {
+    if (!isHidden) {
+      _preHideStatus = status;
+      isHidden = true;
+    }
+  }
+
+  void unhide() {
+    if (isHidden) {
+      if (_preHideStatus != null) status = _preHideStatus!;
+      _preHideStatus = null;
+      isHidden = false;
+    }
+  }
 
   Product? get selectedProduct =>
       candidates.isEmpty ? null : candidates[selectedIndex];
@@ -62,22 +81,35 @@ class _MatchRow {
         'qty': qty,
         'status': status.name,
         'selectedIndex': selectedIndex,
+        'isHidden': isHidden,
+        if (_preHideStatus != null) 'preHideStatus': _preHideStatus!.name,
         'candidates': candidates.map((p) => p.toJson()).toList(),
       };
 
-  factory _MatchRow.fromJson(Map<String, dynamic> m) => _MatchRow(
-        lineItem: (m['lineItem'] as String?) ?? '',
-        qty: (m['qty'] as int?) ?? 1,
-        status: _MatchStatus.values.firstWhere(
-          (s) => s.name == (m['status'] as String?),
-          orElse: () => _MatchStatus.unrecognized,
-        ),
-        selectedIndex: (m['selectedIndex'] as int?) ?? 0,
-        candidates: (m['candidates'] as List<dynamic>?)
-                ?.map((e) => Product.fromJson(e as Map<String, dynamic>))
-                .toList() ??
-            [],
-      );
+  factory _MatchRow.fromJson(Map<String, dynamic> m) {
+    _MatchStatus? preHide;
+    final preStr = m['preHideStatus'] as String?;
+    if (preStr != null) {
+      for (final s in _MatchStatus.values) {
+        if (s.name == preStr) { preHide = s; break; }
+      }
+    }
+    return _MatchRow(
+      lineItem: (m['lineItem'] as String?) ?? '',
+      qty: (m['qty'] as int?) ?? 1,
+      status: _MatchStatus.values.firstWhere(
+        (s) => s.name == (m['status'] as String?),
+        orElse: () => _MatchStatus.unrecognized,
+      ),
+      selectedIndex: (m['selectedIndex'] as int?) ?? 0,
+      isHidden: (m['isHidden'] as bool?) ?? false,
+      preHideStatus: preHide,
+      candidates: (m['candidates'] as List<dynamic>?)
+              ?.map((e) => Product.fromJson(e as Map<String, dynamic>))
+              .toList() ??
+          [],
+    );
+  }
 }
 
 // Sample rows for display before a file is uploaded.
@@ -1249,6 +1281,15 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       final row = _rows[i];
       final key = i.toString();
       final oldProductId = _bulkLineItemMap[key];
+      // Hidden rows: excluded from cart; remove if previously added.
+      if (row.isHidden) {
+        if (oldProductId != null) {
+          cart.removeById(oldProductId);
+          removedCount++;
+        }
+        continue;
+      }
+
       final isMatched = (row.status == _MatchStatus.matched ||
               row.status == _MatchStatus.manuallyMatched) &&
           row.selectedProduct != null;
@@ -1301,6 +1342,19 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     }
   }
 
+  void _onRowHideToggle(int rowIndex) {
+    final row = _rows[rowIndex];
+    if (row.isHidden) {
+      // Row was just hidden — remove from cart if it was added.
+      final productId = _bulkLineItemMap[rowIndex.toString()];
+      if (productId != null) {
+        AppState.of(context).removeById(productId);
+        setState(() => _bulkLineItemMap.remove(rowIndex.toString()));
+      }
+    }
+    _saveSession();
+  }
+
   @override
   Widget build(BuildContext context) {
     return SingleChildScrollView(
@@ -1328,6 +1382,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
                     addingToCart: _addingToCart,
                     onPickFile: _pickAndProcess,
                     onAddToCart: _addMatchedToCart,
+                    onHideToggle: _onRowHideToggle,
                   ),
                   const SizedBox(height: 48),
                 ],
@@ -1389,6 +1444,7 @@ class _MainLayout extends StatelessWidget {
   final bool addingToCart;
   final VoidCallback onPickFile;
   final Future<void> Function() onAddToCart;
+  final void Function(int rowIndex) onHideToggle;
 
   const _MainLayout({
     required this.rows,
@@ -1401,6 +1457,7 @@ class _MainLayout extends StatelessWidget {
     required this.addingToCart,
     required this.onPickFile,
     required this.onAddToCart,
+    required this.onHideToggle,
   });
 
   @override
@@ -1440,6 +1497,7 @@ class _MainLayout extends StatelessWidget {
               fileName: fileName,
               addingToCart: addingToCart,
               onAddToCart: onAddToCart,
+              onHideToggle: onHideToggle,
             ),
           ],
         );
@@ -1463,6 +1521,7 @@ class _MainLayout extends StatelessWidget {
             fileName: fileName,
             addingToCart: addingToCart,
             onAddToCart: onAddToCart,
+            onHideToggle: onHideToggle,
           ),
         ],
       );
@@ -1978,6 +2037,7 @@ class _SmartMatchSection extends StatefulWidget {
   final String? fileName;
   final bool addingToCart;
   final Future<void> Function() onAddToCart;
+  final void Function(int rowIndex) onHideToggle;
 
   const _SmartMatchSection({
     required this.rows,
@@ -1989,6 +2049,7 @@ class _SmartMatchSection extends StatefulWidget {
     this.fileName,
     required this.addingToCart,
     required this.onAddToCart,
+    required this.onHideToggle,
   });
 
   @override
@@ -2003,6 +2064,19 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
   }
 
   void _onRowChanged() => setState(() {});
+
+  void _onHideToggle(int index) {
+    final row = widget.rows[index];
+    if (row.isHidden) {
+      row.unhide();
+    } else {
+      row.hide();
+      // Collapse alternatives when hiding.
+      if (_expandedIndex == index) _expandedIndex = null;
+    }
+    setState(() {});
+    widget.onHideToggle(index);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -2100,20 +2174,41 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
               ),
             )
           else
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
               child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  for (int i = 0; i < widget.rows.length; i++)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: _MobileMatchCard(
-                        key: ValueKey('mob-$i'),
-                        row: widget.rows[i],
-                        isExpanded: _expandedIndex == i,
-                        onToggle: () => _toggleRow(i),
-                        onRowChanged: _onRowChanged,
+                  // Table header
+                  Container(
+                    padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+                    decoration: const BoxDecoration(
+                      color: Color(0xFFF9FAFB),
+                      border: Border(
+                        top: BorderSide(color: Color(0xFFE5E7EB)),
+                        bottom: BorderSide(color: Color(0xFFE5E7EB)),
                       ),
+                    ),
+                    child: const Row(children: [
+                      SizedBox(width: 100, child: Text('LINE ITEM', style: _kTh)),
+                      SizedBox(width: 120, child: Text('MATCHED SKU', style: _kTh)),
+                      SizedBox(width: 48, child: Text('PACK', style: _kTh)),
+                      SizedBox(width: 80, child: Text('COMPANY', style: _kTh)),
+                      SizedBox(width: 34, child: Text('QTY', style: _kTh)),
+                      SizedBox(width: 54, child: Text('MRP', style: _kTh)),
+                      SizedBox(width: 116, child: Text('STATUS', style: _kTh)),
+                    ]),
+                  ),
+                  for (int i = 0; i < widget.rows.length; i++)
+                    _MobileExpandableRow(
+                      key: ValueKey('mob-$i'),
+                      row: widget.rows[i],
+                      index: i,
+                      last: i == widget.rows.length - 1,
+                      isExpanded: _expandedIndex == i,
+                      onToggle: () => _toggleRow(i),
+                      onRowChanged: _onRowChanged,
+                      onHideToggle: () => _onHideToggle(i),
                     ),
                 ],
               ),
@@ -2268,6 +2363,7 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
                 isExpanded: _expandedIndex == i,
                 onToggle: () => _toggleRow(i),
                 onRowChanged: _onRowChanged,
+                onHideToggle: () => _onHideToggle(i),
               ),
           ],
         ],
@@ -2290,6 +2386,7 @@ class _ExpandableMatchRow extends StatefulWidget {
   final bool isExpanded;
   final VoidCallback onToggle;
   final VoidCallback onRowChanged;
+  final VoidCallback onHideToggle;
 
   const _ExpandableMatchRow({
     super.key,
@@ -2299,6 +2396,7 @@ class _ExpandableMatchRow extends StatefulWidget {
     required this.isExpanded,
     required this.onToggle,
     required this.onRowChanged,
+    required this.onHideToggle,
   });
 
   @override
@@ -2350,27 +2448,34 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
     Color badgeText;
     String label;
     Color leftBorderColor;
-    switch (row.status) {
-      case _MatchStatus.matched:
-        badgeColor = const Color(0xFFDCFCE7);
-        badgeText = const Color(0xFF15803D);
-        label = 'Matched';
-        leftBorderColor = const Color(0xFF15803D);
-      case _MatchStatus.manuallyMatched:
-        badgeColor = const Color(0xFFE0E7FF);
-        badgeText = const Color(0xFF3730A3);
-        label = 'Manually Matched';
-        leftBorderColor = const Color(0xFF3730A3);
-      case _MatchStatus.partial:
-        badgeColor = const Color(0xFFFEF3C7);
-        badgeText = const Color(0xFF92400E);
-        label = 'Partial';
-        leftBorderColor = const Color(0xFFEA580C);
-      case _MatchStatus.unrecognized:
-        badgeColor = const Color(0xFFFEE2E2);
-        badgeText = const Color(0xFFDC2626);
-        label = 'Unrecognized';
-        leftBorderColor = const Color(0xFFDC2626);
+    if (row.isHidden) {
+      badgeColor = const Color(0xFFF3F4F6);
+      badgeText = const Color(0xFF9CA3AF);
+      label = 'Hidden';
+      leftBorderColor = const Color(0xFFD1D5DB);
+    } else {
+      switch (row.status) {
+        case _MatchStatus.matched:
+          badgeColor = const Color(0xFFDCFCE7);
+          badgeText = const Color(0xFF15803D);
+          label = 'Matched';
+          leftBorderColor = const Color(0xFF15803D);
+        case _MatchStatus.manuallyMatched:
+          badgeColor = const Color(0xFFE0E7FF);
+          badgeText = const Color(0xFF3730A3);
+          label = 'Manually Matched';
+          leftBorderColor = const Color(0xFF3730A3);
+        case _MatchStatus.partial:
+          badgeColor = const Color(0xFFFEF3C7);
+          badgeText = const Color(0xFF92400E);
+          label = 'Partial';
+          leftBorderColor = const Color(0xFFEA580C);
+        case _MatchStatus.unrecognized:
+          badgeColor = const Color(0xFFFEE2E2);
+          badgeText = const Color(0xFFDC2626);
+          label = 'Unrecognized';
+          leftBorderColor = const Color(0xFFDC2626);
+      }
     }
 
     // Top 4 alternates excluding the currently selected candidate, sorted by MRP asc
@@ -2384,11 +2489,13 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
         ? const BorderSide(color: Color(0xFFEEEEEE))
         : BorderSide.none;
 
-    return Column(
+    return Opacity(
+      opacity: row.isHidden ? 0.45 : 1.0,
+      child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         GestureDetector(
-          onTap: hasCandidates ? widget.onToggle : null,
+          onTap: hasCandidates && !row.isHidden ? widget.onToggle : null,
           child: Container(
             decoration: BoxDecoration(
               color: isEven ? Colors.white : const Color(0xFFFAFAFA),
@@ -2397,7 +2504,7 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
                 bottom: bottomBorder,
               ),
             ),
-            padding: const EdgeInsets.fromLTRB(17, 12, 20, 12),
+            padding: const EdgeInsets.fromLTRB(17, 12, 12, 12),
             child: Row(
               children: [
                 Expanded(
@@ -2469,7 +2576,7 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
                         child: Text(label,
                             style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: badgeText)),
                       ),
-                      if (hasCandidates) ...[
+                      if (hasCandidates && !row.isHidden) ...[
                         const SizedBox(width: 6),
                         AnimatedRotation(
                           turns: widget.isExpanded ? 0.5 : 0,
@@ -2477,6 +2584,18 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
                           child: const Icon(Icons.expand_more, size: 14, color: Color(0xFF9CA3AF)),
                         ),
                       ],
+                      const Spacer(),
+                      GestureDetector(
+                        onTap: widget.onHideToggle,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 4),
+                          child: Icon(
+                            row.isHidden ? Icons.visibility : Icons.visibility_off,
+                            size: 14,
+                            color: const Color(0xFF9CA3AF),
+                          ),
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -2513,6 +2632,7 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
           ),
         ),
       ],
+    ),
     );
   }
 }
@@ -2535,27 +2655,33 @@ class _StatusPillBadge extends StatelessWidget {
   }
 }
 
-// ─── Mobile match card ────────────────────────────────────────────────────────
+// ─── Mobile expandable row (table-style) ─────────────────────────────────────
 
-class _MobileMatchCard extends StatefulWidget {
+class _MobileExpandableRow extends StatefulWidget {
   final _MatchRow row;
+  final int index;
+  final bool last;
   final bool isExpanded;
   final VoidCallback onToggle;
   final VoidCallback onRowChanged;
+  final VoidCallback onHideToggle;
 
-  const _MobileMatchCard({
+  const _MobileExpandableRow({
     super.key,
     required this.row,
+    required this.index,
+    required this.last,
     required this.isExpanded,
     required this.onToggle,
     required this.onRowChanged,
+    required this.onHideToggle,
   });
 
   @override
-  State<_MobileMatchCard> createState() => _MobileMatchCardState();
+  State<_MobileExpandableRow> createState() => _MobileExpandableRowState();
 }
 
-class _MobileMatchCardState extends State<_MobileMatchCard>
+class _MobileExpandableRowState extends State<_MobileExpandableRow>
     with SingleTickerProviderStateMixin {
   late final AnimationController _ctrl;
   late final Animation<double> _anim;
@@ -2572,7 +2698,7 @@ class _MobileMatchCardState extends State<_MobileMatchCard>
   }
 
   @override
-  void didUpdateWidget(_MobileMatchCard old) {
+  void didUpdateWidget(_MobileExpandableRow old) {
     super.didUpdateWidget(old);
     if (widget.isExpanded != old.isExpanded) {
       widget.isExpanded ? _ctrl.forward() : _ctrl.reverse();
@@ -2588,31 +2714,39 @@ class _MobileMatchCardState extends State<_MobileMatchCard>
   @override
   Widget build(BuildContext context) {
     final row = widget.row;
-    final canChange = row.candidates.isNotEmpty && row.status != _MatchStatus.unrecognized;
+    final isEven = widget.index % 2 == 0;
+    final hasCandidates = row.candidates.isNotEmpty;
 
-    Color badgeColor, badgeText, accentColor;
+    Color badgeColor, badgeText, leftBorderColor;
     String label;
-    switch (row.status) {
-      case _MatchStatus.matched:
-        badgeColor = const Color(0xFFDCFCE7);
-        badgeText = const Color(0xFF15803D);
-        accentColor = const Color(0xFF15803D);
-        label = 'Matched';
-      case _MatchStatus.manuallyMatched:
-        badgeColor = const Color(0xFFE0E7FF);
-        badgeText = const Color(0xFF3730A3);
-        accentColor = const Color(0xFF3730A3);
-        label = 'Manually Matched';
-      case _MatchStatus.partial:
-        badgeColor = const Color(0xFFFEF3C7);
-        badgeText = const Color(0xFF92400E);
-        accentColor = const Color(0xFFEA580C);
-        label = 'Partial';
-      case _MatchStatus.unrecognized:
-        badgeColor = const Color(0xFFFEE2E2);
-        badgeText = const Color(0xFFDC2626);
-        accentColor = const Color(0xFFDC2626);
-        label = 'Unrecognized';
+    if (row.isHidden) {
+      badgeColor = const Color(0xFFF3F4F6);
+      badgeText = const Color(0xFF9CA3AF);
+      label = 'Hidden';
+      leftBorderColor = const Color(0xFFD1D5DB);
+    } else {
+      switch (row.status) {
+        case _MatchStatus.matched:
+          badgeColor = const Color(0xFFDCFCE7);
+          badgeText = const Color(0xFF15803D);
+          label = 'Matched';
+          leftBorderColor = const Color(0xFF15803D);
+        case _MatchStatus.manuallyMatched:
+          badgeColor = const Color(0xFFE0E7FF);
+          badgeText = const Color(0xFF3730A3);
+          label = 'Manually Matched';
+          leftBorderColor = const Color(0xFF3730A3);
+        case _MatchStatus.partial:
+          badgeColor = const Color(0xFFFEF3C7);
+          badgeText = const Color(0xFF92400E);
+          label = 'Partial';
+          leftBorderColor = const Color(0xFFEA580C);
+        case _MatchStatus.unrecognized:
+          badgeColor = const Color(0xFFFEE2E2);
+          badgeText = const Color(0xFFDC2626);
+          label = 'Unrecognized';
+          leftBorderColor = const Color(0xFFDC2626);
+      }
     }
 
     final alts = <(int, Product)>[];
@@ -2621,129 +2755,159 @@ class _MobileMatchCardState extends State<_MobileMatchCard>
     }
     alts.sort((a, b) => a.$2.mrp.compareTo(b.$2.mrp));
 
-    final selectedProduct = row.selectedProduct;
-    final String matchedSingleLine;
-    if (selectedProduct != null) {
-      final pack = _packShort(selectedProduct);
-      final parts = <String>[
-        selectedProduct.name,
-        if (pack.isNotEmpty) pack,
-        if (selectedProduct.manufacturer.isNotEmpty) selectedProduct.manufacturer,
-        rupees(selectedProduct.mrp),
-      ];
-      matchedSingleLine = parts.join(' · ');
-    } else {
-      matchedSingleLine = row.status != _MatchStatus.unrecognized ? row.matchedSku : 'No match found';
-    }
+    final bottomBorder = (!widget.last || widget.isExpanded)
+        ? const BorderSide(color: Color(0xFFEEEEEE))
+        : BorderSide.none;
 
-    return GestureDetector(
-      onTap: canChange ? widget.onToggle : null,
-      child: ClipRRect(
-      borderRadius: BorderRadius.circular(10),
-      child: Container(
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(10),
-          boxShadow: [
-            BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 6, offset: const Offset(0, 2)),
-          ],
-          border: Border(left: BorderSide(color: accentColor, width: 3)),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+    return Opacity(
+      opacity: row.isHidden ? 0.45 : 1.0,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          GestureDetector(
+            onTap: hasCandidates && !row.isHidden ? widget.onToggle : null,
+            child: Container(
+              decoration: BoxDecoration(
+                color: isEven ? Colors.white : const Color(0xFFFAFAFA),
+                border: Border(
+                  left: BorderSide(color: leftBorderColor, width: 3),
+                  bottom: bottomBorder,
+                ),
+              ),
+              padding: const EdgeInsets.fromLTRB(9, 10, 4, 10),
+              child: Row(
                 children: [
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text('YOUR ITEM',
-                                style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: Color(0xFF9CA3AF), letterSpacing: 0.5)),
-                            const SizedBox(height: 2),
-                            Text(row.lineItem,
-                                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
-                        decoration: BoxDecoration(color: badgeColor, borderRadius: BorderRadius.circular(20)),
-                        child: Text(label,
-                            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: badgeText)),
-                      ),
-                      if (canChange) ...[
-                        const SizedBox(width: 4),
-                        AnimatedRotation(
-                          turns: widget.isExpanded ? 0.5 : 0,
-                          duration: const Duration(milliseconds: 220),
-                          child: const Icon(Icons.expand_more, size: 16, color: Color(0xFF9CA3AF)),
-                        ),
-                      ],
-                    ],
+                  SizedBox(
+                    width: 100,
+                    child: Text(row.lineItem,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF))),
                   ),
-                  const SizedBox(height: 8),
-                  const Divider(height: 1, color: Color(0xFFE5E7EB)),
-                  const SizedBox(height: 8),
-                  const Text('MATCHED TO',
-                      style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: Color(0xFF9CA3AF), letterSpacing: 0.5)),
-                  const SizedBox(height: 2),
-                  Text(
-                    matchedSingleLine,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: row.status != _MatchStatus.unrecognized ? const Color(0xFF111827) : const Color(0xFF9CA3AF),
+                  SizedBox(
+                    width: 120,
+                    child: Text(
+                      row.selectedProduct?.name ??
+                          (row.status != _MatchStatus.unrecognized ? row.matchedSku : '—'),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: row.status != _MatchStatus.unrecognized
+                            ? FontWeight.w600
+                            : FontWeight.normal,
+                        color: row.status != _MatchStatus.unrecognized
+                            ? const Color(0xFF111827)
+                            : const Color(0xFF9CA3AF),
+                      ),
                     ),
                   ),
-                  const SizedBox(height: 6),
-                  Text('Qty: ${row.qty}',
-                      style: const TextStyle(fontSize: 13, color: Color(0xFF374151))),
+                  SizedBox(
+                    width: 48,
+                    child: Text(
+                      row.selectedProduct != null ? _packShort(row.selectedProduct!) : '',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 11, color: Color(0xFF374151)),
+                    ),
+                  ),
+                  SizedBox(
+                    width: 80,
+                    child: Text(
+                      row.selectedProduct?.manufacturer ?? '',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280)),
+                    ),
+                  ),
+                  SizedBox(
+                    width: 34,
+                    child: Text('${row.qty}',
+                        style: const TextStyle(fontSize: 12, color: Color(0xFF374151))),
+                  ),
+                  SizedBox(
+                    width: 54,
+                    child: Text(row.price,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            fontSize: 12, fontWeight: FontWeight.w500, color: Color(0xFF374151))),
+                  ),
+                  SizedBox(
+                    width: 116,
+                    child: Row(
+                      children: [
+                        GestureDetector(
+                          onTap: widget.onHideToggle,
+                          child: Padding(
+                            padding: const EdgeInsets.only(right: 4),
+                            child: Icon(
+                              row.isHidden ? Icons.visibility : Icons.visibility_off,
+                              size: 13,
+                              color: const Color(0xFF9CA3AF),
+                            ),
+                          ),
+                        ),
+                        Flexible(
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                            decoration: BoxDecoration(
+                              color: badgeColor,
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: Text(label,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                    fontSize: 10, fontWeight: FontWeight.w600, color: badgeText)),
+                          ),
+                        ),
+                        if (hasCandidates && !row.isHidden) ...[
+                          const SizedBox(width: 2),
+                          AnimatedRotation(
+                            turns: widget.isExpanded ? 0.5 : 0,
+                            duration: const Duration(milliseconds: 220),
+                            child: const Icon(Icons.expand_more, size: 12, color: Color(0xFF9CA3AF)),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
                 ],
               ),
             ),
-            SizeTransition(
-              sizeFactor: _anim,
-              child: Container(
-                decoration: const BoxDecoration(
-                  color: Color(0xFFF3F4F6),
-                  border: Border(top: BorderSide(color: Color(0xFFE5E7EB))),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    for (int k = 0; k < alts.length; k++)
-                      _AlternativeRow(
-                        product: alts[k].$2,
-                        isSelected: false,
-                        isLast: k == alts.length - 1,
-                        isMobile: true,
-                        onTap: () {
-                          setState(() {
-                            row.selectedIndex = alts[k].$1;
-                            row.status = _MatchStatus.manuallyMatched;
-                          });
-                          widget.onToggle();
-                          widget.onRowChanged();
-                        },
-                      ),
-                  ],
-                ),
+          ),
+          SizeTransition(
+            sizeFactor: _anim,
+            child: Container(
+              decoration: const BoxDecoration(
+                color: Color(0xFFF3F4F6),
+                border: Border(left: BorderSide(color: Color(0xFFE5E7EB), width: 3)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  for (int k = 0; k < alts.length; k++)
+                    _AlternativeRow(
+                      product: alts[k].$2,
+                      isSelected: false,
+                      isLast: k == alts.length - 1,
+                      isMobile: true,
+                      onTap: () {
+                        setState(() {
+                          row.selectedIndex = alts[k].$1;
+                          row.status = _MatchStatus.manuallyMatched;
+                        });
+                        widget.onToggle();
+                        widget.onRowChanged();
+                      },
+                    ),
+                ],
               ),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
-    ),
     );
   }
 }
@@ -2959,16 +3123,10 @@ class _AlternativeRow extends StatelessWidget {
   Widget _buildMobile() {
     final textColor = isSelected ? const Color(0xFF16A34A) : const Color(0xFF374151);
     final packShort = _packShort(product);
-    final lineParts = <String>[
-      product.name,
-      if (packShort.isNotEmpty) packShort,
-      if (product.manufacturer.isNotEmpty) product.manufacturer,
-      rupees(product.mrp),
-    ];
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+        padding: const EdgeInsets.fromLTRB(9, 9, 4, 9),
         decoration: BoxDecoration(
           color: isSelected ? const Color(0xFFDCFCE7) : const Color(0xFFF3F4F6),
           border: isLast
@@ -2977,9 +3135,12 @@ class _AlternativeRow extends StatelessWidget {
         ),
         child: Row(
           children: [
-            Expanded(
+            // LINE ITEM column — blank (indent under parent)
+            const SizedBox(width: 100),
+            SizedBox(
+              width: 120,
               child: Text(
-                lineParts.join(' · '),
+                product.name,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
@@ -2989,10 +3150,35 @@ class _AlternativeRow extends StatelessWidget {
                 ),
               ),
             ),
-            if (isSelected) ...[
-              const SizedBox(width: 4),
-              const Icon(Icons.check_circle, size: 14, color: Color(0xFF16A34A)),
-            ],
+            SizedBox(
+              width: 48,
+              child: Text(packShort,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
+            ),
+            SizedBox(
+              width: 80,
+              child: Text(product.manufacturer,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
+            ),
+            // QTY column — blank
+            const SizedBox(width: 34),
+            SizedBox(
+              width: 54,
+              child: Text(rupees(product.mrp),
+                  style: TextStyle(
+                      fontSize: 11, fontWeight: FontWeight.w500, color: textColor)),
+            ),
+            SizedBox(
+              width: 116,
+              child: isSelected
+                  ? const Icon(Icons.check_circle, size: 14, color: Color(0xFF16A34A))
+                  : Text('Select',
+                      style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
+            ),
           ],
         ),
       ),

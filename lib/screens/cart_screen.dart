@@ -348,13 +348,11 @@ class _ItemListState extends State<_ItemList> {
     final filtered = _filteredLines;
     final searchActive = _effectiveQuery.trim().isNotEmpty;
 
-    return ListView(
-      physics: platformScrollPhysics(),
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
-      cacheExtent: 400,
-      children: [
-        // ── No results message ──
-        if (searchActive && filtered.isEmpty)
+    if (searchActive && filtered.isEmpty) {
+      return ListView(
+        physics: platformScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+        children: [
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 32),
             child: Center(
@@ -376,16 +374,30 @@ class _ItemListState extends State<_ItemList> {
                 ],
               ),
             ),
-          )
-        else
-          for (final line in filtered)
-            _CartItemCard(line: line, cart: widget.cart),
-        // ── Billing breakdown (scrolls with products, narrow layout only) ──
-        if (widget.showBreakdown && !searchActive) ...[
-          const SizedBox(height: 4),
-          _BillingBreakdownSection(cart: widget.cart),
+          ),
         ],
-      ],
+      );
+    }
+
+    final showBreakdown = widget.showBreakdown && !searchActive;
+    final itemCount = filtered.length + (showBreakdown ? 2 : 0);
+
+    return ListView.builder(
+      physics: platformScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+      cacheExtent: 400,
+      itemCount: itemCount,
+      itemBuilder: (context, i) {
+        if (i < filtered.length) {
+          final line = filtered[i];
+          return RepaintBoundary(
+            key: ValueKey(line.product.id),
+            child: _CartItemCard(line: line, cart: widget.cart),
+          );
+        }
+        if (i == filtered.length) return const SizedBox(height: 4);
+        return _BillingBreakdownSection(cart: widget.cart);
+      },
     );
   }
 }

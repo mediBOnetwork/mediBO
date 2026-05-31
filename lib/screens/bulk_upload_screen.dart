@@ -2907,9 +2907,9 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      // ── Header row ─────────────────────────────────────
+                      // ── Header row — comfortable gaps, taller padding ────
                       Padding(
-                        padding: const EdgeInsets.fromLTRB(10, 10, 10, 6),
+                        padding: const EdgeInsets.fromLTRB(12, 14, 12, 10),
                         child: Row(
                           children: [
                             // Line-item name
@@ -2922,8 +2922,8 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                                       fontWeight: FontWeight.w700,
                                       color: Color(0xFF111827))),
                             ),
-                            const SizedBox(width: 6),
-                            // QTY box — same height as status badge
+                            const SizedBox(width: 12),
+                            // QTY box — height matches status badge (same vertical padding)
                             Container(
                               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
                               decoration: BoxDecoration(
@@ -2937,7 +2937,7 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                                       fontWeight: FontWeight.w500,
                                       color: Color(0xFF374151))),
                             ),
-                            const SizedBox(width: 4),
+                            const SizedBox(width: 12),
                             // Hide/show eye icon
                             GestureDetector(
                               onTap: widget.onHideToggle,
@@ -2953,15 +2953,15 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                                 ),
                               ),
                             ),
-                            const SizedBox(width: 4),
-                            // Status badge — fixed width fits "Manually Matched"
+                            const SizedBox(width: 12),
+                            // Status badge — fixed width, rectangular rounded corners
                             SizedBox(
                               width: 112,
                               child: Container(
                                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                                 decoration: BoxDecoration(
                                     color: badgeColor,
-                                    borderRadius: BorderRadius.circular(20)),
+                                    borderRadius: BorderRadius.circular(8)),
                                 child: Text(label,
                                     textAlign: TextAlign.center,
                                     overflow: TextOverflow.ellipsis,
@@ -2972,8 +2972,8 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                                         color: badgeText)),
                               ),
                             ),
-                            const SizedBox(width: 6),
-                            // Approval checkbox — replaces dropdown chevron
+                            const SizedBox(width: 12),
+                            // Approval checkbox
                             GestureDetector(
                               onTap: row.isHidden ? null : _toggleApproval,
                               behavior: HitTestBehavior.opaque,
@@ -3007,71 +3007,64 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                           ],
                         ),
                       ),
-                      // ── Selected matched SKU — single line, no overlap ──────
+                      // ── Full-bleed divider (no side insets) ─────────────
+                      const Divider(height: 1, thickness: 1, color: Color(0xFFE5E7EB)),
+                      // ── Selected matched SKU — single line, no inner box ─
                       Padding(
-                        padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
-                        child: Container(
-                          width: double.infinity,
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFF9FAFB),
-                            borderRadius: BorderRadius.circular(6),
-                            border: Border.all(color: const Color(0xFFE5E7EB)),
-                          ),
-                          // left=0 so product name aligns with line-item name above
-                          padding: const EdgeInsets.fromLTRB(0, 7, 8, 7),
-                          child: p != null
-                              ? Row(children: [
-                                  // Product name truncates before pack
-                                  Expanded(
-                                    flex: 4,
-                                    child: Text(p.name,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(
-                                            fontSize: 13,
-                                            fontWeight: FontWeight.w600,
-                                            color: Color(0xFF111827))),
-                                  ),
-                                  const SizedBox(width: 4),
-                                  SizedBox(
-                                    width: 36,
-                                    child: Text(pack,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(
-                                            fontSize: 11, color: Color(0xFF374151))),
-                                  ),
-                                  const SizedBox(width: 4),
-                                  // Company truncates before MRP
-                                  Expanded(
-                                    flex: 3,
-                                    child: Text(p.manufacturer,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(
-                                            fontSize: 11, color: Color(0xFF6B7280))),
-                                  ),
-                                  const SizedBox(width: 4),
-                                  // MRP — fixed width, right-aligned
-                                  SizedBox(
-                                    width: 52,
-                                    child: Text(row.price,
-                                        textAlign: TextAlign.right,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(
-                                            fontSize: 12,
-                                            fontWeight: FontWeight.w600,
-                                            color: Color(0xFF111827))),
-                                  ),
-                                ])
-                              : Text(
-                                  row.status != _MatchStatus.unrecognized
-                                      ? row.matchedSku
-                                      : 'No match found',
-                                  style: const TextStyle(
-                                      fontSize: 12, color: Color(0xFF9CA3AF))),
-                        ),
+                        padding: const EdgeInsets.fromLTRB(12, 10, 12, 14),
+                        child: p != null
+                            ? Row(children: [
+                                // Product name truncates before pack
+                                Expanded(
+                                  flex: 4,
+                                  child: Text(p.name,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w600,
+                                          color: Color(0xFF111827))),
+                                ),
+                                const SizedBox(width: 6),
+                                // Pack size — widened so short form never clips
+                                SizedBox(
+                                  width: 48,
+                                  child: Text(pack,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                          fontSize: 11, color: Color(0xFF374151))),
+                                ),
+                                const SizedBox(width: 6),
+                                // Company truncates before MRP
+                                Expanded(
+                                  flex: 3,
+                                  child: Text(p.manufacturer,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                          fontSize: 11, color: Color(0xFF6B7280))),
+                                ),
+                                const SizedBox(width: 6),
+                                // MRP — fixed width, right-aligned
+                                SizedBox(
+                                  width: 52,
+                                  child: Text(row.price,
+                                      textAlign: TextAlign.right,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w600,
+                                          color: Color(0xFF111827))),
+                                ),
+                              ])
+                            : Text(
+                                row.status != _MatchStatus.unrecognized
+                                    ? row.matchedSku
+                                    : 'No match found',
+                                style: const TextStyle(
+                                    fontSize: 12, color: Color(0xFF9CA3AF))),
                       ),
                     ],
                   ),

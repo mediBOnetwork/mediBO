@@ -2131,8 +2131,8 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
               child: const Row(
                 children: [
                   Expanded(flex: 20, child: Text('YOUR LINE ITEM', style: _kTh)),
-                  Expanded(flex: 28, child: Text('MATCHED SKU', style: _kTh)),
-                  Expanded(flex: 8, child: Text('QTY', style: _kTh)),
+                  Expanded(flex: 30, child: Text('MATCHED SKU', style: _kTh)),
+                  Expanded(flex: 6, child: Text('QTY', style: _kTh)),
                   Expanded(flex: 12, child: Text('PRICE', style: _kTh)),
                   Expanded(flex: 14, child: Text('STATUS', style: _kTh)),
                 ],
@@ -2284,7 +2284,7 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
                       style: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
                 ),
                 Expanded(
-                  flex: 28,
+                  flex: 30,
                   child: Row(
                     children: [
                       Expanded(
@@ -2305,7 +2305,7 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
                   ),
                 ),
                 Expanded(
-                  flex: 8,
+                  flex: 6,
                   child: Text('${row.qty}',
                       style: const TextStyle(fontSize: 13, color: Color(0xFF374151))),
                 ),
@@ -2584,6 +2584,7 @@ class _MobileMatchCardState extends State<_MobileMatchCard>
                         product: alts[k].$2,
                         isSelected: false,
                         isLast: k == alts.length - 1,
+                        isMobile: true,
                         onTap: () {
                           setState(() {
                             row.selectedIndex = alts[k].$1;
@@ -2609,6 +2610,7 @@ class _AlternativeRow extends StatelessWidget {
   final Product product;
   final bool isSelected;
   final bool isLast;
+  final bool isMobile;
   final VoidCallback onTap;
 
   const _AlternativeRow({
@@ -2616,17 +2618,87 @@ class _AlternativeRow extends StatelessWidget {
     required this.isSelected,
     required this.isLast,
     required this.onTap,
+    this.isMobile = false,
   });
 
   @override
-  Widget build(BuildContext context) {
-    final sku = product.packSize.isNotEmpty
-        ? '${product.name} (${product.packSize})'
-        : product.name;
+  Widget build(BuildContext context) => isMobile ? _buildMobile() : _buildWeb();
+
+  Widget _buildWeb() {
+    final nameColor = isSelected ? const Color(0xFF16A34A) : const Color(0xFF374151);
+    final priceColor = isSelected ? const Color(0xFF16A34A) : const Color(0xFF6B7280);
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.fromLTRB(40, 10, 20, 10),
+        padding: const EdgeInsets.fromLTRB(17, 10, 20, 10),
+        decoration: BoxDecoration(
+          color: isSelected ? const Color(0xFFDCFCE7) : const Color(0xFFF3F4F6),
+          border: isLast
+              ? null
+              : const Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            const Expanded(flex: 20, child: SizedBox()),
+            Expanded(
+              flex: 30,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    product.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                      color: nameColor,
+                    ),
+                  ),
+                  if (product.manufacturer.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      product.manufacturer,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF)),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            const Expanded(flex: 6, child: SizedBox()),
+            Expanded(
+              flex: 12,
+              child: Text(
+                rupees(product.b2bPrice),
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: priceColor),
+              ),
+            ),
+            Expanded(
+              flex: 14,
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: isSelected
+                    ? const Icon(Icons.check_circle, size: 16, color: Color(0xFF16A34A))
+                    : const SizedBox(width: 16),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMobile() {
+    final nameColor = isSelected ? const Color(0xFF16A34A) : const Color(0xFF374151);
+    final priceColor = isSelected ? const Color(0xFF16A34A) : const Color(0xFF6B7280);
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
         decoration: BoxDecoration(
           color: isSelected ? const Color(0xFFDCFCE7) : const Color(0xFFF3F4F6),
           border: isLast
@@ -2636,33 +2708,43 @@ class _AlternativeRow extends StatelessWidget {
         child: Row(
           children: [
             Expanded(
+              flex: 5,
               child: Text(
-                sku,
+                product.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
                 style: TextStyle(
                   fontSize: 12,
                   fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
-                  color: isSelected
-                      ? const Color(0xFF16A34A)
-                      : const Color(0xFF374151),
+                  color: nameColor,
                 ),
               ),
             ),
-            const SizedBox(width: 8),
-            Text(
-              rupees(product.b2bPrice),
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w500,
-                color: isSelected
-                    ? const Color(0xFF16A34A)
-                    : const Color(0xFF6B7280),
+            const SizedBox(width: 6),
+            Expanded(
+              flex: 3,
+              child: Text(
+                product.manufacturer,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF)),
               ),
             ),
-            const SizedBox(width: 8),
-            if (isSelected)
-              const Icon(Icons.check_circle, size: 16, color: Color(0xFF16A34A))
-            else
-              const SizedBox(width: 16),
+            const SizedBox(width: 6),
+            SizedBox(
+              width: 64,
+              child: Text(
+                rupees(product.b2bPrice),
+                textAlign: TextAlign.right,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: priceColor),
+              ),
+            ),
+            if (isSelected) ...[
+              const SizedBox(width: 4),
+              const Icon(Icons.check_circle, size: 14, color: Color(0xFF16A34A)),
+            ],
           ],
         ),
       ),

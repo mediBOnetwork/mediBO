@@ -2333,7 +2333,9 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
                   Expanded(flex: 12, child: Text('COMPANY', style: _kTh)),
                   Expanded(flex: 5, child: Text('QTY', style: _kTh)),
                   Expanded(flex: 9, child: Text('MRP', style: _kTh)),
-                  Expanded(flex: 14, child: Text('STATUS', style: _kTh)),
+                  Expanded(flex: 10, child: Text('STATUS', style: _kTh)),
+                  Expanded(flex: 3, child: Text('HIDE', textAlign: TextAlign.center, style: _kTh)),
+                  Expanded(flex: 5, child: Text('APPROVE', textAlign: TextAlign.center, style: _kTh)),
                 ],
               ),
             ),
@@ -2563,79 +2565,79 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
                           fontWeight: FontWeight.w500,
                           color: Color(0xFF374151))),
                 ),
-                // STATUS: [fixed-width badge] [hide-eye] [approval checkbox at far right]
+                // STATUS column — badge fills column
                 Expanded(
-                  flex: 14,
-                  child: Row(
-                    children: [
-                      // Status badge — fixed width fits "Manually Matched"
-                      SizedBox(
-                        width: 120,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
-                          decoration: BoxDecoration(
-                            color: badgeColor,
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: Text(label,
-                              textAlign: TextAlign.center,
-                              overflow: TextOverflow.ellipsis,
-                              maxLines: 1,
-                              style: TextStyle(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w600,
-                                  color: badgeText)),
+                  flex: 10,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: badgeColor,
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(label,
+                        textAlign: TextAlign.center,
+                        overflow: TextOverflow.ellipsis,
+                        maxLines: 1,
+                        style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: badgeText)),
+                  ),
+                ),
+                // HIDE column — eye icon centered under its header
+                Expanded(
+                  flex: 3,
+                  child: Center(
+                    child: GestureDetector(
+                      onTap: widget.onHideToggle,
+                      behavior: HitTestBehavior.opaque,
+                      child: Padding(
+                        padding: const EdgeInsets.all(3),
+                        child: Icon(
+                          row.isHidden
+                              ? Icons.visibility_outlined
+                              : Icons.visibility_off_outlined,
+                          size: 16,
+                          color: const Color(0xFF6B7280),
                         ),
                       ),
-                      const SizedBox(width: 6),
-                      // Hide/show eye icon
-                      GestureDetector(
-                        onTap: widget.onHideToggle,
-                        behavior: HitTestBehavior.opaque,
-                        child: Padding(
-                          padding: const EdgeInsets.all(3),
-                          child: Icon(
-                            row.isHidden
-                                ? Icons.visibility_outlined
-                                : Icons.visibility_off_outlined,
-                            size: 16,
-                            color: const Color(0xFF6B7280),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 6),
-                      // Approval checkbox — far-right element, stops tap propagation
-                      GestureDetector(
-                        onTap: row.isHidden ? null : _toggleApproval,
-                        behavior: HitTestBehavior.opaque,
-                        child: Padding(
-                          padding: const EdgeInsets.all(3),
-                          child: isApproved
-                              ? Container(
-                                  width: 18,
-                                  height: 18,
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFF16A34A),
-                                    borderRadius: BorderRadius.circular(4),
-                                  ),
-                                  child: const Icon(Icons.check,
-                                      size: 13, color: Colors.white),
-                                )
-                              : Container(
-                                  width: 18,
-                                  height: 18,
-                                  decoration: BoxDecoration(
-                                    color: Colors.white,
-                                    borderRadius: BorderRadius.circular(4),
-                                    border: Border.all(
-                                        color: const Color(0xFF9CA3AF), width: 1.5),
-                                  ),
-                                  child: const Icon(Icons.check,
-                                      size: 13, color: Color(0xFFD1D5DB)),
+                    ),
+                  ),
+                ),
+                // APPROVE column — checkbox centered under its header
+                Expanded(
+                  flex: 5,
+                  child: Center(
+                    child: GestureDetector(
+                      onTap: row.isHidden ? null : _toggleApproval,
+                      behavior: HitTestBehavior.opaque,
+                      child: Padding(
+                        padding: const EdgeInsets.all(3),
+                        child: isApproved
+                            ? Container(
+                                width: 18,
+                                height: 18,
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF16A34A),
+                                  borderRadius: BorderRadius.circular(4),
                                 ),
-                        ),
+                                child: const Icon(Icons.check,
+                                    size: 13, color: Colors.white),
+                              )
+                            : Container(
+                                width: 18,
+                                height: 18,
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.circular(4),
+                                  border: Border.all(
+                                      color: const Color(0xFF9CA3AF), width: 1.5),
+                                ),
+                                child: const Icon(Icons.check,
+                                    size: 13, color: Color(0xFFD1D5DB)),
+                              ),
                       ),
-                    ],
+                    ),
                   ),
                 ),
               ],
@@ -3299,8 +3301,10 @@ class _AlternativeRow extends StatelessWidget {
                 style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: priceColor),
               ),
             ),
-            // STATUS column — blank (no badge/checkbox for alternate rows)
-            const Expanded(flex: 14, child: SizedBox()),
+            // STATUS / HIDE / APPROVE columns — blank for alternate rows
+            const Expanded(flex: 10, child: SizedBox()),
+            const Expanded(flex: 3, child: SizedBox()),
+            const Expanded(flex: 5, child: SizedBox()),
           ],
         ),
       ),

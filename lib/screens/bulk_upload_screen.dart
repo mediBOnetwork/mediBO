@@ -1130,12 +1130,12 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       }
       final products = rawMatches.map((m) => Product.fromMap(m)).toList();
       final form = _detectDosageForm(term);
-      double topScore = _fuzzyScore(term, products[0].name);
+      double topScore = _trigramScore(term, products[0].name);
       if (form != null && _formMatches(products[0].name, form)) topScore += 0.08;
       return _MatchRow(
         lineItem: name,
         qty: qty,
-        status: topScore >= 0.65 ? _MatchStatus.matched : _MatchStatus.partial,
+        status: topScore >= 0.40 ? _MatchStatus.matched : _MatchStatus.partial,
         candidates: products,
       );
     } catch (_) {
@@ -1166,6 +1166,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
             .from('MEDICINE')
             .select()
             .or('product_name.ilike.%$name%,salt_composition.ilike.%$name%,marketer.ilike.%$name%')
+            .eq('status', 'Available')
             .order('sales_count', ascending: false)
             .limit(20);
         list = List<Map<String, dynamic>>.from(results);
@@ -1174,21 +1175,29 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       }
     }
 
+    // ── 2. Filter to available/active products only ──────────────────────────
+    // RPC may not return the status column; if absent treat the row as active.
+    list = list.where((row) {
+      if (!row.containsKey('status')) return true;
+      final s = (row['status'] as String? ?? '').toLowerCase();
+      return s == 'available' || s == 'active' || s == '1' || s == 'true';
+    }).toList();
+
     if (list.isEmpty) {
-      debugPrint('[FuzzyMatch] 0 candidates for "$name"');
+      debugPrint('[FuzzyMatch] 0 active candidates for "$name"');
       return list;
     }
 
-    // ── 2. Detect dosage form for soft bonus ─────────────────────────────────
+    // ── 3. Detect dosage form for soft bonus ─────────────────────────────────
     final form = _detectDosageForm(name);
-    debugPrint('[FuzzyMatch] query="$name" form=$form raw=${list.length}');
+    debugPrint('[FuzzyMatch] query="$name" form=$form active=${list.length}');
 
-    // ── 3. Score: fuzzy similarity + optional form bonus; sort descending ─────
+    // ── 4. Score by trigram Dice + optional form bonus; sort descending ───────
     list.sort((a, b) {
       final na = (a['product_name'] as String?) ?? '';
       final nb = (b['product_name'] as String?) ?? '';
-      double sa = _fuzzyScore(name, na);
-      double sb = _fuzzyScore(name, nb);
+      double sa = _trigramScore(name, na);
+      double sb = _trigramScore(name, nb);
       if (form != null) {
         if (_formMatches(na, form)) sa += 0.08;
         if (_formMatches(nb, form)) sb += 0.08;
@@ -1198,10 +1207,10 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
     final top5 = list.take(5).toList();
 
-    // ── 4. Debug: show final ranked list ─────────────────────────────────────
+    // ── 5. Debug: show final ranked list ─────────────────────────────────────
     for (int i = 0; i < top5.length; i++) {
       final pName = (top5[i]['product_name'] as String?) ?? '?';
-      double score = _fuzzyScore(name, pName);
+      double score = _trigramScore(name, pName);
       if (form != null && _formMatches(pName, form)) score += 0.08;
       debugPrint('[FuzzyMatch]  #${i + 1} score=${score.toStringAsFixed(3)}  "$pName"');
     }
@@ -3146,60 +3155,27 @@ String _normStr(String s) => s
     .trim()
     .replaceAll(RegExp(r'\s+'), ' ');
 
-/// Levenshtein edit distance (two-row DP).
-int _editDistance(String a, String b) {
-  if (a == b) return 0;
-  if (a.isEmpty) return b.length;
-  if (b.isEmpty) return a.length;
-  final m = a.length, n = b.length;
-  var prev = List<int>.generate(n + 1, (i) => i);
-  var curr = List<int>.filled(n + 1, 0);
-  for (int i = 1; i <= m; i++) {
-    curr[0] = i;
-    for (int j = 1; j <= n; j++) {
-      curr[j] = a[i - 1] == b[j - 1]
-          ? prev[j - 1]
-          : 1 + [prev[j], curr[j - 1], prev[j - 1]].reduce((x, y) => x < y ? x : y);
-    }
-    final tmp = prev; prev = curr; curr = tmp;
-  }
-  return prev[n];
+/// Build the set of all 3-character substrings of [s].
+Set<String> _trigramSet(String s) {
+  final result = <String>{};
+  for (int i = 0; i + 3 <= s.length; i++) result.add(s.substring(i, i + 3));
+  return result;
 }
 
-/// Token intersection ratio: partial-word credit via longest-common-prefix.
-double _tokenScore(List<String> qTokens, List<String> tTokens) {
-  if (qTokens.isEmpty || tTokens.isEmpty) return 0.0;
-  double matched = 0;
-  for (final qt in qTokens) {
-    if (tTokens.contains(qt)) {
-      matched += 1.0;
-    } else {
-      double best = 0.0;
-      for (final tt in tTokens) {
-        if (tt.startsWith(qt) || qt.startsWith(tt)) {
-          final shorter = qt.length < tt.length ? qt.length : tt.length;
-          final longer  = qt.length > tt.length ? qt.length : tt.length;
-          final r = shorter / longer;
-          if (r > best) best = r;
-        }
-      }
-      matched += best;
-    }
-  }
-  final union = qTokens.length + tTokens.length - matched;
-  return matched / (union < 1.0 ? 1.0 : union);
-}
-
-/// Combined fuzzy similarity 0..1: 60% edit-distance ratio + 40% token intersection.
-double _fuzzyScore(String query, String target) {
+/// Dice coefficient over character trigrams, range 0..1.
+/// Strings shorter than 3 chars use exact equality as a fallback.
+double _trigramScore(String query, String target) {
   final q = _normStr(query);
   final t = _normStr(target);
   if (q.isEmpty || t.isEmpty) return 0.0;
-  final maxLen = q.length > t.length ? q.length : t.length;
-  final editR = 1.0 - _editDistance(q, t) / maxLen;
-  final qTokens = q.split(' ').where((s) => s.isNotEmpty).toList();
-  final tTokens = t.split(' ').where((s) => s.isNotEmpty).toList();
-  return 0.6 * editR + 0.4 * _tokenScore(qTokens, tTokens);
+  final qSet = _trigramSet(q);
+  final tSet = _trigramSet(t);
+  if (qSet.isEmpty || tSet.isEmpty) return q == t ? 1.0 : 0.0;
+  int shared = 0;
+  for (final g in qSet) {
+    if (tSet.contains(g)) shared++;
+  }
+  return (2 * shared) / (qSet.length + tSet.length);
 }
 
 /// Detect dosage form keyword in a query string.

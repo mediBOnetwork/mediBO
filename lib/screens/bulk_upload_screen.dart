@@ -2780,7 +2780,7 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
       child: Container(
         padding: const EdgeInsets.fromLTRB(12, 7, 12, 7),
         decoration: BoxDecoration(
-          color: isSelected ? const Color(0xFFDCFCE7) : Colors.transparent,
+          color: isSelected ? const Color(0xFFDCFCE7) : const Color(0xFFF3F4F6),
           border: const Border(top: BorderSide(color: Color(0xFFE5E7EB))),
         ),
         child: Row(
@@ -2877,220 +2877,214 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
     return LayoutBuilder(builder: (context, constraints) {
       final nameColW = (constraints.maxWidth - 252.0).clamp(50.0, 220.0);
       return Opacity(
-      opacity: row.isHidden ? 0.45 : 1.0,
-      child: GestureDetector(
-        onTap: hasCandidates && !row.isHidden ? widget.onToggle : null,
-        child: Container(
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: const Color(0xFFE5E7EB)),
-            boxShadow: [
-              BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.05),
-                  blurRadius: 4,
-                  offset: const Offset(0, 1)),
-            ],
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(10),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Container(
-                  decoration: BoxDecoration(
-                    border: Border(left: BorderSide(color: accentColor, width: 3)),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      // ── Header row — comfortable gaps, taller padding ────
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(12, 14, 12, 10),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: Text(row.lineItem,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w700,
-                                      color: Color(0xFF111827))),
-                            ),
-                            const SizedBox(width: 8),
-                            // QTY box — fixed 36 px wide so its left edge aligns with pack column
-                            SizedBox(
-                              width: 36,
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFF3F4F6),
-                                  borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(color: const Color(0xFFD1D5DB)),
-                                ),
-                                child: Text('${row.qty}',
-                                    textAlign: TextAlign.center,
-                                    style: const TextStyle(
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.w500,
-                                        color: Color(0xFF374151))),
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            // Hide/show eye icon
-                            GestureDetector(
-                              onTap: widget.onHideToggle,
-                              behavior: HitTestBehavior.opaque,
-                              child: Padding(
-                                padding: const EdgeInsets.all(3),
-                                child: Icon(
-                                  row.isHidden
-                                      ? Icons.visibility_outlined
-                                      : Icons.visibility_off_outlined,
-                                  size: 16,
-                                  color: const Color(0xFF6B7280),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            // Status badge — fixed width, rectangular rounded corners
-                            SizedBox(
-                              width: 112,
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                decoration: BoxDecoration(
-                                    color: badgeColor,
-                                    borderRadius: BorderRadius.circular(8)),
-                                child: Text(label,
-                                    textAlign: TextAlign.center,
-                                    overflow: TextOverflow.ellipsis,
-                                    maxLines: 1,
-                                    style: TextStyle(
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.w600,
-                                        color: badgeText)),
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            // Approval checkbox
-                            GestureDetector(
-                              onTap: row.isHidden ? null : _toggleApproval,
-                              behavior: HitTestBehavior.opaque,
-                              child: Padding(
-                                padding: const EdgeInsets.all(3),
-                                child: isApproved
-                                    ? Container(
-                                        width: 20,
-                                        height: 20,
-                                        decoration: BoxDecoration(
-                                          color: const Color(0xFF16A34A),
-                                          borderRadius: BorderRadius.circular(4),
-                                        ),
-                                        child: const Icon(Icons.check,
-                                            size: 14, color: Colors.white),
-                                      )
-                                    : Container(
-                                        width: 20,
-                                        height: 20,
-                                        decoration: BoxDecoration(
-                                          color: Colors.white,
-                                          borderRadius: BorderRadius.circular(4),
-                                          border: Border.all(
-                                              color: const Color(0xFF9CA3AF), width: 1.5),
-                                        ),
-                                        child: const Icon(Icons.check,
-                                            size: 14, color: Color(0xFFD1D5DB)),
-                                      ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      // ── Full-bleed divider (no side insets) ─────────────
-                      const Divider(height: 1, thickness: 1, color: Color(0xFFE5E7EB)),
-                      // ── Selected matched SKU — single line, no inner box ─
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(12, 17, 12, 17),
-                        child: p != null
-                            ? Row(children: [
-                                // Product name — same fixed width as header name col
-                                SizedBox(
-                                  width: nameColW,
-                                  child: Text(p.name,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
-                                          fontSize: 13,
-                                          fontWeight: FontWeight.w600,
-                                          color: Color(0xFF111827))),
-                                ),
-                                const SizedBox(width: 8),
-                                // Pack size — shared column start with QTY above
-                                SizedBox(
-                                  width: 48,
-                                  child: Text(pack,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
-                                          fontSize: 11, color: Color(0xFF374151))),
-                                ),
-                                const SizedBox(width: 8),
-                                // Company truncates before MRP
-                                Expanded(
-                                  child: Text(p.manufacturer,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
-                                          fontSize: 11, color: Color(0xFF6B7280))),
-                                ),
-                                const SizedBox(width: 8),
-                                // MRP — fixed width, right-aligned
-                                SizedBox(
-                                  width: 52,
-                                  child: Text(row.price,
-                                      textAlign: TextAlign.right,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.w600,
-                                          color: Color(0xFF111827))),
-                                ),
-                              ])
-                            : Text(
-                                row.status != _MatchStatus.unrecognized
-                                    ? row.matchedSku
-                                    : 'No match found',
-                                style: const TextStyle(
-                                    fontSize: 12, color: Color(0xFF9CA3AF))),
-                      ),
-                    ],
-                  ),
-                ),
-                // ── Expandable alternatives ─────────────────────────────
-                SizeTransition(
-                  sizeFactor: _anim,
-                  child: Container(
-                    decoration: const BoxDecoration(
-                      color: Color(0xFFF3F4F6),
-                      border: Border(top: BorderSide(color: Color(0xFFE5E7EB))),
+        opacity: row.isHidden ? 0.45 : 1.0,
+        child: GestureDetector(
+          onTap: hasCandidates && !row.isHidden ? widget.onToggle : null,
+          child: Container(
+            // Fill the full available width so controls are always at the right edge.
+            width: double.infinity,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: const Color(0xFFE5E7EB)),
+              boxShadow: [
+                BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.05),
+                    blurRadius: 4,
+                    offset: const Offset(0, 1)),
+              ],
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Container(
+                    decoration: BoxDecoration(
+                      border: Border(left: BorderSide(color: accentColor, width: 3)),
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        for (int k = 0; k < alts.length; k++)
-                          _altRow(alts[k].$2, alts[k].$1, k == alts.length - 1, nameColW),
+                        // ── Header row ──────────────────────────────────────
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(12, 14, 12, 10),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Text(row.lineItem,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w700,
+                                        color: Color(0xFF111827))),
+                              ),
+                              // Controls cluster — min-sized Row pinned to the right
+                              Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const SizedBox(width: 8),
+                                  SizedBox(
+                                    width: 36,
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFFF3F4F6),
+                                        borderRadius: BorderRadius.circular(8),
+                                        border: Border.all(color: const Color(0xFFD1D5DB)),
+                                      ),
+                                      child: Text('${row.qty}',
+                                          textAlign: TextAlign.center,
+                                          style: const TextStyle(
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.w500,
+                                              color: Color(0xFF374151))),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  GestureDetector(
+                                    onTap: widget.onHideToggle,
+                                    behavior: HitTestBehavior.opaque,
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(3),
+                                      child: Icon(
+                                        row.isHidden
+                                            ? Icons.visibility_outlined
+                                            : Icons.visibility_off_outlined,
+                                        size: 16,
+                                        color: const Color(0xFF6B7280),
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  SizedBox(
+                                    width: 112,
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                      decoration: BoxDecoration(
+                                          color: badgeColor,
+                                          borderRadius: BorderRadius.circular(8)),
+                                      child: Text(label,
+                                          textAlign: TextAlign.center,
+                                          overflow: TextOverflow.ellipsis,
+                                          maxLines: 1,
+                                          style: TextStyle(
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.w600,
+                                              color: badgeText)),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  GestureDetector(
+                                    onTap: row.isHidden ? null : _toggleApproval,
+                                    behavior: HitTestBehavior.opaque,
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(3),
+                                      child: isApproved
+                                          ? Container(
+                                              width: 20,
+                                              height: 20,
+                                              decoration: BoxDecoration(
+                                                color: const Color(0xFF16A34A),
+                                                borderRadius: BorderRadius.circular(4),
+                                              ),
+                                              child: const Icon(Icons.check,
+                                                  size: 14, color: Colors.white),
+                                            )
+                                          : Container(
+                                              width: 20,
+                                              height: 20,
+                                              decoration: BoxDecoration(
+                                                color: Colors.white,
+                                                borderRadius: BorderRadius.circular(4),
+                                                border: Border.all(
+                                                    color: const Color(0xFF9CA3AF), width: 1.5),
+                                              ),
+                                              child: const Icon(Icons.check,
+                                                  size: 14, color: Color(0xFFD1D5DB)),
+                                            ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                        const Divider(height: 1, thickness: 1, color: Color(0xFFE5E7EB)),
+                        // ── Selected matched product ─────────────────────────
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(12, 17, 12, 17),
+                          child: p != null
+                              ? Row(children: [
+                                  SizedBox(
+                                    width: nameColW,
+                                    child: Text(p.name,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.w600,
+                                            color: Color(0xFF111827))),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  SizedBox(
+                                    width: 48,
+                                    child: Text(pack,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(
+                                            fontSize: 11, color: Color(0xFF374151))),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(p.manufacturer,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(
+                                            fontSize: 11, color: Color(0xFF6B7280))),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  SizedBox(
+                                    width: 52,
+                                    child: Text(row.price,
+                                        textAlign: TextAlign.right,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w600,
+                                            color: Color(0xFF111827))),
+                                  ),
+                                ])
+                              : Text(
+                                  row.status != _MatchStatus.unrecognized
+                                      ? row.matchedSku
+                                      : 'No match found',
+                                  style: const TextStyle(
+                                      fontSize: 12, color: Color(0xFF9CA3AF))),
+                        ),
+                        // ── Expandable alternates — same container = shared column grid ──
+                        SizeTransition(
+                          sizeFactor: _anim,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              for (int k = 0; k < alts.length; k++)
+                                _altRow(alts[k].$2, alts[k].$1, k == alts.length - 1, nameColW),
+                              const Divider(height: 1, thickness: 1, color: Color(0xFFE5E7EB)),
+                            ],
+                          ),
+                        ),
                       ],
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
-      ),
-    );
+      );
     });
   }
 }

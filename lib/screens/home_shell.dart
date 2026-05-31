@@ -260,7 +260,7 @@ class _HomeShellState extends State<HomeShell> {
               bottom: 16,
               child: Center(
                 child: FractionallySizedBox(
-                  widthFactor: 0.8,
+                  widthFactor: 0.84,
                   child: RepaintBoundary(
                     child: _StickyCartBar(
                       onTap: () => setState(() => _cartOpen = true),

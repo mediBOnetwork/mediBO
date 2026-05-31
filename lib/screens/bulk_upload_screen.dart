@@ -2667,6 +2667,7 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
     with SingleTickerProviderStateMixin {
   late final AnimationController _ctrl;
   late final Animation<double> _anim;
+  _MatchStatus? _preApprovalStatus;
 
   @override
   void initState() {
@@ -2693,10 +2694,25 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
     super.dispose();
   }
 
+  void _toggleApproval() {
+    final row = widget.row;
+    setState(() {
+      if (row.status == _MatchStatus.manuallyMatched) {
+        row.status = _preApprovalStatus ?? _MatchStatus.partial;
+        _preApprovalStatus = null;
+      } else {
+        _preApprovalStatus = row.status;
+        row.status = _MatchStatus.manuallyMatched;
+      }
+    });
+    widget.onRowChanged();
+  }
+
   Widget _altRow(Product p, int origIndex, bool isLast) {
     final row = widget.row;
     final isSelected = row.selectedIndex == origIndex;
     final nameColor = isSelected ? const Color(0xFF16A34A) : const Color(0xFF374151);
+    final pack = _packShort(p);
     return GestureDetector(
       onTap: () {
         setState(() {
@@ -2707,17 +2723,16 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
         widget.onRowChanged();
       },
       child: Container(
-        // Left pad matches card content (10px) so name starts flush, not indented
-        padding: const EdgeInsets.fromLTRB(10, 7, 8, 7),
+        // left=13 aligns product name with line-item name (3px accent border + 10px header padding)
+        padding: const EdgeInsets.fromLTRB(13, 7, 8, 7),
         decoration: BoxDecoration(
           color: isSelected ? const Color(0xFFDCFCE7) : Colors.transparent,
           border: const Border(top: BorderSide(color: Color(0xFFE5E7EB))),
         ),
         child: Row(
           children: [
-            // Product name — takes most of the flexible space
             Expanded(
-              flex: 5,
+              flex: 4,
               child: Text(p.name,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
@@ -2727,8 +2742,15 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                     color: nameColor,
                   )),
             ),
-            const SizedBox(width: 6),
-            // Company name — smaller flexible space, ellipsis before MRP
+            const SizedBox(width: 4),
+            SizedBox(
+              width: 36,
+              child: Text(pack,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 11, color: Color(0xFF374151))),
+            ),
+            const SizedBox(width: 4),
             Expanded(
               flex: 3,
               child: Text(p.manufacturer,
@@ -2737,7 +2759,6 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                   style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
             ),
             const SizedBox(width: 4),
-            // MRP — fixed width, right-aligned, never pushed off screen
             SizedBox(
               width: 52,
               child: Text(rupees(p.mrp),
@@ -2799,6 +2820,7 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
 
     final p = row.selectedProduct;
     final pack = p != null ? _packShort(p) : '';
+    final isApproved = row.status == _MatchStatus.manuallyMatched;
 
     return Opacity(
       opacity: row.isHidden ? 0.45 : 1.0,
@@ -2821,161 +2843,201 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // Coloured left accent + card content
                 Container(
                   decoration: BoxDecoration(
                     border: Border(left: BorderSide(color: accentColor, width: 3)),
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        // ── Header row ─────────────────────────────────────
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(10, 10, 10, 6),
-                          child: Row(
-                            children: [
-                              Expanded(
-                                child: Text(row.lineItem,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.w700,
-                                        color: Color(0xFF111827))),
+                    children: [
+                      // ── Header row ─────────────────────────────────────
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(10, 10, 10, 6),
+                        child: Row(
+                          children: [
+                            // Line-item name
+                            Expanded(
+                              child: Text(row.lineItem,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w700,
+                                      color: Color(0xFF111827))),
+                            ),
+                            const SizedBox(width: 6),
+                            // QTY box — same height as status badge
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFF3F4F6),
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(color: const Color(0xFFD1D5DB)),
                               ),
-                              const SizedBox(width: 8),
-                              GestureDetector(
-                                onTap: widget.onHideToggle,
-                                behavior: HitTestBehavior.opaque,
-                                child: Padding(
-                                  padding: const EdgeInsets.all(3),
-                                  child: Icon(
-                                    row.isHidden
-                                        ? Icons.visibility_outlined
-                                        : Icons.visibility_off_outlined,
-                                    size: 16,
-                                    color: const Color(0xFF6B7280),
-                                  ),
+                              child: Text('${row.qty}',
+                                  style: const TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w500,
+                                      color: Color(0xFF374151))),
+                            ),
+                            const SizedBox(width: 4),
+                            // Hide/show eye icon
+                            GestureDetector(
+                              onTap: widget.onHideToggle,
+                              behavior: HitTestBehavior.opaque,
+                              child: Padding(
+                                padding: const EdgeInsets.all(3),
+                                child: Icon(
+                                  row.isHidden
+                                      ? Icons.visibility_outlined
+                                      : Icons.visibility_off_outlined,
+                                  size: 16,
+                                  color: const Color(0xFF6B7280),
                                 ),
                               ),
-                              const SizedBox(width: 6),
-                              Container(
+                            ),
+                            const SizedBox(width: 4),
+                            // Status badge — fixed width fits "Manually Matched"
+                            SizedBox(
+                              width: 112,
+                              child: Container(
                                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                                 decoration: BoxDecoration(
                                     color: badgeColor,
                                     borderRadius: BorderRadius.circular(20)),
                                 child: Text(label,
+                                    textAlign: TextAlign.center,
+                                    overflow: TextOverflow.ellipsis,
+                                    maxLines: 1,
                                     style: TextStyle(
                                         fontSize: 11,
                                         fontWeight: FontWeight.w600,
                                         color: badgeText)),
                               ),
-                              if (hasCandidates && !row.isHidden) ...[
-                                const SizedBox(width: 4),
-                                AnimatedRotation(
-                                  turns: widget.isExpanded ? 0.5 : 0,
-                                  duration: const Duration(milliseconds: 220),
-                                  child: const Icon(Icons.expand_more,
-                                      size: 16, color: Color(0xFF9CA3AF)),
-                                ),
-                              ],
-                            ],
-                          ),
-                        ),
-                        // ── Inner bordered box: matched SKU ─────────────────
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
-                          child: Container(
-                            width: double.infinity,
-                            decoration: BoxDecoration(
-                              color: const Color(0xFFF9FAFB),
-                              borderRadius: BorderRadius.circular(6),
-                              border: Border.all(color: const Color(0xFFE5E7EB)),
                             ),
-                            padding: const EdgeInsets.fromLTRB(8, 7, 8, 7),
-                            child: p != null
-                                ? Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      // Row 1: full-width product name
-                                      Text(p.name,
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: const TextStyle(
-                                              fontSize: 13,
-                                              fontWeight: FontWeight.w600,
-                                              color: Color(0xFF111827))),
-                                      const SizedBox(height: 5),
-                                      // Row 2: pack | company | qty | MRP (fixed-width cells)
-                                      Row(children: [
-                                        SizedBox(
-                                          width: 44,
-                                          child: Text(pack,
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
-                                              style: const TextStyle(
-                                                  fontSize: 11, color: Color(0xFF374151))),
+                            const SizedBox(width: 6),
+                            // Approval checkbox — replaces dropdown chevron
+                            GestureDetector(
+                              onTap: row.isHidden ? null : _toggleApproval,
+                              behavior: HitTestBehavior.opaque,
+                              child: Padding(
+                                padding: const EdgeInsets.all(3),
+                                child: isApproved
+                                    ? Container(
+                                        width: 20,
+                                        height: 20,
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFF16A34A),
+                                          borderRadius: BorderRadius.circular(4),
                                         ),
-                                        const SizedBox(width: 5),
-                                        Expanded(
-                                          child: Text(p.manufacturer,
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
-                                              style: const TextStyle(
-                                                  fontSize: 11, color: Color(0xFF6B7280))),
+                                        child: const Icon(Icons.check,
+                                            size: 14, color: Colors.white),
+                                      )
+                                    : Container(
+                                        width: 20,
+                                        height: 20,
+                                        decoration: BoxDecoration(
+                                          color: Colors.white,
+                                          borderRadius: BorderRadius.circular(4),
+                                          border: Border.all(
+                                              color: const Color(0xFF9CA3AF), width: 1.5),
                                         ),
-                                        const SizedBox(width: 5),
-                                        SizedBox(
-                                          width: 28,
-                                          child: Text('${row.qty}',
-                                              style: const TextStyle(
-                                                  fontSize: 11, color: Color(0xFF374151))),
-                                        ),
-                                        const SizedBox(width: 5),
-                                        SizedBox(
-                                          width: 52,
-                                          child: Text(row.price,
-                                              textAlign: TextAlign.right,
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
-                                              style: const TextStyle(
-                                                  fontSize: 12,
-                                                  fontWeight: FontWeight.w600,
-                                                  color: Color(0xFF111827))),
-                                        ),
-                                      ]),
-                                    ],
-                                  )
-                                : Text(
-                                    row.status != _MatchStatus.unrecognized
-                                        ? row.matchedSku
-                                        : 'No match found',
-                                    style: const TextStyle(
-                                        fontSize: 12, color: Color(0xFF9CA3AF))),
-                          ),
+                                        child: const Icon(Icons.check,
+                                            size: 14, color: Color(0xFFD1D5DB)),
+                                      ),
+                              ),
+                            ),
+                          ],
                         ),
+                      ),
+                      // ── Selected matched SKU — single line, no overlap ──────
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
+                        child: Container(
+                          width: double.infinity,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF9FAFB),
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(color: const Color(0xFFE5E7EB)),
+                          ),
+                          // left=0 so product name aligns with line-item name above
+                          padding: const EdgeInsets.fromLTRB(0, 7, 8, 7),
+                          child: p != null
+                              ? Row(children: [
+                                  // Product name truncates before pack
+                                  Expanded(
+                                    flex: 4,
+                                    child: Text(p.name,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.w600,
+                                            color: Color(0xFF111827))),
+                                  ),
+                                  const SizedBox(width: 4),
+                                  SizedBox(
+                                    width: 36,
+                                    child: Text(pack,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(
+                                            fontSize: 11, color: Color(0xFF374151))),
+                                  ),
+                                  const SizedBox(width: 4),
+                                  // Company truncates before MRP
+                                  Expanded(
+                                    flex: 3,
+                                    child: Text(p.manufacturer,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(
+                                            fontSize: 11, color: Color(0xFF6B7280))),
+                                  ),
+                                  const SizedBox(width: 4),
+                                  // MRP — fixed width, right-aligned
+                                  SizedBox(
+                                    width: 52,
+                                    child: Text(row.price,
+                                        textAlign: TextAlign.right,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w600,
+                                            color: Color(0xFF111827))),
+                                  ),
+                                ])
+                              : Text(
+                                  row.status != _MatchStatus.unrecognized
+                                      ? row.matchedSku
+                                      : 'No match found',
+                                  style: const TextStyle(
+                                      fontSize: 12, color: Color(0xFF9CA3AF))),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                // ── Expandable alternatives ─────────────────────────────
+                SizeTransition(
+                  sizeFactor: _anim,
+                  child: Container(
+                    decoration: const BoxDecoration(
+                      color: Color(0xFFF3F4F6),
+                      border: Border(top: BorderSide(color: Color(0xFFE5E7EB))),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        for (int k = 0; k < alts.length; k++)
+                          _altRow(alts[k].$2, alts[k].$1, k == alts.length - 1),
                       ],
                     ),
                   ),
-                  // ── Expandable alternatives ─────────────────────────────
-                  SizeTransition(
-                    sizeFactor: _anim,
-                    child: Container(
-                      decoration: const BoxDecoration(
-                        color: Color(0xFFF3F4F6),
-                        border: Border(top: BorderSide(color: Color(0xFFE5E7EB))),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          for (int k = 0; k < alts.length; k++)
-                            _altRow(alts[k].$2, alts[k].$1, k == alts.length - 1),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
-              ),
+                ),
+              ],
+            ),
           ),
         ),
       ),

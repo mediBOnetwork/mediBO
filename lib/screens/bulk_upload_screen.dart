@@ -2178,6 +2178,7 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
             Padding(
               padding: const EdgeInsets.fromLTRB(10, 4, 10, 10),
               child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   for (int i = 0; i < widget.rows.length; i++)
                     Padding(
@@ -2817,17 +2818,16 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
           ),
           child: ClipRRect(
             borderRadius: BorderRadius.circular(10),
-            child: IntrinsicWidth(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  // Coloured left accent + card content
-                  Container(
-                    decoration: BoxDecoration(
-                      border: Border(left: BorderSide(color: accentColor, width: 3)),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // Coloured left accent + card content
+                Container(
+                  decoration: BoxDecoration(
+                    border: Border(left: BorderSide(color: accentColor, width: 3)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         // ── Header row ─────────────────────────────────────
                         Padding(
@@ -2976,7 +2976,6 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                   ),
                 ],
               ),
-            ),
           ),
         ),
       ),

@@ -1129,15 +1129,13 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         return _MatchRow(lineItem: name, qty: qty, status: _MatchStatus.unrecognized, candidates: []);
       }
       final products = rawMatches.map((m) => Product.fromMap(m)).toList();
-      final termLower = term.toLowerCase();
-      final nameLower = products[0].name.toLowerCase();
-      final isStrong = nameLower == termLower ||
-          nameLower.startsWith(termLower) ||
-          (termLower.length > 4 && nameLower.contains(termLower));
+      final form = _detectDosageForm(term);
+      double topScore = _fuzzyScore(term, products[0].name);
+      if (form != null && _formMatches(products[0].name, form)) topScore += 0.08;
       return _MatchRow(
         lineItem: name,
         qty: qty,
-        status: isStrong ? _MatchStatus.matched : _MatchStatus.partial,
+        status: topScore >= 0.65 ? _MatchStatus.matched : _MatchStatus.partial,
         candidates: products,
       );
     } catch (_) {
@@ -1181,43 +1179,31 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       return list;
     }
 
-    // ── 2. Build chunks + detect form ────────────────────────────────────────
-    final chunks = _buildQueryChunks(name);
+    // ── 2. Detect dosage form for soft bonus ─────────────────────────────────
     final form = _detectDosageForm(name);
-    debugPrint('[FuzzyMatch] query="$name" chunks=$chunks form=$form raw=${list.length}');
+    debugPrint('[FuzzyMatch] query="$name" form=$form raw=${list.length}');
 
-    // ── 3. Form filter (falls back to full list if nothing passes) ───────────
-    List<Map<String, dynamic>> candidates = list;
-    if (form != null) {
-      final filtered = list
-          .where((m) => _isFormCompatible((m['product_name'] as String?) ?? '', form))
-          .toList();
-      if (filtered.isNotEmpty) {
-        candidates = filtered;
-        debugPrint('[FuzzyMatch] form-filter kept ${candidates.length}/${list.length}');
-      } else {
-        debugPrint('[FuzzyMatch] form-filter empty — using all ${list.length}');
-      }
-    }
-
-    // ── 4. Sort: chunk score desc; tiebreak = shorter normalised name first ──
-    String normLen(String s) => s.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
-    candidates.sort((a, b) {
+    // ── 3. Score: fuzzy similarity + optional form bonus; sort descending ─────
+    list.sort((a, b) {
       final na = (a['product_name'] as String?) ?? '';
       final nb = (b['product_name'] as String?) ?? '';
-      final sa = _scoreByChunks(na, chunks);
-      final sb = _scoreByChunks(nb, chunks);
-      if (sb != sa) return sb.compareTo(sa);                       // higher score first
-      return normLen(na).length.compareTo(normLen(nb).length);     // shorter name first
+      double sa = _fuzzyScore(name, na);
+      double sb = _fuzzyScore(name, nb);
+      if (form != null) {
+        if (_formMatches(na, form)) sa += 0.08;
+        if (_formMatches(nb, form)) sb += 0.08;
+      }
+      return sb.compareTo(sa);
     });
 
-    final top5 = candidates.take(5).toList();
+    final top5 = list.take(5).toList();
 
-    // ── 5. Debug: show final ranked list ─────────────────────────────────────
+    // ── 4. Debug: show final ranked list ─────────────────────────────────────
     for (int i = 0; i < top5.length; i++) {
       final pName = (top5[i]['product_name'] as String?) ?? '?';
-      final score = _scoreByChunks(pName, chunks);
-      debugPrint('[FuzzyMatch]  #${i + 1} score=$score  "$pName"');
+      double score = _fuzzyScore(name, pName);
+      if (form != null && _formMatches(pName, form)) score += 0.08;
+      debugPrint('[FuzzyMatch]  #${i + 1} score=${score.toStringAsFixed(3)}  "$pName"');
     }
 
     return top5;
@@ -2478,12 +2464,11 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
       }
     }
 
-    // Top 4 alternates excluding the currently selected candidate, sorted by MRP asc
+    // Top 4 alternates excluding the currently selected candidate, in similarity order
     final alts = <(int, Product)>[];
     for (int i = 0; i < row.candidates.length && alts.length < 4; i++) {
       if (i != row.selectedIndex) alts.add((i, row.candidates[i]));
     }
-    alts.sort((a, b) => a.$2.mrp.compareTo(b.$2.mrp));
 
     final bottomBorder = (!widget.last || widget.isExpanded)
         ? const BorderSide(color: Color(0xFFEEEEEE))
@@ -2873,7 +2858,6 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
     for (int i = 0; i < row.candidates.length && alts.length < 4; i++) {
       if (i != row.selectedIndex) alts.add((i, row.candidates[i]));
     }
-    alts.sort((a, b) => a.$2.mrp.compareTo(b.$2.mrp));
 
     final p = row.selectedProduct;
     final pack = p != null ? _packShort(p) : '';
@@ -3148,68 +3132,98 @@ String _packShort(Product p) {
 
 // ── Fuzzy-match helpers (client-side re-ranking) ──────────────────────────────
 
-/// Build sequential non-overlapping 3-letter groups from a query.
-/// "Augmentin 625" → clean "augmentin625" → ["aug","men","tin","625"]
-List<String> _buildQueryChunks(String query) {
-  final clean = query.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
-  final chunks = <String>[];
-  for (int i = 0; i + 3 <= clean.length; i += 3) {
-    chunks.add(clean.substring(i, i + 3));
+/// Normalize a string for fuzzy comparison: lowercase, strip punctuation, collapse spaces.
+String _normStr(String s) => s
+    .toLowerCase()
+    .replaceAll(RegExp(r"[^a-z0-9\s]"), ' ')
+    .trim()
+    .replaceAll(RegExp(r'\s+'), ' ');
+
+/// Levenshtein edit distance (two-row DP).
+int _editDistance(String a, String b) {
+  if (a == b) return 0;
+  if (a.isEmpty) return b.length;
+  if (b.isEmpty) return a.length;
+  final m = a.length, n = b.length;
+  var prev = List<int>.generate(n + 1, (i) => i);
+  var curr = List<int>.filled(n + 1, 0);
+  for (int i = 1; i <= m; i++) {
+    curr[0] = i;
+    for (int j = 1; j <= n; j++) {
+      curr[j] = a[i - 1] == b[j - 1]
+          ? prev[j - 1]
+          : 1 + [prev[j], curr[j - 1], prev[j - 1]].reduce((x, y) => x < y ? x : y);
+    }
+    final tmp = prev; prev = curr; curr = tmp;
   }
-  return chunks;
+  return prev[n];
 }
 
-/// How many of [chunks] appear as substrings in normalised [productName].
-int _scoreByChunks(String productName, List<String> chunks) {
-  if (chunks.isEmpty) return 0;
-  final norm = productName.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
-  return chunks.where((c) => norm.contains(c)).length;
+/// Token intersection ratio: partial-word credit via longest-common-prefix.
+double _tokenScore(List<String> qTokens, List<String> tTokens) {
+  if (qTokens.isEmpty || tTokens.isEmpty) return 0.0;
+  double matched = 0;
+  for (final qt in qTokens) {
+    if (tTokens.contains(qt)) {
+      matched += 1.0;
+    } else {
+      double best = 0.0;
+      for (final tt in tTokens) {
+        if (tt.startsWith(qt) || qt.startsWith(tt)) {
+          final shorter = qt.length < tt.length ? qt.length : tt.length;
+          final longer  = qt.length > tt.length ? qt.length : tt.length;
+          final r = shorter / longer;
+          if (r > best) best = r;
+        }
+      }
+      matched += best;
+    }
+  }
+  final union = qTokens.length + tTokens.length - matched;
+  return matched / (union < 1.0 ? 1.0 : union);
 }
 
-/// Detect dosage form from a query.
-/// Handles: tab/tablet/tabs, 'T/'t pack notation (e.g. "10'T"),
-/// syrup/syp/susp, cap/capsule/caps, inj/injection, cream/ointment/gel.
-/// Returns one of: 'tablet' | 'syrup' | 'capsule' | 'injection' | 'topical' | null.
+/// Combined fuzzy similarity 0..1: 60% edit-distance ratio + 40% token intersection.
+double _fuzzyScore(String query, String target) {
+  final q = _normStr(query);
+  final t = _normStr(target);
+  if (q.isEmpty || t.isEmpty) return 0.0;
+  final maxLen = q.length > t.length ? q.length : t.length;
+  final editR = 1.0 - _editDistance(q, t) / maxLen;
+  final qTokens = q.split(' ').where((s) => s.isNotEmpty).toList();
+  final tTokens = t.split(' ').where((s) => s.isNotEmpty).toList();
+  return 0.6 * editR + 0.4 * _tokenScore(qTokens, tTokens);
+}
+
+/// Detect dosage form keyword in a query string.
+/// Returns one of: 'tablet' | 'syrup' | 'capsule' | 'injection' | 'drops' | 'topical' | 'sachet' | null.
 String? _detectDosageForm(String query) {
   final q = query.toLowerCase();
-  if (RegExp(r"\btab(let|s)?\b").hasMatch(q) || RegExp(r"\d+'t\b").hasMatch(q)) {
-    return 'tablet';
-  }
-  if (q.contains('syrup') || q.contains(' syp') || q.contains('susp')) { return 'syrup'; }
-  if (RegExp(r'\bcaps?(ule(s)?)?\b').hasMatch(q)) { return 'capsule'; }
-  if (q.contains('inj') || q.contains('injection')) { return 'injection'; }
-  if (q.contains('cream') || q.contains('ointment') || q.contains('gel')) { return 'topical'; }
+  if (RegExp(r'\btab(let|s)?\b').hasMatch(q) || RegExp(r"\d+'t\b").hasMatch(q)) return 'tablet';
+  if (q.contains('syrup') || RegExp(r'\bsyp\b').hasMatch(q) ||
+      q.contains('susp') || q.contains('suspension')) return 'syrup';
+  if (RegExp(r'\bcaps?(ule(s)?)?\b').hasMatch(q) || q.contains('softgel')) return 'capsule';
+  if (q.contains('inj') || q.contains('injection') || q.contains('vial') ||
+      q.contains('ampoule') || RegExp(r'\bamp\b').hasMatch(q)) return 'injection';
+  if (q.contains('drop')) return 'drops';
+  if (q.contains('cream') || q.contains('ointment') || q.contains('gel') ||
+      q.contains('lotion') || q.contains('spray')) return 'topical';
+  if (q.contains('sachet') || q.contains('powder') || q.contains('granule')) return 'sachet';
   return null;
 }
 
-/// True when [productName] is compatible with the detected query [form].
-/// TABLET: drop liquid/syrup forms only — tablets and capsules both stay.
-/// SYRUP/INJECTION/TOPICAL: exclusive — keep only exact-form candidates.
-/// CAPSULE: drop liquid forms.
-bool _isFormCompatible(String productName, String form) {
+/// True when a product name contains form-matching keywords (for soft bonus).
+bool _formMatches(String productName, String form) {
   final n = productName.toLowerCase();
   switch (form) {
-    case 'tablet':
-      // Drop only liquid/oral forms; keep tablets AND capsules.
-      return !n.contains('syrup') && !n.contains(' syp') &&
-          !n.contains('susp') && !n.contains('suspension') &&
-          !n.contains('drops') && !n.contains('solution') &&
-          !n.contains('oral') && !n.contains(' liquid');
-    case 'syrup':
-      return n.contains('syrup') || n.contains(' syp') || n.contains('susp') ||
-          n.contains('suspension') || n.contains('oral') || n.contains('liquid');
-    case 'capsule':
-      return !n.contains('syrup') && !n.contains(' syp') &&
-          !n.contains('susp') && !n.contains('suspension') &&
-          !n.contains('drops') && !n.contains('solution');
-    case 'injection':
-      return n.contains('inj') || n.contains('vial') ||
-          n.contains('ampoule') || n.contains(' amp');
-    case 'topical':
-      return n.contains('cream') || n.contains('ointment') ||
-          n.contains('gel') || n.contains('lotion') || n.contains('spray');
-    default:
-      return true;
+    case 'tablet':    return RegExp(r'\btab(let)?\b').hasMatch(n) || n.contains("'t");
+    case 'syrup':     return n.contains('syrup') || RegExp(r'\bsyp\b').hasMatch(n) || n.contains('susp');
+    case 'capsule':   return RegExp(r'\bcap(sule)?\b').hasMatch(n) || n.contains('softgel');
+    case 'injection': return n.contains('inj') || n.contains('vial') || n.contains('ampoule') || RegExp(r'\bamp\b').hasMatch(n);
+    case 'drops':     return n.contains('drop');
+    case 'topical':   return n.contains('cream') || n.contains('oint') || n.contains('gel') || n.contains('lotion') || n.contains('spray');
+    case 'sachet':    return n.contains('sachet') || n.contains('powder') || n.contains('granule');
+    default:          return false;
   }
 }
 

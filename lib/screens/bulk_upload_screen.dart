@@ -9,6 +9,7 @@ import 'package:flutter_svg/flutter_svg.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:xml/xml.dart' as xmlp;
 
 import '../app_state.dart';
@@ -55,6 +56,28 @@ class _MatchRow {
   }
 
   String get price => selectedProduct != null ? rupees(selectedProduct!.b2bPrice) : _displayPrice;
+
+  Map<String, dynamic> toJson() => {
+        'lineItem': lineItem,
+        'qty': qty,
+        'status': status.name,
+        'selectedIndex': selectedIndex,
+        'candidates': candidates.map((p) => p.toJson()).toList(),
+      };
+
+  factory _MatchRow.fromJson(Map<String, dynamic> m) => _MatchRow(
+        lineItem: (m['lineItem'] as String?) ?? '',
+        qty: (m['qty'] as int?) ?? 1,
+        status: _MatchStatus.values.firstWhere(
+          (s) => s.name == (m['status'] as String?),
+          orElse: () => _MatchStatus.unrecognized,
+        ),
+        selectedIndex: (m['selectedIndex'] as int?) ?? 0,
+        candidates: (m['candidates'] as List<dynamic>?)
+                ?.map((e) => Product.fromJson(e as Map<String, dynamic>))
+                .toList() ??
+            [],
+      );
 }
 
 // Sample rows for display before a file is uploaded.
@@ -89,6 +112,47 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
   bool _addingToCart = false;
 
   bool get _isLoading => _step != _LoadStep.idle;
+
+  static const _kSessionKey = 'bulk_upload_session';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSession();
+  }
+
+  Future<void> _loadSession() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_kSessionKey);
+    if (raw == null) return;
+    try {
+      final m = jsonDecode(raw) as Map<String, dynamic>;
+      final fileName = m['fileName'] as String?;
+      final rows = (m['rows'] as List<dynamic>)
+          .map((e) => _MatchRow.fromJson(e as Map<String, dynamic>))
+          .toList();
+      if (rows.isNotEmpty && mounted) {
+        setState(() {
+          _rows = rows;
+          _fileName = fileName;
+          _isFromFile = true;
+        });
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _saveSession() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _kSessionKey,
+      jsonEncode({'fileName': _fileName, 'rows': _rows.map((r) => r.toJson()).toList()}),
+    );
+  }
+
+  Future<void> _clearSession() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_kSessionKey);
+  }
 
   String get _loadingMessage {
     switch (_step) {
@@ -177,6 +241,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         _isFromFile = true;
         _step = _LoadStep.idle;
       });
+      _saveSession();
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -184,6 +249,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         _isFromFile = false;
         _fileName = null;
       });
+      _clearSession();
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(_friendlyError(e)),
@@ -2235,15 +2301,6 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
                           ),
                         ),
                       ),
-                      if (hasCandidates) ...[
-                        const SizedBox(width: 4),
-                        AnimatedRotation(
-                          turns: widget.isExpanded ? 0.5 : 0,
-                          duration: const Duration(milliseconds: 250),
-                          child: const Icon(Icons.expand_more,
-                              size: 16, color: Color(0xFF9CA3AF)),
-                        ),
-                      ],
                     ],
                   ),
                 ),
@@ -2262,9 +2319,7 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
                 ),
                 Expanded(
                   flex: 14,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
+                  child: Row(
                     children: [
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
@@ -2276,21 +2331,11 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
                             style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: badgeText)),
                       ),
                       if (hasCandidates) ...[
-                        const SizedBox(height: 3),
-                        GestureDetector(
-                          onTap: widget.onToggle,
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Text('Change match',
-                                  style: TextStyle(fontSize: 10, color: Color(0xFF3B82F6), fontWeight: FontWeight.w500)),
-                              AnimatedRotation(
-                                turns: widget.isExpanded ? 0.5 : 0,
-                                duration: const Duration(milliseconds: 250),
-                                child: const Icon(Icons.expand_more, size: 12, color: Color(0xFF3B82F6)),
-                              ),
-                            ],
-                          ),
+                        const SizedBox(width: 6),
+                        AnimatedRotation(
+                          turns: widget.isExpanded ? 0.5 : 0,
+                          duration: const Duration(milliseconds: 250),
+                          child: const Icon(Icons.expand_more, size: 14, color: Color(0xFF9CA3AF)),
                         ),
                       ],
                     ],
@@ -2436,7 +2481,9 @@ class _MobileMatchCardState extends State<_MobileMatchCard>
       if (i != row.selectedIndex) alts.add((i, row.candidates[i]));
     }
 
-    return ClipRRect(
+    return GestureDetector(
+      onTap: canChange ? widget.onToggle : null,
+      child: ClipRRect(
       borderRadius: BorderRadius.circular(10),
       child: Container(
         decoration: BoxDecoration(
@@ -2477,6 +2524,14 @@ class _MobileMatchCardState extends State<_MobileMatchCard>
                         child: Text(label,
                             style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: badgeText)),
                       ),
+                      if (canChange) ...[
+                        const SizedBox(width: 4),
+                        AnimatedRotation(
+                          turns: widget.isExpanded ? 0.5 : 0,
+                          duration: const Duration(milliseconds: 220),
+                          child: const Icon(Icons.expand_more, size: 16, color: Color(0xFF9CA3AF)),
+                        ),
+                      ],
                     ],
                   ),
                   const SizedBox(height: 8),
@@ -2509,22 +2564,6 @@ class _MobileMatchCardState extends State<_MobileMatchCard>
                           maxLines: 1,
                         ),
                       ),
-                      if (canChange)
-                        GestureDetector(
-                          onTap: widget.onToggle,
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Text('Change match',
-                                  style: TextStyle(fontSize: 11, color: Color(0xFF3B82F6), fontWeight: FontWeight.w600)),
-                              AnimatedRotation(
-                                turns: widget.isExpanded ? 0.5 : 0,
-                                duration: const Duration(milliseconds: 220),
-                                child: const Icon(Icons.expand_more, size: 14, color: Color(0xFF3B82F6)),
-                              ),
-                            ],
-                          ),
-                        ),
                     ],
                   ),
                 ],
@@ -2561,6 +2600,7 @@ class _MobileMatchCardState extends State<_MobileMatchCard>
           ],
         ),
       ),
+    ),
     );
   }
 }

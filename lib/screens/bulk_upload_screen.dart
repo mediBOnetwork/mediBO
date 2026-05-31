@@ -608,6 +608,11 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         .toList();
     if (rows.isEmpty) return [];
 
+    // PDF-extracted text has no tab/comma delimiters — use line-oriented parser.
+    if (!rawContent.contains('\t') && !rawContent.contains(',')) {
+      return _extractFromPdfTextLines(lines);
+    }
+
     const namePatterns = [
       'medicine', 'product', 'name', 'drug', 'item', 'description',
       'salt', 'brand', 'particular', 'detail', 'dawa',
@@ -681,8 +686,15 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
       int qty = 1;
       if (qtyCol >= 0 && qtyCol < row.length) {
-        final raw = row[qtyCol].replaceAll(RegExp(r'[^\d]'), '');
-        qty = int.tryParse(raw) ?? 1;
+        final raw = row[qtyCol].trim();
+        // Excel stores integers as "5.0" — parse as double then truncate.
+        final dv = double.tryParse(raw.replaceAll(',', ''));
+        if (dv != null && dv >= 1 && dv <= 99999) {
+          qty = dv.truncate();
+        } else {
+          final digits = raw.replaceAll(RegExp(r'[^\d]'), '');
+          qty = int.tryParse(digits) ?? 1;
+        }
       }
       result.add({'name': name, 'qty': qty.clamp(1, 99999)});
     }
@@ -808,6 +820,125 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     return bestCol;
   }
 
+  /// Handles PDF-extracted text where columns appear as one-value-per-line
+  /// (e.g. "product_name\nquantity\nAugmentin 625\n5\nPan 40\n10\n...")
+  /// OR as space-aligned columns on the same line
+  /// (e.g. "Augmentin 625                  5").
+  List<Map<String, dynamic>> _extractFromPdfTextLines(List<String> lines) {
+    const nameKw = [
+      'medicine', 'product', 'name', 'drug', 'item', 'description',
+      'salt', 'brand', 'particular',
+    ];
+    const qtyKw = [
+      'qty', 'quantity', 'units', 'pcs', 'pack', 'nos', 'pieces',
+    ];
+    const skipKw = ['total', 'subtotal', 'grand', 's.no', 'sl.', 'serial'];
+
+    int headerIdx = -1;
+    bool spaceAligned = false;
+
+    for (int i = 0; i < lines.length.clamp(0, 6); i++) {
+      final lower = lines[i].toLowerCase();
+      final hasName = nameKw.any((k) => lower.contains(k));
+      final hasQty = qtyKw.any((k) => lower.contains(k));
+      if (hasName && hasQty) {
+        headerIdx = i;
+        spaceAligned = true;
+        break;
+      }
+      if (hasName) {
+        headerIdx = i;
+        break;
+      }
+    }
+
+    if (headerIdx == -1) return _extractFromPlainTextLines(lines);
+
+    if (spaceAligned) {
+      // e.g. "Augmentin 625                  5"
+      final result = <Map<String, dynamic>>[];
+      final pattern = RegExp(r'^(.+?)\s{2,}(\d+(?:\.\d*)?)\s*$');
+      for (int i = headerIdx + 1; i < lines.length; i++) {
+        final line = lines[i].trim();
+        if (line.isEmpty || line.length < 2) continue;
+        final lower = line.toLowerCase();
+        if (skipKw.any((s) => lower.contains(s))) continue;
+        if (_isColumnHeaderLine(line)) continue;
+        if (RegExp(r'^\d+\.?\s*$').hasMatch(line)) continue;
+        final m = pattern.firstMatch(line);
+        if (m != null) {
+          final name = m.group(1)!.trim();
+          final dv = double.tryParse(m.group(2)!) ?? 1.0;
+          if (name.length >= 2) {
+            result.add({'name': name, 'qty': dv.truncate().clamp(1, 99999)});
+          }
+        } else if (line.length >= 2) {
+          result.add({'name': line, 'qty': 1});
+        }
+      }
+      if (result.isNotEmpty) return result;
+      return _extractFromPlainTextLines(lines);
+    }
+
+    // Skip standalone qty-header lines after the name header
+    // (e.g., "quantity" on its own line before the data).
+    int start = headerIdx + 1;
+    while (start < lines.length &&
+        qtyKw.any((k) => lines[start].trim().toLowerCase() == k)) {
+      start++;
+    }
+
+    final dataLines = lines.sublist(start);
+    if (dataLines.isEmpty) return _extractFromPlainTextLines(lines);
+
+    // Count pure-number lines to detect alternating name/number format.
+    final pureNumCount = dataLines
+        .where((l) => RegExp(r'^\d+\.?\d*\s*$').hasMatch(l.trim()))
+        .length;
+
+    // < 30 % pure-number lines → plain text "Name - qty" format
+    if (pureNumCount < dataLines.length * 0.3) {
+      return _extractFromPlainTextLines(lines);
+    }
+
+    // Alternating: "Augmentin 625" then "5" then "Pan 40" then "10" ...
+    final result = <Map<String, dynamic>>[];
+    int i = start;
+    while (i < lines.length) {
+      final line = lines[i].trim();
+      if (line.isEmpty || line.length < 2) {
+        i++;
+        continue;
+      }
+      final lower = line.toLowerCase();
+      if (skipKw.any((s) => lower.contains(s))) {
+        i++;
+        continue;
+      }
+      if (_isColumnHeaderLine(line)) {
+        i++;
+        continue;
+      }
+      if (RegExp(r'^\d+\.?\s*$').hasMatch(line)) {
+        i++;
+        continue; // orphan number
+      }
+      // Medicine name — look ahead for the qty line.
+      int qty = 1;
+      if (i + 1 < lines.length) {
+        final next = lines[i + 1].trim();
+        final dv = double.tryParse(next.replaceAll(',', ''));
+        if (dv != null && dv >= 1 && dv <= 9999) {
+          qty = dv.truncate();
+          i++;
+        }
+      }
+      result.add({'name': line, 'qty': qty.clamp(1, 99999)});
+      i++;
+    }
+    return result.isNotEmpty ? result : _extractFromPlainTextLines(lines);
+  }
+
   static const _geminiPrompt =
       'You are an expert Indian pharmacy procurement assistant. '
       'Extract ALL medicine/product names and their quantities from this order document.\n'
@@ -862,9 +993,12 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       'amount columns. A medicine ordered "5 times" has qty=5 even if its MRP is ₹210.\n'
       '4. If a Qty column exists, read each row\'s actual value — do NOT return '
       'qty=1 for every row unless quantities are truly absent from the file.\n'
-      '5. Keep medicine names with their dosage (e.g. "Paracetamol 500mg", '
+      '5. If the content shows alternating lines of medicine names and numbers '
+      '(e.g. "Augmentin 625\\n5\\nPan 40\\n10"), each number is the quantity for '
+      'the medicine name immediately above it.\n'
+      '6. Keep medicine names with their dosage (e.g. "Paracetamol 500mg", '
       '"Augmentin 625 Duo").\n'
-      '6. Decode common abbreviations: PCM=Paracetamol, Aug=Augmentin, MTF=Metformin.\n\n'
+      '7. Decode common abbreviations: PCM=Paracetamol, Aug=Augmentin, MTF=Metformin.\n\n'
       'File content:\n\n$content\n\n'
       'Return ONLY a valid JSON array, no markdown fences:\n'
       '[{"name":"Augmentin 625 Duo","qty":5},{"name":"Pan 40mg","qty":10}]';

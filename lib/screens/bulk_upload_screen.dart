@@ -250,11 +250,9 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       } else {
         try {
           extracted = await _extractWithGeminiAI(rawContent, file.name);
-        } catch (_) {
-          if (isBinary) {
-            throw Exception(
-                'Could not extract medicines from this file. For image-based PDFs or photos, ensure the content is clear and legible, or use a typed CSV/Excel/text file instead.');
-          }
+        } catch (e) {
+          debugPrint('[BulkUpload] Extraction error (isBinary=$isBinary): $e');
+          if (isBinary) rethrow;
           extracted = _extractWithFallback(rawContent);
         }
       }
@@ -657,6 +655,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       final colonIdx = withoutPrefix.indexOf(':');
       final mimeType = withoutPrefix.substring(0, colonIdx);
       final base64Data = withoutPrefix.substring(colonIdx + 1);
+      debugPrint('[Gemini] Image upload — mime=$mimeType payload=${base64Data.length} chars attempt=$attempt');
       // Second attempt uses a broader, simpler prompt to catch cases where the
       // detailed prompt confuses the model on low-quality handwriting
       final imagePromptText =
@@ -667,11 +666,13 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       ];
     } else if (isPdf) {
       final base64Pdf = rawContent.substring('PDF_BYTES:'.length);
+      debugPrint('[Gemini] PDF upload — payload=${base64Pdf.length} chars attempt=$attempt');
       parts = [
         {'inline_data': {'mime_type': 'application/pdf', 'data': base64Pdf}},
         {'text': _geminiPrompt},
       ];
     } else {
+      debugPrint('[Gemini] Text upload — length=${rawContent.length} chars attempt=$attempt');
       parts = [{'text': _geminiTextPrompt(rawContent)}];
     }
 
@@ -690,8 +691,8 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       }),
     );
 
+    debugPrint('[Gemini] HTTP ${response.statusCode} — body(200)=${response.statusCode == 200 ? response.body.substring(0, response.body.length.clamp(0, 400)) : response.body}');
     if (response.statusCode != 200) {
-      debugPrint('[Gemini] HTTP ${response.statusCode}: ${response.body}');
       throw Exception('Gemini API error (HTTP ${response.statusCode}). Check API key or quota.');
     }
 

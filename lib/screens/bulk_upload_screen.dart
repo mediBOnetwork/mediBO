@@ -2788,7 +2788,9 @@ int _scoreByChunks(String productName, List<String> chunks) {
 /// Returns 'tablet', 'syrup', 'capsule', 'injection', 'topical', or null.
 String? _detectDosageForm(String query) {
   final q = query.toLowerCase();
-  if (RegExp(r"\btab\b|\btablet\b|\btabs\b").hasMatch(q)) return 'tablet';
+  // \d+'t detects pack notations like "10'T", "20'T" used in bulk orders.
+  if (RegExp(r"\btab\b|\btablet\b|\btabs\b").hasMatch(q) ||
+      RegExp(r"\d+'t\b").hasMatch(q)) return 'tablet';
   if (q.contains('syrup') || q.contains('syp') || q.contains('susp')) return 'syrup';
   if (RegExp(r'\bcap\b|\bcapsule\b|\bcaps\b').hasMatch(q)) return 'capsule';
   if (q.contains('inj') || q.contains('injection')) return 'injection';

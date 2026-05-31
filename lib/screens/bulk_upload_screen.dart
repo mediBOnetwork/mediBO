@@ -1200,29 +1200,21 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         final product = row.selectedProduct!;
         final newProductId = product.id;
 
+        // Row changed its product: remove the old one first.
         if (oldProductId != null && oldProductId != newProductId) {
-          // Row changed its product: remove old (always bulk-owned), add new.
           cart.removeById(oldProductId);
           removedCount++;
-          if (cart.quantityOf(newProductId) == 0) {
-            cart.setBulkQuantity(product, row.qty, i);
-            addedCount++;
-            newLineItemMap[key] = newProductId;
-          }
-          // If new product is already in cart from browsing, don't track it
-          // (we must not remove it on future re-syncs).
-        } else if (oldProductId == null) {
-          // First time this row is synced — add if not already in cart.
-          if (cart.quantityOf(newProductId) == 0) {
-            cart.setBulkQuantity(product, row.qty, i);
-            addedCount++;
-            newLineItemMap[key] = newProductId;
-          }
-          // Already in cart (from browsing): leave untouched, don't claim ownership.
-        } else {
-          // Same product still matched — preserve any manual qty edit.
-          newLineItemMap[key] = newProductId;
         }
+
+        // Always verify the product is actually present in the cart — re-add
+        // with original row qty if missing or qty == 0, regardless of map state.
+        // Uses row index so bulk ordering is preserved on re-add.
+        if (cart.quantityOf(newProductId) == 0) {
+          cart.setBulkQuantity(product, row.qty, i);
+          addedCount++;
+        }
+        newLineItemMap[key] = newProductId;
+
       } else if (oldProductId != null) {
         // Row was previously synced but is now unmatched/partial — remove it.
         cart.removeById(oldProductId);

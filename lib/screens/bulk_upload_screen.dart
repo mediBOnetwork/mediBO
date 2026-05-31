@@ -2750,7 +2750,7 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
     widget.onRowChanged();
   }
 
-  Widget _altRow(Product p, int origIndex, bool isLast) {
+  Widget _altRow(Product p, int origIndex, bool isLast, double nameColW) {
     final row = widget.row;
     final isSelected = row.selectedIndex == origIndex;
     final nameColor = isSelected ? const Color(0xFF16A34A) : const Color(0xFF374151);
@@ -2765,16 +2765,15 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
         widget.onRowChanged();
       },
       child: Container(
-        // left=13 aligns product name with line-item name (3px accent border + 10px header padding)
-        padding: const EdgeInsets.fromLTRB(13, 7, 8, 7),
+        padding: const EdgeInsets.fromLTRB(12, 7, 12, 7),
         decoration: BoxDecoration(
           color: isSelected ? const Color(0xFFDCFCE7) : Colors.transparent,
           border: const Border(top: BorderSide(color: Color(0xFFE5E7EB))),
         ),
         child: Row(
           children: [
-            Expanded(
-              flex: 4,
+            SizedBox(
+              width: nameColW,
               child: Text(p.name,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
@@ -2784,9 +2783,9 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                     color: nameColor,
                   )),
             ),
-            const SizedBox(width: 4),
+            const SizedBox(width: 8),
             SizedBox(
-              width: 36,
+              width: 48,
               child: Text(pack,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
@@ -2794,7 +2793,6 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
             ),
             const SizedBox(width: 4),
             Expanded(
-              flex: 3,
               child: Text(p.manufacturer,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
@@ -2863,7 +2861,13 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
     final pack = p != null ? _packShort(p) : '';
     final isApproved = row.status == _MatchStatus.manuallyMatched;
 
-    return Opacity(
+    return LayoutBuilder(builder: (context, constraints) {
+      // nameColW: fixed name-column width shared by header, selected-product, and
+      // all alternate rows so the pack/QTY column starts at the same left x.
+      // Right-side after QTY: 8+36(qty)+8+22(eye)+8+112(status)+8+26(cb) = 228
+      // Card horizontal padding: 24.  Total: 252.
+      final nameColW = (constraints.maxWidth - 252.0).clamp(50.0, 220.0);
+      return Opacity(
       opacity: row.isHidden ? 0.45 : 1.0,
       child: GestureDetector(
         onTap: hasCandidates && !row.isHidden ? widget.onToggle : null,
@@ -2896,8 +2900,9 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                         padding: const EdgeInsets.fromLTRB(12, 14, 12, 10),
                         child: Row(
                           children: [
-                            // Line-item name
-                            Expanded(
+                            // Line-item name — fixed width = nameColW (shared pack column)
+                            SizedBox(
+                              width: nameColW,
                               child: Text(row.lineItem,
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
@@ -2906,22 +2911,26 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                                       fontWeight: FontWeight.w700,
                                       color: Color(0xFF111827))),
                             ),
-                            const SizedBox(width: 12),
-                            // QTY box — height matches status badge (same vertical padding)
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFF3F4F6),
-                                borderRadius: BorderRadius.circular(8),
-                                border: Border.all(color: const Color(0xFFD1D5DB)),
+                            const SizedBox(width: 8),
+                            // QTY box — fixed 36 px wide so its left edge aligns with pack column
+                            SizedBox(
+                              width: 36,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFF3F4F6),
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(color: const Color(0xFFD1D5DB)),
+                                ),
+                                child: Text('${row.qty}',
+                                    textAlign: TextAlign.center,
+                                    style: const TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w500,
+                                        color: Color(0xFF374151))),
                               ),
-                              child: Text('${row.qty}',
-                                  style: const TextStyle(
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.w500,
-                                      color: Color(0xFF374151))),
                             ),
-                            const SizedBox(width: 12),
+                            const SizedBox(width: 8),
                             // Hide/show eye icon
                             GestureDetector(
                               onTap: widget.onHideToggle,
@@ -2937,7 +2946,7 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                                 ),
                               ),
                             ),
-                            const SizedBox(width: 12),
+                            const SizedBox(width: 8),
                             // Status badge — fixed width, rectangular rounded corners
                             SizedBox(
                               width: 112,
@@ -2956,7 +2965,7 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                                         color: badgeText)),
                               ),
                             ),
-                            const SizedBox(width: 12),
+                            const SizedBox(width: 8),
                             // Approval checkbox
                             GestureDetector(
                               onTap: row.isHidden ? null : _toggleApproval,
@@ -2995,12 +3004,12 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                       const Divider(height: 1, thickness: 1, color: Color(0xFFE5E7EB)),
                       // ── Selected matched SKU — single line, no inner box ─
                       Padding(
-                        padding: const EdgeInsets.fromLTRB(12, 10, 12, 14),
+                        padding: const EdgeInsets.fromLTRB(12, 17, 12, 17),
                         child: p != null
                             ? Row(children: [
-                                // Product name truncates before pack
-                                Expanded(
-                                  flex: 4,
+                                // Product name — same fixed width as header name col
+                                SizedBox(
+                                  width: nameColW,
                                   child: Text(p.name,
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
@@ -3009,8 +3018,8 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                                           fontWeight: FontWeight.w600,
                                           color: Color(0xFF111827))),
                                 ),
-                                const SizedBox(width: 6),
-                                // Pack size — widened so short form never clips
+                                const SizedBox(width: 8),
+                                // Pack size — shared column start with QTY above
                                 SizedBox(
                                   width: 48,
                                   child: Text(pack,
@@ -3019,17 +3028,16 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                                       style: const TextStyle(
                                           fontSize: 11, color: Color(0xFF374151))),
                                 ),
-                                const SizedBox(width: 6),
+                                const SizedBox(width: 8),
                                 // Company truncates before MRP
                                 Expanded(
-                                  flex: 3,
                                   child: Text(p.manufacturer,
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
                                       style: const TextStyle(
                                           fontSize: 11, color: Color(0xFF6B7280))),
                                 ),
-                                const SizedBox(width: 6),
+                                const SizedBox(width: 8),
                                 // MRP — fixed width, right-aligned
                                 SizedBox(
                                   width: 52,
@@ -3065,7 +3073,7 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         for (int k = 0; k < alts.length; k++)
-                          _altRow(alts[k].$2, alts[k].$1, k == alts.length - 1),
+                          _altRow(alts[k].$2, alts[k].$1, k == alts.length - 1, nameColW),
                       ],
                     ),
                   ),
@@ -3076,6 +3084,7 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
         ),
       ),
     );
+    });
   }
 }
 

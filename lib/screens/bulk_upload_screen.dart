@@ -2795,14 +2795,14 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(fontSize: 11, color: Color(0xFF374151))),
             ),
-            const SizedBox(width: 4),
+            const SizedBox(width: 8),
             Expanded(
               child: Text(p.manufacturer,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
             ),
-            const SizedBox(width: 4),
+            const SizedBox(width: 8),
             SizedBox(
               width: 52,
               child: Text(rupees(p.mrp),
@@ -2866,10 +2866,6 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
     final isApproved = row.status == _MatchStatus.manuallyMatched;
 
     return LayoutBuilder(builder: (context, constraints) {
-      // nameColW: fixed name-column width shared by header, selected-product, and
-      // all alternate rows so the pack/QTY column starts at the same left x.
-      // Right-side after QTY: 8+36(qty)+8+22(eye)+8+112(status)+8+26(cb) = 228
-      // Card horizontal padding: 24.  Total: 252.
       final nameColW = (constraints.maxWidth - 252.0).clamp(50.0, 220.0);
       return Opacity(
       opacity: row.isHidden ? 0.45 : 1.0,
@@ -2904,9 +2900,7 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                         padding: const EdgeInsets.fromLTRB(12, 14, 12, 10),
                         child: Row(
                           children: [
-                            // Line-item name — fixed width = nameColW (shared pack column)
-                            SizedBox(
-                              width: nameColW,
+                            Expanded(
                               child: Text(row.lineItem,
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,

@@ -110,9 +110,10 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
   bool _isFromFile = false;
   String? _fileName;
   bool _addingToCart = false;
-  // Product IDs that were added to cart via "Add matched to cart" (bulk-owned).
-  // Persisted with the bulk session so re-sync works after page refresh.
-  Set<String> _bulkCartProductIds = {};
+  // Maps row index (as string) → productId that row last added to cart.
+  // Enables precise per-row removal: when a row changes product, only ITS old
+  // product is removed — nothing else is touched. Persisted with session.
+  Map<String, String> _bulkLineItemMap = {};
 
   bool get _isLoading => _step != _LoadStep.idle;
 
@@ -134,16 +135,15 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       final rows = (m['rows'] as List<dynamic>)
           .map((e) => _MatchRow.fromJson(e as Map<String, dynamic>))
           .toList();
-      final bulkIds = (m['bulkCartProductIds'] as List<dynamic>?)
-              ?.map((e) => e as String)
-              .toSet() ??
+      final lineItemMap = (m['bulkLineItemMap'] as Map<String, dynamic>?)
+              ?.map((k, v) => MapEntry(k, v as String)) ??
           {};
       if (rows.isNotEmpty && mounted) {
         setState(() {
           _rows = rows;
           _fileName = fileName;
           _isFromFile = true;
-          _bulkCartProductIds = bulkIds;
+          _bulkLineItemMap = lineItemMap;
         });
       }
     } catch (_) {}
@@ -156,7 +156,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       jsonEncode({
         'fileName': _fileName,
         'rows': _rows.map((r) => r.toJson()).toList(),
-        'bulkCartProductIds': _bulkCartProductIds.toList(),
+        'bulkLineItemMap': _bulkLineItemMap,
       }),
     );
   }
@@ -252,7 +252,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         _rows = rows;
         _isFromFile = true;
         _step = _LoadStep.idle;
-        _bulkCartProductIds = {};
+        _bulkLineItemMap = {};
       });
       _saveSession();
     } catch (e) {
@@ -261,7 +261,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         _step = _LoadStep.idle;
         _isFromFile = false;
         _fileName = null;
-        _bulkCartProductIds = {};
+        _bulkLineItemMap = {};
       });
       _clearSession();
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1181,45 +1181,59 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       return;
     }
 
-    // ── Real-file re-sync ──────────────────────────────────────────────────
-    // Build new matched set: productId → (product, qty).
-    final newSet = <String, (Product, int)>{};
-    for (final row in _rows) {
-      if ((row.status == _MatchStatus.matched ||
-              row.status == _MatchStatus.manuallyMatched) &&
-          row.selectedProduct != null) {
-        final p = row.selectedProduct!;
-        newSet[p.id] = (p, row.qty);
-      }
-    }
-    if (newSet.isEmpty) return;
-
-    // 1. Remove bulk-owned items that are no longer matched.
-    final toRemoveIds = _bulkCartProductIds.difference(newSet.keys.toSet());
-    for (final productId in toRemoveIds) {
-      cart.removeById(productId);
-    }
-
-    // 2. Add products not yet in cart; preserve qty for already-in-cart items
-    //    (covers both manual qty edits and items already present from browsing).
+    // ── Real-file re-sync (per-row ownership) ─────────────────────────────
+    // Each row owns the product it added. Compare old ownership → new ownership
+    // to know exactly which old product to remove when a row changes its match.
     int addedCount = 0;
-    final updatedBulkIds = <String>{};
-    for (final entry in newSet.entries) {
-      final productId = entry.key;
-      final (product, qty) = entry.value;
-      if (cart.quantityOf(productId) == 0) {
-        cart.setQuantity(product, qty);
-        addedCount++;
+    int removedCount = 0;
+    final newLineItemMap = <String, String>{};
+
+    for (int i = 0; i < _rows.length; i++) {
+      final row = _rows[i];
+      final key = i.toString();
+      final oldProductId = _bulkLineItemMap[key];
+      final isMatched = (row.status == _MatchStatus.matched ||
+              row.status == _MatchStatus.manuallyMatched) &&
+          row.selectedProduct != null;
+
+      if (isMatched) {
+        final product = row.selectedProduct!;
+        final newProductId = product.id;
+
+        if (oldProductId != null && oldProductId != newProductId) {
+          // Row changed its product: remove old (always bulk-owned), add new.
+          cart.removeById(oldProductId);
+          removedCount++;
+          if (cart.quantityOf(newProductId) == 0) {
+            cart.setQuantity(product, row.qty);
+            addedCount++;
+            newLineItemMap[key] = newProductId;
+          }
+          // If new product is already in cart from browsing, don't track it
+          // (we must not remove it on future re-syncs).
+        } else if (oldProductId == null) {
+          // First time this row is synced — add if not already in cart.
+          if (cart.quantityOf(newProductId) == 0) {
+            cart.setQuantity(product, row.qty);
+            addedCount++;
+            newLineItemMap[key] = newProductId;
+          }
+          // Already in cart (from browsing): leave untouched, don't claim ownership.
+        } else {
+          // Same product still matched — preserve any manual qty edit.
+          newLineItemMap[key] = newProductId;
+        }
+      } else if (oldProductId != null) {
+        // Row was previously synced but is now unmatched/partial — remove it.
+        cart.removeById(oldProductId);
+        removedCount++;
       }
-      // Track as bulk-owned regardless (new add OR already-in-cart bulk item).
-      updatedBulkIds.add(productId);
     }
 
-    setState(() => _bulkCartProductIds = updatedBulkIds);
+    setState(() => _bulkLineItemMap = newLineItemMap);
     _saveSession();
 
     if (mounted) {
-      final removedCount = toRemoveIds.length;
       final String msg;
       if (addedCount > 0 && removedCount > 0) {
         msg = '$addedCount added, $removedCount removed from cart';

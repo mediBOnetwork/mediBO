@@ -15,8 +15,11 @@ class CartLine {
   final Product product;
   int quantity;
   final bool isSample;
+  // Row index from the bulk-upload preview; null for manually browsed items.
+  // Used to sort bulk items in upload order and restore position on re-sync.
+  final int? bulkOrder;
 
-  CartLine(this.product, this.quantity, {this.isSample = false});
+  CartLine(this.product, this.quantity, {this.isSample = false, this.bulkOrder});
 
   double get lineTotal => product.b2bPrice * quantity;
   double get lineGst => lineTotal * product.gstPercent / 100;
@@ -187,7 +190,8 @@ class CartModel extends ChangeNotifier {
           category: (map['category'] as String?) ?? 'Other',
           gstPercent: (map['gst_percent'] as num?)?.toDouble() ?? 12.0,
         );
-        _lines[product.id] = CartLine(product, map['quantity'] as int);
+        _lines[product.id] = CartLine(product, map['quantity'] as int,
+            bulkOrder: map['bulk_order'] as int?);
       }
       _recomputeTotals();
       notifyListeners();
@@ -209,6 +213,7 @@ class CartModel extends ChangeNotifier {
                 'pack_size': l.product.packSize,
                 'category': l.product.category,
                 'gst_percent': l.product.gstPercent,
+                'bulk_order': l.bulkOrder,
               })
           .toList();
       html.window.localStorage[_guestKey] = jsonEncode(list);
@@ -268,7 +273,15 @@ class CartModel extends ChangeNotifier {
     _cachedTotalGst = _lines.values.fold(0.0, (s, l) => s + l.lineGst);
   }
 
-  List<CartLine> get lines => _lines.values.toList();
+  List<CartLine> get lines {
+    final bulk = <CartLine>[];
+    final others = <CartLine>[];
+    for (final l in _lines.values) {
+      if (l.bulkOrder != null) bulk.add(l); else others.add(l);
+    }
+    bulk.sort((a, b) => a.bulkOrder!.compareTo(b.bulkOrder!));
+    return [...bulk, ...others];
+  }
   List<Order> get orders => List.unmodifiable(_orders.reversed);
 
   int get distinctItems => _lines.length;
@@ -344,6 +357,16 @@ class CartModel extends ChangeNotifier {
       notifyListeners();
       _persist(product, qty);
     }
+  }
+
+  /// Add or replace a bulk-upload item, stamping it with [bulkOrder] (its row
+  /// index in the preview). Always overwrites any existing entry for this
+  /// product so the bulkOrder is set correctly on re-sync.
+  void setBulkQuantity(Product product, int qty, int bulkOrder) {
+    _lines[product.id] = CartLine(product, qty, bulkOrder: bulkOrder);
+    _recomputeTotals();
+    notifyListeners();
+    _persist(product, qty);
   }
 
   void increment(Product product) =>

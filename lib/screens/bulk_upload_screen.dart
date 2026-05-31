@@ -1205,7 +1205,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
           cart.removeById(oldProductId);
           removedCount++;
           if (cart.quantityOf(newProductId) == 0) {
-            cart.setQuantity(product, row.qty);
+            cart.setBulkQuantity(product, row.qty, i);
             addedCount++;
             newLineItemMap[key] = newProductId;
           }
@@ -1214,7 +1214,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         } else if (oldProductId == null) {
           // First time this row is synced — add if not already in cart.
           if (cart.quantityOf(newProductId) == 0) {
-            cart.setQuantity(product, row.qty);
+            cart.setBulkQuantity(product, row.qty, i);
             addedCount++;
             newLineItemMap[key] = newProductId;
           }

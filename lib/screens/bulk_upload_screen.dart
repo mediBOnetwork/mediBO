@@ -844,13 +844,12 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
   // No binarization, no dilation, no deskew — natural smooth anti-aliased strokes.
   Uint8List? _processOneCrop(html.ImageElement img, int srcW, int srcH, Rect bbox) {
     try {
-      // Tighten bbox: vTrim=0.18 excludes ruled underline; rTrim=0.06 removes qty bleed.
-      const vTrim = 0.18;
-      const rTrim = 0.06;
+      // Tighten bbox: vTrim excludes ruled underline; rTrim removes qty bleed.
+      // Values must stay in sync with _kCropVTrim/_kCropRTrim used for aspect ratio.
       final tLeft   = bbox.left * srcW;
-      final tTop    = (bbox.top + bbox.height * vTrim) * srcH;
-      final tWidth  = bbox.width * (1.0 - rTrim) * srcW;
-      final tHeight = bbox.height * (1.0 - 2 * vTrim) * srcH;
+      final tTop    = (bbox.top + bbox.height * _kCropVTrim) * srcH;
+      final tWidth  = bbox.width * (1.0 - _kCropRTrim) * srcW;
+      final tHeight = bbox.height * (1.0 - 2 * _kCropVTrim) * srcH;
       if (tWidth < 6 || tHeight < 4) return null;
 
       // Natural source resolution — no upscaling or fixed-height normalization.
@@ -2769,18 +2768,54 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
 /// Renders the handwriting crop for a LINE ITEM cell.
 /// Shows ONLY the crop image (transparent background, black ink) — no caption.
 /// Falls back to raw bbox clip or plain text if processedCrop is unavailable.
+// Trim constants must match _processOneCrop so aspect ratio is computed correctly.
+const _kCropVTrim = 0.18;
+const _kCropRTrim = 0.06;
+
 Widget _lineItemCrop(_MatchRow row, Uint8List? imageBytes, Size? imageSize,
     {TextStyle? fallbackStyle}) {
   if (row.processedCrop != null) {
     return Tooltip(
       message: row.lineItem,
       waitDuration: const Duration(milliseconds: 400),
-      child: Image.memory(
-        row.processedCrop!,
-        fit: BoxFit.contain,
-        alignment: Alignment.centerLeft,
-        gaplessPlayback: true,
-      ),
+      child: LayoutBuilder(builder: (ctx, constraints) {
+        // maxHeight comes from the SizedBox(height:22/24) caller.
+        // maxWidth comes from the Expanded parent.
+        final fixedH =
+            constraints.maxHeight.isFinite ? constraints.maxHeight : 22.0;
+        final maxW =
+            constraints.maxWidth.isFinite ? constraints.maxWidth : double.infinity;
+
+        // Derive natural aspect ratio from bbox (same trim as _processOneCrop).
+        double displayW = maxW;
+        double displayH = fixedH;
+        final bbox = row.bbox;
+        final imgSize = imageSize;
+        if (bbox != null && imgSize != null &&
+            bbox.width > 0 && bbox.height > 0) {
+          final cropW = bbox.width * (1.0 - _kCropRTrim) * imgSize.width;
+          final cropH = bbox.height * (1.0 - 2 * _kCropVTrim) * imgSize.height;
+          if (cropW > 0 && cropH > 0) {
+            final aspect = cropW / cropH;
+            displayW = fixedH * aspect;
+            // Cap at available column width; scale down proportionally if needed.
+            if (displayW > maxW) {
+              displayW = maxW;
+              displayH = maxW / aspect;
+            }
+          }
+        }
+
+        return SizedBox(
+          width: displayW,
+          height: displayH,
+          child: Image.memory(
+            row.processedCrop!,
+            fit: BoxFit.fill, // box is pre-sized to correct aspect ratio
+            gaplessPlayback: true,
+          ),
+        );
+      }),
     );
   }
 

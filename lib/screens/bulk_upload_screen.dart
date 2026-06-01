@@ -259,7 +259,9 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
       if (extracted.isEmpty) throw Exception('No medicine rows found in file');
 
-      // Step 3: fuzzy-match each extracted medicine against Supabase
+      // Step 3: fuzzy-match each extracted medicine against Supabase.
+      // IMPORTANT: rows are processed sequentially (await) and appended in
+      // input order. _rows must never be sorted — display preserves this order.
       setState(() {
         _step = _LoadStep.matching;
         _matchTotal = extracted.length;
@@ -1058,6 +1060,8 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       'Return ONLY a valid JSON array — no explanation, no markdown:\n'
       '[{"name": "medicine name exactly as written", "qty": 5}]\n\n'
       'CRITICAL RULES:\n'
+      '- PRESERVE THE ORIGINAL ORDER: return medicines in the exact same top-to-bottom '
+      'sequence they appear in the document. Do NOT sort or reorder them.\n'
       '- SKIP the header row: any row whose cells are column labels like '
       '"Product", "Medicine", "Item", "Name", "Qty", "Quantity", "Rate", '
       '"MRP", "Price", "Amount", "S.No", "Serial", "Units", "Pack". '
@@ -1078,12 +1082,14 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       '- Medicine/drug names (may include brand names, generic names, tablet/capsule/gel suffixes)\n'
       '- Quantities (numbers next to medicine names)\n'
       '- Units (Box, B, Piece, P, Strip, Tab, etc.)\n'
+      'IMPORTANT: Return medicines in the exact top-to-bottom order they appear in the image. '
+      'Do NOT sort or reorder them.\n'
       'Return ONLY a JSON array like: [{"name": "medicine name", "qty": 5, "unit": "Box"}]\n'
       'Do not return anything else. Extract every medicine you can see even if handwriting is unclear.';
 
   static const _geminiImageFallbackPrompt =
       'Look at this image carefully. It contains a list of medicines/drugs written by hand. '
-      'List every item you can read, even partially. '
+      'List every item you can read, even partially, in the same order they appear top to bottom. '
       'For each item write the medicine name and the number next to it. '
       'If no number is visible use 1. '
       'Respond with ONLY this JSON — nothing else:\n'
@@ -1094,6 +1100,8 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       'Below is raw content from a medicine order file (PDF, text, or Word document).\n'
       'Extract ALL medicine/product names and their actual quantities.\n\n'
       'CRITICAL RULES — follow exactly:\n'
+      '0. PRESERVE ORDER: Return medicines in the exact top-to-bottom sequence they appear '
+      'in the document. Do NOT sort, group, or reorder them in any way.\n'
       '1. HEADER ROW: Any row whose cells are column labels such as "Product", '
       '"Medicine", "Item", "Name", "Description", "Qty", "Quantity", "Rate", '
       '"MRP", "Price", "Amount", "Sr", "S.No", "Serial", "Units", "Pack" is a '
@@ -1192,13 +1200,16 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     final form = _detectDosageForm(name);
     debugPrint('[FuzzyMatch] query="$name" form=$form active=${list.length}');
 
-    // ── 4. Stage 1 — shortlist top 5 by positional 3-letter-chunk priority ───
+    // ── 4. Stage 1 — fuzzy shortlist top-15 by trigram + edit-distance ─────────
+    // Using _stage1Score (trigram Jaccard 50% + edit ratio 40% + chunk bonus 10%)
+    // so near-spellings with transpositions (Paraxim↔Praxium) survive into Stage 2.
+    // "take(5)" is replaced by take(15) so Stage 2 has a richer pool to re-rank.
     list.sort((a, b) {
       final na = (a['product_name'] as String?) ?? '';
       final nb = (b['product_name'] as String?) ?? '';
-      return _positionalChunkScore(name, nb).compareTo(_positionalChunkScore(name, na));
+      return _stage1Score(name, nb).compareTo(_stage1Score(name, na));
     });
-    final shortlist = list.take(5).toList();
+    final shortlist = list.take(15).toList();
 
     // ── 5. Stage 2 — rank shortlist by full-name similarity + form tiebreaker ──
     // Form bonus is capped at 0.02 so name similarity always dominates.
@@ -1214,16 +1225,19 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       return sb.compareTo(sa);
     });
 
+    // Narrow to final top-5 (1 selected + 4 alternates shown in UI).
+    final top5 = shortlist.take(5).toList();
+
     // ── 6. Debug ──────────────────────────────────────────────────────────────
-    for (int i = 0; i < shortlist.length; i++) {
-      final pName = (shortlist[i]['product_name'] as String?) ?? '?';
-      final s1 = _positionalChunkScore(name, pName);
+    for (int i = 0; i < top5.length; i++) {
+      final pName = (top5[i]['product_name'] as String?) ?? '?';
+      final s1 = _stage1Score(name, pName);
       double s2 = _stage2Score(name, pName);
       if (form != null && _formMatches(pName, form)) s2 += 0.02;
-      debugPrint('[FuzzyMatch]  #${i + 1} s1=${s1.toStringAsFixed(2)} s2=${s2.toStringAsFixed(3)}  "$pName"');
+      debugPrint('[FuzzyMatch]  #${i + 1} s1=${s1.toStringAsFixed(3)} s2=${s2.toStringAsFixed(3)}  "$pName"');
     }
 
-    return shortlist;
+    return top5;
   }
 
   // ── Error messages ─────────────────────────────────────────────────────────
@@ -3156,6 +3170,43 @@ String _normStr(String s) => s
     .replaceAll(RegExp(r"[^a-z0-9\s]"), ' ')
     .trim()
     .replaceAll(RegExp(r'\s+'), ' ');
+
+/// Returns the set of all overlapping 3-grams (substrings of length 3) from [s].
+Set<String> _trigrams(String s) {
+  if (s.length < 3) return {};
+  final t = <String>{};
+  for (int i = 0; i + 3 <= s.length; i++) t.add(s.substring(i, i + 3));
+  return t;
+}
+
+/// Stage 1 — Typo-tolerant shortlist score.
+/// Combines trigram-set Jaccard (robust to letter transpositions / insertions)
+/// with normalised edit-distance ratio. Both operate on space-stripped normalized
+/// strings so "Paraxim"↔"Praxium" share {rax, axi, mcr, cr2, r25, 25t, tab}
+/// trigrams and score high despite the leading transposition that breaks strict
+/// chunk matching. The old positional chunk score is kept as a small bonus so
+/// candidates that DO start like the query still edge ahead of ties.
+double _stage1Score(String query, String candidate) {
+  final q = _normStr(query).replaceAll(' ', '');
+  final c = _normStr(candidate).replaceAll(' ', '');
+  if (q.isEmpty || c.isEmpty) return 0.0;
+
+  // 1. Trigram Jaccard — insensitive to transpositions.
+  final qTri = _trigrams(q);
+  final cTri = _trigrams(c);
+  final inter = qTri.intersection(cTri).length.toDouble();
+  final union = qTri.union(cTri).length.toDouble();
+  final trigramScore = union == 0 ? 0.0 : inter / union;
+
+  // 2. Edit-distance ratio (space-stripped).
+  final maxLen = q.length > c.length ? q.length : c.length;
+  final editRatio = 1.0 - _editDistance(q, c) / maxLen;
+
+  // 3. Positional chunk bonus — small so it cannot gate out a good match.
+  final chunkBonus = (_positionalChunkScore(query, candidate) / 2.0).clamp(0.0, 1.0);
+
+  return 0.50 * trigramScore + 0.40 * editRatio + 0.10 * chunkBonus;
+}
 
 /// Stage 1 — Positional 3-letter chunk score.
 /// Query is split into sequential 3-char chunks (spaces stripped). Each chunk

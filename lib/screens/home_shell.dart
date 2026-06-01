@@ -255,18 +255,23 @@ class _HomeShellState extends State<HomeShell> {
           ),
           if (_index == 0 && AppState.of(context).distinctItems > 0)
             Positioned(
-              left: 16,
-              right: 16,
               bottom: 16,
-              child: Center(
-                child: FractionallySizedBox(
-                  widthFactor: 0.84,
-                  child: RepaintBoundary(
-                    child: _StickyCartBar(
-                      onTap: () => setState(() => _cartOpen = true),
+              left: 0,
+              right: 0,
+              child: Builder(
+                builder: (ctx) {
+                  final sw = MediaQuery.sizeOf(ctx).width;
+                  return Center(
+                    child: SizedBox(
+                      width: sw * 0.90,
+                      child: RepaintBoundary(
+                        child: _StickyCartBar(
+                          onTap: () => setState(() => _cartOpen = true),
+                        ),
+                      ),
                     ),
-                  ),
-                ),
+                  );
+                },
               ),
             ),
           RepaintBoundary(
@@ -1918,6 +1923,9 @@ class _StickyCartBarState extends State<_StickyCartBar>
       progress = 1.0;
       leftContent = const Text(
         '🎉 7% discount unlocked! (maximum)',
+        maxLines: 1,
+        softWrap: false,
+        overflow: TextOverflow.clip,
         style: TextStyle(
           color: Colors.white,
           fontSize: 12,
@@ -1952,6 +1960,7 @@ class _StickyCartBarState extends State<_StickyCartBar>
       child: GestureDetector(
         onTap: widget.onTap,
         child: Container(
+          height: 64,
           decoration: BoxDecoration(
             color: const Color(0xFF1B5E20),
             borderRadius: BorderRadius.circular(16),
@@ -1964,19 +1973,27 @@ class _StickyCartBarState extends State<_StickyCartBar>
             ],
           ),
           child: Column(
-            mainAxisSize: MainAxisSize.min,
+            mainAxisSize: MainAxisSize.max,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(10, 8, 8, 8),
-                child: Row(
-                  children: [
-                    Expanded(child: leftContent),
-                    ScaleTransition(
-                      scale: _pulseAnim,
-                      child: _CartChip(uniqueItems: uniqueItems),
-                    ),
-                  ],
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(10, 8, 8, 8),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          alignment: Alignment.centerLeft,
+                          child: leftContent,
+                        ),
+                      ),
+                      ScaleTransition(
+                        scale: _pulseAnim,
+                        child: _CartChip(uniqueItems: uniqueItems),
+                      ),
+                    ],
+                  ),
                 ),
               ),
               Padding(
@@ -2022,6 +2039,9 @@ class _DiscountText extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return RichText(
+      maxLines: 1,
+      softWrap: false,
+      overflow: TextOverflow.clip,
       text: TextSpan(
         style: const TextStyle(
             fontSize: 12, fontWeight: FontWeight.w500, color: Colors.white),
@@ -2054,6 +2074,9 @@ class _UnlockedTierText extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return RichText(
+      maxLines: 1,
+      softWrap: false,
+      overflow: TextOverflow.clip,
       text: TextSpan(
         style: const TextStyle(
             fontSize: 12, fontWeight: FontWeight.w500, color: Colors.white),

@@ -2510,7 +2510,6 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
     with SingleTickerProviderStateMixin {
   late final AnimationController _ctrl;
   late final Animation<double> _anim;
-  _MatchStatus? _preApprovalStatus;
 
   @override
   void initState() {
@@ -2543,13 +2542,17 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
 
   void _toggleApproval() {
     final row = widget.row;
+    if (row.status == _MatchStatus.unrecognized) return;
     setState(() {
-      if (row.status == _MatchStatus.manuallyMatched) {
-        row.status = _preApprovalStatus ?? _MatchStatus.partial;
-        _preApprovalStatus = null;
-      } else {
-        _preApprovalStatus = row.status;
+      if (row.status == _MatchStatus.matched) {
+        // Untick a Matched row → Partial (unticked)
+        row.status = _MatchStatus.partial;
+      } else if (row.status == _MatchStatus.partial) {
+        // Tick a Partial row → Manually Matched (ticked)
         row.status = _MatchStatus.manuallyMatched;
+      } else if (row.status == _MatchStatus.manuallyMatched) {
+        // Untick a Manually Matched row → Partial (unticked)
+        row.status = _MatchStatus.partial;
       }
     });
     widget.onRowChanged();
@@ -2606,7 +2609,9 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
         ? const BorderSide(color: Color(0xFFEEEEEE))
         : BorderSide.none;
 
-    final isApproved = row.status == _MatchStatus.manuallyMatched;
+    // Ticked when Matched (auto) or Manually Matched.  Partial and Unrecognized are unticked.
+    final isApproved = row.status == _MatchStatus.matched ||
+        row.status == _MatchStatus.manuallyMatched;
 
     return Opacity(
       opacity: row.isHidden ? 0.45 : 1.0,
@@ -2728,7 +2733,7 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
                   flex: 5,
                   child: Center(
                     child: GestureDetector(
-                      onTap: row.isHidden ? null : _toggleApproval,
+                      onTap: (row.isHidden || row.status == _MatchStatus.unrecognized) ? null : _toggleApproval,
                       behavior: HitTestBehavior.opaque,
                       child: Padding(
                         padding: const EdgeInsets.all(3),
@@ -2843,7 +2848,6 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
     with SingleTickerProviderStateMixin {
   late final AnimationController _ctrl;
   late final Animation<double> _anim;
-  _MatchStatus? _preApprovalStatus;
 
   @override
   void initState() {
@@ -2872,13 +2876,17 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
 
   void _toggleApproval() {
     final row = widget.row;
+    if (row.status == _MatchStatus.unrecognized) return;
     setState(() {
-      if (row.status == _MatchStatus.manuallyMatched) {
-        row.status = _preApprovalStatus ?? _MatchStatus.partial;
-        _preApprovalStatus = null;
-      } else {
-        _preApprovalStatus = row.status;
+      if (row.status == _MatchStatus.matched) {
+        // Untick a Matched row → Partial (unticked)
+        row.status = _MatchStatus.partial;
+      } else if (row.status == _MatchStatus.partial) {
+        // Tick a Partial row → Manually Matched (ticked)
         row.status = _MatchStatus.manuallyMatched;
+      } else if (row.status == _MatchStatus.manuallyMatched) {
+        // Untick a Manually Matched row → Partial (unticked)
+        row.status = _MatchStatus.partial;
       }
     });
     widget.onRowChanged();
@@ -2993,7 +3001,9 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
 
     final p = row.selectedProduct;
     final pack = p != null ? _packShort(p) : '';
-    final isApproved = row.status == _MatchStatus.manuallyMatched;
+    // Ticked when Matched (auto) or Manually Matched.  Partial and Unrecognized are unticked.
+    final isApproved = row.status == _MatchStatus.matched ||
+        row.status == _MatchStatus.manuallyMatched;
 
     return LayoutBuilder(builder: (context, constraints) {
       final nameColW = (constraints.maxWidth - 252.0).clamp(50.0, 220.0);
@@ -3098,7 +3108,7 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                                   ),
                                   const SizedBox(width: 8),
                                   GestureDetector(
-                                    onTap: row.isHidden ? null : _toggleApproval,
+                                    onTap: (row.isHidden || row.status == _MatchStatus.unrecognized) ? null : _toggleApproval,
                                     behavior: HitTestBehavior.opaque,
                                     child: Padding(
                                       padding: const EdgeInsets.all(3),

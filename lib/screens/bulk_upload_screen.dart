@@ -1320,13 +1320,38 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     // Narrow to final top-5 (1 selected + 4 alternates shown in UI).
     final top5 = shortlist.take(5).toList();
 
-    // ── 6. Debug ──────────────────────────────────────────────────────────────
+    // ── 6. Debug — component breakdown matches _stage2Score formula exactly ───
     for (int i = 0; i < top5.length; i++) {
       final pName = (top5[i]['product_name'] as String?) ?? '?';
       final s1 = _stage1Score(name, pName);
-      double s2 = _stage2Score(name, pName);
+      final dbQ = _normStr(name);
+      final dbC = _normStr(pName);
+      final dbML = dbQ.length > dbC.length ? dbQ.length : dbC.length;
+      final dbEr = dbML == 0 ? 0.0 : 1.0 - _dlEditDistance(dbQ, dbC) / dbML;
+      final dbQW = dbQ.split(' ').where((t) => t.isNotEmpty).toSet();
+      final dbCW = dbC.split(' ').where((t) => t.isNotEmpty).toSet();
+      final dbTj = dbQW.union(dbCW).isEmpty ? 0.0 : dbQW.intersection(dbCW).length / dbQW.union(dbCW).length;
+      final dbTr = dbQW.isEmpty ? 0.0 : dbQW.where((t) => dbCW.contains(t)).length / dbQW.length;
+      final dbQL = dbQ.split(' ').where((t) => t.isNotEmpty).toList();
+      final dbCL = dbC.split(' ').where((t) => t.isNotEmpty).toList();
+      final dbQF = dbQL.isEmpty ? '' : dbQL[0];
+      final dbCF = dbCL.isEmpty ? '' : dbCL[0];
+      final dbFML = dbQF.length > dbCF.length ? dbQF.length : dbCF.length;
+      final dbPfx = dbFML == 0 ? 0.0 : 1.0 - _dlEditDistance(dbQF, dbCF) / dbFML;
+      final dbQFT = _trigrams(dbQF);
+      final dbCFT = _trigrams(dbCF);
+      final dbFWU = dbQFT.union(dbCFT).length.toDouble();
+      final dbFwt = dbFWU == 0 ? 0.0 : dbQFT.intersection(dbCFT).length / dbFWU;
+      double s2 = 0.50 * dbEr + 0.12 * dbTj + 0.13 * dbTr + 0.20 * dbPfx + 0.05 * dbFwt;
       if (form != null && _formMatches(pName, form)) s2 += 0.02;
-      debugPrint('[FuzzyMatch]  #${i + 1} s1=${s1.toStringAsFixed(3)} s2=${s2.toStringAsFixed(3)}  "$pName"');
+      debugPrint('[FuzzyMatch]  #${i + 1}'
+          ' s1=${s1.toStringAsFixed(3)}'
+          ' edit=${(0.50 * dbEr).toStringAsFixed(3)}'
+          ' tok=${(0.12 * dbTj + 0.13 * dbTr).toStringAsFixed(3)}'
+          ' pfx=${(0.20 * dbPfx).toStringAsFixed(3)}'
+          ' fwt=${(0.05 * dbFwt).toStringAsFixed(3)}'
+          ' final=${s2.toStringAsFixed(3)}'
+          '  "$pName"');
     }
 
     return top5;
@@ -3392,16 +3417,21 @@ int _dlEditDistance(String s, String t) {
 }
 
 /// Stage 2 — Full-name accuracy score.
-/// Three-component weighted score:
-///   50% Damerau-Levenshtein ratio — char-level accuracy; transpositions cost 1
-///                                   so OCR "ar"↔"ra" swaps don't inflate distance.
-///   30% token score               — 15% token-set Jaccard + 15% query-token recall;
-///                                   recall directly catches a missing distinguishing
-///                                   token like "B" (Lulim B Cream vs Lulimac Cream).
-///   20% first-word DL ratio       — tolerates single OCR leading-letter error,
-///                                   capped at 0.10 so it acts as a tiebreaker and
-///                                   cannot promote a weaker base-score candidate
-///                                   above a stronger one.
+/// Five-component weighted score (max 1.0):
+///   50% DL edit ratio          — char-level accuracy; DL transpositions cost 1 so
+///                                 OCR "ar"↔"ra" swaps don't inflate distance.
+///   12% token-set Jaccard      — symmetric token overlap.
+///   13% query-token recall     — fraction of query tokens present in candidate;
+///                                 directly catches a missing short token like "B".
+///   20% first-word DL ratio    — prefix similarity, full weight (no hard cap).
+///    5% first-word trigram     — letter-group overlap at drug-name level.
+///                                 "paraxin" shares {rax,axi} with "praxium" (J=0.25)
+///                                 but only {par} with "paroxep" (J=0.11) and nothing
+///                                 with "pazotin" (J=0.0), resolving the DL tie that
+///                                 the prefix component alone cannot break. The cap
+///                                 (formerly 0.10) is removed; this component now
+///                                 guards against prefix-sharing impostors overtaking
+///                                 the correct transposition-related match.
 ///
 /// Short tokens (B, D, SR, LS, XT, ER, …) are preserved by _normStr and
 /// included in both Jaccard and recall — they are never stripped.
@@ -3428,9 +3458,10 @@ double _stage2Score(String query, String candidate) {
       ? 0.0
       : qWords.where((t) => cWords.contains(t)).length / qWords.length;
 
-  // 4. First-word DL ratio — prefix tiebreaker.
-  // Capped at 0.10 (half the nominal 0.20 weight) so it cannot flip the ranking
-  // of two candidates whose base scores (edit + token) differ meaningfully.
+  // 4. First-word DL ratio — full 0.20 weight, no hard cap.
+  // The former 0.10 hard cap lowered the winning candidate's absolute contribution
+  // without preventing ties; the first-word trigram (component 5) now provides the
+  // ordering guard so the cap is no longer needed.
   final qList = q.split(' ').where((t) => t.isNotEmpty).toList();
   final cList = c.split(' ').where((t) => t.isNotEmpty).toList();
   final qFirst = qList.isEmpty ? '' : qList[0];
@@ -3439,9 +3470,22 @@ double _stage2Score(String query, String candidate) {
   final prefixRaw = firstMaxLen == 0
       ? 0.0
       : 1.0 - _dlEditDistance(qFirst, cFirst) / firstMaxLen;
-  final prefixContrib = (0.20 * prefixRaw).clamp(0.0, 0.10);
 
-  return 0.50 * editRatio + 0.15 * tokenJaccard + 0.15 * tokenRecall + prefixContrib;
+  // 5. First-word trigram Jaccard — letter-group overlap at drug-name level.
+  // When the DL transposition fires (e.g. "ar"↔"ra" in "paraxin"↔"praxium"),
+  // the shared trigrams {rax,axi} provide a measurable signal (J=0.25) that
+  // differentiates Praxium from Paroxep (J=0.11) and Pazotin (J=0.0) even
+  // though all three have the same first-word DL distance from "paraxin".
+  final qFirstTri = _trigrams(qFirst);
+  final cFirstTri = _trigrams(cFirst);
+  final fwUnion = qFirstTri.union(cFirstTri).length.toDouble();
+  final firstWordTrigram = fwUnion == 0 ? 0.0 : qFirstTri.intersection(cFirstTri).length / fwUnion;
+
+  return 0.50 * editRatio
+       + 0.12 * tokenJaccard
+       + 0.13 * tokenRecall
+       + 0.20 * prefixRaw
+       + 0.05 * firstWordTrigram;
 }
 
 /// Detect dosage form keyword in a query string.

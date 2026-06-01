@@ -1211,7 +1211,15 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
   // ── Supabase matching ──────────────────────────────────────────────────────
 
   Future<_MatchRow> _matchOne(String name, int qty) async {
-    final term = name.replaceAll(RegExp(r'[,()*%]'), ' ').trim();
+    // Strip punctuation noise common in handwritten/OCR orders:
+    // • ,()*%  → always noise
+    // • trailing/mid-word periods ("Tab.", "B. Cream", "Cap.") → abbreviation markers
+    //   but preserve decimal points in dosage numbers ("30.5mg" → keep "." before digit)
+    final term = name
+        .replaceAll(RegExp(r'[,()*%]'), ' ')
+        .replaceAll(RegExp(r'\.(?!\d)'), ' ')
+        .trim()
+        .replaceAll(RegExp(r'\s+'), ' ');
     if (term.isEmpty) {
       return _MatchRow(lineItem: name, qty: qty, status: _MatchStatus.unrecognized, candidates: []);
     }
@@ -3344,15 +3352,18 @@ int _editDistance(String s, String t) {
 }
 
 /// Stage 2 — Full-name accuracy score.
-/// Weighted combination: edit-distance ratio (50%), token-set Jaccard (30%),
-/// and first-word edit-distance ratio (20%).
+/// Four-component weighted score:
+///   40% edit-distance ratio   — char-level accuracy (full string)
+///   25% token-set Jaccard     — symmetric token overlap
+///   20% query-token recall    — fraction of query tokens present in candidate;
+///                               directly catches a missing distinguishing token
+///                               like "B" (Lulim B Cream vs Lulimac Cream) or
+///                               "LS" that edit-distance alone would obscure.
+///   15% first-word edit ratio — tolerates a single OCR leading-letter error
+///                               ("fulim"↔"lulim" → 0.80 vs "fulim"↔"risdan" → 0.17).
 ///
-/// The prefix component uses edit-distance on the first word rather than
-/// exact character-run length so that a single OCR substitution on the first
-/// letter ("fulim"↔"lulim", edit=1/5 → bonus=0.80) is not penalised as
-/// heavily as "fulim"↔"risdan" (edit=5/6 → bonus=0.17). Under the old
-/// exact-prefix scheme both would have given bonus=0, letting unrelated
-/// candidates that happen to start with the same misread letter win.
+/// Short tokens (B, D, SR, LS, XT, ER, …) are preserved by _normStr and
+/// included in both Jaccard and recall — they are never stripped.
 double _stage2Score(String query, String candidate) {
   final q = _normStr(query);
   final c = _normStr(candidate);
@@ -3362,27 +3373,32 @@ double _stage2Score(String query, String candidate) {
   final maxLen = q.length > c.length ? q.length : c.length;
   final editRatio = 1.0 - _editDistance(q, c) / maxLen;
 
-  // 2. Token-set Jaccard overlap.
-  final qWords = q.split(' ').where((t) => t.isNotEmpty).toList();
-  final cWords = c.split(' ').where((t) => t.isNotEmpty).toList();
-  final qSet = qWords.toSet();
-  final cSet = cWords.toSet();
-  final intersection = qSet.intersection(cSet).length;
-  final union = qSet.union(cSet).length;
-  final tokenScore = union == 0 ? 0.0 : intersection / union;
+  // 2. Token-set Jaccard — short tokens (B, LS, SR, XT…) are included, not stripped.
+  final qWords = q.split(' ').where((t) => t.isNotEmpty).toSet();
+  final cWords = c.split(' ').where((t) => t.isNotEmpty).toSet();
+  final intersection = qWords.intersection(cWords).length;
+  final union = qWords.union(cWords).length;
+  final tokenJaccard = union == 0 ? 0.0 : intersection / union;
 
-  // 3. First-word edit-distance ratio — tolerates a single misread leading
-  //    letter. "fulim"↔"lulim"→0.80, "eptoin"↔"epitor"→0.50,
-  //    "eptoin"↔"risdan"→0.17. Keeps correctly similar names ahead of ones
-  //    that only share the accidental first letter of the OCR error.
-  final qFirst = qWords.isEmpty ? '' : qWords[0];
-  final cFirst = cWords.isEmpty ? '' : cWords[0];
+  // 3. Query-token recall — fraction of query tokens found in candidate.
+  // A candidate missing any query token (even a single-letter "B") is penalised
+  // here regardless of how small that token is — edit-distance is insensitive to
+  // single-token presence when the rest of the string is nearly identical.
+  final tokenRecall = qWords.isEmpty
+      ? 0.0
+      : qWords.where((t) => cWords.contains(t)).length / qWords.length;
+
+  // 4. First-word edit-distance ratio — tolerates single OCR leading-letter error.
+  final qList = q.split(' ').where((t) => t.isNotEmpty).toList();
+  final cList = c.split(' ').where((t) => t.isNotEmpty).toList();
+  final qFirst = qList.isEmpty ? '' : qList[0];
+  final cFirst = cList.isEmpty ? '' : cList[0];
   final firstMaxLen = qFirst.length > cFirst.length ? qFirst.length : cFirst.length;
   final prefixBonus = firstMaxLen == 0
       ? 0.0
       : 1.0 - _editDistance(qFirst, cFirst) / firstMaxLen;
 
-  return 0.50 * editRatio + 0.30 * tokenScore + 0.20 * prefixBonus;
+  return 0.40 * editRatio + 0.25 * tokenJaccard + 0.20 * tokenRecall + 0.15 * prefixBonus;
 }
 
 /// Detect dosage form keyword in a query string.

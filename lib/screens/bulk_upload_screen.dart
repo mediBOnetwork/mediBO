@@ -159,6 +159,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
   String? _fileName;
   bool _addingToCart = false;
   bool _isRetrying = false;
+  double _retryProgress = 0.0;
   // Maps row index (as string) → productId that row last added to cart.
   // Enables precise per-row removal: when a row changes product, only ITS old
   // product is removed — nothing else is touched. Persisted with session.
@@ -1913,7 +1914,15 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
   // (matched stays matched; partial stays at least partial).
   Future<void> _retryMatch() async {
     if (_isRetrying || !_isFromFile) return;
-    setState(() => _isRetrying = true);
+    // Count rows that will actually be processed (skip manuallyMatched).
+    final toProcess =
+        _rows.where((r) => r.status != _MatchStatus.manuallyMatched).length;
+    if (toProcess == 0) return;
+    setState(() {
+      _isRetrying = true;
+      _retryProgress = 0.0;
+    });
+    int processed = 0;
     try {
       for (int i = 0; i < _rows.length; i++) {
         if (!mounted) break;
@@ -1925,37 +1934,42 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         if (name.isEmpty && old.bbox != null && _uploadedImageBytes != null) {
           name = await _reOcrOneLine(old.bbox!) ?? '';
         }
-        if (name.isEmpty) continue;
 
-        final fresh = await _matchOne(name, old.qty, bbox: old.bbox);
+        if (name.isNotEmpty) {
+          final fresh = await _matchOne(name, old.qty, bbox: old.bbox);
 
-        // Determine best status — never downgrade.
-        final _MatchStatus best;
-        if (old.status == _MatchStatus.matched &&
-            fresh.status != _MatchStatus.matched) {
-          best = _MatchStatus.matched;
-        } else if (old.status == _MatchStatus.partial &&
-            fresh.status == _MatchStatus.unrecognized) {
-          best = _MatchStatus.partial;
-        } else {
-          best = fresh.status;
+          // Determine best status — never downgrade.
+          final _MatchStatus best;
+          if (old.status == _MatchStatus.matched &&
+              fresh.status != _MatchStatus.matched) {
+            best = _MatchStatus.matched;
+          } else if (old.status == _MatchStatus.partial &&
+              fresh.status == _MatchStatus.unrecognized) {
+            best = _MatchStatus.partial;
+          } else {
+            best = fresh.status;
+          }
+
+          final updated = _MatchRow(
+            lineItem: name,
+            qty: old.qty,
+            status: best,
+            candidates:
+                fresh.candidates.isNotEmpty ? fresh.candidates : old.candidates,
+            selectedIndex: 0,
+            isHidden: old.isHidden,
+            preHideStatus: old._preHideStatus,
+            bbox: old.bbox,
+          );
+          updated.processedCrop = old.processedCrop;
+          if (mounted) setState(() => _rows[i] = updated);
         }
 
-        final updated = _MatchRow(
-          lineItem: name,
-          qty: old.qty,
-          status: best,
-          candidates:
-              fresh.candidates.isNotEmpty ? fresh.candidates : old.candidates,
-          selectedIndex: 0,
-          isHidden: old.isHidden,
-          preHideStatus: old._preHideStatus,
-          bbox: old.bbox,
-        );
-        updated.processedCrop = old.processedCrop;
-
-        if (mounted) setState(() => _rows[i] = updated);
+        processed++;
+        if (mounted) setState(() => _retryProgress = processed / toProcess);
       }
+      // Hold the full ring briefly so the user sees 100% completion.
+      if (mounted) await Future.delayed(const Duration(milliseconds: 500));
     } finally {
       if (mounted) setState(() => _isRetrying = false);
     }
@@ -2055,6 +2069,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
                     uploadedImageSize: _uploadedImageSize,
                     onRetry: _retryMatch,
                     isRetrying: _isRetrying,
+                    retryProgress: _retryProgress,
                   ),
                   const SizedBox(height: 48),
                 ],
@@ -2120,6 +2135,7 @@ class _MainLayout extends StatelessWidget {
   final Size? uploadedImageSize;
   final VoidCallback onRetry;
   final bool isRetrying;
+  final double retryProgress;
 
   const _MainLayout({
     required this.rows,
@@ -2136,6 +2152,7 @@ class _MainLayout extends StatelessWidget {
     this.uploadedImageSize,
     required this.onRetry,
     required this.isRetrying,
+    required this.retryProgress,
   });
 
   @override
@@ -2179,6 +2196,7 @@ class _MainLayout extends StatelessWidget {
               uploadedImageSize: uploadedImageSize,
               onRetry: onRetry,
               isRetrying: isRetrying,
+              retryProgress: retryProgress,
             ),
           ],
         );
@@ -2206,6 +2224,7 @@ class _MainLayout extends StatelessWidget {
             uploadedImageSize: uploadedImageSize,
             onRetry: onRetry,
             isRetrying: isRetrying,
+            retryProgress: retryProgress,
           ),
         ],
       );
@@ -2725,6 +2744,7 @@ class _SmartMatchSection extends StatefulWidget {
   final Size? uploadedImageSize;
   final VoidCallback onRetry;
   final bool isRetrying;
+  final double retryProgress;
 
   const _SmartMatchSection({
     required this.rows,
@@ -2740,6 +2760,7 @@ class _SmartMatchSection extends StatefulWidget {
     this.uploadedImageSize,
     required this.onRetry,
     required this.isRetrying,
+    required this.retryProgress,
   });
 
   @override
@@ -2806,6 +2827,7 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
                     if (widget.isFromFile)
                       _RetryIconButton(
                         isRetrying: widget.isRetrying,
+                        retryProgress: widget.retryProgress,
                         enabled: !widget.isLoading && !widget.isRetrying,
                         onRetry: widget.onRetry,
                       ),
@@ -2967,6 +2989,7 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
                           const SizedBox(width: 4),
                           _RetryIconButton(
                             isRetrying: widget.isRetrying,
+                            retryProgress: widget.retryProgress,
                             enabled: !widget.isLoading && !widget.isRetrying,
                             onRetry: widget.onRetry,
                           ),
@@ -2989,6 +3012,7 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
                       if (widget.isFromFile) ...[
                         _RetryIconButton(
                           isRetrying: widget.isRetrying,
+                          retryProgress: widget.retryProgress,
                           enabled: !widget.isLoading && !widget.isRetrying,
                           onRetry: widget.onRetry,
                         ),
@@ -3486,11 +3510,13 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
 
 class _RetryIconButton extends StatelessWidget {
   final bool isRetrying;
+  final double retryProgress;
   final bool enabled;
   final VoidCallback onRetry;
 
   const _RetryIconButton({
     required this.isRetrying,
+    required this.retryProgress,
     required this.enabled,
     required this.onRetry,
   });
@@ -3498,12 +3524,19 @@ class _RetryIconButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (isRetrying) {
-      return const SizedBox(
+      // Determinate ring: arc fills proportionally to rows processed.
+      // value drives 0.0→1.0 arc; no text, no animation, pure fill.
+      return SizedBox(
         width: 36,
         height: 36,
         child: Padding(
-          padding: EdgeInsets.all(8),
-          child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF6B7280)),
+          padding: const EdgeInsets.all(8),
+          child: CircularProgressIndicator(
+            value: retryProgress,
+            strokeWidth: 2.5,
+            color: const Color(0xFF6B7280),
+            backgroundColor: const Color(0xFFE5E7EB),
+          ),
         ),
       );
     }

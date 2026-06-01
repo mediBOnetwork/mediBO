@@ -1284,16 +1284,16 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     final form = _detectDosageForm(name);
     debugPrint('[FuzzyMatch] query="$name" form=$form active=${list.length}');
 
-    // ── 4. Stage 1 — fuzzy shortlist top-15 by trigram + edit-distance ─────────
-    // Using _stage1Score (trigram Jaccard 50% + edit ratio 40% + chunk bonus 10%)
-    // so near-spellings with transpositions (Paraxim↔Praxium) survive into Stage 2.
-    // "take(5)" is replaced by take(15) so Stage 2 has a richer pool to re-rank.
+    // ── 4. Stage 1 — fuzzy shortlist top-20 by trigram + edit-distance ─────────
+    // _stage1Score = 55% trigram Jaccard + 45% edit-distance ratio (no chunk
+    // weighting) so a single misread leading letter does not knock the correct
+    // product out of the pool before Stage 2 can re-rank it.
     list.sort((a, b) {
       final na = (a['product_name'] as String?) ?? '';
       final nb = (b['product_name'] as String?) ?? '';
       return _stage1Score(name, nb).compareTo(_stage1Score(name, na));
     });
-    final shortlist = list.take(15).toList();
+    final shortlist = list.take(20).toList();
 
     // ── 5. Stage 2 — rank shortlist by full-name similarity + form tiebreaker ──
     // Form bonus is capped at 0.02 so name similarity always dominates.
@@ -3271,32 +3271,28 @@ Set<String> _trigrams(String s) {
 }
 
 /// Stage 1 — Typo-tolerant shortlist score.
-/// Combines trigram-set Jaccard (robust to letter transpositions / insertions)
-/// with normalised edit-distance ratio. Both operate on space-stripped normalized
-/// strings so "Paraxim"↔"Praxium" share {rax, axi, mcr, cr2, r25, 25t, tab}
-/// trigrams and score high despite the leading transposition that breaks strict
-/// chunk matching. The old positional chunk score is kept as a small bonus so
-/// candidates that DO start like the query still edge ahead of ties.
+/// Pure character-level: trigram-set Jaccard (55%) + normalised edit-distance
+/// ratio (45%), both on space-stripped strings. No first-chunk weighting so a
+/// single misread leading letter (OCR "fulim"→"lulim") does not gate out the
+/// correct candidate. The positional chunk bonus is kept for completeness but
+/// excluded from this score — it's still used by the debug output.
 double _stage1Score(String query, String candidate) {
   final q = _normStr(query).replaceAll(' ', '');
   final c = _normStr(candidate).replaceAll(' ', '');
   if (q.isEmpty || c.isEmpty) return 0.0;
 
-  // 1. Trigram Jaccard — insensitive to transpositions.
+  // 1. Trigram Jaccard — insensitive to transpositions and 1-char substitutions.
   final qTri = _trigrams(q);
   final cTri = _trigrams(c);
   final inter = qTri.intersection(cTri).length.toDouble();
   final union = qTri.union(cTri).length.toDouble();
   final trigramScore = union == 0 ? 0.0 : inter / union;
 
-  // 2. Edit-distance ratio (space-stripped).
+  // 2. Edit-distance ratio (space-stripped, full string).
   final maxLen = q.length > c.length ? q.length : c.length;
   final editRatio = 1.0 - _editDistance(q, c) / maxLen;
 
-  // 3. Positional chunk bonus — small so it cannot gate out a good match.
-  final chunkBonus = (_positionalChunkScore(query, candidate) / 2.0).clamp(0.0, 1.0);
-
-  return 0.50 * trigramScore + 0.40 * editRatio + 0.10 * chunkBonus;
+  return 0.55 * trigramScore + 0.45 * editRatio;
 }
 
 /// Stage 1 — Positional 3-letter chunk score.
@@ -3349,15 +3345,20 @@ int _editDistance(String s, String t) {
 
 /// Stage 2 — Full-name accuracy score.
 /// Weighted combination: edit-distance ratio (50%), token-set Jaccard (30%),
-/// and a first-word prefix bonus (20%) so names that start like the query
-/// rank higher even when token overlap is tied (e.g. Epitor > Risdan for
-/// query "Eptoin LS"). Normalize first so hyphens/punctuation don't skew.
+/// and first-word edit-distance ratio (20%).
+///
+/// The prefix component uses edit-distance on the first word rather than
+/// exact character-run length so that a single OCR substitution on the first
+/// letter ("fulim"↔"lulim", edit=1/5 → bonus=0.80) is not penalised as
+/// heavily as "fulim"↔"risdan" (edit=5/6 → bonus=0.17). Under the old
+/// exact-prefix scheme both would have given bonus=0, letting unrelated
+/// candidates that happen to start with the same misread letter win.
 double _stage2Score(String query, String candidate) {
   final q = _normStr(query);
   final c = _normStr(candidate);
   if (q.isEmpty || c.isEmpty) return 0.0;
 
-  // 1. Normalised edit-distance ratio.
+  // 1. Normalised edit-distance ratio (full string with spaces, case-folded).
   final maxLen = q.length > c.length ? q.length : c.length;
   final editRatio = 1.0 - _editDistance(q, c) / maxLen;
 
@@ -3370,14 +3371,16 @@ double _stage2Score(String query, String candidate) {
   final union = qSet.union(cSet).length;
   final tokenScore = union == 0 ? 0.0 : intersection / union;
 
-  // 3. Prefix bonus: fraction of the query's first word matched at the start
-  //    of the candidate's first word. "eptoin"↔"epitor" → "ep"/6 = 0.33;
-  //    "eptoin"↔"risdan" → 0. Keeps prefix-alike names ahead of unrelated ones.
+  // 3. First-word edit-distance ratio — tolerates a single misread leading
+  //    letter. "fulim"↔"lulim"→0.80, "eptoin"↔"epitor"→0.50,
+  //    "eptoin"↔"risdan"→0.17. Keeps correctly similar names ahead of ones
+  //    that only share the accidental first letter of the OCR error.
   final qFirst = qWords.isEmpty ? '' : qWords[0];
   final cFirst = cWords.isEmpty ? '' : cWords[0];
-  int pfx = 0;
-  while (pfx < qFirst.length && pfx < cFirst.length && qFirst[pfx] == cFirst[pfx]) pfx++;
-  final prefixBonus = qFirst.isEmpty ? 0.0 : pfx / qFirst.length;
+  final firstMaxLen = qFirst.length > cFirst.length ? qFirst.length : cFirst.length;
+  final prefixBonus = firstMaxLen == 0
+      ? 0.0
+      : 1.0 - _editDistance(qFirst, cFirst) / firstMaxLen;
 
   return 0.50 * editRatio + 0.30 * tokenScore + 0.20 * prefixBonus;
 }

@@ -30,6 +30,12 @@ class _HomeShellState extends State<HomeShell> {
   final MedicineRepository _repo = MedicineRepository();
   final TextEditingController _searchCtrl = TextEditingController();
 
+  // GlobalKey keeps BulkUploadScreen's State alive when _MainLayout's LayoutBuilder
+  // switches branches (mobile ↔ desktop at 900px). Without a key, Flutter destroys the
+  // old element and creates a new one at the new tree position, wiping _uploadedImageBytes
+  // and all processedCrop values. With a GlobalKey, Flutter reparents the element instead.
+  final GlobalKey _bulkUploadKey = GlobalKey();
+
   int _index = 0; // 0 = storefront, 1 = orders, 2 = bulk upload
   String _query = '';
   String _category = 'All';
@@ -184,7 +190,7 @@ class _HomeShellState extends State<HomeShell> {
             onFooterCart: () => setState(() => _cartOpen = true),
           ),
           const OrdersScreen(),
-          const BulkUploadScreen(),
+          BulkUploadScreen(key: _bulkUploadKey),
         ];
 
         if (isDesktop) return _buildDesktop(pages);

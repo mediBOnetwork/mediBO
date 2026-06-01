@@ -170,6 +170,14 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
   Size? _uploadedImageSize;
   String? _uploadedMimeType;
 
+  // Static (session-lifetime) cache of the last uploaded image.
+  // Survives State recreation caused by GlobalKey reparenting failures,
+  // navigation away-and-back, or any other rebuild path that calls initState.
+  // Cleared on _clearSession so stale bytes don't bleed into a fresh upload.
+  static Uint8List? _cachedImageBytes;
+  static Size? _cachedImageSize;
+  static String? _cachedMimeType;
+
   bool get _isLoading => _step != _LoadStep.idle;
 
   static const _kSessionKey = 'bulk_upload_session';
@@ -200,6 +208,16 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
           _isFromFile = true;
           _bulkLineItemMap = lineItemMap;
         });
+        // Rehydrate image bytes from static cache when State was recreated.
+        // This restores _uploadedImageBytes lost on layout-breakpoint reparent
+        // (belt-and-suspenders alongside the GlobalKey fix in home_shell.dart).
+        if (_uploadedImageBytes == null && _cachedImageBytes != null) {
+          _uploadedImageBytes = _cachedImageBytes;
+          _uploadedImageSize = _cachedImageSize;
+          _uploadedMimeType = _cachedMimeType ?? 'image/jpeg';
+          debugPrint('[BulkUpload] Rehydrated ${_cachedImageBytes!.length} B image from static cache');
+          _reprocessCropsFromCache();
+        }
       }
     } catch (_) {}
   }
@@ -219,6 +237,31 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
   Future<void> _clearSession() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_kSessionKey);
+    _cachedImageBytes = null;
+    _cachedImageSize = null;
+    _cachedMimeType = null;
+  }
+
+  // Reprocesses crops for rows that have a bbox but no processedCrop yet.
+  // Called after State rehydrates from the static image cache (i.e., after State
+  // was recreated and _loadSession restored rows-with-bboxes but lost processedCrop).
+  Future<void> _reprocessCropsFromCache() async {
+    final bytes = _uploadedImageBytes;
+    final mime = _uploadedMimeType ?? 'image/jpeg';
+    if (bytes == null) return;
+    final imgEl = await _loadImageForProcessing(bytes, mime);
+    if (imgEl == null || !mounted) return;
+    final srcW = imgEl.naturalWidth;
+    final srcH = imgEl.naturalHeight;
+    bool anyUpdated = false;
+    for (final row in _rows) {
+      if (row.processedCrop == null && row.bbox != null) {
+        row.processedCrop = _processOneCrop(imgEl, srcW, srcH, row.bbox!);
+        debugPrint('[Crop] Reprocessed "${row.lineItem}" → ${row.processedCrop?.length ?? 0} B');
+        anyUpdated = true;
+      }
+    }
+    if (anyUpdated && mounted) setState(() {});
   }
 
   String get _loadingMessage {
@@ -298,6 +341,10 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         _uploadedImageBytes = origImageBytes;
         _uploadedImageSize = origImageSize;
         _uploadedMimeType = origMimeType;
+        // Populate static cache so the bytes survive State recreation.
+        _cachedImageBytes = origImageBytes;
+        _cachedImageSize = origImageSize;
+        _cachedMimeType = origMimeType;
       }
 
       // Step 3: fuzzy-match each extracted medicine against Supabase.
@@ -2829,6 +2876,11 @@ Widget _lineItemCrop(_MatchRow row, Uint8List? imageBytes, Size? imageSize, {req
   final imgSize = imageSize;
   if (bbox == null || bytes == null || imgSize == null ||
       bbox.width <= 0 || bbox.height <= 0) {
+    debugPrint('[CropFallback] "${row.lineItem}": using text — '
+        'processedCrop=null '
+        'bbox=${bbox != null ? "ok" : "NULL"} '
+        'bytes=${bytes != null ? "ok" : "NULL"} '
+        'imgSize=${imgSize != null ? "ok" : "NULL"}');
     return fallback;
   }
 

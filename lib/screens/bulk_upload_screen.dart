@@ -1,7 +1,6 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
 import 'dart:convert';
 import 'dart:html' as html;
-import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
@@ -181,6 +180,50 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
   bool get _isLoading => _step != _LoadStep.idle;
 
   static const _kSessionKey = 'bulk_upload_session';
+  static const _kImageKey = 'bulk_upload_image';
+  static const _kImageMetaKey = 'bulk_upload_image_meta';
+
+  Future<void> _saveImageToPrefs(Uint8List bytes, String mimeType, Size size) async {
+    try {
+      final b64 = base64Encode(bytes);
+      if (b64.length > 6 * 1024 * 1024) return; // too large for localStorage
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_kImageKey, b64);
+      await prefs.setString(_kImageMetaKey,
+          jsonEncode({'mime': mimeType, 'w': size.width, 'h': size.height}));
+    } catch (e) {
+      debugPrint('[ImgCache] Save failed: $e');
+    }
+  }
+
+  Future<bool> _loadImageFromPrefs() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final b64 = prefs.getString(_kImageKey);
+      final metaStr = prefs.getString(_kImageMetaKey);
+      if (b64 == null || metaStr == null) return false;
+      final bytes = base64Decode(b64);
+      final meta = jsonDecode(metaStr) as Map<String, dynamic>;
+      _uploadedImageBytes = bytes;
+      _uploadedImageSize = Size(
+          (meta['w'] as num).toDouble(), (meta['h'] as num).toDouble());
+      _uploadedMimeType = (meta['mime'] as String?) ?? 'image/jpeg';
+      _cachedImageBytes = bytes;
+      _cachedImageSize = _uploadedImageSize;
+      _cachedMimeType = _uploadedMimeType;
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  Future<void> _clearImageFromPrefs() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_kImageKey);
+      await prefs.remove(_kImageMetaKey);
+    } catch (_) {}
+  }
 
   @override
   void initState() {
@@ -208,15 +251,20 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
           _isFromFile = true;
           _bulkLineItemMap = lineItemMap;
         });
-        // Rehydrate image bytes from static cache when State was recreated.
-        // This restores _uploadedImageBytes lost on layout-breakpoint reparent
-        // (belt-and-suspenders alongside the GlobalKey fix in home_shell.dart).
+        // Rehydrate image bytes: prefer static cache (survives layout reparent);
+        // fall back to SharedPreferences (survives page refresh).
         if (_uploadedImageBytes == null && _cachedImageBytes != null) {
           _uploadedImageBytes = _cachedImageBytes;
           _uploadedImageSize = _cachedImageSize;
           _uploadedMimeType = _cachedMimeType ?? 'image/jpeg';
           debugPrint('[BulkUpload] Rehydrated ${_cachedImageBytes!.length} B image from static cache');
           _reprocessCropsFromCache();
+        } else if (_uploadedImageBytes == null) {
+          final loaded = await _loadImageFromPrefs();
+          if (loaded && mounted) {
+            debugPrint('[BulkUpload] Rehydrated ${_uploadedImageBytes!.length} B image from prefs');
+            _reprocessCropsFromCache();
+          }
         }
       }
     } catch (_) {}
@@ -240,6 +288,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     _cachedImageBytes = null;
     _cachedImageSize = null;
     _cachedMimeType = null;
+    await _clearImageFromPrefs();
   }
 
   // Reprocesses crops for rows that have a bbox but no processedCrop yet.
@@ -341,10 +390,11 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         _uploadedImageBytes = origImageBytes;
         _uploadedImageSize = origImageSize;
         _uploadedMimeType = origMimeType;
-        // Populate static cache so the bytes survive State recreation.
+        // Populate static cache (survives layout reparent) and prefs (survives refresh).
         _cachedImageBytes = origImageBytes;
         _cachedImageSize = origImageSize;
         _cachedMimeType = origMimeType;
+        _saveImageToPrefs(origImageBytes, origMimeType, origImageSize!);
       }
 
       // Step 3: fuzzy-match each extracted medicine against Supabase.
@@ -790,132 +840,41 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     }
   }
 
-  // Crops a name-only region from the image, applies binarisation + stroke
-  // dilation + deskew, returns PNG bytes. Synchronous (all canvas ops are sync).
+  // Crops a name-only region from the image, converts to black transparent ink.
+  // No binarization, no dilation, no deskew — natural smooth anti-aliased strokes.
   Uint8List? _processOneCrop(html.ImageElement img, int srcW, int srcH, Rect bbox) {
     try {
-      // ── 1. Tighten bbox: trim edges to exclude ruled lines + qty column ──────
-      // vTrim=0.18 prevents overlap with adjacent lines (consecutive bbox y-ranges
-      // can overlap by ~0.013 units; 18% trim gives a safe gap even in that case).
+      // Tighten bbox: vTrim=0.18 excludes ruled underline; rTrim=0.06 removes qty bleed.
       const vTrim = 0.18;
-      const rTrim = 0.06; // 6% off right → removes qty digit bleed
+      const rTrim = 0.06;
       final tLeft   = bbox.left * srcW;
-      final tTop    = (bbox.top    + bbox.height * vTrim) * srcH;
-      final tWidth  = bbox.width  * (1.0 - rTrim) * srcW;
+      final tTop    = (bbox.top + bbox.height * vTrim) * srcH;
+      final tWidth  = bbox.width * (1.0 - rTrim) * srcW;
       final tHeight = bbox.height * (1.0 - 2 * vTrim) * srcH;
       if (tWidth < 6 || tHeight < 4) return null;
 
-      // ── 2. Scale crop to processing canvas (fixed height 96 px) ─────────────
-      const procH = 96;
-      final procScale = procH / tHeight;
-      final procW = (tWidth * procScale).round().clamp(20, 1200);
+      // Natural source resolution — no upscaling or fixed-height normalization.
+      final outW = tWidth.round().clamp(10, 800);
+      final outH = tHeight.round().clamp(4, 200);
 
-      final procCanvas = html.CanvasElement(width: procW, height: procH);
-      final ctx = procCanvas.context2D;
-      ctx.drawImageScaledFromSource(
-        img,
-        tLeft, tTop, tWidth, tHeight,
-        0, 0, procW.toDouble(), procH.toDouble(),
-      );
+      // Canvas starts transparent (no fillRect white).
+      final canvas = html.CanvasElement(width: outW, height: outH);
+      final ctx = canvas.context2D;
+      ctx.drawImageScaledFromSource(img, tLeft, tTop, tWidth, tHeight, 0, 0,
+          outW.toDouble(), outH.toDouble());
 
-      // ── 3. Binarise with Otsu's threshold ────────────────────────────────────
-      final imgData = ctx.getImageData(0, 0, procW, procH);
-      final data = imgData.data; // Uint8ClampedList, RGBA
-      final hist = List<int>.filled(256, 0);
+      // Grayscale → alpha: dark ink → opaque black, light paper → transparent.
+      final imgData = ctx.getImageData(0, 0, outW, outH);
+      final data = imgData.data;
       for (int i = 0; i < data.length; i += 4) {
-        final luma = (0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]).round();
-        hist[luma]++;
-      }
-      final thresh = _otsuThreshold(hist, procW * procH);
-
-      for (int i = 0; i < data.length; i += 4) {
-        final luma = (0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]).round();
-        final ink = luma < thresh ? 0 : 255;
-        data[i] = ink; data[i + 1] = ink; data[i + 2] = ink; data[i + 3] = 255;
+        final luma =
+            (0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]).round();
+        final alpha = (255 - luma).clamp(0, 255);
+        data[i] = 0; data[i + 1] = 0; data[i + 2] = 0; data[i + 3] = alpha;
       }
       ctx.putImageData(imgData, 0, 0);
 
-      // ── 3b. Auto-crop to ink pixel bounds (removes residual ruled lines) ──────
-      // Find the tightest bounding box that contains any dark (ink) pixel,
-      // then re-draw only that region onto a fresh canvas with 3px padding.
-      int inkTop = procH, inkBottom = -1, inkLeft = procW, inkRight = -1;
-      for (int y = 0; y < procH; y++) {
-        for (int x = 0; x < procW; x++) {
-          final idx = (y * procW + x) * 4;
-          if (data[idx] == 0) { // black pixel = ink
-            if (y < inkTop) inkTop = y;
-            if (y > inkBottom) inkBottom = y;
-            if (x < inkLeft) inkLeft = x;
-            if (x > inkRight) inkRight = x;
-          }
-        }
-      }
-      // If no ink found at all, fall back to full canvas
-      if (inkBottom < inkTop) { inkTop = 0; inkBottom = procH - 1; inkLeft = 0; inkRight = procW - 1; }
-
-      const pad = 3;
-      final cropL = (inkLeft - pad).clamp(0, procW - 1);
-      final cropT = (inkTop - pad).clamp(0, procH - 1);
-      final cropR = (inkRight + pad).clamp(0, procW - 1);
-      final cropB = (inkBottom + pad).clamp(0, procH - 1);
-      final cropW2 = cropR - cropL + 1;
-      final cropH2 = cropB - cropT + 1;
-
-      final tightCanvas = html.CanvasElement(width: cropW2, height: cropH2);
-      final tightCtx = tightCanvas.context2D;
-      tightCtx.fillStyle = '#ffffff';
-      tightCtx.fillRect(0, 0, cropW2, cropH2);
-      tightCtx.drawImageScaledFromSource(
-        procCanvas, cropL.toDouble(), cropT.toDouble(), cropW2.toDouble(), cropH2.toDouble(),
-        0, 0, cropW2.toDouble(), cropH2.toDouble(),
-      );
-
-      // ── 4. Dilation (thicken strokes): 1-px all-8-neighbours via multiply ───
-      final dilCanvas = html.CanvasElement(width: cropW2, height: cropH2);
-      final dilCtx = dilCanvas.context2D;
-      dilCtx.fillStyle = '#ffffff';
-      dilCtx.fillRect(0, 0, cropW2, cropH2);
-      dilCtx.globalCompositeOperation = 'multiply';
-      for (int dy = -1; dy <= 1; dy++) {
-        for (int dx = -1; dx <= 1; dx++) {
-          dilCtx.drawImage(tightCanvas, dx.toDouble(), dy.toDouble());
-        }
-      }
-      dilCtx.globalCompositeOperation = 'source-over';
-
-      // ── 5. Deskew: estimate angle from image moments and rotate ──────────────
-      final binData = dilCtx.getImageData(0, 0, cropW2, cropH2);
-      final angle = _estimateSkewAngle(binData, cropW2, cropH2);
-
-      final outCanvas = html.CanvasElement(width: cropW2, height: cropH2);
-      final outCtx = outCanvas.context2D;
-      outCtx.fillStyle = '#ffffff';
-      outCtx.fillRect(0, 0, cropW2, cropH2);
-      if (angle.abs() > 0.5) {
-        outCtx.save();
-        outCtx.translate(cropW2 / 2.0, cropH2 / 2.0);
-        outCtx.rotate(-angle * math.pi / 180.0);
-        outCtx.translate(-cropW2 / 2.0, -cropH2 / 2.0);
-      }
-      outCtx.drawImage(dilCanvas, 0, 0);
-      if (angle.abs() > 0.5) outCtx.restore();
-
-      // ── 5b. Colorize: replace ink (dark) pixels with pen-blue ────────────────
-      // Done after all geometric ops so the algorithms work on clean B&W.
-      // #1D4ED8 = Tailwind blue-700 — solid ballpoint-pen blue, bold and readable.
-      final colorData = outCtx.getImageData(0, 0, cropW2, cropH2);
-      final cd = colorData.data;
-      for (int i = 0; i < cd.length; i += 4) {
-        if (cd[i] < 128) { // ink pixel
-          cd[i] = 29; cd[i + 1] = 78; cd[i + 2] = 216; cd[i + 3] = 255;
-        } else { // background pixel — force pure white
-          cd[i] = 255; cd[i + 1] = 255; cd[i + 2] = 255; cd[i + 3] = 255;
-        }
-      }
-      outCtx.putImageData(colorData, 0, 0);
-
-      // ── 6. Export as PNG ─────────────────────────────────────────────────────
-      final dataUrl = outCanvas.toDataUrl('image/png');
+      final dataUrl = canvas.toDataUrl('image/png');
       return base64Decode(dataUrl.split(',').last);
     } catch (e) {
       debugPrint('[CropProcess] Failed: $e');
@@ -1450,8 +1409,10 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       '  y = TOP of the tallest letter glyph in this name (NOT the ruled line above)\n'
       '  w = width ending at the RIGHT edge of the LAST letter of the name — '
       'STOP BEFORE any quantity digit, slash, dash, or number column\n'
-      '  h = distance from top of tallest glyph to bottom of lowest glyph ONLY '
-      '(NOT to the ruled line below). Make h as tight as possible around the ink strokes.';
+      '  h = distance from top of tallest glyph to BOTTOM of lowest glyph ONLY — '
+      'STOP BEFORE any ruled line or underline below the text. '
+      'The ruled line is OUTSIDE the bbox. Make h as tight as possible '
+      'so only ink strokes are inside; a ruled underline must be fully below bbox.bottom.';
 
   static const _geminiImageFallbackPrompt =
       'This is a photo of a handwritten list of medicines from a pharmacy. '
@@ -1461,8 +1422,8 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       '- Write the number next to it if there is one; otherwise use 1.\n\n'
       'Do NOT leave out any line just because it is unclear — include it with your best guess.\n'
       'Do NOT return [] (empty). If you can see any words at all in the list, include them.\n\n'
-      'Respond with ONLY this JSON. Include a TIGHT bbox around ONLY the name text '
-      '(not the quantity, not ruled lines — just the ink strokes of the name):\n'
+      'Respond with ONLY this JSON. Include a TIGHT bbox around ONLY the name ink strokes '
+      '(not the quantity, not ruled lines — stop the bbox BEFORE any ruled underline):\n'
       '[{"name": "what you can read", "qty": 1, "bbox": {"x": 0.05, "y": 0.12, "w": 0.38, "h": 0.04}}]';
 
   static String _geminiTextPrompt(String content) =>
@@ -2805,117 +2766,24 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
   }
 }
 
-// ── Otsu's optimal binarisation threshold ─────────────────────────────────────
-int _otsuThreshold(List<int> hist, int total) {
-  double sum = 0;
-  for (int i = 0; i < 256; i++) sum += i * hist[i];
-  double sumB = 0, wB = 0, maxVar = 0;
-  int threshold = 128;
-  for (int t = 0; t < 256; t++) {
-    wB += hist[t];
-    if (wB == 0) continue;
-    final wF = total - wB;
-    if (wF == 0) break;
-    sumB += t * hist[t];
-    final mB = sumB / wB;
-    final mF = (sum - sumB) / wF;
-    final v = wB * wF * (mB - mF) * (mB - mF);
-    if (v > maxVar) { maxVar = v; threshold = t; }
-  }
-  return threshold;
-}
-
-// ── Skew angle via second-order image moments (PCA on dark pixels) ─────────────
-double _estimateSkewAngle(html.ImageData imageData, int width, int height) {
-  final data = imageData.data;
-  double m00 = 0, m10 = 0, m01 = 0;
-  for (int y = 0; y < height; y++) {
-    for (int x = 0; x < width; x++) {
-      final idx = (y * width + x) * 4;
-      final intensity = 255 - data[idx]; // dark pixel → high intensity
-      if (intensity < 64) continue;
-      m00 += intensity; m10 += x * intensity; m01 += y * intensity;
-    }
-  }
-  if (m00 < 1) return 0.0;
-  final cx = m10 / m00;
-  final cy = m01 / m00;
-  double m11 = 0, m20 = 0, m02 = 0;
-  for (int y = 0; y < height; y++) {
-    for (int x = 0; x < width; x++) {
-      final idx = (y * width + x) * 4;
-      final intensity = (255 - data[idx]).toDouble();
-      if (intensity < 64) continue;
-      final dx = x - cx, dy = y - cy;
-      m11 += dx * dy * intensity;
-      m20 += dx * dx * intensity;
-      m02 += dy * dy * intensity;
-    }
-  }
-  // Principal axis angle in image coords (y-down)
-  final angle = 0.5 * math.atan2(2 * m11, m20 - m02) * 180 / math.pi;
-  return angle.clamp(-20.0, 20.0);
-}
-
-// Fixed display heights for the handwriting crop column — uniform across all rows.
-const _kCropImgH = 18.0; // px height of the crop image itself
-const _kCropPadH = 5.0;  // px horizontal padding (left AND right, equal)
-
 /// Renders the handwriting crop for a LINE ITEM cell.
-/// Layout: [crop image at fixed _kCropImgH, fully contained within available width]
-///         [2px gap]
-///         [small gray caption = parsed OCR name]
-///
-/// imageBytes and imageSize come from _BulkUploadScreenState so they survive
-/// layout breakpoint switches. The height parameter is removed — height is now
-/// controlled by the constants above so all rows are uniform.
-Widget _lineItemCrop(_MatchRow row, Uint8List? imageBytes, Size? imageSize, {TextStyle? fallbackStyle}) {
-  // Gray caption shown under every crop (or under the fallback text if no crop).
-  final caption = Text(
-    row.lineItem,
-    maxLines: 1,
-    overflow: TextOverflow.ellipsis,
-    style: const TextStyle(fontSize: 10.0, color: Color(0xFF9CA3AF), height: 1.2),
-  );
-
-  // ── Prefer pre-processed crop (binarised, pen-blue, deskewed PNG) ────────────
+/// Shows ONLY the crop image (transparent background, black ink) — no caption.
+/// Falls back to raw bbox clip or plain text if processedCrop is unavailable.
+Widget _lineItemCrop(_MatchRow row, Uint8List? imageBytes, Size? imageSize,
+    {TextStyle? fallbackStyle}) {
   if (row.processedCrop != null) {
     return Tooltip(
       message: row.lineItem,
       waitDuration: const Duration(milliseconds: 400),
-      child: LayoutBuilder(builder: (ctx, constraints) {
-        // Subtract equal padding from both sides; the SizedBox gets an explicit
-        // width so BoxFit.contain can scale down if the image is wider than the cell.
-        final availW = (constraints.maxWidth - _kCropPadH * 2).clamp(20.0, double.infinity);
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: _kCropPadH),
-              child: SizedBox(
-                width: availW,
-                height: _kCropImgH,
-                child: Image.memory(
-                  row.processedCrop!,
-                  fit: BoxFit.contain,
-                  alignment: Alignment.centerLeft,
-                  gaplessPlayback: true,
-                ),
-              ),
-            ),
-            const SizedBox(height: 2),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: _kCropPadH),
-              child: caption,
-            ),
-          ],
-        );
-      }),
+      child: Image.memory(
+        row.processedCrop!,
+        fit: BoxFit.contain,
+        alignment: Alignment.centerLeft,
+        gaplessPlayback: true,
+      ),
     );
   }
 
-  // ── Fallback: raw bbox crop from original image (no processing) ─────────────
   final bbox = row.bbox;
   final bytes = imageBytes;
   final imgSize = imageSize;
@@ -2929,56 +2797,49 @@ Widget _lineItemCrop(_MatchRow row, Uint8List? imageBytes, Size? imageSize, {Tex
     return Text(row.lineItem,
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
-        style: fallbackStyle ?? const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)));
+        style: fallbackStyle ??
+            const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)));
   }
 
   return Tooltip(
     message: row.lineItem,
     waitDuration: const Duration(milliseconds: 400),
     child: LayoutBuilder(builder: (context, constraints) {
-      final availW = (constraints.maxWidth - _kCropPadH * 2).clamp(20.0, double.infinity);
+      final availW = constraints.maxWidth.clamp(20.0, double.infinity);
+      final availH =
+          constraints.maxHeight.isFinite ? constraints.maxHeight : 22.0;
       final cropX = bbox.left * imgSize.width;
       final cropY = bbox.top * imgSize.height;
       final cropW = bbox.width * imgSize.width;
       final cropH = bbox.height * imgSize.height;
       if (cropW <= 0 || cropH <= 0) {
-        return Text(row.lineItem, maxLines: 1, overflow: TextOverflow.ellipsis,
-            style: fallbackStyle ?? const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)));
+        return Text(row.lineItem,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: fallbackStyle ??
+                const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)));
       }
       final scaleX = availW / cropW;
-      final scaleY = _kCropImgH / cropH;
+      final scaleY = availH / cropH;
       final scale = scaleX < scaleY ? scaleX : scaleY;
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: _kCropPadH),
-            child: ClipRect(
-              child: SizedBox(
-                width: availW,
-                height: _kCropImgH,
-                child: Stack(
-                  clipBehavior: Clip.hardEdge,
-                  children: [
-                    Positioned(
-                      left: -cropX * scale,
-                      top: -cropY * scale,
-                      width: imgSize.width * scale,
-                      height: imgSize.height * scale,
-                      child: Image.memory(bytes, fit: BoxFit.fill, gaplessPlayback: true),
-                    ),
-                  ],
-                ),
+      return ClipRect(
+        child: SizedBox(
+          width: availW,
+          height: availH,
+          child: Stack(
+            clipBehavior: Clip.hardEdge,
+            children: [
+              Positioned(
+                left: -cropX * scale,
+                top: -cropY * scale,
+                width: imgSize.width * scale,
+                height: imgSize.height * scale,
+                child:
+                    Image.memory(bytes, fit: BoxFit.fill, gaplessPlayback: true),
               ),
-            ),
+            ],
           ),
-          const SizedBox(height: 2),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: _kCropPadH),
-            child: caption,
-          ),
-        ],
+        ),
       );
     }),
   );
@@ -3146,7 +3007,11 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
               children: [
                 Expanded(
                   flex: 18,
-                  child: _lineItemCrop(row, widget.uploadedImageBytes, widget.uploadedImageSize),
+                  child: SizedBox(
+                    height: 22,
+                    child: _lineItemCrop(
+                        row, widget.uploadedImageBytes, widget.uploadedImageSize),
+                  ),
                 ),
                 Expanded(
                   flex: 20,
@@ -3557,11 +3422,17 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                           child: Row(
                             children: [
                               Expanded(
-                                child: _lineItemCrop(row, widget.uploadedImageBytes, widget.uploadedImageSize,
-                                    fallbackStyle: const TextStyle(
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.w700,
-                                        color: Color(0xFF111827))),
+                                child: SizedBox(
+                                  height: 24,
+                                  child: _lineItemCrop(
+                                      row,
+                                      widget.uploadedImageBytes,
+                                      widget.uploadedImageSize,
+                                      fallbackStyle: const TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w700,
+                                          color: Color(0xFF111827))),
+                                ),
                               ),
                               // Controls cluster — min-sized Row pinned to the right
                               Row(

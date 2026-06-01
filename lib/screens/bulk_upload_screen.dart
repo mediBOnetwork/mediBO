@@ -900,6 +900,20 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       outCtx.drawImage(dilCanvas, 0, 0);
       if (angle.abs() > 0.5) outCtx.restore();
 
+      // ── 5b. Colorize: replace ink (dark) pixels with pen-blue ────────────────
+      // Done after all geometric ops so the algorithms work on clean B&W.
+      // #1D4ED8 = Tailwind blue-700 — solid ballpoint-pen blue, bold and readable.
+      final colorData = outCtx.getImageData(0, 0, cropW2, cropH2);
+      final cd = colorData.data;
+      for (int i = 0; i < cd.length; i += 4) {
+        if (cd[i] < 128) { // ink pixel
+          cd[i] = 29; cd[i + 1] = 78; cd[i + 2] = 216; cd[i + 3] = 255;
+        } else { // background pixel — force pure white
+          cd[i] = 255; cd[i + 1] = 255; cd[i + 2] = 255; cd[i + 3] = 255;
+        }
+      }
+      outCtx.putImageData(colorData, 0, 0);
+
       // ── 6. Export as PNG ─────────────────────────────────────────────────────
       final dataUrl = outCanvas.toDataUrl('image/png');
       return base64Decode(dataUrl.split(',').last);
@@ -2843,30 +2857,61 @@ double _estimateSkewAngle(html.ImageData imageData, int width, int height) {
   return angle.clamp(-20.0, 20.0);
 }
 
-/// Renders the handwriting crop for a LINE ITEM cell when bbox + imageBytes are
-/// available, otherwise falls back to the plain OCR text.
-/// imageBytes and imageSize come from _BulkUploadScreenState (not from row)
-/// so they persist through layout breakpoint switches that recreate child States.
-Widget _lineItemCrop(_MatchRow row, Uint8List? imageBytes, Size? imageSize, {required double height, TextStyle? fallbackStyle}) {
-  final fallback = Text(row.lineItem,
-      maxLines: 1,
-      overflow: TextOverflow.ellipsis,
-      style: fallbackStyle ?? const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)));
+// Fixed display heights for the handwriting crop column — uniform across all rows.
+const _kCropImgH = 18.0; // px height of the crop image itself
+const _kCropPadH = 5.0;  // px horizontal padding (left AND right, equal)
 
-  // ── Prefer pre-processed crop (binarised, dilated, deskewed PNG) ────────────
+/// Renders the handwriting crop for a LINE ITEM cell.
+/// Layout: [crop image at fixed _kCropImgH, fully contained within available width]
+///         [2px gap]
+///         [small gray caption = parsed OCR name]
+///
+/// imageBytes and imageSize come from _BulkUploadScreenState so they survive
+/// layout breakpoint switches. The height parameter is removed — height is now
+/// controlled by the constants above so all rows are uniform.
+Widget _lineItemCrop(_MatchRow row, Uint8List? imageBytes, Size? imageSize, {TextStyle? fallbackStyle}) {
+  // Gray caption shown under every crop (or under the fallback text if no crop).
+  final caption = Text(
+    row.lineItem,
+    maxLines: 1,
+    overflow: TextOverflow.ellipsis,
+    style: const TextStyle(fontSize: 10.0, color: Color(0xFF9CA3AF), height: 1.2),
+  );
+
+  // ── Prefer pre-processed crop (binarised, pen-blue, deskewed PNG) ────────────
   if (row.processedCrop != null) {
     return Tooltip(
       message: row.lineItem,
       waitDuration: const Duration(milliseconds: 400),
-      child: SizedBox(
-        height: height,
-        child: Image.memory(
-          row.processedCrop!,
-          fit: BoxFit.contain,
-          alignment: Alignment.centerLeft,
-          gaplessPlayback: true,
-        ),
-      ),
+      child: LayoutBuilder(builder: (ctx, constraints) {
+        // Subtract equal padding from both sides; the SizedBox gets an explicit
+        // width so BoxFit.contain can scale down if the image is wider than the cell.
+        final availW = (constraints.maxWidth - _kCropPadH * 2).clamp(20.0, double.infinity);
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: _kCropPadH),
+              child: SizedBox(
+                width: availW,
+                height: _kCropImgH,
+                child: Image.memory(
+                  row.processedCrop!,
+                  fit: BoxFit.contain,
+                  alignment: Alignment.centerLeft,
+                  gaplessPlayback: true,
+                ),
+              ),
+            ),
+            const SizedBox(height: 2),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: _kCropPadH),
+              child: caption,
+            ),
+          ],
+        );
+      }),
     );
   }
 
@@ -2881,43 +2926,61 @@ Widget _lineItemCrop(_MatchRow row, Uint8List? imageBytes, Size? imageSize, {req
         'bbox=${bbox != null ? "ok" : "NULL"} '
         'bytes=${bytes != null ? "ok" : "NULL"} '
         'imgSize=${imgSize != null ? "ok" : "NULL"}');
-    return fallback;
+    return Text(row.lineItem,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: fallbackStyle ?? const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)));
   }
 
   return Tooltip(
     message: row.lineItem,
     waitDuration: const Duration(milliseconds: 400),
-    child: LayoutBuilder(
-      builder: (context, constraints) {
-        final containerW = constraints.maxWidth.isFinite ? constraints.maxWidth : 120.0;
-        final cropX = bbox.left * imgSize.width;
-        final cropY = bbox.top * imgSize.height;
-        final cropW = bbox.width * imgSize.width;
-        final cropH = bbox.height * imgSize.height;
-        if (cropW <= 0 || cropH <= 0) return fallback;
-        final scaleX = containerW / cropW;
-        final scaleY = height / cropH;
-        final scale = scaleX < scaleY ? scaleX : scaleY;
-        return ClipRect(
-          child: SizedBox(
-            width: containerW,
-            height: height,
-            child: Stack(
-              clipBehavior: Clip.hardEdge,
-              children: [
-                Positioned(
-                  left: -cropX * scale,
-                  top: -cropY * scale,
-                  width: imgSize.width * scale,
-                  height: imgSize.height * scale,
-                  child: Image.memory(bytes, fit: BoxFit.fill, gaplessPlayback: true),
+    child: LayoutBuilder(builder: (context, constraints) {
+      final availW = (constraints.maxWidth - _kCropPadH * 2).clamp(20.0, double.infinity);
+      final cropX = bbox.left * imgSize.width;
+      final cropY = bbox.top * imgSize.height;
+      final cropW = bbox.width * imgSize.width;
+      final cropH = bbox.height * imgSize.height;
+      if (cropW <= 0 || cropH <= 0) {
+        return Text(row.lineItem, maxLines: 1, overflow: TextOverflow.ellipsis,
+            style: fallbackStyle ?? const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)));
+      }
+      final scaleX = availW / cropW;
+      final scaleY = _kCropImgH / cropH;
+      final scale = scaleX < scaleY ? scaleX : scaleY;
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: _kCropPadH),
+            child: ClipRect(
+              child: SizedBox(
+                width: availW,
+                height: _kCropImgH,
+                child: Stack(
+                  clipBehavior: Clip.hardEdge,
+                  children: [
+                    Positioned(
+                      left: -cropX * scale,
+                      top: -cropY * scale,
+                      width: imgSize.width * scale,
+                      height: imgSize.height * scale,
+                      child: Image.memory(bytes, fit: BoxFit.fill, gaplessPlayback: true),
+                    ),
+                  ],
                 ),
-              ],
+              ),
             ),
           ),
-        );
-      },
-    ),
+          const SizedBox(height: 2),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: _kCropPadH),
+            child: caption,
+          ),
+        ],
+      );
+    }),
   );
 }
 
@@ -3083,10 +3146,7 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
               children: [
                 Expanded(
                   flex: 18,
-                  child: SizedBox(
-                    height: 22,
-                    child: _lineItemCrop(row, widget.uploadedImageBytes, widget.uploadedImageSize, height: 22),
-                  ),
+                  child: _lineItemCrop(row, widget.uploadedImageBytes, widget.uploadedImageSize),
                 ),
                 Expanded(
                   flex: 20,
@@ -3497,14 +3557,11 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                           child: Row(
                             children: [
                               Expanded(
-                                child: SizedBox(
-                                  height: 24,
-                                  child: _lineItemCrop(row, widget.uploadedImageBytes, widget.uploadedImageSize, height: 24,
-                                      fallbackStyle: const TextStyle(
-                                          fontSize: 13,
-                                          fontWeight: FontWeight.w700,
-                                          color: Color(0xFF111827))),
-                                ),
+                                child: _lineItemCrop(row, widget.uploadedImageBytes, widget.uploadedImageSize,
+                                    fallbackStyle: const TextStyle(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w700,
+                                        color: Color(0xFF111827))),
                               ),
                               // Controls cluster — min-sized Row pinned to the right
                               Row(

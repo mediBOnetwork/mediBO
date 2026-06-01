@@ -1112,17 +1112,6 @@ class _CheckoutBar extends StatelessWidget {
                           ),
                         ],
                       ),
-                      if (gateMsg != null) ...[
-                        const SizedBox(height: 6),
-                        Text(
-                          gateMsg,
-                          style: const TextStyle(
-                            fontSize: 11,
-                            color: Color(0xFF9CA3AF),
-                          ),
-                          textAlign: TextAlign.center,
-                        ),
-                      ],
                     ],
                   );
                 }),
@@ -1892,15 +1881,6 @@ class _OrderSummaryPanel extends StatelessWidget {
                     ),
                   ),
                 ),
-                if (gateMsg != null) ...[
-                  const SizedBox(height: 6),
-                  Text(
-                    gateMsg,
-                    style: const TextStyle(
-                        fontSize: 11, color: Color(0xFF9CA3AF)),
-                    textAlign: TextAlign.center,
-                  ),
-                ],
               ],
             );
           }),

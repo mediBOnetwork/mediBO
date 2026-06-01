@@ -2592,12 +2592,12 @@ class _HowItWorksCard extends StatelessWidget {
         ],
         border: Border.all(color: Colors.grey.withValues(alpha: 0.15), width: 1),
       ),
-      child: const Column(
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisAlignment: MainAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text(
+          const Text(
             'HOW IT WORKS',
             style: TextStyle(
               fontSize: 10,
@@ -2606,8 +2606,8 @@ class _HowItWorksCard extends StatelessWidget {
               letterSpacing: 1.2,
             ),
           ),
-          SizedBox(height: 10),
-          Text(
+          const SizedBox(height: 10),
+          const Text(
             'Three steps to a packed cart.',
             style: TextStyle(
               fontSize: 16,
@@ -2616,11 +2616,106 @@ class _HowItWorksCard extends StatelessWidget {
               height: 1.25,
             ),
           ),
-          SizedBox(height: 24),
-          _Step(1, 'Drop your file.', 'AI detects columns & extracts medicines from any format.'),
-          _Step(2, 'Smart matcher pairs each line', 'to the best in-stock SKU.'),
-          _Step(3, 'Review, edit, and push to cart', 'in one click.'),
+          const SizedBox(height: 24),
+          const _Step(1, 'Drop your file.', 'AI detects columns & extracts medicines from any format.'),
+          const _Step(2, 'Smart matcher pairs each line', 'to the best in-stock SKU.'),
+          const _Step(3, 'Review, edit, and push to cart', 'in one click.'),
+          Container(
+            height: 1,
+            margin: const EdgeInsets.symmetric(vertical: 14),
+            color: Colors.white.withValues(alpha: 0.10),
+          ),
+          Text(
+            'New here? Try a sample:',
+            style: TextStyle(
+              fontSize: 11,
+              color: Colors.white.withValues(alpha: 0.55),
+            ),
+          ),
+          const SizedBox(height: 10),
+          const _DemoDownloadRow(),
         ],
+      ),
+    );
+  }
+}
+
+class _DemoDownloadRow extends StatelessWidget {
+  const _DemoDownloadRow();
+
+  void _download(String url, String filename) {
+    html.AnchorElement(href: url)
+      ..setAttribute('download', filename)
+      ..setAttribute('target', '_blank')
+      ..click();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          child: _DemoBtn(
+            label: 'Demo image',
+            icon: Icons.image_outlined,
+            onTap: () => _download(
+              'https://drive.google.com/uc?export=download&id=12tJhDaPIlBb4JbU7ZbI0hdTctNc3lnMr',
+              'demo-handwritten.jpg',
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: _DemoBtn(
+            label: 'Demo file (Excel)',
+            icon: Icons.table_chart_outlined,
+            onTap: () => _download(
+              'https://docs.google.com/spreadsheets/d/13dgfukS73-cZFS2Svg6MlNdVPf7_ZB0h/export?format=xlsx',
+              'demo-order.xlsx',
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _DemoBtn extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final VoidCallback onTap;
+  const _DemoBtn({required this.label, required this.icon, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.07),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 13, color: Colors.white.withValues(alpha: 0.65)),
+            const SizedBox(width: 5),
+            Flexible(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w500,
+                  color: Colors.white.withValues(alpha: 0.80),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

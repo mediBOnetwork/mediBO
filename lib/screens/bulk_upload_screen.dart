@@ -608,7 +608,56 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
   // ── Gemini AI extraction ──────────────────────────────────────────────────
 
-  // Retries up to 3 times; images also retry on empty result with a broader prompt.
+  // Applies grayscale + contrast boost + resize to ≤1600px using HTML Canvas.
+  // Falls back to the original bytes on any error.
+  Future<String> _enhanceImageForOCR(String rawContent) async {
+    final withoutPrefix = rawContent.substring('IMAGE_BYTES:'.length);
+    final colonIdx = withoutPrefix.indexOf(':');
+    final mimeType = withoutPrefix.substring(0, colonIdx);
+    final base64Data = withoutPrefix.substring(colonIdx + 1);
+    try {
+      final bytes = base64Decode(base64Data);
+      final blob = html.Blob([bytes], mimeType);
+      final url = html.Url.createObjectUrlFromBlob(blob);
+      final img = html.ImageElement()..src = url;
+      await img.onLoad.first.timeout(const Duration(seconds: 10));
+      html.Url.revokeObjectUrl(url);
+      final srcW = img.naturalWidth;
+      final srcH = img.naturalHeight;
+      if (srcW == 0 || srcH == 0) throw Exception('image dimensions 0');
+      const maxDim = 1600;
+      int dstW = srcW, dstH = srcH;
+      if (srcW > maxDim || srcH > maxDim) {
+        final scale = maxDim / (srcW > srcH ? srcW : srcH);
+        dstW = (srcW * scale).round();
+        dstH = (srcH * scale).round();
+      }
+      final canvas = html.CanvasElement(width: dstW, height: dstH);
+      final ctx = canvas.context2D;
+      ctx.filter = 'grayscale(100%) contrast(160%) brightness(108%)';
+      ctx.drawImageScaled(img, 0, 0, dstW.toDouble(), dstH.toDouble());
+      final dataUrl = canvas.toDataUrl('image/jpeg', 0.92);
+      final enhanced = 'IMAGE_BYTES:image/jpeg:${dataUrl.split(',').last}';
+      debugPrint('[ImageEnhance] ${srcW}x$srcH → ${dstW}x$dstH, out=${enhanced.length} chars');
+      return enhanced;
+    } catch (e) {
+      debugPrint('[ImageEnhance] Failed ($e) — using original');
+      return rawContent;
+    }
+  }
+
+  static bool _isNetworkOrApiError(Object e) {
+    final msg = e.toString().toLowerCase();
+    return msg.contains('http') ||
+        msg.contains('network') ||
+        msg.contains('socket') ||
+        msg.contains('timeout') ||
+        msg.contains('api error') ||
+        msg.contains('quota');
+  }
+
+  // Retries up to 3 times; images are preprocessed once then retried with
+  // progressively broader prompts. Network/API errors abort immediately.
   Future<List<Map<String, dynamic>>> _extractWithGeminiAI(
       String rawContent, String fileName) async {
     if (geminiApiKey.isEmpty || geminiApiKey.startsWith('YOUR_')) {
@@ -619,30 +668,40 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     debugPrint('[Gemini] Key prefix: ${geminiApiKey.substring(0, geminiApiKey.length.clamp(0, 10))}…');
 
     final isImage = rawContent.startsWith('IMAGE_BYTES:');
+
+    // Preprocess image once before all attempts.
+    final content = isImage ? await _enhanceImageForOCR(rawContent) : rawContent;
+
     Object? lastError;
 
     for (int attempt = 0; attempt < 3; attempt++) {
       try {
-        final result = await _callGeminiOnce(rawContent, attempt: attempt);
+        final result = await _callGeminiOnce(content, attempt: attempt);
         if (result.isNotEmpty) return result;
-        // Empty response — retry images with the fallback prompt once
-        if (isImage && attempt < 2) {
-          await Future.delayed(const Duration(milliseconds: 800));
+        // Empty result — retry with next prompt variant.
+        if (attempt < 2) {
+          await Future.delayed(Duration(milliseconds: 800 * (attempt + 1)));
           continue;
+        }
+        // All 3 attempts returned empty.
+        if (isImage) {
+          throw Exception(
+              'Could not read medicines from the photo. Try better lighting or a clearer shot of the list.');
         }
         throw Exception('empty_response');
       } catch (e) {
         lastError = e;
+        // Network/API errors — no point retrying.
+        if (_isNetworkOrApiError(e)) {
+          debugPrint('[Gemini] Network/API error on attempt $attempt — aborting: $e');
+          rethrow;
+        }
         if (attempt < 2) {
           await Future.delayed(Duration(milliseconds: 600 * (attempt + 1)));
         }
       }
     }
 
-    if (isImage) {
-      throw Exception(
-          'Image unclear or no medicines detected. Please ensure good lighting, clear handwriting, and that the full list is visible in the photo.');
-    }
     throw lastError!;
   }
 
@@ -658,10 +717,9 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       final mimeType = withoutPrefix.substring(0, colonIdx);
       final base64Data = withoutPrefix.substring(colonIdx + 1);
       debugPrint('[Gemini] Image upload — mime=$mimeType payload=${base64Data.length} chars attempt=$attempt');
-      // Second attempt uses a broader, simpler prompt to catch cases where the
-      // detailed prompt confuses the model on low-quality handwriting
+      // Attempts 0–1 use the detailed prompt; attempt 2 uses the broader fallback.
       final imagePromptText =
-          attempt == 0 ? _geminiImagePrompt : _geminiImageFallbackPrompt;
+          attempt < 2 ? _geminiImagePrompt : _geminiImageFallbackPrompt;
       parts = [
         {'inline_data': {'mime_type': mimeType, 'data': base64Data}},
         {'text': imagePromptText},
@@ -691,7 +749,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
           'maxOutputTokens': isImage ? 4096 : 3000,
         },
       }),
-    );
+    ).timeout(const Duration(seconds: 60));
 
     debugPrint('[Gemini] HTTP ${response.statusCode} — body(200)=${response.statusCode == 200 ? response.body.substring(0, response.body.length.clamp(0, 400)) : response.body}');
     if (response.statusCode != 200) {
@@ -699,8 +757,18 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     }
 
     final data = jsonDecode(response.body) as Map<String, dynamic>;
-    final text =
-        data['candidates'][0]['content']['parts'][0]['text'] as String;
+    final candidates = data['candidates'] as List<dynamic>?;
+    if (candidates == null || candidates.isEmpty) {
+      // Safety block or empty response from the model.
+      debugPrint('[Gemini] No candidates in response (safety block or empty)');
+      return [];
+    }
+    final content = (candidates[0] as Map<String, dynamic>)['content'] as Map<String, dynamic>?;
+    final textParts = content?['parts'] as List<dynamic>?;
+    final text = textParts?.isNotEmpty == true
+        ? (textParts![0] as Map<String, dynamic>)['text'] as String? ?? ''
+        : '';
+    if (text.isEmpty) return [];
     final match = RegExp(r'\[[\s\S]*\]').firstMatch(text);
     if (match == null) throw Exception('no_json_in_response');
 
@@ -1076,24 +1144,36 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       '- Return EVERY medicine found.';
 
   static const _geminiImagePrompt =
-      'This is a handwritten medicine order list from a pharmacy. '
-      'Please extract ALL medicine names and quantities from this handwritten image. '
-      'The handwriting may not be perfect. Look for:\n'
-      '- Medicine/drug names (may include brand names, generic names, tablet/capsule/gel suffixes)\n'
-      '- Quantities (numbers next to medicine names)\n'
-      '- Units (Box, B, Piece, P, Strip, Tab, etc.)\n'
-      'IMPORTANT: Return medicines in the exact top-to-bottom order they appear in the image. '
-      'Do NOT sort or reorder them.\n'
-      'Return ONLY a JSON array like: [{"name": "medicine name", "qty": 5, "unit": "Box"}]\n'
-      'Do not return anything else. Extract every medicine you can see even if handwriting is unclear.';
+      'You are reading a HANDWRITTEN medicine order list photographed at a pharmacy. '
+      'The photo may have faint ink, slight blur, glare, shadows, or an angled perspective — '
+      'this is normal. Your job is to extract EVERY medicine entry visible.\n\n'
+      'WHAT EACH LINE LOOKS LIKE:\n'
+      '- A medicine/brand name (e.g. "Augmentin 625", "Pan 40", "Dolo 650", "Metformin 500mg")\n'
+      '- Followed by a small quantity number (how many strips/boxes to order)\n'
+      '- Dosage forms: Tab, Cap, Syr, Inj, Drops, Gel, Cream\n'
+      '- Units: Box/B/box, Strip/S/strip, Pcs/P, Vial\n\n'
+      'IGNORE: page header, shop name, date, phone number, calendar text, ruled lines, '
+      'column headers (Name/Qty/Rate/MRP), totals.\n\n'
+      'STRICT RULES:\n'
+      '1. READ EVERY LINE that could be a medicine, even if messy/faint/smudged/unclear. '
+      'Make your best guess — DO NOT SKIP a line just because you are not 100% certain.\n'
+      '2. Partial reads are fine: write what you can see; mark unclear parts with "?".\n'
+      '3. If quantity not visible, use qty=1.\n'
+      '4. NEVER return an empty JSON array [] unless image is genuinely blank/selfie/landscape.\n'
+      '5. Return items in top-to-bottom order.\n\n'
+      'Return ONLY a valid JSON array:\n'
+      '[{"name": "medicine name as written", "qty": 5}]';
 
   static const _geminiImageFallbackPrompt =
-      'Look at this image carefully. It contains a list of medicines/drugs written by hand. '
-      'List every item you can read, even partially, in the same order they appear top to bottom. '
-      'For each item write the medicine name and the number next to it. '
-      'If no number is visible use 1. '
-      'Respond with ONLY this JSON — nothing else:\n'
-      '[{"name": "drug name", "qty": 1}]';
+      'This is a photo of a handwritten list of medicines from a pharmacy. '
+      'Some lines may be hard to read because of faint ink, blur, or angle.\n\n'
+      'For EVERY line that has a word that could be a medicine or drug name:\n'
+      '- Write down the word(s) as best you can read them (even if uncertain).\n'
+      '- Write the number next to it if there is one; otherwise use 1.\n\n'
+      'Do NOT leave out any line just because it is unclear — include it with your best guess.\n'
+      'Do NOT return [] (empty). If you can see any words at all in the list, include them.\n\n'
+      'Respond with ONLY this JSON:\n'
+      '[{"name": "what you can read", "qty": 1}]';
 
   static String _geminiTextPrompt(String content) =>
       'You are an expert Indian pharmacy procurement assistant.\n'
@@ -1251,8 +1331,15 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     if (msg.contains('not configured') || msg.contains('no_api_key')) {
       return 'AI image processing is not configured. Please upload a CSV or Excel file instead.';
     }
-    if (msg.contains('image unclear') || msg.contains('no medicines detected')) {
+    if (msg.contains('could not read medicines') || msg.contains('image unclear') ||
+        msg.contains('no medicines detected')) {
       return e.toString().replaceFirst('Exception: ', '');
+    }
+    if (msg.contains('api error') || msg.contains('quota')) {
+      return 'Something went wrong communicating with the AI service. Please try again in a moment.';
+    }
+    if (msg.contains('timeout') || msg.contains('socket') || msg.contains('network')) {
+      return 'Network error — check your connection and try again.';
     }
     // All other throw sites use clear messages — pass them through directly
     final clean = e.toString().replaceFirst('Exception: ', '');

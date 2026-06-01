@@ -844,12 +844,17 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
   // No binarization, no dilation, no deskew — natural smooth anti-aliased strokes.
   Uint8List? _processOneCrop(html.ImageElement img, int srcW, int srcH, Rect bbox) {
     try {
-      // Tighten bbox: vTrim excludes ruled underline; rTrim removes qty bleed.
-      // Values must stay in sync with _kCropVTrim/_kCropRTrim used for aspect ratio.
-      final tLeft   = bbox.left * srcW;
-      final tTop    = (bbox.top + bbox.height * _kCropVTrim) * srcH;
-      final tWidth  = bbox.width * (1.0 - _kCropRTrim) * srcW;
-      final tHeight = bbox.height * (1.0 - 2 * _kCropVTrim) * srcH;
+      // Compute crop region using shared constants (kept in sync with _lineItemCrop).
+      // Expand left/right so trailing/leading letters aren't clipped.
+      // Trim top slightly for neighbour-line safety; trim more from bottom for underline.
+      final bLeft  = (bbox.left  - bbox.width  * _kCropLPad).clamp(0.0, 1.0);
+      final bRight = (bbox.left  + bbox.width  + bbox.width  * _kCropRPad).clamp(0.0, 1.0);
+      final bTop   = (bbox.top   + bbox.height * _kCropVTop).clamp(0.0, 1.0);
+      final bBot   = (bbox.top   + bbox.height * (1.0 - _kCropVBot)).clamp(0.0, 1.0);
+      final tLeft   = bLeft * srcW;
+      final tTop    = bTop  * srcH;
+      final tWidth  = (bRight - bLeft) * srcW;
+      final tHeight = (bBot   - bTop)  * srcH;
       if (tWidth < 6 || tHeight < 4) return null;
 
       // Natural source resolution — no upscaling or fixed-height normalization.
@@ -1400,18 +1405,19 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       '3. If quantity not visible, use qty=1.\n'
       '4. NEVER return an empty JSON array [] unless image is genuinely blank/selfie/landscape.\n'
       '5. Return items in top-to-bottom order.\n\n'
-      'Return ONLY a valid JSON array. For each entry include a TIGHT bbox around ONLY '
+      'Return ONLY a valid JSON array. For each entry include a bbox that FULLY encloses '
       'the handwritten medicine/brand NAME for that line — nothing else:\n'
       '[{"name": "medicine name as written", "qty": 5, "bbox": {"x": 0.05, "y": 0.12, "w": 0.38, "h": 0.04}}]\n'
       'BBOX RULES (all values 0.0–1.0 fraction of image width/height):\n'
-      '  x = left edge of first letter of the name\n'
+      '  x = slightly LEFT of the first letter (add ~2 % of image width as left margin)\n'
       '  y = TOP of the tallest letter glyph in this name (NOT the ruled line above)\n'
-      '  w = width ending at the RIGHT edge of the LAST letter of the name — '
-      'STOP BEFORE any quantity digit, slash, dash, or number column\n'
-      '  h = distance from top of tallest glyph to BOTTOM of lowest glyph ONLY — '
+      '  w = width that FULLY encompasses the COMPLETE last word/character PLUS a small '
+      'right margin (~3 % of image width) — NEVER stop early; every letter of the name '
+      'including trailing words like "Tablet", "Cap.MR", "Sachet", "Inj" must be inside '
+      'x+w. Stop well before any quantity digit or number column.\n'
+      '  h = from top of tallest glyph to BOTTOM of lowest descender ONLY — '
       'STOP BEFORE any ruled line or underline below the text. '
-      'The ruled line is OUTSIDE the bbox. Make h as tight as possible '
-      'so only ink strokes are inside; a ruled underline must be fully below bbox.bottom.';
+      'The ruled underline is OUTSIDE the bbox; only ink strokes of this name are inside.';
 
   static const _geminiImageFallbackPrompt =
       'This is a photo of a handwritten list of medicines from a pharmacy. '
@@ -1421,9 +1427,10 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       '- Write the number next to it if there is one; otherwise use 1.\n\n'
       'Do NOT leave out any line just because it is unclear — include it with your best guess.\n'
       'Do NOT return [] (empty). If you can see any words at all in the list, include them.\n\n'
-      'Respond with ONLY this JSON. Include a TIGHT bbox around ONLY the name ink strokes '
-      '(not the quantity, not ruled lines — stop the bbox BEFORE any ruled underline):\n'
-      '[{"name": "what you can read", "qty": 1, "bbox": {"x": 0.05, "y": 0.12, "w": 0.38, "h": 0.04}}]';
+      'Respond with ONLY this JSON. The bbox must FULLY enclose the complete handwritten '
+      'name — every letter including the last word — with a small margin on left/right. '
+      'Stop the bbox BEFORE any ruled underline or quantity number:\n'
+      '[{"name": "what you can read", "qty": 1, "bbox": {"x": 0.04, "y": 0.12, "w": 0.42, "h": 0.04}}]';
 
   static String _geminiTextPrompt(String content) =>
       'You are an expert Indian pharmacy procurement assistant.\n'
@@ -2768,9 +2775,13 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
 /// Renders the handwriting crop for a LINE ITEM cell.
 /// Shows ONLY the crop image (transparent background, black ink) — no caption.
 /// Falls back to raw bbox clip or plain text if processedCrop is unavailable.
-// Trim constants must match _processOneCrop so aspect ratio is computed correctly.
-const _kCropVTrim = 0.18;
-const _kCropRTrim = 0.06;
+// Crop region constants — must match between _processOneCrop and _lineItemCrop.
+// Horizontal: expand slightly beyond Gemini bbox so trailing letters aren't clipped.
+// Vertical: trim top for neighbour-line safety, trim more from bottom for underline.
+const _kCropLPad  = 0.02;  // expand 2 % of bbox.width to the LEFT of first letter
+const _kCropRPad  = 0.04;  // expand 4 % of bbox.width past the RIGHT of last letter
+const _kCropVTop  = 0.06;  // trim 6 % of bbox.height from TOP (neighbour-line safety)
+const _kCropVBot  = 0.14;  // trim 14 % of bbox.height from BOTTOM (underline exclusion)
 
 Widget _lineItemCrop(_MatchRow row, Uint8List? imageBytes, Size? imageSize,
     {TextStyle? fallbackStyle}) {
@@ -2786,19 +2797,23 @@ Widget _lineItemCrop(_MatchRow row, Uint8List? imageBytes, Size? imageSize,
         final maxW =
             constraints.maxWidth.isFinite ? constraints.maxWidth : double.infinity;
 
-        // Derive natural aspect ratio from bbox (same trim as _processOneCrop).
+        // Derive natural aspect ratio from bbox using same formula as _processOneCrop.
         double displayW = maxW;
         double displayH = fixedH;
         final bbox = row.bbox;
         final imgSize = imageSize;
         if (bbox != null && imgSize != null &&
             bbox.width > 0 && bbox.height > 0) {
-          final cropW = bbox.width * (1.0 - _kCropRTrim) * imgSize.width;
-          final cropH = bbox.height * (1.0 - 2 * _kCropVTrim) * imgSize.height;
+          final bLeft  = (bbox.left  - bbox.width  * _kCropLPad).clamp(0.0, 1.0);
+          final bRight = (bbox.left  + bbox.width  + bbox.width  * _kCropRPad).clamp(0.0, 1.0);
+          final bTop   = (bbox.top   + bbox.height * _kCropVTop).clamp(0.0, 1.0);
+          final bBot   = (bbox.top   + bbox.height * (1.0 - _kCropVBot)).clamp(0.0, 1.0);
+          final cropW  = (bRight - bLeft) * imgSize.width;
+          final cropH  = (bBot   - bTop)  * imgSize.height;
           if (cropW > 0 && cropH > 0) {
             final aspect = cropW / cropH;
             displayW = fixedH * aspect;
-            // Cap at available column width; scale down proportionally if needed.
+            // If natural width exceeds available column, scale the whole image down.
             if (displayW > maxW) {
               displayW = maxW;
               displayH = maxW / aspect;
@@ -2806,13 +2821,18 @@ Widget _lineItemCrop(_MatchRow row, Uint8List? imageBytes, Size? imageSize,
           }
         }
 
-        return SizedBox(
-          width: displayW,
-          height: displayH,
-          child: Image.memory(
-            row.processedCrop!,
-            fit: BoxFit.fill, // box is pre-sized to correct aspect ratio
-            gaplessPlayback: true,
+        // Align releases the tight width constraint from Expanded so SizedBox can
+        // be narrower than the full column — prevents BoxFit.fill from stretching.
+        return Align(
+          alignment: Alignment.centerLeft,
+          child: SizedBox(
+            width: displayW,
+            height: displayH,
+            child: Image.memory(
+              row.processedCrop!,
+              fit: BoxFit.fill, // box pre-sized to exact aspect ratio
+              gaplessPlayback: true,
+            ),
           ),
         );
       }),

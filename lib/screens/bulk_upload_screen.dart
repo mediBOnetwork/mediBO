@@ -2998,23 +2998,7 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
                       _StatusPillBadge(label: '● $manuallyMatched Manually Matched', bg: const Color(0xFFE0E7FF), fg: const Color(0xFF3730A3)),
                   ],
                 ),
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  height: 48,
-                  child: FilledButton(
-                    onPressed: canAdd ? () => widget.onAddToCart() : null,
-                    style: FilledButton.styleFrom(
-                      backgroundColor: const Color(0xFF16A34A),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                      elevation: 0,
-                    ),
-                    child: widget.addingToCart
-                        ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                        : const Text('Add matched to cart', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
-                  ),
-                ),
-                const SizedBox(height: 12),
+                const SizedBox(height: 10),
               ],
             ),
           ),
@@ -3070,6 +3054,22 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
                             : null,
                       ),
                     ),
+                  const SizedBox(height: 4),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 48,
+                    child: FilledButton(
+                      onPressed: canAdd ? () => widget.onAddToCart() : null,
+                      style: FilledButton.styleFrom(
+                        backgroundColor: const Color(0xFF16A34A),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        elevation: 0,
+                      ),
+                      child: widget.addingToCart
+                          ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                          : const Text('Add matched to cart', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+                    ),
+                  ),
                 ],
               ),
             ),

@@ -11,7 +11,8 @@ class ProfileScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final auth = UserState.of(context);
     final profile = auth.profile;
-    final email = Supabase.instance.client.auth.currentUser?.email ?? '';
+    final authUser = Supabase.instance.client.auth.currentUser;
+    final authEmail = authUser?.email ?? '';
     final isRegistered = auth.isRegistered;
 
     return Scaffold(
@@ -72,10 +73,10 @@ class ProfileScreen extends StatelessWidget {
                           color: Color(0xFF111827),
                         ),
                       ),
-                      if (profile?.ownerName.isNotEmpty == true) ...[
+                      if ((profile?.customerName ?? '').isNotEmpty) ...[
                         const SizedBox(height: 4),
                         Text(
-                          profile!.ownerName,
+                          profile!.customerName,
                           textAlign: TextAlign.center,
                           style: const TextStyle(
                             fontSize: 14,
@@ -84,7 +85,6 @@ class ProfileScreen extends StatelessWidget {
                         ),
                       ],
                       const SizedBox(height: 14),
-                      // ── Account status badge ──────────────────────────
                       _AccountStatusBadge(
                         isRegistered: isRegistered,
                         isApproved: profile?.isApproved ?? false,
@@ -94,7 +94,7 @@ class ProfileScreen extends StatelessWidget {
                   ),
                 ),
 
-                // ── Unregistered: complete registration CTA ──────────────
+                // Unregistered: complete registration CTA
                 if (!isRegistered) ...[
                   Padding(
                     padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
@@ -130,14 +130,14 @@ class ProfileScreen extends StatelessWidget {
                             height: 44,
                             child: FilledButton(
                               onPressed: () {
-                                final user = Supabase
-                                    .instance.client.auth.currentUser;
+                                final user = authUser;
                                 if (user == null) return;
                                 Navigator.of(context).push(
                                   MaterialPageRoute(
                                     builder: (_) => BusinessDetailsScreen(
                                       userId: user.id,
                                       phone: user.phone ?? '',
+                                      email: user.email ?? '',
                                     ),
                                   ),
                                 );
@@ -161,7 +161,7 @@ class ProfileScreen extends StatelessWidget {
                   ),
                 ],
 
-                // ── Pending: approval notice ──────────────────────────────
+                // Pending: approval notice
                 if (isRegistered && !(profile?.isApproved ?? false)) ...[
                   Container(
                     margin: const EdgeInsets.fromLTRB(16, 16, 16, 0),
@@ -191,7 +191,7 @@ class ProfileScreen extends StatelessWidget {
                   ),
                 ],
 
-                // ── Registered: "contact support to update" notice ─────────
+                // Registered: profile fields
                 if (isRegistered) ...[
                   Container(
                     margin: const EdgeInsets.fromLTRB(16, 16, 16, 4),
@@ -220,64 +220,136 @@ class ProfileScreen extends StatelessWidget {
                     ),
                   ),
 
-                  // Profile fields card
-                  Container(
-                    margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: const Color(0xFFE5E7EB)),
-                    ),
-                    child: Column(
-                      children: [
-                        _InfoRow(
-                          label: 'Owner Name',
-                          value: profile?.ownerName,
-                          icon: Icons.person_outline,
-                        ),
-                        _InfoRow(
-                          label: 'Pharmacy / Clinic Name',
-                          value: profile?.pharmacyName,
-                          icon: Icons.storefront_outlined,
-                        ),
-                        _InfoRow(
-                          label: 'Phone Number',
-                          value: profile?.phone,
-                          icon: Icons.phone_outlined,
-                        ),
-                        _InfoRow(
-                          label: 'Email',
-                          value: email.isNotEmpty ? email : null,
-                          icon: Icons.email_outlined,
-                        ),
-                        _InfoRow(
-                          label: 'GSTIN',
-                          value: profile?.gstin,
-                          icon: Icons.receipt_long_outlined,
-                        ),
-                        _InfoRow(
-                          label: 'Drug License Number',
-                          value: profile?.drugLicense,
-                          icon: Icons.verified_outlined,
-                        ),
-                        _InfoRow(
-                          label: 'Full Address',
-                          value: profile?.address,
-                          icon: Icons.location_on_outlined,
-                        ),
-                        _InfoRow(
-                          label: 'City',
-                          value: profile?.city,
-                          icon: Icons.location_city_outlined,
-                        ),
-                        _InfoRow(
-                          label: 'Pincode',
-                          value: profile?.pincode,
-                          icon: Icons.pin_drop_outlined,
-                          isLast: true,
-                        ),
-                      ],
-                    ),
+                  // Business details
+                  _SectionCard(
+                    icon: Icons.storefront_outlined,
+                    title: 'Business Details',
+                    children: [
+                      _InfoRow(
+                        label: 'Customer / Contact Name',
+                        value: profile?.customerName,
+                        icon: Icons.person_outline,
+                      ),
+                      _InfoRow(
+                        label: 'Pharmacy / Clinic Name',
+                        value: profile?.pharmacyName,
+                        icon: Icons.storefront_outlined,
+                      ),
+                      _InfoRow(
+                        label: 'Store Type',
+                        value: profile?.storeType,
+                        icon: Icons.category_outlined,
+                      ),
+                      _InfoRow(
+                        label: 'Delivery Range',
+                        value: profile?.rangeZone,
+                        icon: Icons.local_shipping_outlined,
+                        isLast: true,
+                      ),
+                    ],
+                  ),
+
+                  // Address
+                  _SectionCard(
+                    icon: Icons.location_on_outlined,
+                    title: 'Address',
+                    children: [
+                      _InfoRow(
+                        label: 'Local Address',
+                        value: profile?.addressLocal,
+                        icon: Icons.home_outlined,
+                      ),
+                      _InfoRow(
+                        label: 'City',
+                        value: profile?.city,
+                        icon: Icons.location_city_outlined,
+                      ),
+                      _InfoRow(
+                        label: 'State',
+                        value: profile?.state,
+                        icon: Icons.map_outlined,
+                      ),
+                      _InfoRow(
+                        label: 'Pincode',
+                        value: profile?.pincode,
+                        icon: Icons.pin_drop_outlined,
+                      ),
+                      _InfoRow(
+                        label: 'Store Location Link',
+                        value: profile?.storeLocationLink,
+                        icon: Icons.link_outlined,
+                        isLast: true,
+                      ),
+                    ],
+                  ),
+
+                  // Contact
+                  _SectionCard(
+                    icon: Icons.phone_outlined,
+                    title: 'Contact',
+                    children: [
+                      _InfoRow(
+                        label: 'WhatsApp Number',
+                        value: profile?.whatsappNo,
+                        icon: Icons.phone_outlined,
+                      ),
+                      _InfoRow(
+                        label: 'Other Contact',
+                        value: profile?.otherContactNo,
+                        icon: Icons.phone_callback_outlined,
+                      ),
+                      _InfoRow(
+                        label: 'Email',
+                        value: (profile?.email.isNotEmpty == true)
+                            ? profile!.email
+                            : (authEmail.isNotEmpty ? authEmail : null),
+                        icon: Icons.email_outlined,
+                        isLast: true,
+                      ),
+                    ],
+                  ),
+
+                  // Drug Licenses
+                  _SectionCard(
+                    icon: Icons.verified_outlined,
+                    title: 'Drug Licenses',
+                    children: [
+                      _InfoRow(
+                        label: 'DL 20B',
+                        value: profile?.dl20b,
+                        icon: Icons.receipt_long_outlined,
+                      ),
+                      _InfoRow(
+                        label: 'DL 21B',
+                        value: profile?.dl21b,
+                        icon: Icons.receipt_outlined,
+                      ),
+                      _InfoRow(
+                        label: 'GST Number',
+                        value: profile?.gstNo,
+                        icon: Icons.account_balance_outlined,
+                        isLast: true,
+                      ),
+                    ],
+                  ),
+
+                  // Account Setup
+                  _SectionCard(
+                    icon: Icons.manage_accounts_outlined,
+                    title: 'Account Setup',
+                    children: [
+                      _InfoRow(
+                        label: 'Payment Term',
+                        value: profile?.paymentTerm,
+                        icon: Icons.payments_outlined,
+                      ),
+                      _InfoRow(
+                        label: 'Customer Code',
+                        value: profile?.customerCode,
+                        icon: Icons.tag_outlined,
+                        isLast: true,
+                      ),
+                    ],
                   ),
                 ],
 
@@ -379,6 +451,57 @@ class _AccountStatusBadge extends StatelessWidget {
   }
 }
 
+// ── Section card ──────────────────────────────────────────────────────────────
+
+class _SectionCard extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final List<Widget> children;
+
+  const _SectionCard({
+    required this.icon,
+    required this.title,
+    required this.children,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+            child: Row(
+              children: [
+                Icon(icon, size: 14, color: const Color(0xFF1B5E20)),
+                const SizedBox(width: 6),
+                Text(
+                  title,
+                  style: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF1B5E20),
+                    letterSpacing: 0.4,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 4),
+          ...children,
+        ],
+      ),
+    );
+  }
+}
+
 // ── Info row ──────────────────────────────────────────────────────────────────
 
 class _InfoRow extends StatelessWidget {
@@ -401,7 +524,7 @@ class _InfoRow extends StatelessWidget {
     return Column(
       children: [
         Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [

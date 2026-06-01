@@ -1131,7 +1131,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       final products = rawMatches.map((m) => Product.fromMap(m)).toList();
       final form = _detectDosageForm(term);
       double topScore = _stage2Score(term, products[0].name);
-      if (form != null && _formMatches(products[0].name, form)) topScore += 0.08;
+      if (form != null && _formMatches(products[0].name, form)) topScore += 0.02;
       return _MatchRow(
         lineItem: name,
         qty: qty,
@@ -1200,15 +1200,16 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     });
     final shortlist = list.take(5).toList();
 
-    // ── 5. Stage 2 — rank shortlist by full-name similarity + form bonus ──────
+    // ── 5. Stage 2 — rank shortlist by full-name similarity + form tiebreaker ──
+    // Form bonus is capped at 0.02 so name similarity always dominates.
     shortlist.sort((a, b) {
       final na = (a['product_name'] as String?) ?? '';
       final nb = (b['product_name'] as String?) ?? '';
       double sa = _stage2Score(name, na);
       double sb = _stage2Score(name, nb);
       if (form != null) {
-        if (_formMatches(na, form)) sa += 0.08;
-        if (_formMatches(nb, form)) sb += 0.08;
+        if (_formMatches(na, form)) sa += 0.02;
+        if (_formMatches(nb, form)) sb += 0.02;
       }
       return sb.compareTo(sa);
     });
@@ -1218,7 +1219,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       final pName = (shortlist[i]['product_name'] as String?) ?? '?';
       final s1 = _positionalChunkScore(name, pName);
       double s2 = _stage2Score(name, pName);
-      if (form != null && _formMatches(pName, form)) s2 += 0.08;
+      if (form != null && _formMatches(pName, form)) s2 += 0.02;
       debugPrint('[FuzzyMatch]  #${i + 1} s1=${s1.toStringAsFixed(2)} s2=${s2.toStringAsFixed(3)}  "$pName"');
     }
 
@@ -3205,19 +3206,38 @@ int _editDistance(String s, String t) {
 }
 
 /// Stage 2 — Full-name accuracy score.
-/// Average of (1 − normalised edit-distance ratio) and token-set Jaccard similarity.
+/// Weighted combination: edit-distance ratio (50%), token-set Jaccard (30%),
+/// and a first-word prefix bonus (20%) so names that start like the query
+/// rank higher even when token overlap is tied (e.g. Epitor > Risdan for
+/// query "Eptoin LS"). Normalize first so hyphens/punctuation don't skew.
 double _stage2Score(String query, String candidate) {
   final q = _normStr(query);
   final c = _normStr(candidate);
   if (q.isEmpty || c.isEmpty) return 0.0;
+
+  // 1. Normalised edit-distance ratio.
   final maxLen = q.length > c.length ? q.length : c.length;
   final editRatio = 1.0 - _editDistance(q, c) / maxLen;
-  final qTokens = q.split(' ').where((t) => t.isNotEmpty).toSet();
-  final cTokens = c.split(' ').where((t) => t.isNotEmpty).toSet();
-  final intersection = qTokens.intersection(cTokens).length;
-  final union = qTokens.union(cTokens).length;
+
+  // 2. Token-set Jaccard overlap.
+  final qWords = q.split(' ').where((t) => t.isNotEmpty).toList();
+  final cWords = c.split(' ').where((t) => t.isNotEmpty).toList();
+  final qSet = qWords.toSet();
+  final cSet = cWords.toSet();
+  final intersection = qSet.intersection(cSet).length;
+  final union = qSet.union(cSet).length;
   final tokenScore = union == 0 ? 0.0 : intersection / union;
-  return (editRatio + tokenScore) / 2.0;
+
+  // 3. Prefix bonus: fraction of the query's first word matched at the start
+  //    of the candidate's first word. "eptoin"↔"epitor" → "ep"/6 = 0.33;
+  //    "eptoin"↔"risdan" → 0. Keeps prefix-alike names ahead of unrelated ones.
+  final qFirst = qWords.isEmpty ? '' : qWords[0];
+  final cFirst = cWords.isEmpty ? '' : cWords[0];
+  int pfx = 0;
+  while (pfx < qFirst.length && pfx < cFirst.length && qFirst[pfx] == cFirst[pfx]) pfx++;
+  final prefixBonus = qFirst.isEmpty ? 0.0 : pfx / qFirst.length;
+
+  return 0.50 * editRatio + 0.30 * tokenScore + 0.20 * prefixBonus;
 }
 
 /// Detect dosage form keyword in a query string.

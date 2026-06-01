@@ -919,61 +919,107 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         data[i] = 0; data[i + 1] = 0; data[i + 2] = 0; data[i + 3] = alpha;
       }
 
-      // ── Row-band cleanup: remove residue from neighbouring lines ─────────────
-      // After alpha is set, compute the per-row sum of alpha values.  A row that
-      // belongs to a neighbouring line appears as isolated ink far above/below
-      // the main writing band, separated by a low-density gap.  We find the
-      // longest contiguous band of non-gap rows (≥ 2% of peak row-sum) and zero
-      // out everything outside it.  A 3-row box-filter smooths over single-pixel
-      // gaps inside the name (thin stroke parts, letter crossings) so we never
-      // accidentally split ascenders/descenders from the main body.
-      final rowSum = List<double>.filled(outH, 0.0);
-      for (int y = 0; y < outH; y++) {
-        for (int x = 0; x < outW; x++) {
-          rowSum[y] += data[(y * outW + x) * 4 + 3];
+      // ── Connected-component residue removal ─────────────────────────────────
+      // BFS flood-fill labels every ink blob (4-connected, alpha > inkThresh).
+      // Then we find the dominant writing component (largest non-rule blob) and
+      // erase any other component whose vertical centroid is > 35% of the crop
+      // height away from it, plus any component that looks like a horizontal rule
+      // (very wide, very flat).  This removes neighbour-line tails and dash lines
+      // without touching the main writing — even if individual letters are
+      // disconnected they still cluster near the same y-centre.
+      const inkThresh = 15;
+      final labels = List<int>.filled(outW * outH, -1);
+      final cArea = <int>[];
+      final cSumY = <double>[];
+      final cMinY = <int>[];
+      final cMaxY = <int>[];
+      final cMinX = <int>[];
+      final cMaxX = <int>[];
+      final bfsQ  = <int>[];
+      int nextLabel = 0;
+
+      for (int seed = 0; seed < outW * outH; seed++) {
+        if (labels[seed] != -1) continue;
+        if (data[seed * 4 + 3] <= inkThresh) { labels[seed] = -2; continue; }
+        final lbl = nextLabel++;
+        cArea.add(0); cSumY.add(0.0);
+        cMinY.add(outH); cMaxY.add(0);
+        cMinX.add(outW); cMaxX.add(0);
+        bfsQ.clear();
+        labels[seed] = lbl;
+        bfsQ.add(seed);
+        int qi = 0;
+        while (qi < bfsQ.length) {
+          final idx = bfsQ[qi++];
+          final px = idx % outW;
+          final py = idx ~/ outW;
+          cArea[lbl]++;
+          cSumY[lbl] += py;
+          if (py < cMinY[lbl]) cMinY[lbl] = py;
+          if (py > cMaxY[lbl]) cMaxY[lbl] = py;
+          if (px < cMinX[lbl]) cMinX[lbl] = px;
+          if (px > cMaxX[lbl]) cMaxX[lbl] = px;
+          // 4-connected neighbours — inline to avoid closure overhead.
+          if (px > 0) {
+            final ni = idx - 1;
+            if (labels[ni] == -1) {
+              if (data[ni * 4 + 3] <= inkThresh) labels[ni] = -2;
+              else { labels[ni] = lbl; bfsQ.add(ni); }
+            }
+          }
+          if (px < outW - 1) {
+            final ni = idx + 1;
+            if (labels[ni] == -1) {
+              if (data[ni * 4 + 3] <= inkThresh) labels[ni] = -2;
+              else { labels[ni] = lbl; bfsQ.add(ni); }
+            }
+          }
+          if (py > 0) {
+            final ni = idx - outW;
+            if (labels[ni] == -1) {
+              if (data[ni * 4 + 3] <= inkThresh) labels[ni] = -2;
+              else { labels[ni] = lbl; bfsQ.add(ni); }
+            }
+          }
+          if (py < outH - 1) {
+            final ni = idx + outW;
+            if (labels[ni] == -1) {
+              if (data[ni * 4 + 3] <= inkThresh) labels[ni] = -2;
+              else { labels[ni] = lbl; bfsQ.add(ni); }
+            }
+          }
         }
       }
 
-      // 3-row box-filter to bridge single sparse rows (e.g. thin crossbar of 't').
-      final smoothed = List<double>.filled(outH, 0.0);
-      for (int y = 0; y < outH; y++) {
-        final a = y > 0       ? rowSum[y - 1] : rowSum[y];
-        final b = rowSum[y];
-        final c = y < outH - 1 ? rowSum[y + 1] : rowSum[y];
-        smoothed[y] = (a + b + c) / 3.0;
-      }
-
-      double maxSmooth = 0;
-      for (final s in smoothed) if (s > maxSmooth) maxSmooth = s;
-
-      if (maxSmooth > 0) {
-        final gapThresh = maxSmooth * 0.02; // 2% of peak = gap between bands
-
-        // Find the LONGEST contiguous run of above-threshold rows (main writing band).
-        int bestStart = 0, bestLen = 0, curStart = 0, curLen = 0;
-        for (int y = 0; y < outH; y++) {
-          if (smoothed[y] >= gapThresh) {
-            if (curLen == 0) curStart = y;
-            curLen++;
-            if (curLen > bestLen) { bestLen = curLen; bestStart = curStart; }
-          } else {
-            curLen = 0;
+      if (nextLabel > 0) {
+        // Anchor = largest component that isn't itself a horizontal rule.
+        int anchorLbl = -1, anchorArea = 0;
+        for (int l = 0; l < nextLabel; l++) {
+          if (cArea[l] < 4) continue;
+          final compW = cMaxX[l] - cMinX[l] + 1;
+          final compH = cMaxY[l] - cMinY[l] + 1;
+          final isRule = compW > outW * 0.45 && compH <= 5;
+          if (!isRule && cArea[l] > anchorArea) {
+            anchorArea = cArea[l];
+            anchorLbl = l;
           }
         }
-
-        // Zero alpha for rows outside the dominant band.
-        if (bestLen > 0) {
-          final bandTop = bestStart;
-          final bandBot = bestStart + bestLen - 1;
-          for (int y = 0; y < bandTop; y++) {
-            for (int x = 0; x < outW; x++) {
-              data[(y * outW + x) * 4 + 3] = 0;
-            }
+        if (anchorLbl >= 0) {
+          final anchorCY = cSumY[anchorLbl] / cArea[anchorLbl];
+          final vertTol = outH * 0.35;
+          final excl = List<bool>.filled(nextLabel, false);
+          for (int l = 0; l < nextLabel; l++) {
+            if (l == anchorLbl) continue;
+            if (cArea[l] < 4) { excl[l] = true; continue; }
+            final ccy  = cSumY[l] / cArea[l];
+            final compW = cMaxX[l] - cMinX[l] + 1;
+            final compH = cMaxY[l] - cMinY[l] + 1;
+            excl[l] = (compW > outW * 0.45 && compH <= 5) ||
+                (ccy - anchorCY).abs() > vertTol;
           }
-          for (int y = bandBot + 1; y < outH; y++) {
-            for (int x = 0; x < outW; x++) {
-              data[(y * outW + x) * 4 + 3] = 0;
-            }
+          for (int idx = 0; idx < outW * outH; idx++) {
+            final l = labels[idx];
+            if (l >= 0 && excl[l]) data[idx * 4 + 3] = 0;
           }
         }
       }

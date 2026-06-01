@@ -36,8 +36,8 @@ class _MatchRow {
   final String _displaySku;
   final String _displayPrice;
   final Rect? bbox;
-  // Pre-processed crop: binarized, dilated, deskewed PNG bytes. Set after canvas
-  // processing in _pickAndProcess; never serialized (derived, not source data).
+  // Handwriting crop PNG (grayscale→alpha, black ink, transparent bg).
+  // Set after canvas processing in _pickAndProcess; never serialized.
   Uint8List? processedCrop;
 
   _MatchRow({
@@ -1779,7 +1779,6 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
                     onPickFile: _pickAndProcess,
                     onAddToCart: _addMatchedToCart,
                     onHideToggle: _onRowHideToggle,
-                    uploadedImageBytes: _uploadedImageBytes,
                     uploadedImageSize: _uploadedImageSize,
                   ),
                   const SizedBox(height: 48),
@@ -1843,7 +1842,6 @@ class _MainLayout extends StatelessWidget {
   final VoidCallback onPickFile;
   final Future<void> Function() onAddToCart;
   final void Function(int rowIndex) onHideToggle;
-  final Uint8List? uploadedImageBytes;
   final Size? uploadedImageSize;
 
   const _MainLayout({
@@ -1858,7 +1856,6 @@ class _MainLayout extends StatelessWidget {
     required this.onPickFile,
     required this.onAddToCart,
     required this.onHideToggle,
-    this.uploadedImageBytes,
     this.uploadedImageSize,
   });
 
@@ -1900,7 +1897,6 @@ class _MainLayout extends StatelessWidget {
               addingToCart: addingToCart,
               onAddToCart: onAddToCart,
               onHideToggle: onHideToggle,
-              uploadedImageBytes: uploadedImageBytes,
               uploadedImageSize: uploadedImageSize,
             ),
           ],
@@ -1926,7 +1922,6 @@ class _MainLayout extends StatelessWidget {
             addingToCart: addingToCart,
             onAddToCart: onAddToCart,
             onHideToggle: onHideToggle,
-            uploadedImageBytes: uploadedImageBytes,
             uploadedImageSize: uploadedImageSize,
           ),
         ],
@@ -2444,7 +2439,6 @@ class _SmartMatchSection extends StatefulWidget {
   final bool addingToCart;
   final Future<void> Function() onAddToCart;
   final void Function(int rowIndex) onHideToggle;
-  final Uint8List? uploadedImageBytes;
   final Size? uploadedImageSize;
 
   const _SmartMatchSection({
@@ -2458,7 +2452,6 @@ class _SmartMatchSection extends StatefulWidget {
     required this.addingToCart,
     required this.onAddToCart,
     required this.onHideToggle,
-    this.uploadedImageBytes,
     this.uploadedImageSize,
   });
 
@@ -2600,7 +2593,6 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
                         onToggle: () => _toggleRow(i),
                         onRowChanged: _onRowChanged,
                         onHideToggle: () => _onHideToggle(i),
-                        uploadedImageBytes: widget.uploadedImageBytes,
                         uploadedImageSize: widget.uploadedImageSize,
                       ),
                     ),
@@ -2762,7 +2754,6 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
                 onToggle: () => _toggleRow(i),
                 onRowChanged: _onRowChanged,
                 onHideToggle: () => _onHideToggle(i),
-                uploadedImageBytes: widget.uploadedImageBytes,
                 uploadedImageSize: widget.uploadedImageSize,
               ),
           ],
@@ -2772,32 +2763,31 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
   }
 }
 
-/// Renders the handwriting crop for a LINE ITEM cell.
-/// Shows ONLY the crop image (transparent background, black ink) — no caption.
-/// Falls back to raw bbox clip or plain text if processedCrop is unavailable.
-// Crop region constants — must match between _processOneCrop and _lineItemCrop.
-// Horizontal: expand slightly beyond Gemini bbox so trailing letters aren't clipped.
-// Vertical: trim top for neighbour-line safety, trim more from bottom for underline.
-const _kCropLPad  = 0.02;  // expand 2 % of bbox.width to the LEFT of first letter
-const _kCropRPad  = 0.04;  // expand 4 % of bbox.width past the RIGHT of last letter
+// Crop region constants — shared between _processOneCrop (canvas crop) and
+// _lineItemCrop (aspect-ratio computation). Must stay in sync.
+// Horizontal: expand beyond Gemini bbox so trailing/leading letters aren't clipped.
+// Vertical: trim top for neighbour-line safety; trim more from bottom for underline.
+const _kCropLPad  = 0.02;  // expand 2 % of bbox.width LEFT of first letter
+const _kCropRPad  = 0.04;  // expand 4 % of bbox.width RIGHT past last letter
 const _kCropVTop  = 0.06;  // trim 6 % of bbox.height from TOP (neighbour-line safety)
 const _kCropVBot  = 0.14;  // trim 14 % of bbox.height from BOTTOM (underline exclusion)
 
-Widget _lineItemCrop(_MatchRow row, Uint8List? imageBytes, Size? imageSize,
-    {TextStyle? fallbackStyle}) {
+/// Standard LINE ITEM renderer: shows the handwriting crop (constant height,
+/// proportional width, smooth black strokes, transparent background, no caption).
+/// Falls back to the digital parsed name only when no crop is available.
+Widget _lineItemCrop(_MatchRow row, Size? imageSize, {TextStyle? fallbackStyle}) {
   if (row.processedCrop != null) {
     return Tooltip(
       message: row.lineItem,
       waitDuration: const Duration(milliseconds: 400),
       child: LayoutBuilder(builder: (ctx, constraints) {
-        // maxHeight comes from the SizedBox(height:22/24) caller.
-        // maxWidth comes from the Expanded parent.
+        // maxHeight from the SizedBox(height:22/24) caller; maxWidth from Expanded.
         final fixedH =
             constraints.maxHeight.isFinite ? constraints.maxHeight : 22.0;
         final maxW =
             constraints.maxWidth.isFinite ? constraints.maxWidth : double.infinity;
 
-        // Derive natural aspect ratio from bbox using same formula as _processOneCrop.
+        // Aspect ratio from bbox using the same formula as _processOneCrop.
         double displayW = maxW;
         double displayH = fixedH;
         final bbox = row.bbox;
@@ -2813,7 +2803,6 @@ Widget _lineItemCrop(_MatchRow row, Uint8List? imageBytes, Size? imageSize,
           if (cropW > 0 && cropH > 0) {
             final aspect = cropW / cropH;
             displayW = fixedH * aspect;
-            // If natural width exceeds available column, scale the whole image down.
             if (displayW > maxW) {
               displayW = maxW;
               displayH = maxW / aspect;
@@ -2821,8 +2810,8 @@ Widget _lineItemCrop(_MatchRow row, Uint8List? imageBytes, Size? imageSize,
           }
         }
 
-        // Align releases the tight width constraint from Expanded so SizedBox can
-        // be narrower than the full column — prevents BoxFit.fill from stretching.
+        // Align releases the tight width constraint from Expanded so the SizedBox
+        // can be narrower than the full column (prevents BoxFit.fill distortion).
         return Align(
           alignment: Alignment.centerLeft,
           child: SizedBox(
@@ -2830,7 +2819,7 @@ Widget _lineItemCrop(_MatchRow row, Uint8List? imageBytes, Size? imageSize,
             height: displayH,
             child: Image.memory(
               row.processedCrop!,
-              fit: BoxFit.fill, // box pre-sized to exact aspect ratio
+              fit: BoxFit.fill, // box is pre-sized to the correct aspect ratio
               gaplessPlayback: true,
             ),
           ),
@@ -2839,65 +2828,14 @@ Widget _lineItemCrop(_MatchRow row, Uint8List? imageBytes, Size? imageSize,
     );
   }
 
-  final bbox = row.bbox;
-  final bytes = imageBytes;
-  final imgSize = imageSize;
-  if (bbox == null || bytes == null || imgSize == null ||
-      bbox.width <= 0 || bbox.height <= 0) {
-    debugPrint('[CropFallback] "${row.lineItem}": using text — '
-        'processedCrop=null '
-        'bbox=${bbox != null ? "ok" : "NULL"} '
-        'bytes=${bytes != null ? "ok" : "NULL"} '
-        'imgSize=${imgSize != null ? "ok" : "NULL"}');
-    return Text(row.lineItem,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: fallbackStyle ??
-            const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)));
-  }
-
-  return Tooltip(
-    message: row.lineItem,
-    waitDuration: const Duration(milliseconds: 400),
-    child: LayoutBuilder(builder: (context, constraints) {
-      final availW = constraints.maxWidth.clamp(20.0, double.infinity);
-      final availH =
-          constraints.maxHeight.isFinite ? constraints.maxHeight : 22.0;
-      final cropX = bbox.left * imgSize.width;
-      final cropY = bbox.top * imgSize.height;
-      final cropW = bbox.width * imgSize.width;
-      final cropH = bbox.height * imgSize.height;
-      if (cropW <= 0 || cropH <= 0) {
-        return Text(row.lineItem,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: fallbackStyle ??
-                const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)));
-      }
-      final scaleX = availW / cropW;
-      final scaleY = availH / cropH;
-      final scale = scaleX < scaleY ? scaleX : scaleY;
-      return ClipRect(
-        child: SizedBox(
-          width: availW,
-          height: availH,
-          child: Stack(
-            clipBehavior: Clip.hardEdge,
-            children: [
-              Positioned(
-                left: -cropX * scale,
-                top: -cropY * scale,
-                width: imgSize.width * scale,
-                height: imgSize.height * scale,
-                child:
-                    Image.memory(bytes, fit: BoxFit.fill, gaplessPlayback: true),
-              ),
-            ],
-          ),
-        ),
-      );
-    }),
-  );
+  // Fallback: show digital parsed name so no row is ever blank.
+  debugPrint('[CropFallback] "${row.lineItem}": no processedCrop '
+      '(bbox=${row.bbox != null ? "ok" : "NULL"})');
+  return Text(row.lineItem,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: fallbackStyle ??
+          const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)));
 }
 
 const _kTh = TextStyle(
@@ -2915,7 +2853,6 @@ class _ExpandableMatchRow extends StatefulWidget {
   final VoidCallback onToggle;
   final VoidCallback onRowChanged;
   final VoidCallback onHideToggle;
-  final Uint8List? uploadedImageBytes;
   final Size? uploadedImageSize;
 
   const _ExpandableMatchRow({
@@ -2927,7 +2864,6 @@ class _ExpandableMatchRow extends StatefulWidget {
     required this.onToggle,
     required this.onRowChanged,
     required this.onHideToggle,
-    this.uploadedImageBytes,
     this.uploadedImageSize,
   });
 
@@ -3064,8 +3000,7 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
                   flex: 18,
                   child: SizedBox(
                     height: 22,
-                    child: _lineItemCrop(
-                        row, widget.uploadedImageBytes, widget.uploadedImageSize),
+                    child: _lineItemCrop(row, widget.uploadedImageSize),
                   ),
                 ),
                 Expanded(
@@ -3259,7 +3194,6 @@ class _MobileExpandableRow extends StatefulWidget {
   final VoidCallback onToggle;
   final VoidCallback onRowChanged;
   final VoidCallback onHideToggle;
-  final Uint8List? uploadedImageBytes;
   final Size? uploadedImageSize;
 
   const _MobileExpandableRow({
@@ -3270,7 +3204,6 @@ class _MobileExpandableRow extends StatefulWidget {
     required this.onToggle,
     required this.onRowChanged,
     required this.onHideToggle,
-    this.uploadedImageBytes,
     this.uploadedImageSize,
   });
 
@@ -3481,7 +3414,6 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                                   height: 24,
                                   child: _lineItemCrop(
                                       row,
-                                      widget.uploadedImageBytes,
                                       widget.uploadedImageSize,
                                       fallbackStyle: const TextStyle(
                                           fontSize: 13,

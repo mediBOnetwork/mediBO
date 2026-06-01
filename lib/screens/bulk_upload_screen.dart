@@ -738,7 +738,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
     final response = await http.post(
       Uri.parse(
-          'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$geminiApiKey'),
+          'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=$geminiApiKey'),
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({
         'contents': [
@@ -765,8 +765,12 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     }
     final content = (candidates[0] as Map<String, dynamic>)['content'] as Map<String, dynamic>?;
     final textParts = content?['parts'] as List<dynamic>?;
-    final text = textParts?.isNotEmpty == true
-        ? (textParts![0] as Map<String, dynamic>)['text'] as String? ?? ''
+    // Filter out thinking parts (thought=true) — keep only the actual output.
+    final outputParts = textParts
+        ?.where((p) => (p as Map<String, dynamic>)['thought'] != true)
+        .toList();
+    final text = outputParts?.isNotEmpty == true
+        ? (outputParts![0] as Map<String, dynamic>)['text'] as String? ?? ''
         : '';
     if (text.isEmpty) return [];
     final match = RegExp(r'\[[\s\S]*\]').firstMatch(text);

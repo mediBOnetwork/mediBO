@@ -918,6 +918,66 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         final alpha = (255.0 * inv * inv * inv).round().clamp(0, 255);
         data[i] = 0; data[i + 1] = 0; data[i + 2] = 0; data[i + 3] = alpha;
       }
+
+      // ── Row-band cleanup: remove residue from neighbouring lines ─────────────
+      // After alpha is set, compute the per-row sum of alpha values.  A row that
+      // belongs to a neighbouring line appears as isolated ink far above/below
+      // the main writing band, separated by a low-density gap.  We find the
+      // longest contiguous band of non-gap rows (≥ 2% of peak row-sum) and zero
+      // out everything outside it.  A 3-row box-filter smooths over single-pixel
+      // gaps inside the name (thin stroke parts, letter crossings) so we never
+      // accidentally split ascenders/descenders from the main body.
+      final rowSum = List<double>.filled(outH, 0.0);
+      for (int y = 0; y < outH; y++) {
+        for (int x = 0; x < outW; x++) {
+          rowSum[y] += data[(y * outW + x) * 4 + 3];
+        }
+      }
+
+      // 3-row box-filter to bridge single sparse rows (e.g. thin crossbar of 't').
+      final smoothed = List<double>.filled(outH, 0.0);
+      for (int y = 0; y < outH; y++) {
+        final a = y > 0       ? rowSum[y - 1] : rowSum[y];
+        final b = rowSum[y];
+        final c = y < outH - 1 ? rowSum[y + 1] : rowSum[y];
+        smoothed[y] = (a + b + c) / 3.0;
+      }
+
+      double maxSmooth = 0;
+      for (final s in smoothed) if (s > maxSmooth) maxSmooth = s;
+
+      if (maxSmooth > 0) {
+        final gapThresh = maxSmooth * 0.02; // 2% of peak = gap between bands
+
+        // Find the LONGEST contiguous run of above-threshold rows (main writing band).
+        int bestStart = 0, bestLen = 0, curStart = 0, curLen = 0;
+        for (int y = 0; y < outH; y++) {
+          if (smoothed[y] >= gapThresh) {
+            if (curLen == 0) curStart = y;
+            curLen++;
+            if (curLen > bestLen) { bestLen = curLen; bestStart = curStart; }
+          } else {
+            curLen = 0;
+          }
+        }
+
+        // Zero alpha for rows outside the dominant band.
+        if (bestLen > 0) {
+          final bandTop = bestStart;
+          final bandBot = bestStart + bestLen - 1;
+          for (int y = 0; y < bandTop; y++) {
+            for (int x = 0; x < outW; x++) {
+              data[(y * outW + x) * 4 + 3] = 0;
+            }
+          }
+          for (int y = bandBot + 1; y < outH; y++) {
+            for (int x = 0; x < outW; x++) {
+              data[(y * outW + x) * 4 + 3] = 0;
+            }
+          }
+        }
+      }
+
       ctx.putImageData(imgData, 0, 0);
 
       final dataUrl = canvas.toDataUrl('image/png');
@@ -1452,14 +1512,19 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       '[{"name": "medicine name as written", "qty": 5, "bbox": {"x": 0.05, "y": 0.12, "w": 0.38, "h": 0.04}}]\n'
       'BBOX RULES (all values 0.0–1.0 fraction of image width/height):\n'
       '  x = slightly LEFT of the first letter (add ~2 % of image width as left margin)\n'
-      '  y = TOP of the tallest letter glyph in this name (NOT the ruled line above)\n'
+      '  y = TOP of the tallest ascender of THIS line ONLY — start just above the tallest '
+      'letter (like h, d, l). Do NOT reach up into the blank inter-line gap above or into '
+      'any ink from the previous line.\n'
       '  w = width that FULLY encompasses the COMPLETE last word/character PLUS a small '
       'right margin (~3 % of image width) — NEVER stop early; every letter of the name '
       'including trailing words like "Tablet", "Cap.MR", "Sachet", "Inj" must be inside '
       'x+w. Stop well before any quantity digit or number column.\n'
-      '  h = from top of tallest glyph to BOTTOM of lowest descender ONLY — '
-      'STOP BEFORE any ruled line or underline below the text. '
-      'The ruled underline is OUTSIDE the bbox; only ink strokes of this name are inside.';
+      '  h = from y down to the BOTTOM of the lowest descender of THIS line ONLY — '
+      'tightly hug just this name\'s ink strokes. Do NOT extend into the inter-line gap '
+      'below or into the next line\'s ink. On a typical handwritten pharmacy list h is '
+      'roughly 3–6 % of the image height. If h exceeds 8 % of image height the bbox '
+      'likely overlaps a neighbouring line — tighten it. '
+      'The ruled underline is OUTSIDE the bbox.';
 
   static const _geminiImageFallbackPrompt =
       'This is a photo of a handwritten list of medicines from a pharmacy. '
@@ -1469,9 +1534,11 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       '- Write the number next to it if there is one; otherwise use 1.\n\n'
       'Do NOT leave out any line just because it is unclear — include it with your best guess.\n'
       'Do NOT return [] (empty). If you can see any words at all in the list, include them.\n\n'
-      'Respond with ONLY this JSON. The bbox must FULLY enclose the complete handwritten '
-      'name — every letter including the last word — with a small margin on left/right. '
-      'Stop the bbox BEFORE any ruled underline or quantity number:\n'
+      'Respond with ONLY this JSON. The bbox must FULLY enclose this name\'s own ink — '
+      'every letter including the last word — with small left/right margins. '
+      'Vertically: start just above this line\'s tallest letter; end just below its '
+      'lowest descender. Do NOT let the bbox overlap neighbouring lines or the inter-line '
+      'gap. Typical h is 3–6 % of image height:\n'
       '[{"name": "what you can read", "qty": 1, "bbox": {"x": 0.04, "y": 0.12, "w": 0.42, "h": 0.04}}]';
 
   static String _geminiTextPrompt(String content) =>

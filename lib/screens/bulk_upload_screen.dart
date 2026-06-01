@@ -867,13 +867,55 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       ctx.drawImageScaledFromSource(img, tLeft, tTop, tWidth, tHeight, 0, 0,
           outW.toDouble(), outH.toDouble());
 
-      // Grayscale → alpha: dark ink → opaque black, light paper → transparent.
+      // Background-normalised ink extraction — smooth, no threshold, no speckle.
+      //
+      // Simple alpha = 255-luma leaves paper (luma≈200) at alpha≈55, creating a
+      // visible gray haze.  Instead we normalise relative to the crop's own
+      // paper-white level (P95) and ink-dark level (P5), then apply a cubic
+      // falloff so paper goes fully transparent and ink stays fully opaque.
+      //
+      // Cubic (^3) keeps edges anti-aliased: a partly-transparent pixel at the
+      // ink boundary blends smoothly, so strokes look clean not dotted.
       final imgData = ctx.getImageData(0, 0, outW, outH);
       final data = imgData.data;
+      final n = outW * outH;
+
+      // Build a luminance histogram (O(n), no sort needed).
+      final hist = List<int>.filled(256, 0);
+      for (int i = 0; i < data.length; i += 4) {
+        final luma = (0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2])
+            .round()
+            .clamp(0, 255);
+        hist[luma]++;
+      }
+
+      // P5 = 5th-percentile luminance → darkest ink reference.
+      // P95 = 95th-percentile luminance → paper-white reference.
+      int p5 = 0, p95 = 255, cumul = 0;
+      for (int v = 0; v < 256; v++) {
+        cumul += hist[v];
+        if (p5 == 0 && cumul >= n * 0.05) p5 = v;
+        if (cumul >= n * 0.95) {
+          p95 = v;
+          break;
+        }
+      }
+      // Guard: clamp so we always have a meaningful ink→paper range (≥40 units).
+      p5  = p5.clamp(0, 160);
+      p95 = p95.clamp(p5 + 40, 255);
+      final invRange = 1.0 / (p95 - p5);
+
+      // Map each pixel:
+      //   t=0  (luma=P5, darkest ink) → alpha=255 (fully opaque black)
+      //   t=1  (luma=P95, paper)      → alpha=0   (fully transparent)
+      //   cubic (1−t)^3 makes the paper-side of the curve drop off fast
+      //   while keeping anti-aliased ink edges smooth and solid.
       for (int i = 0; i < data.length; i += 4) {
         final luma =
-            (0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]).round();
-        final alpha = (255 - luma).clamp(0, 255);
+            0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+        final t   = ((luma - p5) * invRange).clamp(0.0, 1.0);
+        final inv = 1.0 - t;
+        final alpha = (255.0 * inv * inv * inv).round().clamp(0, 255);
         data[i] = 0; data[i + 1] = 0; data[i + 2] = 0; data[i + 3] = alpha;
       }
       ctx.putImageData(imgData, 0, 0);

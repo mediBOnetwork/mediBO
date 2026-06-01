@@ -3361,16 +3361,47 @@ int _editDistance(String s, String t) {
   return dp[m][n];
 }
 
+/// Damerau-Levenshtein distance (OSA variant).
+/// Like Levenshtein but counts an adjacent-character transposition as cost 1
+/// instead of 2, so OCR swaps like "ar"↔"ra" or "eh"↔"he" score closer.
+int _dlEditDistance(String s, String t) {
+  final m = s.length, n = t.length;
+  if (m == 0) return n;
+  if (n == 0) return m;
+  final dp = List.generate(m + 1, (i) => List.filled(n + 1, 0));
+  for (int i = 0; i <= m; i++) dp[i][0] = i;
+  for (int j = 0; j <= n; j++) dp[0][j] = j;
+  for (int i = 1; i <= m; i++) {
+    for (int j = 1; j <= n; j++) {
+      if (s[i - 1] == t[j - 1]) {
+        dp[i][j] = dp[i - 1][j - 1];
+      } else {
+        final a = dp[i - 1][j];
+        final b = dp[i][j - 1];
+        final cc = dp[i - 1][j - 1];
+        dp[i][j] = 1 + (a < b ? (a < cc ? a : cc) : (b < cc ? b : cc));
+      }
+      // Transposition: s[i-1]==t[j-2] and s[i-2]==t[j-1]
+      if (i > 1 && j > 1 && s[i - 1] == t[j - 2] && s[i - 2] == t[j - 1]) {
+        final trans = dp[i - 2][j - 2] + 1;
+        if (trans < dp[i][j]) dp[i][j] = trans;
+      }
+    }
+  }
+  return dp[m][n];
+}
+
 /// Stage 2 — Full-name accuracy score.
-/// Four-component weighted score:
-///   40% edit-distance ratio   — char-level accuracy (full string)
-///   25% token-set Jaccard     — symmetric token overlap
-///   20% query-token recall    — fraction of query tokens present in candidate;
-///                               directly catches a missing distinguishing token
-///                               like "B" (Lulim B Cream vs Lulimac Cream) or
-///                               "LS" that edit-distance alone would obscure.
-///   15% first-word edit ratio — tolerates a single OCR leading-letter error
-///                               ("fulim"↔"lulim" → 0.80 vs "fulim"↔"risdan" → 0.17).
+/// Three-component weighted score:
+///   50% Damerau-Levenshtein ratio — char-level accuracy; transpositions cost 1
+///                                   so OCR "ar"↔"ra" swaps don't inflate distance.
+///   30% token score               — 15% token-set Jaccard + 15% query-token recall;
+///                                   recall directly catches a missing distinguishing
+///                                   token like "B" (Lulim B Cream vs Lulimac Cream).
+///   20% first-word DL ratio       — tolerates single OCR leading-letter error,
+///                                   capped at 0.10 so it acts as a tiebreaker and
+///                                   cannot promote a weaker base-score candidate
+///                                   above a stronger one.
 ///
 /// Short tokens (B, D, SR, LS, XT, ER, …) are preserved by _normStr and
 /// included in both Jaccard and recall — they are never stripped.
@@ -3379,9 +3410,9 @@ double _stage2Score(String query, String candidate) {
   final c = _normStr(candidate);
   if (q.isEmpty || c.isEmpty) return 0.0;
 
-  // 1. Normalised edit-distance ratio (full string with spaces, case-folded).
+  // 1. Normalised DL edit-distance ratio (full string, spaces included).
   final maxLen = q.length > c.length ? q.length : c.length;
-  final editRatio = 1.0 - _editDistance(q, c) / maxLen;
+  final editRatio = 1.0 - _dlEditDistance(q, c) / maxLen;
 
   // 2. Token-set Jaccard — short tokens (B, LS, SR, XT…) are included, not stripped.
   final qWords = q.split(' ').where((t) => t.isNotEmpty).toSet();
@@ -3392,23 +3423,25 @@ double _stage2Score(String query, String candidate) {
 
   // 3. Query-token recall — fraction of query tokens found in candidate.
   // A candidate missing any query token (even a single-letter "B") is penalised
-  // here regardless of how small that token is — edit-distance is insensitive to
-  // single-token presence when the rest of the string is nearly identical.
+  // here regardless of how small that token is.
   final tokenRecall = qWords.isEmpty
       ? 0.0
       : qWords.where((t) => cWords.contains(t)).length / qWords.length;
 
-  // 4. First-word edit-distance ratio — tolerates single OCR leading-letter error.
+  // 4. First-word DL ratio — prefix tiebreaker.
+  // Capped at 0.10 (half the nominal 0.20 weight) so it cannot flip the ranking
+  // of two candidates whose base scores (edit + token) differ meaningfully.
   final qList = q.split(' ').where((t) => t.isNotEmpty).toList();
   final cList = c.split(' ').where((t) => t.isNotEmpty).toList();
   final qFirst = qList.isEmpty ? '' : qList[0];
   final cFirst = cList.isEmpty ? '' : cList[0];
   final firstMaxLen = qFirst.length > cFirst.length ? qFirst.length : cFirst.length;
-  final prefixBonus = firstMaxLen == 0
+  final prefixRaw = firstMaxLen == 0
       ? 0.0
-      : 1.0 - _editDistance(qFirst, cFirst) / firstMaxLen;
+      : 1.0 - _dlEditDistance(qFirst, cFirst) / firstMaxLen;
+  final prefixContrib = (0.20 * prefixRaw).clamp(0.0, 0.10);
 
-  return 0.40 * editRatio + 0.25 * tokenJaccard + 0.20 * tokenRecall + 0.15 * prefixBonus;
+  return 0.50 * editRatio + 0.15 * tokenJaccard + 0.15 * tokenRecall + prefixContrib;
 }
 
 /// Detect dosage form keyword in a query string.

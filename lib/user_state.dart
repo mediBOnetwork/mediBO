@@ -18,6 +18,12 @@ class AuthNotifier extends ChangeNotifier {
       Supabase.instance.client.auth.currentUser != null;
   UserProfile? get profile => _profile;
 
+  /// True when logged in AND has submitted a pharmacy_profiles row.
+  bool get isRegistered => isAuthenticated && _profile != null;
+
+  /// True when registered AND admin has approved the account.
+  bool get canOrder => isRegistered && (_profile?.isApproved ?? false);
+
   late final StreamSubscription<AuthState> _sub;
 
   AuthNotifier() {

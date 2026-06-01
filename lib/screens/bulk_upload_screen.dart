@@ -15,7 +15,9 @@ import 'package:xml/xml.dart' as xmlp;
 import '../app_state.dart';
 import '../config/api_keys.dart';
 import '../models/product.dart';
+import '../user_state.dart';
 import '../util.dart';
+import 'auth/login_screen.dart';
 
 // ─── Loading step ─────────────────────────────────────────────────────────────
 
@@ -2299,6 +2301,35 @@ class _WhatsAppCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final auth = UserState.of(context);
+    final canOrder = auth.canOrder;
+    final isAuthenticated = auth.isAuthenticated;
+    final isRegistered = auth.isRegistered;
+
+    // Determine button label and gate message.
+    final String btnLabel;
+    final String? gateNote;
+    final VoidCallback? onTap;
+    if (canOrder) {
+      btnLabel = 'Send Order on WhatsApp';
+      gateNote = null;
+      onTap = _openWhatsApp;
+    } else if (!isAuthenticated) {
+      btnLabel = 'Login to Send Order';
+      gateNote = 'Login required to place orders';
+      onTap = () => Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => const LoginScreen()),
+          );
+    } else if (!isRegistered) {
+      btnLabel = 'Complete Registration to Order';
+      gateNote = 'Register your pharmacy to place orders';
+      onTap = null;
+    } else {
+      btnLabel = 'Pending Approval';
+      gateNote = 'Your account is pending admin approval';
+      onTap = null;
+    }
+
     return Container(
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(16),
@@ -2382,29 +2413,56 @@ class _WhatsAppCard extends StatelessWidget {
                       textColor: const Color(0xFF374151),
                     ),
                     const SizedBox(height: 48),
-                    SizedBox(
-                      height: 52,
-                      child: FilledButton(
-                        onPressed: _openWhatsApp,
-                        style: FilledButton.styleFrom(
-                          backgroundColor: const Color(0xFF25D366),
-                          foregroundColor: Colors.white,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                          elevation: 0,
-                          padding: const EdgeInsets.symmetric(horizontal: 16),
-                        ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            SvgPicture.asset('assets/whatsapp.svg', width: 20, height: 20),
-                            const SizedBox(width: 8),
-                            const Text(
-                              'Send Order on WhatsApp',
-                              style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        SizedBox(
+                          height: 52,
+                          child: FilledButton(
+                            onPressed: onTap,
+                            style: FilledButton.styleFrom(
+                              backgroundColor: canOrder
+                                  ? const Color(0xFF25D366)
+                                  : const Color(0xFF9CA3AF),
+                              foregroundColor: Colors.white,
+                              disabledBackgroundColor: const Color(0xFFD1D5DB),
+                              shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(10)),
+                              elevation: 0,
+                              padding: const EdgeInsets.symmetric(horizontal: 16),
                             ),
-                          ],
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                if (canOrder) ...[
+                                  SvgPicture.asset('assets/whatsapp.svg',
+                                      width: 20, height: 20),
+                                  const SizedBox(width: 8),
+                                ] else
+                                  const SizedBox(width: 0),
+                                Flexible(
+                                  child: Text(
+                                    btnLabel,
+                                    style: const TextStyle(
+                                        fontWeight: FontWeight.w700,
+                                        fontSize: 13),
+                                    textAlign: TextAlign.center,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
                         ),
-                      ),
+                        if (gateNote != null) ...[
+                          const SizedBox(height: 8),
+                          Text(
+                            gateNote,
+                            style: const TextStyle(
+                                fontSize: 11, color: Color(0xFF9CA3AF)),
+                            textAlign: TextAlign.center,
+                          ),
+                        ],
+                      ],
                     ),
                   ],
                 ),

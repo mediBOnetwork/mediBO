@@ -26,43 +26,28 @@ class _CartScreenState extends State<CartScreen> {
   Future<void> _openPayment() async {
     if (_paymentInProgress) return;
 
-    // TODO: RE-ENABLE LOGIN CHECK BEFORE LAUNCH
-    // DISABLED FOR NOW - RE-ENABLE LATER
-    // // Require login before payment
-    // final auth = UserState.read(context);
-    // if (!auth.isAuthenticated) {
-    //   final goLogin = await showDialog<bool>(
-    //     context: context,
-    //     builder: (ctx) => AlertDialog(
-    //       shape: RoundedRectangleBorder(
-    //           borderRadius: BorderRadius.circular(16)),
-    //       title: const Text('Login required',
-    //           style: TextStyle(fontWeight: FontWeight.w700)),
-    //       content: const Text(
-    //         'Please log in to complete your purchase.',
-    //         style: TextStyle(fontSize: 14),
-    //       ),
-    //       actions: [
-    //         TextButton(
-    //           onPressed: () => Navigator.pop(ctx, false),
-    //           child: const Text('Cancel'),
-    //         ),
-    //         FilledButton(
-    //           onPressed: () => Navigator.pop(ctx, true),
-    //           style: FilledButton.styleFrom(
-    //               backgroundColor: const Color(0xFF1B5E20)),
-    //           child: const Text('Log In'),
-    //         ),
-    //       ],
-    //     ),
-    //   );
-    //   if (goLogin != true || !mounted) return;
-    //   await Navigator.push(
-    //     context,
-    //     MaterialPageRoute(builder: (_) => const LoginScreen()),
-    //   );
-    //   return; // User can retry payment after logging in
-    // }
+    final auth = UserState.read(context);
+    if (!auth.isAuthenticated) {
+      await Navigator.push(context,
+          MaterialPageRoute(builder: (_) => const LoginScreen()));
+      return;
+    }
+    if (!auth.isRegistered) {
+      _showOrderGate(
+        title: 'Registration required',
+        message: 'Complete your pharmacy registration to place orders.',
+        actionLabel: 'Go to Profile',
+        onAction: () => Navigator.of(context).pop(),
+      );
+      return;
+    }
+    if (!auth.canOrder) {
+      _showOrderGate(
+        title: 'Account pending approval',
+        message: 'Your account is pending admin approval. You will be notified once approved.',
+      );
+      return;
+    }
 
     setState(() => _paymentInProgress = true);
     final cart = AppState.of(context);
@@ -159,6 +144,40 @@ class _CartScreenState extends State<CartScreen> {
       'payment_id': paymentId,
       'status': 'paid',
     }).then((_) {}).catchError((_) {});
+  }
+
+  void _showOrderGate({
+    required String title,
+    required String message,
+    String? actionLabel,
+    VoidCallback? onAction,
+  }) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text(title,
+            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+        content: Text(message,
+            style: const TextStyle(fontSize: 14, color: Color(0xFF374151))),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('OK'),
+          ),
+          if (actionLabel != null && onAction != null)
+            FilledButton(
+              onPressed: () {
+                Navigator.pop(ctx);
+                onAction();
+              },
+              style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFF1B5E20)),
+              child: Text(actionLabel),
+            ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -965,6 +984,14 @@ class _BillingBreakdownSection extends StatelessWidget {
   }
 }
 
+// Returns a short gate message when the user cannot place orders, null when they can.
+String? _orderGateMessage(AuthNotifier auth) {
+  if (!auth.isAuthenticated) return 'Login and register to place orders';
+  if (!auth.isRegistered) return 'Complete registration to place orders';
+  if (!auth.canOrder) return 'Your account is pending approval';
+  return null;
+}
+
 // ─── Fixed checkout bar (narrow layout) ──────────────────────────────────────
 
 class _CheckoutBar extends StatelessWidget {
@@ -1019,66 +1046,86 @@ class _CheckoutBar extends StatelessWidget {
                   ],
                 ),
                 const SizedBox(height: 12),
-                // View bill + Make Payment
-                Row(
-                  children: [
-                    GestureDetector(
-                      onTap: () => _showBill(context),
-                      child: const Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisSize: MainAxisSize.min,
+                // View bill + Make Payment (auth-gated)
+                Builder(builder: (ctx) {
+                  final auth = UserState.of(ctx);
+                  final gateMsg = _orderGateMessage(auth);
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(
                         children: [
-                          Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(
-                                'View bill',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: Color(0xFF1D4ED8),
-                                  fontWeight: FontWeight.w600,
+                          GestureDetector(
+                            onTap: () => _showBill(context),
+                            child: const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  'View bill',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Color(0xFF1D4ED8),
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                SizedBox(width: 2),
+                                Icon(Icons.keyboard_arrow_up,
+                                    size: 14, color: Color(0xFF1D4ED8)),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: GestureDetector(
+                              onTap: onMakePayment,
+                              child: Container(
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 15),
+                                decoration: BoxDecoration(
+                                  color: gateMsg != null
+                                      ? const Color(0xFF9CA3AF)
+                                      : const Color(0xFF1B5E20),
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Row(
+                                  mainAxisAlignment:
+                                      MainAxisAlignment.center,
+                                  children: [
+                                    const Icon(Icons.payment_rounded,
+                                        color: Colors.white, size: 18),
+                                    const SizedBox(width: 8),
+                                    Text(
+                                      auth.isAuthenticated
+                                          ? 'Make Payment'
+                                          : 'Login to Order',
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w700,
+                                        letterSpacing: 0.2,
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               ),
-                              SizedBox(width: 2),
-                              Icon(Icons.keyboard_arrow_up,
-                                  size: 14, color: Color(0xFF1D4ED8)),
-                            ],
+                            ),
                           ),
                         ],
                       ),
-                    ),
-                    const SizedBox(width: 14),
-                    Expanded(
-                      child: GestureDetector(
-                        onTap: onMakePayment,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(vertical: 15),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF1B5E20),
-                            borderRadius: BorderRadius.circular(12),
+                      if (gateMsg != null) ...[
+                        const SizedBox(height: 6),
+                        Text(
+                          gateMsg,
+                          style: const TextStyle(
+                            fontSize: 11,
+                            color: Color(0xFF9CA3AF),
                           ),
-                          child: const Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(Icons.payment_rounded,
-                                  color: Colors.white, size: 18),
-                              SizedBox(width: 8),
-                              Text(
-                                'Make Payment',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w700,
-                                  letterSpacing: 0.2,
-                                ),
-                              ),
-                            ],
-                          ),
+                          textAlign: TextAlign.center,
                         ),
-                      ),
-                    ),
-                  ],
-                ),
+                      ],
+                    ],
+                  );
+                }),
               ],
             ),
           ),
@@ -1808,32 +1855,55 @@ class _OrderSummaryPanel extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 14),
-          GestureDetector(
-            onTap: onMakePayment,
-            child: Container(
-              padding: const EdgeInsets.symmetric(vertical: 15),
-              decoration: BoxDecoration(
-                color: const Color(0xFF1B5E20),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: const Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.payment_rounded, color: Colors.white, size: 18),
-                  SizedBox(width: 8),
-                  Text(
-                    'Make Payment',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 0.2,
+          Builder(builder: (ctx) {
+            final auth = UserState.of(ctx);
+            final gateMsg = _orderGateMessage(auth);
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                GestureDetector(
+                  onTap: onMakePayment,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(vertical: 15),
+                    decoration: BoxDecoration(
+                      color: gateMsg != null
+                          ? const Color(0xFF9CA3AF)
+                          : const Color(0xFF1B5E20),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(Icons.payment_rounded,
+                            color: Colors.white, size: 18),
+                        const SizedBox(width: 8),
+                        Text(
+                          auth.isAuthenticated
+                              ? 'Make Payment'
+                              : 'Login to Order',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.2,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
+                ),
+                if (gateMsg != null) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    gateMsg,
+                    style: const TextStyle(
+                        fontSize: 11, color: Color(0xFF9CA3AF)),
+                    textAlign: TextAlign.center,
+                  ),
                 ],
-              ),
-            ),
-          ),
+              ],
+            );
+          }),
           const SizedBox(height: 12),
           if (deliveryFee == 0)
             Container(

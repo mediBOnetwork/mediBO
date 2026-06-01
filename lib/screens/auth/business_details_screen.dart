@@ -65,7 +65,7 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
         pincode: _pincodeCtrl.text.trim(),
       );
       await UserState.read(context).saveProfile(profile);
-      // AuthNotifier sets needsProfile=false → root auto-switches to HomeShell
+      if (context.mounted) Navigator.of(context).pop();
     } catch (e) {
       if (mounted) setState(() => _saveError = 'Failed to save. Please try again.');
     } finally {

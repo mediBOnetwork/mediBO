@@ -482,19 +482,28 @@ class _ImageBlockState extends State<_ImageBlock> {
                       ),
           ),
           // ── Static overlays ───────────────────────────────────────────
-          Positioned(
-            left: 8,
-            top: 8,
-            right: _hasScheme(widget.product.id) ? 50 : 8,
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: _CategoryImagePill(
-                  text: prettyCategory(widget.product.category),
-                  style: widget.style),
-            ),
-          ),
-          if (_hasScheme(widget.product.id))
-            Positioned(right: 8, top: 8, child: _SchemePill(text: '5+1')),
+          Builder(builder: (ctx) {
+            final showScheme = UserState.of(ctx).isAuthenticated &&
+                _hasScheme(widget.product.id);
+            return Stack(
+              children: [
+                Positioned(
+                  left: 8,
+                  top: 8,
+                  right: showScheme ? 50 : 8,
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: _CategoryImagePill(
+                        text: prettyCategory(widget.product.category),
+                        style: widget.style),
+                  ),
+                ),
+                if (showScheme)
+                  Positioned(
+                      right: 8, top: 8, child: _SchemePill(text: '5+1')),
+              ],
+            );
+          }),
           if (widget.isBestSeller)
             Positioned(
               left: 8,

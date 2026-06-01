@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../user_state.dart';
+import 'auth/business_details_screen.dart';
 
 class ProfileScreen extends StatelessWidget {
   const ProfileScreen({super.key});
@@ -10,8 +11,8 @@ class ProfileScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final auth = UserState.of(context);
     final profile = auth.profile;
-    final email =
-        Supabase.instance.client.auth.currentUser?.email ?? '';
+    final email = Supabase.instance.client.auth.currentUser?.email ?? '';
+    final isRegistered = auth.isRegistered;
 
     return Scaffold(
       backgroundColor: const Color(0xFFF9FAFB),
@@ -63,7 +64,7 @@ class ProfileScreen extends StatelessWidget {
                       ),
                       const SizedBox(height: 14),
                       Text(
-                        profile?.displayName ?? 'My Pharmacy',
+                        profile?.displayName ?? 'My Account',
                         textAlign: TextAlign.center,
                         style: const TextStyle(
                           fontSize: 20,
@@ -82,97 +83,203 @@ class ProfileScreen extends StatelessWidget {
                           ),
                         ),
                       ],
+                      const SizedBox(height: 14),
+                      // ── Account status badge ──────────────────────────
+                      _AccountStatusBadge(
+                        isRegistered: isRegistered,
+                        isApproved: profile?.isApproved ?? false,
+                        status: profile?.status ?? 'pending',
+                      ),
                     ],
                   ),
                 ),
 
-                // "Contact support" notice
-                Container(
-                  margin: const EdgeInsets.fromLTRB(16, 16, 16, 4),
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 14, vertical: 10),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFFFFBEB),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: const Color(0xFFFCD34D)),
+                // ── Unregistered: complete registration CTA ──────────────
+                if (!isRegistered) ...[
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+                    child: Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF0FDF4),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: const Color(0xFFBBF7D0)),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          const Row(
+                            children: [
+                              Icon(Icons.info_outline,
+                                  size: 18, color: Color(0xFF15803D)),
+                              SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  'Registration required to place orders',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                    color: Color(0xFF15803D),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 10),
+                          SizedBox(
+                            height: 44,
+                            child: FilledButton(
+                              onPressed: () {
+                                final user = Supabase
+                                    .instance.client.auth.currentUser;
+                                if (user == null) return;
+                                Navigator.of(context).push(
+                                  MaterialPageRoute(
+                                    builder: (_) => BusinessDetailsScreen(
+                                      userId: user.id,
+                                      phone: user.phone ?? '',
+                                    ),
+                                  ),
+                                );
+                              },
+                              style: FilledButton.styleFrom(
+                                backgroundColor: const Color(0xFF1B5E20),
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(8)),
+                                elevation: 0,
+                              ),
+                              child: const Text(
+                                'Complete Registration',
+                                style: TextStyle(
+                                    fontWeight: FontWeight.w700, fontSize: 14),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
-                  child: const Row(
-                    children: [
-                      Icon(Icons.info_outline,
-                          size: 16, color: Color(0xFFD97706)),
-                      SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'To update your details, contact support.',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: Color(0xFF92400E),
+                ],
+
+                // ── Pending: approval notice ──────────────────────────────
+                if (isRegistered && !(profile?.isApproved ?? false)) ...[
+                  Container(
+                    margin: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFFBEB),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: const Color(0xFFFCD34D)),
+                    ),
+                    child: const Row(
+                      children: [
+                        Icon(Icons.access_time,
+                            size: 16, color: Color(0xFFD97706)),
+                        SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Your account is pending admin approval. You will be able to place orders once approved.',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Color(0xFF92400E),
+                            ),
                           ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
+                ],
 
-                // Profile fields card
-                Container(
-                  margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: const Color(0xFFE5E7EB)),
+                // ── Registered: "contact support to update" notice ─────────
+                if (isRegistered) ...[
+                  Container(
+                    margin: const EdgeInsets.fromLTRB(16, 16, 16, 4),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF9FAFB),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: const Color(0xFFE5E7EB)),
+                    ),
+                    child: const Row(
+                      children: [
+                        Icon(Icons.info_outline,
+                            size: 16, color: Color(0xFF9CA3AF)),
+                        SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'To update your details, contact support.',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Color(0xFF6B7280),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                  child: Column(
-                    children: [
-                      _InfoRow(
-                        label: 'Owner Name',
-                        value: profile?.ownerName,
-                        icon: Icons.person_outline,
-                      ),
-                      _InfoRow(
-                        label: 'Pharmacy / Clinic Name',
-                        value: profile?.pharmacyName,
-                        icon: Icons.storefront_outlined,
-                      ),
-                      _InfoRow(
-                        label: 'Phone Number',
-                        value: profile?.phone,
-                        icon: Icons.phone_outlined,
-                      ),
-                      _InfoRow(
-                        label: 'Email',
-                        value: email.isNotEmpty ? email : null,
-                        icon: Icons.email_outlined,
-                      ),
-                      _InfoRow(
-                        label: 'GSTIN',
-                        value: profile?.gstin,
-                        icon: Icons.receipt_long_outlined,
-                      ),
-                      _InfoRow(
-                        label: 'Drug License Number',
-                        value: profile?.drugLicense,
-                        icon: Icons.verified_outlined,
-                      ),
-                      _InfoRow(
-                        label: 'Full Address',
-                        value: profile?.address,
-                        icon: Icons.location_on_outlined,
-                      ),
-                      _InfoRow(
-                        label: 'City',
-                        value: profile?.city,
-                        icon: Icons.location_city_outlined,
-                      ),
-                      _InfoRow(
-                        label: 'Pincode',
-                        value: profile?.pincode,
-                        icon: Icons.pin_drop_outlined,
-                        isLast: true,
-                      ),
-                    ],
+
+                  // Profile fields card
+                  Container(
+                    margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: const Color(0xFFE5E7EB)),
+                    ),
+                    child: Column(
+                      children: [
+                        _InfoRow(
+                          label: 'Owner Name',
+                          value: profile?.ownerName,
+                          icon: Icons.person_outline,
+                        ),
+                        _InfoRow(
+                          label: 'Pharmacy / Clinic Name',
+                          value: profile?.pharmacyName,
+                          icon: Icons.storefront_outlined,
+                        ),
+                        _InfoRow(
+                          label: 'Phone Number',
+                          value: profile?.phone,
+                          icon: Icons.phone_outlined,
+                        ),
+                        _InfoRow(
+                          label: 'Email',
+                          value: email.isNotEmpty ? email : null,
+                          icon: Icons.email_outlined,
+                        ),
+                        _InfoRow(
+                          label: 'GSTIN',
+                          value: profile?.gstin,
+                          icon: Icons.receipt_long_outlined,
+                        ),
+                        _InfoRow(
+                          label: 'Drug License Number',
+                          value: profile?.drugLicense,
+                          icon: Icons.verified_outlined,
+                        ),
+                        _InfoRow(
+                          label: 'Full Address',
+                          value: profile?.address,
+                          icon: Icons.location_on_outlined,
+                        ),
+                        _InfoRow(
+                          label: 'City',
+                          value: profile?.city,
+                          icon: Icons.location_city_outlined,
+                        ),
+                        _InfoRow(
+                          label: 'Pincode',
+                          value: profile?.pincode,
+                          icon: Icons.pin_drop_outlined,
+                          isLast: true,
+                        ),
+                      ],
+                    ),
                   ),
-                ),
+                ],
 
                 // Logout button
                 Padding(
@@ -210,6 +317,70 @@ class ProfileScreen extends StatelessWidget {
   }
 }
 
+// ── Account status badge ──────────────────────────────────────────────────────
+
+class _AccountStatusBadge extends StatelessWidget {
+  final bool isRegistered;
+  final bool isApproved;
+  final String status;
+
+  const _AccountStatusBadge({
+    required this.isRegistered,
+    required this.isApproved,
+    required this.status,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final Color bg;
+    final Color fg;
+    final IconData icon;
+    final String label;
+
+    if (!isRegistered) {
+      bg = const Color(0xFFF3F4F6);
+      fg = const Color(0xFF6B7280);
+      icon = Icons.person_off_outlined;
+      label = 'Not Registered';
+    } else if (isApproved) {
+      bg = const Color(0xFFDCFCE7);
+      fg = const Color(0xFF15803D);
+      icon = Icons.verified_outlined;
+      label = 'Approved';
+    } else {
+      bg = const Color(0xFFFEF3C7);
+      fg = const Color(0xFFD97706);
+      icon = Icons.access_time;
+      label = 'Pending Approval';
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: fg),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              color: fg,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Info row ──────────────────────────────────────────────────────────────────
+
 class _InfoRow extends StatelessWidget {
   final String label;
   final String? value;
@@ -225,8 +396,7 @@ class _InfoRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final display =
-        (value != null && value!.isNotEmpty) ? value! : '—';
+    final display = (value != null && value!.isNotEmpty) ? value! : '—';
 
     return Column(
       children: [

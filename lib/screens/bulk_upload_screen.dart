@@ -2220,7 +2220,7 @@ class _MainLayout extends StatelessWidget {
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const Expanded(flex: 35, child: _WhatsAppCard()),
+                  const Expanded(flex: 35, child: _WhatsAppCard(showGateNote: false)),
                   const SizedBox(width: 16),
                   Expanded(
                     flex: 35,
@@ -2290,11 +2290,20 @@ class _MainLayout extends StatelessWidget {
 // ─── WhatsApp card ────────────────────────────────────────────────────────────
 
 class _WhatsAppCard extends StatelessWidget {
-  const _WhatsAppCard();
+  final bool showGateNote;
+  const _WhatsAppCard({this.showGateNote = true});
 
-  void _openWhatsApp() {
+  void _openWhatsApp(BuildContext context) {
+    final auth = UserState.of(context);
+    final profile = auth.profile;
+    final msg = 'Hello mediBO, I\'m placing a new order, check the image I\'ve sent.\n'
+        'My Details:\n'
+        'Customer name - ${profile?.customerName ?? ''}\n'
+        'Pharmacy name - ${profile?.pharmacyName ?? ''}\n'
+        'WhatsApp no - ${profile?.whatsappNo ?? ''}\n'
+        'Customer code - ${profile?.customerCode ?? ''}';
     html.window.open(
-      'https://wa.me/918357881873?text=Hi%2C%20I%20want%20to%20place%20a%20bulk%20medicine%20order',
+      'https://wa.me/918357881873?text=${Uri.encodeComponent(msg)}',
       '_blank',
     );
   }
@@ -2313,7 +2322,7 @@ class _WhatsAppCard extends StatelessWidget {
     if (canOrder) {
       btnLabel = 'Send Order on WhatsApp';
       gateNote = null;
-      onTap = _openWhatsApp;
+      onTap = () => _openWhatsApp(context);
     } else if (!isAuthenticated) {
       btnLabel = 'Login to Send Order';
       gateNote = 'Login required to place orders';
@@ -2421,11 +2430,10 @@ class _WhatsAppCard extends StatelessWidget {
                           child: FilledButton(
                             onPressed: onTap,
                             style: FilledButton.styleFrom(
-                              backgroundColor: canOrder
-                                  ? const Color(0xFF25D366)
-                                  : const Color(0xFF9CA3AF),
+                              backgroundColor: const Color(0xFF25D366),
                               foregroundColor: Colors.white,
-                              disabledBackgroundColor: const Color(0xFFD1D5DB),
+                              disabledBackgroundColor: const Color(0xFF25D366),
+                              disabledForegroundColor: Colors.white,
                               shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(10)),
                               elevation: 0,
@@ -2453,7 +2461,7 @@ class _WhatsAppCard extends StatelessWidget {
                             ),
                           ),
                         ),
-                        if (gateNote != null) ...[
+                        if (showGateNote && gateNote != null) ...[
                           const SizedBox(height: 8),
                           Text(
                             gateNote,

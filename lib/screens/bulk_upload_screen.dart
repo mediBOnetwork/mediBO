@@ -158,6 +158,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
   bool _isFromFile = false;
   String? _fileName;
   bool _addingToCart = false;
+  bool _isRetrying = false;
   // Maps row index (as string) → productId that row last added to cart.
   // Enables precise per-row removal: when a row changes product, only ITS old
   // product is removed — nothing else is touched. Persisted with session.
@@ -1906,6 +1907,123 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     _saveSession();
   }
 
+  // ── Retry matching ─────────────────────────────────────────────────────────
+  // Re-runs stage1+stage2 on every non-manuallyMatched row using its stored
+  // OCR text, without re-uploading the file.  Never downgrades a row's status
+  // (matched stays matched; partial stays at least partial).
+  Future<void> _retryMatch() async {
+    if (_isRetrying || !_isFromFile) return;
+    setState(() => _isRetrying = true);
+    try {
+      for (int i = 0; i < _rows.length; i++) {
+        if (!mounted) break;
+        final old = _rows[i];
+        if (old.status == _MatchStatus.manuallyMatched) continue;
+
+        String name = old.lineItem.trim();
+        // Edge case: no OCR text but have image bbox — re-OCR the crop.
+        if (name.isEmpty && old.bbox != null && _uploadedImageBytes != null) {
+          name = await _reOcrOneLine(old.bbox!) ?? '';
+        }
+        if (name.isEmpty) continue;
+
+        final fresh = await _matchOne(name, old.qty, bbox: old.bbox);
+
+        // Determine best status — never downgrade.
+        final _MatchStatus best;
+        if (old.status == _MatchStatus.matched &&
+            fresh.status != _MatchStatus.matched) {
+          best = _MatchStatus.matched;
+        } else if (old.status == _MatchStatus.partial &&
+            fresh.status == _MatchStatus.unrecognized) {
+          best = _MatchStatus.partial;
+        } else {
+          best = fresh.status;
+        }
+
+        final updated = _MatchRow(
+          lineItem: name,
+          qty: old.qty,
+          status: best,
+          candidates:
+              fresh.candidates.isNotEmpty ? fresh.candidates : old.candidates,
+          selectedIndex: 0,
+          isHidden: old.isHidden,
+          preHideStatus: old._preHideStatus,
+          bbox: old.bbox,
+        );
+        updated.processedCrop = old.processedCrop;
+
+        if (mounted) setState(() => _rows[i] = updated);
+      }
+    } finally {
+      if (mounted) setState(() => _isRetrying = false);
+    }
+    _saveSession();
+  }
+
+  // Crops a single bbox from the cached image and calls Gemini to read one line.
+  // Only used when a row has an empty lineItem (network failure during OCR).
+  Future<String?> _reOcrOneLine(Rect bbox) async {
+    final bytes = _uploadedImageBytes;
+    if (bytes == null) return null;
+    try {
+      final imgEl = await _loadImageForProcessing(
+          bytes, _uploadedMimeType ?? 'image/jpeg');
+      if (imgEl == null) return null;
+      final srcW = imgEl.naturalWidth.toDouble();
+      final srcH = imgEl.naturalHeight.toDouble();
+
+      // Expand bbox slightly for OCR context.
+      final left   = ((bbox.left   - bbox.width  * 0.05) * srcW).clamp(0.0, srcW);
+      final top    = ((bbox.top    - bbox.height * 0.20) * srcH).clamp(0.0, srcH);
+      final width  = ((bbox.width  * 1.10) * srcW).clamp(4.0, srcW - left);
+      final height = ((bbox.height * 1.40) * srcH).clamp(4.0, srcH - top);
+
+      final outW = width.round().clamp(10, 800);
+      final outH = height.round().clamp(4, 200);
+      final canvas = html.CanvasElement(width: outW, height: outH);
+      final ctx = canvas.context2D;
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillRect(0, 0, outW.toDouble(), outH.toDouble());
+      ctx.drawImageScaledFromSource(
+          imgEl, left, top, width, height, 0, 0, outW.toDouble(), outH.toDouble());
+      final base64Data = canvas.toDataUrl('image/jpeg', 0.9).split(',').last;
+
+      final response = await http.post(
+        Uri.parse(
+            'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$geminiApiKey'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'contents': [
+            {'parts': [
+              {'inline_data': {'mime_type': 'image/jpeg', 'data': base64Data}},
+              {'text': 'This is a crop of ONE handwritten medicine name from a pharmacy '
+                  'order list. Read and return ONLY the medicine name as plain text. '
+                  'Best guess if unclear. No JSON, no explanation.'},
+            ]}
+          ],
+          'generationConfig': {'temperature': 0.1, 'maxOutputTokens': 50},
+        }),
+      ).timeout(const Duration(seconds: 30));
+
+      if (response.statusCode != 200) return null;
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      final cands = data['candidates'] as List<dynamic>?;
+      if (cands == null || cands.isEmpty) return null;
+      final cont = (cands[0] as Map<String, dynamic>)['content'] as Map<String, dynamic>?;
+      final parts = cont?['parts'] as List<dynamic>?;
+      final out = parts?.where((p) => (p as Map<String, dynamic>)['thought'] != true).toList();
+      final text = out?.isNotEmpty == true
+          ? (out![0] as Map<String, dynamic>)['text'] as String? ?? ''
+          : '';
+      return text.trim().isNotEmpty ? text.trim() : null;
+    } catch (e) {
+      debugPrint('[RetryOCR] Failed: $e');
+      return null;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return SingleChildScrollView(
@@ -1935,6 +2053,8 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
                     onAddToCart: _addMatchedToCart,
                     onHideToggle: _onRowHideToggle,
                     uploadedImageSize: _uploadedImageSize,
+                    onRetry: _retryMatch,
+                    isRetrying: _isRetrying,
                   ),
                   const SizedBox(height: 48),
                 ],
@@ -1998,6 +2118,8 @@ class _MainLayout extends StatelessWidget {
   final Future<void> Function() onAddToCart;
   final void Function(int rowIndex) onHideToggle;
   final Size? uploadedImageSize;
+  final VoidCallback onRetry;
+  final bool isRetrying;
 
   const _MainLayout({
     required this.rows,
@@ -2012,6 +2134,8 @@ class _MainLayout extends StatelessWidget {
     required this.onAddToCart,
     required this.onHideToggle,
     this.uploadedImageSize,
+    required this.onRetry,
+    required this.isRetrying,
   });
 
   @override
@@ -2053,6 +2177,8 @@ class _MainLayout extends StatelessWidget {
               onAddToCart: onAddToCart,
               onHideToggle: onHideToggle,
               uploadedImageSize: uploadedImageSize,
+              onRetry: onRetry,
+              isRetrying: isRetrying,
             ),
           ],
         );
@@ -2078,6 +2204,8 @@ class _MainLayout extends StatelessWidget {
             onAddToCart: onAddToCart,
             onHideToggle: onHideToggle,
             uploadedImageSize: uploadedImageSize,
+            onRetry: onRetry,
+            isRetrying: isRetrying,
           ),
         ],
       );
@@ -2595,6 +2723,8 @@ class _SmartMatchSection extends StatefulWidget {
   final Future<void> Function() onAddToCart;
   final void Function(int rowIndex) onHideToggle;
   final Size? uploadedImageSize;
+  final VoidCallback onRetry;
+  final bool isRetrying;
 
   const _SmartMatchSection({
     required this.rows,
@@ -2608,6 +2738,8 @@ class _SmartMatchSection extends StatefulWidget {
     required this.onAddToCart,
     required this.onHideToggle,
     this.uploadedImageSize,
+    required this.onRetry,
+    required this.isRetrying,
   });
 
   @override
@@ -2665,8 +2797,20 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('Smart match preview',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+                Row(
+                  children: [
+                    const Expanded(
+                      child: Text('Smart match preview',
+                          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+                    ),
+                    if (widget.isFromFile)
+                      _RetryIconButton(
+                        isRetrying: widget.isRetrying,
+                        enabled: !widget.isLoading && !widget.isRetrying,
+                        onRetry: widget.onRetry,
+                      ),
+                  ],
+                ),
                 const SizedBox(height: 10),
                 Wrap(
                   spacing: 6,
@@ -2819,7 +2963,15 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
                       const SizedBox(height: 8),
                       Row(children: [
                         Expanded(child: statsText),
-                        const SizedBox(width: 8),
+                        if (widget.isFromFile) ...[
+                          const SizedBox(width: 4),
+                          _RetryIconButton(
+                            isRetrying: widget.isRetrying,
+                            enabled: !widget.isLoading && !widget.isRetrying,
+                            onRetry: widget.onRetry,
+                          ),
+                        ],
+                        const SizedBox(width: 4),
                         widget.addingToCart ? spinner : addButton,
                       ]),
                     ],
@@ -2834,6 +2986,14 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
                       const SizedBox(width: 8),
                       badgeWidget,
                       const Spacer(),
+                      if (widget.isFromFile) ...[
+                        _RetryIconButton(
+                          isRetrying: widget.isRetrying,
+                          enabled: !widget.isLoading && !widget.isRetrying,
+                          onRetry: widget.onRetry,
+                        ),
+                        const SizedBox(width: 4),
+                      ],
                       widget.addingToCart ? spinner : addButton,
                     ]),
                     const SizedBox(height: 4),
@@ -3318,6 +3478,42 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
         ),
       ],
     ),
+    );
+  }
+}
+
+// ─── Retry icon button ────────────────────────────────────────────────────────
+
+class _RetryIconButton extends StatelessWidget {
+  final bool isRetrying;
+  final bool enabled;
+  final VoidCallback onRetry;
+
+  const _RetryIconButton({
+    required this.isRetrying,
+    required this.enabled,
+    required this.onRetry,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (isRetrying) {
+      return const SizedBox(
+        width: 36,
+        height: 36,
+        child: Padding(
+          padding: EdgeInsets.all(8),
+          child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF6B7280)),
+        ),
+      );
+    }
+    return IconButton(
+      icon: const Icon(Icons.refresh),
+      onPressed: enabled ? onRetry : null,
+      tooltip: 'Re-run matching',
+      iconSize: 20,
+      visualDensity: VisualDensity.compact,
+      color: const Color(0xFF6B7280),
     );
   }
 }

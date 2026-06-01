@@ -35,6 +35,9 @@ class _MatchRow {
   _MatchStatus? _preHideStatus; // saved on hide, restored on unhide
   final String _displaySku;
   final String _displayPrice;
+  final Rect? bbox;
+  final Uint8List? imageBytes;
+  final Size? imageSize;
 
   _MatchRow({
     required this.lineItem,
@@ -46,6 +49,9 @@ class _MatchRow {
     _MatchStatus? preHideStatus,
     String displaySku = 'No match found',
     String displayPrice = '-',
+    this.bbox,
+    this.imageBytes,
+    this.imageSize,
   })  : _preHideStatus = preHideStatus,
         _displaySku = displaySku,
         _displayPrice = displayPrice;
@@ -259,6 +265,19 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
       if (extracted.isEmpty) throw Exception('No medicine rows found in file');
 
+      // Extract original image bytes + size so each row can show a handwriting crop.
+      Uint8List? origImageBytes;
+      Size? origImageSize;
+      if (rawContent.startsWith('IMAGE_BYTES:')) {
+        final withoutPrefix = rawContent.substring('IMAGE_BYTES:'.length);
+        final colonIdx = withoutPrefix.indexOf(':');
+        final mimeType = withoutPrefix.substring(0, colonIdx);
+        final base64Data = withoutPrefix.substring(colonIdx + 1);
+        origImageBytes = base64Decode(base64Data);
+        origImageSize = await _getImageSize(origImageBytes, mimeType);
+        debugPrint('[BulkUpload] Original image: ${origImageSize?.width.toInt()}x${origImageSize?.height.toInt()}');
+      }
+
       // Step 3: fuzzy-match each extracted medicine against Supabase.
       // IMPORTANT: rows are processed sequentially (await) and appended in
       // input order. _rows must never be sorted — display preserves this order.
@@ -273,7 +292,17 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         final name = item['name']?.toString().trim() ?? '';
         final qty = (int.tryParse(item['qty']?.toString() ?? '') ?? 1).clamp(1, 99999);
         if (name.isNotEmpty) {
-          rows.add(await _matchOne(name, qty));
+          Rect? bbox;
+          final bboxMap = item['bbox'] as Map<String, dynamic>?;
+          if (bboxMap != null && origImageSize != null) {
+            final bx = (bboxMap['x'] as num?)?.toDouble() ?? 0;
+            final by = (bboxMap['y'] as num?)?.toDouble() ?? 0;
+            final bw = (bboxMap['w'] as num?)?.toDouble() ?? 0;
+            final bh = (bboxMap['h'] as num?)?.toDouble() ?? 0;
+            if (bw > 0 && bh > 0) bbox = Rect.fromLTWH(bx, by, bw, bh);
+            debugPrint('[BBox] "$name" → x=$bx y=$by w=$bw h=$bh');
+          }
+          rows.add(await _matchOne(name, qty, bbox: bbox, imageBytes: origImageBytes, imageSize: origImageSize));
         }
         if (!mounted) return;
         setState(() => _matchProgress = rows.length);
@@ -644,6 +673,22 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       debugPrint('[ImageEnhance] Failed ($e) — using original');
       return rawContent;
     }
+  }
+
+  Future<Size?> _getImageSize(Uint8List bytes, String mimeType) async {
+    try {
+      final blob = html.Blob([bytes], mimeType);
+      final url = html.Url.createObjectUrlFromBlob(blob);
+      final img = html.ImageElement()..src = url;
+      await img.onLoad.first.timeout(const Duration(seconds: 10));
+      html.Url.revokeObjectUrl(url);
+      final w = img.naturalWidth;
+      final h = img.naturalHeight;
+      if (w > 0 && h > 0) return Size(w.toDouble(), h.toDouble());
+    } catch (e) {
+      debugPrint('[ImageSize] Failed: $e');
+    }
+    return null;
   }
 
   static bool _isNetworkOrApiError(Object e) {
@@ -1165,8 +1210,10 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       '3. If quantity not visible, use qty=1.\n'
       '4. NEVER return an empty JSON array [] unless image is genuinely blank/selfie/landscape.\n'
       '5. Return items in top-to-bottom order.\n\n'
-      'Return ONLY a valid JSON array:\n'
-      '[{"name": "medicine name as written", "qty": 5}]';
+      'Return ONLY a valid JSON array. For each entry also include a bbox object '
+      'with the normalized bounding box of that line\'s handwritten product-name region:\n'
+      '[{"name": "medicine name as written", "qty": 5, "bbox": {"x": 0.05, "y": 0.12, "w": 0.85, "h": 0.05}}]\n'
+      'bbox fields: x=left edge, y=top edge, w=width, h=height — all as fraction of image dimensions (0.0–1.0).';
 
   static const _geminiImageFallbackPrompt =
       'This is a photo of a handwritten list of medicines from a pharmacy. '
@@ -1176,8 +1223,8 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       '- Write the number next to it if there is one; otherwise use 1.\n\n'
       'Do NOT leave out any line just because it is unclear — include it with your best guess.\n'
       'Do NOT return [] (empty). If you can see any words at all in the list, include them.\n\n'
-      'Respond with ONLY this JSON:\n'
-      '[{"name": "what you can read", "qty": 1}]';
+      'Respond with ONLY this JSON (include bbox for each line):\n'
+      '[{"name": "what you can read", "qty": 1, "bbox": {"x": 0.05, "y": 0.12, "w": 0.85, "h": 0.05}}]';
 
   static String _geminiTextPrompt(String content) =>
       'You are an expert Indian pharmacy procurement assistant.\n'
@@ -1210,7 +1257,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
   // ── Supabase matching ──────────────────────────────────────────────────────
 
-  Future<_MatchRow> _matchOne(String name, int qty) async {
+  Future<_MatchRow> _matchOne(String name, int qty, {Rect? bbox, Uint8List? imageBytes, Size? imageSize}) async {
     // Strip punctuation noise common in handwritten/OCR orders:
     // • ,()*%  → always noise
     // • trailing/mid-word periods ("Tab.", "B. Cream", "Cap.") → abbreviation markers
@@ -1221,12 +1268,12 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         .trim()
         .replaceAll(RegExp(r'\s+'), ' ');
     if (term.isEmpty) {
-      return _MatchRow(lineItem: name, qty: qty, status: _MatchStatus.unrecognized, candidates: []);
+      return _MatchRow(lineItem: name, qty: qty, status: _MatchStatus.unrecognized, candidates: [], bbox: bbox, imageBytes: imageBytes, imageSize: imageSize);
     }
     try {
       final rawMatches = await _searchMedicineTop5(term);
       if (rawMatches.isEmpty) {
-        return _MatchRow(lineItem: name, qty: qty, status: _MatchStatus.unrecognized, candidates: []);
+        return _MatchRow(lineItem: name, qty: qty, status: _MatchStatus.unrecognized, candidates: [], bbox: bbox, imageBytes: imageBytes, imageSize: imageSize);
       }
       final products = rawMatches.map((m) => Product.fromMap(m)).toList();
       final form = _detectDosageForm(term);
@@ -1237,9 +1284,12 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         qty: qty,
         status: topScore >= 0.40 ? _MatchStatus.matched : _MatchStatus.partial,
         candidates: products,
+        bbox: bbox,
+        imageBytes: imageBytes,
+        imageSize: imageSize,
       );
     } catch (_) {
-      return _MatchRow(lineItem: name, qty: qty, status: _MatchStatus.unrecognized, candidates: []);
+      return _MatchRow(lineItem: name, qty: qty, status: _MatchStatus.unrecognized, candidates: [], bbox: bbox, imageBytes: imageBytes, imageSize: imageSize);
     }
   }
 
@@ -2500,6 +2550,74 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
   }
 }
 
+/// Renders the handwriting crop for a LINE ITEM cell when bbox + imageBytes are
+/// available, otherwise falls back to the plain OCR text.
+Widget _lineItemCrop(_MatchRow row, {required double height, TextStyle? fallbackStyle}) {
+  final bbox = row.bbox;
+  final bytes = row.imageBytes;
+  final imgSize = row.imageSize;
+
+  if (bbox == null || bytes == null || imgSize == null ||
+      bbox.width <= 0 || bbox.height <= 0) {
+    return Text(row.lineItem,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: fallbackStyle ?? const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)));
+  }
+
+  return Tooltip(
+    message: row.lineItem,
+    waitDuration: const Duration(milliseconds: 400),
+    child: LayoutBuilder(
+      builder: (context, constraints) {
+        final containerW = constraints.maxWidth.isFinite ? constraints.maxWidth : 120.0;
+        final containerH = height;
+
+        final cropX = bbox.left * imgSize.width;
+        final cropY = bbox.top * imgSize.height;
+        final cropW = bbox.width * imgSize.width;
+        final cropH = bbox.height * imgSize.height;
+
+        if (cropW <= 0 || cropH <= 0) {
+          return Text(row.lineItem,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: fallbackStyle ?? const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)));
+        }
+
+        // BoxFit.contain: scale so the crop fills as much of the container as possible
+        final scaleX = containerW / cropW;
+        final scaleY = containerH / cropH;
+        final scale = scaleX < scaleY ? scaleX : scaleY;
+
+        final renderW = imgSize.width * scale;
+        final renderH = imgSize.height * scale;
+        final offsetX = -cropX * scale;
+        final offsetY = -cropY * scale;
+
+        return ClipRect(
+          child: SizedBox(
+            width: containerW,
+            height: containerH,
+            child: Stack(
+              clipBehavior: Clip.hardEdge,
+              children: [
+                Positioned(
+                  left: offsetX,
+                  top: offsetY,
+                  width: renderW,
+                  height: renderH,
+                  child: Image.memory(bytes, fit: BoxFit.fill, gaplessPlayback: true),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    ),
+  );
+}
+
 const _kTh = TextStyle(
   fontSize: 11,
   fontWeight: FontWeight.w600,
@@ -2658,10 +2776,10 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
               children: [
                 Expanded(
                   flex: 18,
-                  child: Text(row.lineItem,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
+                  child: SizedBox(
+                    height: 22,
+                    child: _lineItemCrop(row, height: 22),
+                  ),
                 ),
                 Expanded(
                   flex: 20,
@@ -3068,13 +3186,14 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                           child: Row(
                             children: [
                               Expanded(
-                                child: Text(row.lineItem,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.w700,
-                                        color: Color(0xFF111827))),
+                                child: SizedBox(
+                                  height: 24,
+                                  child: _lineItemCrop(row, height: 24,
+                                      fallbackStyle: const TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w700,
+                                          color: Color(0xFF111827))),
+                                ),
                               ),
                               // Controls cluster — min-sized Row pinned to the right
                               Row(

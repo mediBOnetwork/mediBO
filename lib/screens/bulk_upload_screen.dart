@@ -2038,6 +2038,55 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     }
   }
 
+  // Per-row retry: re-runs OCR (if needed) + stage1+stage2 for one row only.
+  // Reports 0.0→1.0 progress via onProgress: 0.5 after OCR step, 1.0 at end.
+  Future<void> _retryOneRow(
+      int rowIndex, void Function(double) onProgress) async {
+    if (rowIndex < 0 || rowIndex >= _rows.length) return;
+    final old = _rows[rowIndex];
+    String name = old.lineItem.trim();
+
+    final needsOcr = name.isEmpty && old.bbox != null && _uploadedImageBytes != null;
+    if (needsOcr) {
+      name = await _reOcrOneLine(old.bbox!) ?? '';
+      onProgress(0.5);
+    }
+
+    if (name.isEmpty) {
+      onProgress(1.0);
+      return;
+    }
+
+    final fresh = await _matchOne(name, old.qty, bbox: old.bbox);
+
+    final _MatchStatus best;
+    if (old.status == _MatchStatus.matched &&
+        fresh.status != _MatchStatus.matched) {
+      best = _MatchStatus.matched;
+    } else if (old.status == _MatchStatus.partial &&
+        fresh.status == _MatchStatus.unrecognized) {
+      best = _MatchStatus.partial;
+    } else {
+      best = fresh.status;
+    }
+
+    final updated = _MatchRow(
+      lineItem: name,
+      qty: old.qty,
+      status: best,
+      candidates:
+          fresh.candidates.isNotEmpty ? fresh.candidates : old.candidates,
+      selectedIndex: 0,
+      isHidden: old.isHidden,
+      preHideStatus: old._preHideStatus,
+      bbox: old.bbox,
+    );
+    updated.processedCrop = old.processedCrop;
+
+    if (mounted) setState(() => _rows[rowIndex] = updated);
+    onProgress(1.0);
+  }
+
   @override
   Widget build(BuildContext context) {
     return SingleChildScrollView(
@@ -2070,6 +2119,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
                     onRetry: _retryMatch,
                     isRetrying: _isRetrying,
                     retryProgress: _retryProgress,
+                    onRowRetry: _isFromFile ? _retryOneRow : null,
                   ),
                   const SizedBox(height: 48),
                 ],
@@ -2136,6 +2186,7 @@ class _MainLayout extends StatelessWidget {
   final VoidCallback onRetry;
   final bool isRetrying;
   final double retryProgress;
+  final Future<void> Function(int, void Function(double))? onRowRetry;
 
   const _MainLayout({
     required this.rows,
@@ -2153,6 +2204,7 @@ class _MainLayout extends StatelessWidget {
     required this.onRetry,
     required this.isRetrying,
     required this.retryProgress,
+    this.onRowRetry,
   });
 
   @override
@@ -2197,6 +2249,7 @@ class _MainLayout extends StatelessWidget {
               onRetry: onRetry,
               isRetrying: isRetrying,
               retryProgress: retryProgress,
+              onRowRetry: onRowRetry,
             ),
           ],
         );
@@ -2745,6 +2798,7 @@ class _SmartMatchSection extends StatefulWidget {
   final VoidCallback onRetry;
   final bool isRetrying;
   final double retryProgress;
+  final Future<void> Function(int, void Function(double))? onRowRetry;
 
   const _SmartMatchSection({
     required this.rows,
@@ -2761,6 +2815,7 @@ class _SmartMatchSection extends StatefulWidget {
     required this.onRetry,
     required this.isRetrying,
     required this.retryProgress,
+    this.onRowRetry,
   });
 
   @override
@@ -2915,6 +2970,9 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
                         onRowChanged: _onRowChanged,
                         onHideToggle: () => _onHideToggle(i),
                         uploadedImageSize: widget.uploadedImageSize,
+                        onRowRetry: widget.onRowRetry != null
+                            ? (onProgress) => widget.onRowRetry!(i, onProgress)
+                            : null,
                       ),
                     ),
                 ],
@@ -3094,6 +3152,9 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
                 onRowChanged: _onRowChanged,
                 onHideToggle: () => _onHideToggle(i),
                 uploadedImageSize: widget.uploadedImageSize,
+                onRowRetry: widget.onRowRetry != null
+                    ? (onProgress) => widget.onRowRetry!(i, onProgress)
+                    : null,
               ),
           ],
         ],
@@ -3193,6 +3254,7 @@ class _ExpandableMatchRow extends StatefulWidget {
   final VoidCallback onRowChanged;
   final VoidCallback onHideToggle;
   final Size? uploadedImageSize;
+  final Future<void> Function(void Function(double))? onRowRetry;
 
   const _ExpandableMatchRow({
     super.key,
@@ -3204,6 +3266,7 @@ class _ExpandableMatchRow extends StatefulWidget {
     required this.onRowChanged,
     required this.onHideToggle,
     this.uploadedImageSize,
+    this.onRowRetry,
   });
 
   @override
@@ -3214,6 +3277,8 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
     with SingleTickerProviderStateMixin {
   late final AnimationController _ctrl;
   late final Animation<double> _anim;
+  bool _isRowRetrying = false;
+  double _rowRetryProgress = 0.0;
 
   @override
   void initState() {
@@ -3242,6 +3307,20 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
   void dispose() {
     _ctrl.dispose();
     super.dispose();
+  }
+
+  Future<void> _doRowRetry() async {
+    if (_isRowRetrying || widget.onRowRetry == null) return;
+    setState(() { _isRowRetrying = true; _rowRetryProgress = 0.0; });
+    try {
+      await widget.onRowRetry!((p) {
+        if (mounted) setState(() => _rowRetryProgress = p);
+      });
+      if (mounted) await Future.delayed(const Duration(milliseconds: 500));
+    } finally {
+      if (mounted) setState(() => _isRowRetrying = false);
+    }
+    widget.onRowChanged();
   }
 
   void _toggleApproval() {
@@ -3431,41 +3510,61 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
                     ),
                   ),
                 ),
-                // APPROVE column — checkbox centered under its header
+                // APPROVE column — per-row retry for unrecognized; checkbox for others
                 const SizedBox(width: 12),
                 Expanded(
                   flex: 5,
                   child: Center(
-                    child: GestureDetector(
-                      onTap: (row.isHidden || row.status == _MatchStatus.unrecognized) ? null : _toggleApproval,
-                      behavior: HitTestBehavior.opaque,
-                      child: Padding(
-                        padding: const EdgeInsets.all(3),
-                        child: isApproved
-                            ? Container(
-                                width: 18,
-                                height: 18,
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFF16A34A),
-                                  borderRadius: BorderRadius.circular(4),
+                    child: (row.status == _MatchStatus.unrecognized && !row.isHidden)
+                        ? _isRowRetrying
+                            ? SizedBox(
+                                width: 18, height: 18,
+                                child: CircularProgressIndicator(
+                                  value: _rowRetryProgress,
+                                  strokeWidth: 2,
+                                  color: const Color(0xFFDC2626),
+                                  backgroundColor: const Color(0xFFFEE2E2),
                                 ),
-                                child: const Icon(Icons.check,
-                                    size: 13, color: Colors.white),
                               )
-                            : Container(
-                                width: 18,
-                                height: 18,
-                                decoration: BoxDecoration(
-                                  color: Colors.white,
-                                  borderRadius: BorderRadius.circular(4),
-                                  border: Border.all(
-                                      color: const Color(0xFF9CA3AF), width: 1.5),
+                            : GestureDetector(
+                                onTap: widget.onRowRetry != null ? _doRowRetry : null,
+                                behavior: HitTestBehavior.opaque,
+                                child: Padding(
+                                  padding: const EdgeInsets.all(3),
+                                  child: Icon(Icons.refresh, size: 16,
+                                      color: widget.onRowRetry != null
+                                          ? const Color(0xFFDC2626)
+                                          : const Color(0xFF9CA3AF)),
                                 ),
-                                child: const Icon(Icons.check,
-                                    size: 13, color: Color(0xFFD1D5DB)),
-                              ),
-                      ),
-                    ),
+                              )
+                        : GestureDetector(
+                            onTap: row.isHidden ? null : _toggleApproval,
+                            behavior: HitTestBehavior.opaque,
+                            child: Padding(
+                              padding: const EdgeInsets.all(3),
+                              child: isApproved
+                                  ? Container(
+                                      width: 18, height: 18,
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFF16A34A),
+                                        borderRadius: BorderRadius.circular(4),
+                                      ),
+                                      child: const Icon(Icons.check,
+                                          size: 13, color: Colors.white),
+                                    )
+                                  : Container(
+                                      width: 18, height: 18,
+                                      decoration: BoxDecoration(
+                                        color: Colors.white,
+                                        borderRadius: BorderRadius.circular(4),
+                                        border: Border.all(
+                                            color: const Color(0xFF9CA3AF), width: 1.5),
+                                      ),
+                                      child: const Icon(Icons.check,
+                                          size: 13, color: Color(0xFFD1D5DB)),
+                                    ),
+                            ),
+                          ),
                   ),
                 ),
               ],
@@ -3579,6 +3678,7 @@ class _MobileExpandableRow extends StatefulWidget {
   final VoidCallback onRowChanged;
   final VoidCallback onHideToggle;
   final Size? uploadedImageSize;
+  final Future<void> Function(void Function(double))? onRowRetry;
 
   const _MobileExpandableRow({
     super.key,
@@ -3589,6 +3689,7 @@ class _MobileExpandableRow extends StatefulWidget {
     required this.onRowChanged,
     required this.onHideToggle,
     this.uploadedImageSize,
+    this.onRowRetry,
   });
 
   @override
@@ -3599,6 +3700,8 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
     with SingleTickerProviderStateMixin {
   late final AnimationController _ctrl;
   late final Animation<double> _anim;
+  bool _isRowRetrying = false;
+  double _rowRetryProgress = 0.0;
 
   @override
   void initState() {
@@ -3623,6 +3726,20 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
   void dispose() {
     _ctrl.dispose();
     super.dispose();
+  }
+
+  Future<void> _doRowRetry() async {
+    if (_isRowRetrying || widget.onRowRetry == null) return;
+    setState(() { _isRowRetrying = true; _rowRetryProgress = 0.0; });
+    try {
+      await widget.onRowRetry!((p) {
+        if (mounted) setState(() => _rowRetryProgress = p);
+      });
+      if (mounted) await Future.delayed(const Duration(milliseconds: 500));
+    } finally {
+      if (mounted) setState(() => _isRowRetrying = false);
+    }
+    widget.onRowChanged();
   }
 
   void _toggleApproval() {
@@ -3861,36 +3978,58 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                                     ),
                                   ),
                                   const SizedBox(width: 8),
-                                  GestureDetector(
-                                    onTap: (row.isHidden || row.status == _MatchStatus.unrecognized) ? null : _toggleApproval,
-                                    behavior: HitTestBehavior.opaque,
-                                    child: Padding(
-                                      padding: const EdgeInsets.all(3),
-                                      child: isApproved
-                                          ? Container(
-                                              width: 20,
-                                              height: 20,
-                                              decoration: BoxDecoration(
-                                                color: const Color(0xFF16A34A),
-                                                borderRadius: BorderRadius.circular(4),
+                                  // Approve cell: per-row retry for unrecognized rows,
+                                  // normal checkbox for all other statuses.
+                                  (row.status == _MatchStatus.unrecognized && !row.isHidden)
+                                      ? _isRowRetrying
+                                          ? SizedBox(
+                                              width: 20, height: 20,
+                                              child: CircularProgressIndicator(
+                                                value: _rowRetryProgress,
+                                                strokeWidth: 2,
+                                                color: const Color(0xFFDC2626),
+                                                backgroundColor: const Color(0xFFFEE2E2),
                                               ),
-                                              child: const Icon(Icons.check,
-                                                  size: 14, color: Colors.white),
                                             )
-                                          : Container(
-                                              width: 20,
-                                              height: 20,
-                                              decoration: BoxDecoration(
-                                                color: Colors.white,
-                                                borderRadius: BorderRadius.circular(4),
-                                                border: Border.all(
-                                                    color: const Color(0xFF9CA3AF), width: 1.5),
+                                          : GestureDetector(
+                                              onTap: widget.onRowRetry != null ? _doRowRetry : null,
+                                              behavior: HitTestBehavior.opaque,
+                                              child: Padding(
+                                                padding: const EdgeInsets.all(3),
+                                                child: Icon(Icons.refresh, size: 18,
+                                                    color: widget.onRowRetry != null
+                                                        ? const Color(0xFFDC2626)
+                                                        : const Color(0xFF9CA3AF)),
                                               ),
-                                              child: const Icon(Icons.check,
-                                                  size: 14, color: Color(0xFFD1D5DB)),
-                                            ),
-                                    ),
-                                  ),
+                                            )
+                                      : GestureDetector(
+                                          onTap: row.isHidden ? null : _toggleApproval,
+                                          behavior: HitTestBehavior.opaque,
+                                          child: Padding(
+                                            padding: const EdgeInsets.all(3),
+                                            child: isApproved
+                                                ? Container(
+                                                    width: 20, height: 20,
+                                                    decoration: BoxDecoration(
+                                                      color: const Color(0xFF16A34A),
+                                                      borderRadius: BorderRadius.circular(4),
+                                                    ),
+                                                    child: const Icon(Icons.check,
+                                                        size: 14, color: Colors.white),
+                                                  )
+                                                : Container(
+                                                    width: 20, height: 20,
+                                                    decoration: BoxDecoration(
+                                                      color: Colors.white,
+                                                      borderRadius: BorderRadius.circular(4),
+                                                      border: Border.all(
+                                                          color: const Color(0xFF9CA3AF), width: 1.5),
+                                                    ),
+                                                    child: const Icon(Icons.check,
+                                                        size: 14, color: Color(0xFFD1D5DB)),
+                                                  ),
+                                          ),
+                                        ),
                                 ],
                               ),
                             ],

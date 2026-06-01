@@ -36,8 +36,6 @@ class _MatchRow {
   final String _displaySku;
   final String _displayPrice;
   final Rect? bbox;
-  final Uint8List? imageBytes;
-  final Size? imageSize;
 
   _MatchRow({
     required this.lineItem,
@@ -50,8 +48,6 @@ class _MatchRow {
     String displaySku = 'No match found',
     String displayPrice = '-',
     this.bbox,
-    this.imageBytes,
-    this.imageSize,
   })  : _preHideStatus = preHideStatus,
         _displaySku = displaySku,
         _displayPrice = displayPrice;
@@ -90,6 +86,7 @@ class _MatchRow {
         'isHidden': isHidden,
         if (_preHideStatus != null) 'preHideStatus': _preHideStatus!.name,
         'candidates': candidates.map((p) => p.toJson()).toList(),
+        if (bbox != null) 'bbox': {'x': bbox!.left, 'y': bbox!.top, 'w': bbox!.width, 'h': bbox!.height},
       };
 
   factory _MatchRow.fromJson(Map<String, dynamic> m) {
@@ -99,6 +96,15 @@ class _MatchRow {
       for (final s in _MatchStatus.values) {
         if (s.name == preStr) { preHide = s; break; }
       }
+    }
+    Rect? bbox;
+    final bm = m['bbox'] as Map<String, dynamic>?;
+    if (bm != null) {
+      final bx = (bm['x'] as num?)?.toDouble() ?? 0;
+      final by = (bm['y'] as num?)?.toDouble() ?? 0;
+      final bw = (bm['w'] as num?)?.toDouble() ?? 0;
+      final bh = (bm['h'] as num?)?.toDouble() ?? 0;
+      if (bw > 0 && bh > 0) bbox = Rect.fromLTWH(bx, by, bw, bh);
     }
     return _MatchRow(
       lineItem: (m['lineItem'] as String?) ?? '',
@@ -114,6 +120,7 @@ class _MatchRow {
               ?.map((e) => Product.fromJson(e as Map<String, dynamic>))
               .toList() ??
           [],
+      bbox: bbox,
     );
   }
 }
@@ -152,6 +159,11 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
   // Enables precise per-row removal: when a row changes product, only ITS old
   // product is removed — nothing else is touched. Persisted with session.
   Map<String, String> _bulkLineItemMap = {};
+  // Original image bytes + size — lives in screen State so they survive
+  // layout breakpoint switches (web↔mobile), which can recreate child widget
+  // States but never recreate _BulkUploadScreenState itself.
+  Uint8List? _uploadedImageBytes;
+  Size? _uploadedImageSize;
 
   bool get _isLoading => _step != _LoadStep.idle;
 
@@ -265,7 +277,8 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
       if (extracted.isEmpty) throw Exception('No medicine rows found in file');
 
-      // Extract original image bytes + size so each row can show a handwriting crop.
+      // Extract original image bytes + size. Stored in screen State (not in
+      // rows) so they survive layout breakpoint switches without re-decoding.
       Uint8List? origImageBytes;
       Size? origImageSize;
       if (rawContent.startsWith('IMAGE_BYTES:')) {
@@ -276,6 +289,8 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         origImageBytes = base64Decode(base64Data);
         origImageSize = await _getImageSize(origImageBytes, mimeType);
         debugPrint('[BulkUpload] Original image: ${origImageSize?.width.toInt()}x${origImageSize?.height.toInt()}');
+        _uploadedImageBytes = origImageBytes;
+        _uploadedImageSize = origImageSize;
       }
 
       // Step 3: fuzzy-match each extracted medicine against Supabase.
@@ -302,7 +317,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
             if (bw > 0 && bh > 0) bbox = Rect.fromLTWH(bx, by, bw, bh);
             debugPrint('[BBox] "$name" → x=$bx y=$by w=$bw h=$bh');
           }
-          rows.add(await _matchOne(name, qty, bbox: bbox, imageBytes: origImageBytes, imageSize: origImageSize));
+          rows.add(await _matchOne(name, qty, bbox: bbox));
         }
         if (!mounted) return;
         setState(() => _matchProgress = rows.length);
@@ -1257,7 +1272,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
   // ── Supabase matching ──────────────────────────────────────────────────────
 
-  Future<_MatchRow> _matchOne(String name, int qty, {Rect? bbox, Uint8List? imageBytes, Size? imageSize}) async {
+  Future<_MatchRow> _matchOne(String name, int qty, {Rect? bbox}) async {
     // Strip punctuation noise common in handwritten/OCR orders:
     // • ,()*%  → always noise
     // • trailing/mid-word periods ("Tab.", "B. Cream", "Cap.") → abbreviation markers
@@ -1268,12 +1283,12 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         .trim()
         .replaceAll(RegExp(r'\s+'), ' ');
     if (term.isEmpty) {
-      return _MatchRow(lineItem: name, qty: qty, status: _MatchStatus.unrecognized, candidates: [], bbox: bbox, imageBytes: imageBytes, imageSize: imageSize);
+      return _MatchRow(lineItem: name, qty: qty, status: _MatchStatus.unrecognized, candidates: [], bbox: bbox);
     }
     try {
       final rawMatches = await _searchMedicineTop5(term);
       if (rawMatches.isEmpty) {
-        return _MatchRow(lineItem: name, qty: qty, status: _MatchStatus.unrecognized, candidates: [], bbox: bbox, imageBytes: imageBytes, imageSize: imageSize);
+        return _MatchRow(lineItem: name, qty: qty, status: _MatchStatus.unrecognized, candidates: [], bbox: bbox);
       }
       final products = rawMatches.map((m) => Product.fromMap(m)).toList();
       final form = _detectDosageForm(term);
@@ -1285,11 +1300,9 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         status: topScore >= 0.40 ? _MatchStatus.matched : _MatchStatus.partial,
         candidates: products,
         bbox: bbox,
-        imageBytes: imageBytes,
-        imageSize: imageSize,
       );
     } catch (_) {
-      return _MatchRow(lineItem: name, qty: qty, status: _MatchStatus.unrecognized, candidates: [], bbox: bbox, imageBytes: imageBytes, imageSize: imageSize);
+      return _MatchRow(lineItem: name, qty: qty, status: _MatchStatus.unrecognized, candidates: [], bbox: bbox);
     }
   }
 
@@ -1575,6 +1588,8 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
                     onPickFile: _pickAndProcess,
                     onAddToCart: _addMatchedToCart,
                     onHideToggle: _onRowHideToggle,
+                    uploadedImageBytes: _uploadedImageBytes,
+                    uploadedImageSize: _uploadedImageSize,
                   ),
                   const SizedBox(height: 48),
                 ],
@@ -1637,6 +1652,8 @@ class _MainLayout extends StatelessWidget {
   final VoidCallback onPickFile;
   final Future<void> Function() onAddToCart;
   final void Function(int rowIndex) onHideToggle;
+  final Uint8List? uploadedImageBytes;
+  final Size? uploadedImageSize;
 
   const _MainLayout({
     required this.rows,
@@ -1650,6 +1667,8 @@ class _MainLayout extends StatelessWidget {
     required this.onPickFile,
     required this.onAddToCart,
     required this.onHideToggle,
+    this.uploadedImageBytes,
+    this.uploadedImageSize,
   });
 
   @override
@@ -1690,6 +1709,8 @@ class _MainLayout extends StatelessWidget {
               addingToCart: addingToCart,
               onAddToCart: onAddToCart,
               onHideToggle: onHideToggle,
+              uploadedImageBytes: uploadedImageBytes,
+              uploadedImageSize: uploadedImageSize,
             ),
           ],
         );
@@ -1714,6 +1735,8 @@ class _MainLayout extends StatelessWidget {
             addingToCart: addingToCart,
             onAddToCart: onAddToCart,
             onHideToggle: onHideToggle,
+            uploadedImageBytes: uploadedImageBytes,
+            uploadedImageSize: uploadedImageSize,
           ),
         ],
       );
@@ -2230,6 +2253,8 @@ class _SmartMatchSection extends StatefulWidget {
   final bool addingToCart;
   final Future<void> Function() onAddToCart;
   final void Function(int rowIndex) onHideToggle;
+  final Uint8List? uploadedImageBytes;
+  final Size? uploadedImageSize;
 
   const _SmartMatchSection({
     required this.rows,
@@ -2242,6 +2267,8 @@ class _SmartMatchSection extends StatefulWidget {
     required this.addingToCart,
     required this.onAddToCart,
     required this.onHideToggle,
+    this.uploadedImageBytes,
+    this.uploadedImageSize,
   });
 
   @override
@@ -2382,6 +2409,8 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
                         onToggle: () => _toggleRow(i),
                         onRowChanged: _onRowChanged,
                         onHideToggle: () => _onHideToggle(i),
+                        uploadedImageBytes: widget.uploadedImageBytes,
+                        uploadedImageSize: widget.uploadedImageSize,
                       ),
                     ),
                 ],
@@ -2542,6 +2571,8 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
                 onToggle: () => _toggleRow(i),
                 onRowChanged: _onRowChanged,
                 onHideToggle: () => _onHideToggle(i),
+                uploadedImageBytes: widget.uploadedImageBytes,
+                uploadedImageSize: widget.uploadedImageSize,
               ),
           ],
         ],
@@ -2552,10 +2583,12 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
 
 /// Renders the handwriting crop for a LINE ITEM cell when bbox + imageBytes are
 /// available, otherwise falls back to the plain OCR text.
-Widget _lineItemCrop(_MatchRow row, {required double height, TextStyle? fallbackStyle}) {
+/// imageBytes and imageSize come from _BulkUploadScreenState (not from row)
+/// so they persist through layout breakpoint switches that recreate child States.
+Widget _lineItemCrop(_MatchRow row, Uint8List? imageBytes, Size? imageSize, {required double height, TextStyle? fallbackStyle}) {
   final bbox = row.bbox;
-  final bytes = row.imageBytes;
-  final imgSize = row.imageSize;
+  final bytes = imageBytes;
+  final imgSize = imageSize;
 
   if (bbox == null || bytes == null || imgSize == null ||
       bbox.width <= 0 || bbox.height <= 0) {
@@ -2633,6 +2666,8 @@ class _ExpandableMatchRow extends StatefulWidget {
   final VoidCallback onToggle;
   final VoidCallback onRowChanged;
   final VoidCallback onHideToggle;
+  final Uint8List? uploadedImageBytes;
+  final Size? uploadedImageSize;
 
   const _ExpandableMatchRow({
     super.key,
@@ -2643,6 +2678,8 @@ class _ExpandableMatchRow extends StatefulWidget {
     required this.onToggle,
     required this.onRowChanged,
     required this.onHideToggle,
+    this.uploadedImageBytes,
+    this.uploadedImageSize,
   });
 
   @override
@@ -2778,7 +2815,7 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
                   flex: 18,
                   child: SizedBox(
                     height: 22,
-                    child: _lineItemCrop(row, height: 22),
+                    child: _lineItemCrop(row, widget.uploadedImageBytes, widget.uploadedImageSize, height: 22),
                   ),
                 ),
                 Expanded(
@@ -2972,6 +3009,8 @@ class _MobileExpandableRow extends StatefulWidget {
   final VoidCallback onToggle;
   final VoidCallback onRowChanged;
   final VoidCallback onHideToggle;
+  final Uint8List? uploadedImageBytes;
+  final Size? uploadedImageSize;
 
   const _MobileExpandableRow({
     super.key,
@@ -2981,6 +3020,8 @@ class _MobileExpandableRow extends StatefulWidget {
     required this.onToggle,
     required this.onRowChanged,
     required this.onHideToggle,
+    this.uploadedImageBytes,
+    this.uploadedImageSize,
   });
 
   @override
@@ -3188,7 +3229,7 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                               Expanded(
                                 child: SizedBox(
                                   height: 24,
-                                  child: _lineItemCrop(row, height: 24,
+                                  child: _lineItemCrop(row, widget.uploadedImageBytes, widget.uploadedImageSize, height: 24,
                                       fallbackStyle: const TextStyle(
                                           fontSize: 13,
                                           fontWeight: FontWeight.w700,

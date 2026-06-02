@@ -3,8 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../user_state.dart';
-import 'admin_add_admin_screen.dart';
 import 'admin_add_medicine_screen.dart';
+import 'admin_manage_admins_screen.dart';
 import 'admin_pending_bills_screen.dart';
 
 // ── Nav entry ────────────────────────────────────────────────────────────────
@@ -17,7 +17,7 @@ class _NavEntry {
   const _NavEntry(this.icon, this.activeIcon, this.label, this.pageTitle);
 }
 
-const _kNav = [
+const _kNavBase = [
   _NavEntry(Icons.medication_outlined, Icons.medication,
       'Add Medicine', 'Add Medicine Details'),
   _NavEntry(Icons.receipt_long_outlined, Icons.receipt_long,
@@ -31,6 +31,15 @@ const _kNav = [
   _NavEntry(Icons.inbox_outlined, Icons.inbox,
       'Bills', 'Pending Bills'),
 ];
+
+const _kNavAdmins = _NavEntry(
+  Icons.admin_panel_settings_outlined,
+  Icons.admin_panel_settings,
+  'Admins', 'Manage Admins',
+);
+
+List<_NavEntry> _effectiveNav(bool isSuperAdmin) =>
+    isSuperAdmin ? [..._kNavBase, _kNavAdmins] : _kNavBase;
 
 // ── Admin shell ──────────────────────────────────────────────────────────────
 
@@ -67,7 +76,7 @@ class _AdminShellState extends State<AdminShell> {
       UserState.read(ctx).signOut();
       return;
     }
-    if (route == 'add_admin' && !isSuperAdmin) {
+    if (route == 'manage_admins' && !isSuperAdmin) {
       ScaffoldMessenger.of(ctx).showSnackBar(
         const SnackBar(
           content: Text('Only super-admins can manage admin accounts'),
@@ -78,7 +87,7 @@ class _AdminShellState extends State<AdminShell> {
     }
     Navigator.of(ctx).push(MaterialPageRoute(
       builder: (_) => switch (route) {
-        'add_admin' => const AdminAddAdminScreen(),
+        'manage_admins' => const AdminManageAdminsScreen(),
         'add_supplier' => const _QuickLinkPlaceholder(
             title: 'Add Supplier',
             icon: Icons.add_business_outlined),
@@ -106,6 +115,7 @@ class _AdminShellState extends State<AdminShell> {
   // ── Web/desktop layout ───────────────────────────────────────────────────
 
   Widget _buildDesktop(BuildContext ctx, bool isSuperAdmin) {
+    final nav = _effectiveNav(isSuperAdmin);
     return Scaffold(
       backgroundColor: const Color(0xFFF9FAFB),
       body: Column(
@@ -113,30 +123,37 @@ class _AdminShellState extends State<AdminShell> {
         children: [
           _DesktopHeader(
             currentIndex: _index,
+            nav: nav,
             onNavTap: (i) => setState(() => _index = i),
             isSuperAdmin: isSuperAdmin,
             onQuickLink: (route) => _navigateQuickLink(ctx, route, isSuperAdmin),
             onLogout: () => UserState.read(ctx).signOut(),
             pendingBillsCount: _pendingBillsCount,
           ),
-          Expanded(
-            child: _index == 0
-                ? const AdminAddMedicineScreen()
-                : _index == 5
-                ? PendingBillsScreen(onCountChanged: _loadPendingCount)
-                : _PageBody(
-                    title: _kNav[_index].pageTitle,
-                    icon: _kNav[_index].icon,
-                  ),
-          ),
+          Expanded(child: _buildBody(isSuperAdmin)),
         ],
       ),
     );
   }
 
+  Widget _buildBody(bool isSuperAdmin) {
+    final nav = _effectiveNav(isSuperAdmin);
+    if (_index == 0) return const AdminAddMedicineScreen();
+    if (_index == 5) return PendingBillsScreen(onCountChanged: _loadPendingCount);
+    if (isSuperAdmin && _index == 6) return const AdminManageAdminsScreen();
+    if (_index < nav.length) return _PageBody(title: nav[_index].pageTitle, icon: nav[_index].icon);
+    return const _PageBody(title: 'Coming Soon', icon: Icons.construction_outlined);
+  }
+
   // ── Mobile layout ────────────────────────────────────────────────────────
 
   Widget _buildMobile(BuildContext ctx, bool isSuperAdmin) {
+    final nav = _effectiveNav(isSuperAdmin);
+    // Clamp _index to valid range when nav length changes
+    final safeIndex = _index.clamp(0, nav.length - 1);
+    if (safeIndex != _index) WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) setState(() => _index = safeIndex);
+    });
     return Scaffold(
       backgroundColor: const Color(0xFFF9FAFB),
       appBar: AppBar(
@@ -177,10 +194,10 @@ class _AdminShellState extends State<AdminShell> {
             itemBuilder: (_) => [
               if (isSuperAdmin)
                 const PopupMenuItem(
-                  value: 'add_admin',
+                  value: 'manage_admins',
                   child: _PopupRow(
                     icon: Icons.admin_panel_settings_outlined,
-                    label: 'Add New Admin',
+                    label: 'Manage Admins',
                     color: Color(0xFF1B5E20),
                   ),
                 ),
@@ -211,16 +228,9 @@ class _AdminShellState extends State<AdminShell> {
           ),
         ],
       ),
-      body: _index == 0
-          ? const AdminAddMedicineScreen()
-          : _index == 5
-          ? PendingBillsScreen(onCountChanged: _loadPendingCount)
-          : _PageBody(
-              title: _kNav[_index].pageTitle,
-              icon: _kNav[_index].icon,
-            ),
+      body: _buildBody(isSuperAdmin),
       bottomNavigationBar: BottomNavigationBar(
-        currentIndex: _index,
+        currentIndex: safeIndex,
         type: BottomNavigationBarType.fixed,
         selectedItemColor: const Color(0xFF1B5E20),
         unselectedItemColor: const Color(0xFF9CA3AF),
@@ -228,7 +238,7 @@ class _AdminShellState extends State<AdminShell> {
         unselectedFontSize: 10,
         elevation: 8,
         onTap: (i) => setState(() => _index = i),
-        items: _kNav.asMap().entries.map((e) {
+        items: nav.asMap().entries.map((e) {
               final i = e.key;
               final n = e.value;
               final hasBadge = i == 5 && _pendingBillsCount > 0;
@@ -251,6 +261,7 @@ class _AdminShellState extends State<AdminShell> {
 
 class _DesktopHeader extends StatelessWidget {
   final int currentIndex;
+  final List<_NavEntry> nav;
   final ValueChanged<int> onNavTap;
   final ValueChanged<String> onQuickLink;
   final VoidCallback onLogout;
@@ -259,6 +270,7 @@ class _DesktopHeader extends StatelessWidget {
 
   const _DesktopHeader({
     required this.currentIndex,
+    required this.nav,
     required this.onNavTap,
     required this.onQuickLink,
     required this.onLogout,
@@ -307,12 +319,12 @@ class _DesktopHeader extends StatelessWidget {
                     scrollDirection: Axis.horizontal,
                     child: Row(
                       children: List.generate(
-                        _kNav.length,
+                        nav.length,
                         (i) => _NavTab(
                           icon: currentIndex == i
-                              ? _kNav[i].activeIcon
-                              : _kNav[i].icon,
-                          label: _kNav[i].label,
+                              ? nav[i].activeIcon
+                              : nav[i].icon,
+                          label: nav[i].label,
                           selected: currentIndex == i,
                           onTap: () => onNavTap(i),
                           badge: i == 5 ? pendingBillsCount : 0,
@@ -470,10 +482,10 @@ class _QuickLinksButton extends StatelessWidget {
       itemBuilder: (_) => [
         if (isSuperAdmin)
           const PopupMenuItem(
-            value: 'add_admin',
+            value: 'manage_admins',
             child: _PopupRow(
               icon: Icons.admin_panel_settings_outlined,
-              label: 'Add New Admin',
+              label: 'Manage Admins',
               color: Color(0xFF1B5E20),
             ),
           ),

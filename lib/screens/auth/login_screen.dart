@@ -9,10 +9,15 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
+  // ── Google sign-in ────────────────────────────────────────────────────────
+  bool _googleLoading = false;
+  String? _googleError;
+
+  // ── Magic link ────────────────────────────────────────────────────────────
   final _emailCtrl = TextEditingController();
-  bool _loading = false;
-  bool _sent = false;
-  String? _error;
+  bool _mlLoading = false;
+  bool _mlSent = false;
+  String? _mlError;
 
   // ── Admin dev login (temporary) ───────────────────────────────────────────
   bool _showAdminLogin = false;
@@ -44,29 +49,30 @@ class _LoginScreenState extends State<LoginScreen> {
     if (Navigator.canPop(context)) Navigator.pop(context);
   }
 
+  static final _emailRe = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$');
+
   Future<void> _sendMagicLink() async {
     final email = _emailCtrl.text.trim();
     if (email.isEmpty) {
-      setState(() => _error = 'Please enter your email address.');
+      setState(() => _mlError = 'Enter your email address.');
       return;
     }
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+    if (!_emailRe.hasMatch(email)) {
+      setState(() => _mlError = 'Enter a valid email address.');
+      return;
+    }
+    setState(() { _mlLoading = true; _mlError = null; });
     try {
       await Supabase.instance.client.auth.signInWithOtp(
         email: email,
         emailRedirectTo: 'https://medibo.in',
       );
-      if (mounted) setState(() { _sent = true; _loading = false; });
+      if (mounted) setState(() { _mlSent = true; _mlLoading = false; });
     } catch (e) {
-      if (mounted) {
-        setState(() {
-          _error = 'Could not send link. Please check your email and try again.';
-          _loading = false;
-        });
-      }
+      if (mounted) setState(() {
+        _mlError = 'Could not send link — check your email and try again.';
+        _mlLoading = false;
+      });
     }
   }
 
@@ -92,7 +98,7 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _googleSignIn() async {
-    setState(() { _loading = true; _error = null; });
+    setState(() { _googleLoading = true; _googleError = null; });
     try {
       await Supabase.instance.client.auth.signInWithOAuth(
         OAuthProvider.google,
@@ -100,12 +106,10 @@ class _LoginScreenState extends State<LoginScreen> {
       );
       if (mounted) Navigator.of(context).popUntil((r) => r.isFirst);
     } catch (_) {
-      if (mounted) {
-        setState(() {
-          _error = 'Google sign-in failed. Please try again.';
-          _loading = false;
-        });
-      }
+      if (mounted) setState(() {
+        _googleError = 'Google sign-in failed. Please try again.';
+        _googleLoading = false;
+      });
     }
   }
 
@@ -158,60 +162,91 @@ class _LoginScreenState extends State<LoginScreen> {
                       SizedBox(
                         height: 54,
                         child: OutlinedButton(
-                          onPressed: _loading ? null : _googleSignIn,
+                          onPressed: _googleLoading ? null : _googleSignIn,
                           style: OutlinedButton.styleFrom(
                             backgroundColor: Colors.white,
-                            side: const BorderSide(
-                                color: Color(0xFFD1D5DB), width: 1.5),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(10),
-                            ),
+                            side: const BorderSide(color: Color(0xFFD1D5DB), width: 1.5),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                           ),
-                          child: _loading
-                              ? const SizedBox(
-                                  width: 22,
-                                  height: 22,
-                                  child: CircularProgressIndicator(
-                                    color: Color(0xFF4285F4),
-                                    strokeWidth: 2.5,
-                                  ),
-                                )
-                              : const Row(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    _GoogleIcon(),
-                                    SizedBox(width: 12),
-                                    Text(
-                                      'Continue with Google',
-                                      style: TextStyle(
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.w600,
-                                        color: Color(0xFF374151),
-                                      ),
-                                    ),
-                                  ],
-                                ),
+                          child: _googleLoading
+                              ? const SizedBox(width: 22, height: 22,
+                                  child: CircularProgressIndicator(color: Color(0xFF4285F4), strokeWidth: 2.5))
+                              : const Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                                  _GoogleIcon(),
+                                  SizedBox(width: 12),
+                                  Text('Continue with Google',
+                                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
+                                ]),
                         ),
                       ),
-                      if (_error != null) ...[
-                        const SizedBox(height: 12),
-                        Text(
-                          _error!,
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(
-                              fontSize: 12, color: Color(0xFFDC2626)),
-                        ),
+                      if (_googleError != null) ...[
+                        const SizedBox(height: 8),
+                        Text(_googleError!, textAlign: TextAlign.center,
+                            style: const TextStyle(fontSize: 12, color: Color(0xFFDC2626))),
                       ],
 
-                      // ── Magic link (preserved — re-enable by un-commenting) ──
-                      // if (_sent) ...[
-                      //   Container(success state — check your email...),
-                      // ] else ...[
-                      //   TextField(controller: _emailCtrl, labelText: 'Email address'...),
-                      //   SizedBox(height: 16),
-                      //   FilledButton(onPressed: _sendMagicLink, child: Text('Send Magic Link')),
-                      //   if (_error != null) Text(_error!)...,
-                      // ],
+                      // ── Divider ────────────────────────────────────────
+                      const SizedBox(height: 20),
+                      Row(children: [
+                        const Expanded(child: Divider(color: Color(0xFFE5E7EB))),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          child: Text('or', style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF), fontWeight: FontWeight.w500)),
+                        ),
+                        const Expanded(child: Divider(color: Color(0xFFE5E7EB))),
+                      ]),
+                      const SizedBox(height: 20),
+
+                      // ── Magic link ─────────────────────────────────────
+                      if (_mlSent)
+                        _MagicLinkSentCard(
+                          email: _emailCtrl.text.trim(),
+                          onResend: () => setState(() { _mlSent = false; _mlError = null; }),
+                        )
+                      else ...[
+                        TextField(
+                          controller: _emailCtrl,
+                          keyboardType: TextInputType.emailAddress,
+                          textInputAction: TextInputAction.send,
+                          onSubmitted: (_) => _mlLoading ? null : _sendMagicLink(),
+                          style: const TextStyle(fontSize: 15),
+                          decoration: InputDecoration(
+                            hintText: 'your@email.com',
+                            hintStyle: const TextStyle(color: Color(0xFFD1D5DB)),
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                            border: OutlineInputBorder(borderRadius: BorderRadius.circular(10),
+                                borderSide: const BorderSide(color: Color(0xFFD1D5DB))),
+                            enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10),
+                                borderSide: const BorderSide(color: Color(0xFFD1D5DB))),
+                            focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10),
+                                borderSide: const BorderSide(color: Color(0xFF1B5E20), width: 1.5)),
+                          ),
+                        ),
+                        if (_mlError != null) ...[
+                          const SizedBox(height: 8),
+                          Text(_mlError!, style: const TextStyle(fontSize: 12, color: Color(0xFFDC2626))),
+                        ],
+                        const SizedBox(height: 12),
+                        SizedBox(
+                          height: 50,
+                          child: FilledButton(
+                            onPressed: _mlLoading ? null : _sendMagicLink,
+                            style: FilledButton.styleFrom(
+                              backgroundColor: const Color(0xFF1B5E20),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                            ),
+                            child: _mlLoading
+                                ? const SizedBox(width: 20, height: 20,
+                                    child: CircularProgressIndicator(strokeWidth: 2.5, color: Colors.white))
+                                : const Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                                    Icon(Icons.mail_outline, size: 18, color: Colors.white),
+                                    SizedBox(width: 8),
+                                    Text('Send magic link',
+                                        style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Colors.white)),
+                                  ]),
+                          ),
+                        ),
+                      ],
 
                       // ── Admin dev login (TEMPORARY — remove before public launch) ──
                       const SizedBox(height: 28),
@@ -435,6 +470,53 @@ class _AdminLoginPanel extends StatelessWidget {
             ]),
           ),
         ],
+      ]),
+    );
+  }
+}
+
+// ─── Magic-link sent confirmation ────────────────────────────────────────────
+
+class _MagicLinkSentCard extends StatelessWidget {
+  final String email;
+  final VoidCallback onResend;
+  const _MagicLinkSentCard({required this.email, required this.onResend});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: const Color(0xFFECFDF5),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFBBF7D0)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          const Icon(Icons.mark_email_read_outlined, color: Color(0xFF16A34A), size: 22),
+          const SizedBox(width: 10),
+          const Text('Check your email',
+              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF15803D))),
+        ]),
+        const SizedBox(height: 8),
+        RichText(
+          text: TextSpan(
+            style: const TextStyle(fontSize: 13, color: Color(0xFF166534), height: 1.5),
+            children: [
+              const TextSpan(text: 'We sent a sign-in link to '),
+              TextSpan(text: email,
+                  style: const TextStyle(fontWeight: FontWeight.w700)),
+              const TextSpan(text: '. Tap the link to log in — no password needed.'),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        GestureDetector(
+          onTap: onResend,
+          child: const Text('Use a different email or resend',
+              style: TextStyle(fontSize: 12, color: Color(0xFF16A34A),
+                  fontWeight: FontWeight.w600, decoration: TextDecoration.underline)),
+        ),
       ]),
     );
   }

@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 
+import 'package:supabase_flutter/supabase_flutter.dart';
+
 import '../../user_state.dart';
 import 'admin_add_admin_screen.dart';
 import 'admin_add_medicine_screen.dart';
+import 'admin_pending_bills_screen.dart';
 
 // ── Nav entry ────────────────────────────────────────────────────────────────
 
@@ -25,6 +28,8 @@ const _kNav = [
       'Suppliers', 'Supplier Dashboard'),
   _NavEntry(Icons.people_outline, Icons.people,
       'Customers', 'Customer Dashboard'),
+  _NavEntry(Icons.inbox_outlined, Icons.inbox,
+      'Bills', 'Pending Bills'),
 ];
 
 // ── Admin shell ──────────────────────────────────────────────────────────────
@@ -38,6 +43,23 @@ class AdminShell extends StatefulWidget {
 
 class _AdminShellState extends State<AdminShell> {
   int _index = 0;
+  int _pendingBillsCount = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPendingCount();
+  }
+
+  Future<void> _loadPendingCount() async {
+    try {
+      final res = await Supabase.instance.client
+          .from('pending_bills')
+          .select('id')
+          .eq('status', 'pending');
+      if (mounted) setState(() => _pendingBillsCount = (res as List).length);
+    } catch (_) {}
+  }
 
   void _navigateQuickLink(BuildContext ctx, String route, bool isSuperAdmin) {
     if (!mounted) return;
@@ -95,10 +117,13 @@ class _AdminShellState extends State<AdminShell> {
             isSuperAdmin: isSuperAdmin,
             onQuickLink: (route) => _navigateQuickLink(ctx, route, isSuperAdmin),
             onLogout: () => UserState.read(ctx).signOut(),
+            pendingBillsCount: _pendingBillsCount,
           ),
           Expanded(
             child: _index == 0
                 ? const AdminAddMedicineScreen()
+                : _index == 5
+                ? PendingBillsScreen(onCountChanged: _loadPendingCount)
                 : _PageBody(
                     title: _kNav[_index].pageTitle,
                     icon: _kNav[_index].icon,
@@ -188,6 +213,8 @@ class _AdminShellState extends State<AdminShell> {
       ),
       body: _index == 0
           ? const AdminAddMedicineScreen()
+          : _index == 5
+          ? PendingBillsScreen(onCountChanged: _loadPendingCount)
           : _PageBody(
               title: _kNav[_index].pageTitle,
               icon: _kNav[_index].icon,
@@ -201,13 +228,20 @@ class _AdminShellState extends State<AdminShell> {
         unselectedFontSize: 10,
         elevation: 8,
         onTap: (i) => setState(() => _index = i),
-        items: _kNav
-            .map((n) => BottomNavigationBarItem(
-                  icon: Icon(n.icon),
-                  activeIcon: Icon(n.activeIcon),
-                  label: n.label,
-                ))
-            .toList(),
+        items: _kNav.asMap().entries.map((e) {
+              final i = e.key;
+              final n = e.value;
+              final hasBadge = i == 5 && _pendingBillsCount > 0;
+              return BottomNavigationBarItem(
+                icon: hasBadge
+                    ? Badge(label: Text('$_pendingBillsCount'), child: Icon(n.icon))
+                    : Icon(n.icon),
+                activeIcon: hasBadge
+                    ? Badge(label: Text('$_pendingBillsCount'), child: Icon(n.activeIcon))
+                    : Icon(n.activeIcon),
+                label: n.label,
+              );
+            }).toList(),
       ),
     );
   }
@@ -221,6 +255,7 @@ class _DesktopHeader extends StatelessWidget {
   final ValueChanged<String> onQuickLink;
   final VoidCallback onLogout;
   final bool isSuperAdmin;
+  final int pendingBillsCount;
 
   const _DesktopHeader({
     required this.currentIndex,
@@ -228,6 +263,7 @@ class _DesktopHeader extends StatelessWidget {
     required this.onQuickLink,
     required this.onLogout,
     required this.isSuperAdmin,
+    this.pendingBillsCount = 0,
   });
 
   @override
@@ -279,6 +315,7 @@ class _DesktopHeader extends StatelessWidget {
                           label: _kNav[i].label,
                           selected: currentIndex == i,
                           onTap: () => onNavTap(i),
+                          badge: i == 5 ? pendingBillsCount : 0,
                         ),
                       ),
                     ),
@@ -323,51 +360,61 @@ class _NavTab extends StatelessWidget {
   final String label;
   final bool selected;
   final VoidCallback onTap;
+  final int badge;
 
   const _NavTab({
     required this.icon,
     required this.label,
     required this.selected,
     required this.onTap,
+    this.badge = 0,
   });
 
   @override
   Widget build(BuildContext context) {
+    Widget iconWidget = Icon(
+      icon, size: 15,
+      color: selected ? const Color(0xFF1B5E20) : const Color(0xFF6B7280),
+    );
+    if (badge > 0) {
+      iconWidget = Stack(clipBehavior: Clip.none, children: [
+        iconWidget,
+        Positioned(
+          right: -7, top: -5,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
+            decoration: BoxDecoration(
+              color: const Color(0xFFDC2626),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text('$badge',
+                style: const TextStyle(fontSize: 9, color: Colors.white, fontWeight: FontWeight.w700)),
+          ),
+        ),
+      ]);
+    }
     return Padding(
       padding: const EdgeInsets.only(right: 4),
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(8),
         child: Container(
-          padding:
-              const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           decoration: BoxDecoration(
-            color: selected
-                ? const Color(0xFFECFDF5)
-                : Colors.transparent,
+            color: selected ? const Color(0xFFECFDF5) : Colors.transparent,
             borderRadius: BorderRadius.circular(8),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(
-                icon,
-                size: 15,
-                color: selected
-                    ? const Color(0xFF1B5E20)
-                    : const Color(0xFF6B7280),
-              ),
+              iconWidget,
               const SizedBox(width: 6),
               Text(
                 label,
                 style: TextStyle(
                   fontSize: 13,
-                  fontWeight: selected
-                      ? FontWeight.w700
-                      : FontWeight.w500,
-                  color: selected
-                      ? const Color(0xFF1B5E20)
-                      : const Color(0xFF6B7280),
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                  color: selected ? const Color(0xFF1B5E20) : const Color(0xFF6B7280),
                 ),
               ),
             ],

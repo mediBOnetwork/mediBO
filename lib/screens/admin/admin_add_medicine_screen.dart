@@ -102,7 +102,16 @@ const _kTh = TextStyle(
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
 class AdminAddMedicineScreen extends StatefulWidget {
-  const AdminAddMedicineScreen({super.key});
+  final Uint8List? preloadedBytes;
+  final String? preloadedFileName;
+  final VoidCallback? onImportComplete;
+
+  const AdminAddMedicineScreen({
+    super.key,
+    this.preloadedBytes,
+    this.preloadedFileName,
+    this.onImportComplete,
+  });
   @override
   State<AdminAddMedicineScreen> createState() => _AdminAddMedicineScreenState();
 }
@@ -128,6 +137,16 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
   int _updatedCount = 0;
   int _insertedCount = 0;
   int _skippedCount = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.preloadedBytes != null && widget.preloadedFileName != null) {
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => _startFromBytes(widget.preloadedBytes!, widget.preloadedFileName!),
+      );
+    }
+  }
 
   @override
   void dispose() {
@@ -160,8 +179,9 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
     } catch (_) { return ''; }
   }
 
-  Future<String> _xlsxText(html.File f) async {
-    final bytes = await _readBytes(f);
+  Future<String> _xlsxText(html.File f) async => _xlsxBytesText(await _readBytes(f));
+
+  String _xlsxBytesText(Uint8List bytes) {
     Archive archive;
     try { archive = ZipDecoder().decodeBytes(bytes); }
     catch (_) { throw Exception('Could not open Excel file.'); }
@@ -211,8 +231,9 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
     return sb.toString();
   }
 
-  Future<String> _odsText(html.File f) async {
-    final bytes = await _readBytes(f);
+  Future<String> _odsText(html.File f) async => _odsBytesText(await _readBytes(f));
+
+  String _odsBytesText(Uint8List bytes) {
     Archive archive;
     try { archive = ZipDecoder().decodeBytes(bytes); }
     catch (_) { throw Exception('Could not open ODS file.'); }
@@ -236,8 +257,9 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
     return sb.toString();
   }
 
-  Future<String> _docxText(html.File f) async {
-    final bytes = await _readBytes(f);
+  Future<String> _docxText(html.File f) async => _docxBytesText(await _readBytes(f));
+
+  String _docxBytesText(Uint8List bytes) {
     Archive archive;
     try { archive = ZipDecoder().decodeBytes(bytes); }
     catch (_) { throw Exception('Could not open DOCX file.'); }
@@ -283,6 +305,63 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
         return _geminiTable(true, 'image/gif', base64Encode(await _readBytes(f)), '');
       default:
         return _textToTable(await _readAsText(f));
+    }
+  }
+
+  Future<({List<String> headers, List<List<String>> rows})> _parseBytesFile(Uint8List bytes, String fileName) async {
+    final ext = fileName.toLowerCase().split('.').last;
+    switch (ext) {
+      case 'csv': case 'tsv': case 'txt':
+        final text = utf8.decode(bytes, allowMalformed: true).replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+        return _textToTable(text);
+      case 'xlsx': case 'xls':
+        return _textToTable(_xlsxBytesText(bytes));
+      case 'ods':
+        return _textToTable(_odsBytesText(bytes));
+      case 'docx':
+        return _textToTable(_docxBytesText(bytes));
+      case 'pdf':
+        final local = await _pdfText(bytes);
+        if (local.trim().length > 20) return _textToTable(local);
+        return _geminiTable(false, '', base64Encode(bytes), 'application/pdf');
+      case 'jpg': case 'jpeg':
+        return _geminiTable(true, 'image/jpeg', base64Encode(bytes), '');
+      case 'png':
+        return _geminiTable(true, 'image/png', base64Encode(bytes), '');
+      case 'webp':
+        return _geminiTable(true, 'image/webp', base64Encode(bytes), '');
+      case 'heic': case 'heif':
+        return _geminiTable(true, 'image/heic', base64Encode(bytes), '');
+      case 'gif':
+        return _geminiTable(true, 'image/gif', base64Encode(bytes), '');
+      default:
+        final text = utf8.decode(bytes, allowMalformed: true).replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+        return _textToTable(text);
+    }
+  }
+
+  Future<void> _startFromBytes(Uint8List bytes, String fileName) async {
+    setState(() { _step = _ImpStep.parsing; _statusMsg = 'Reading file…'; });
+    try {
+      final table = await _parseBytesFile(bytes, fileName);
+      if (table.rows.isEmpty) throw Exception('No data rows found in the file');
+      setState(() { _step = _ImpStep.geminiCols; _statusMsg = 'Mapping columns with Gemini…'; });
+      final cols = await _geminiMapCols(table.headers, table.rows);
+      for (final c in _newColCtrls.values) c.dispose();
+      _newColCtrls.clear();
+      setState(() {
+        _rawRows = table.rows;
+        _cols = cols;
+        for (final c in _cols) _newColCtrls[c.fileIndex] = TextEditingController();
+        _step = _ImpStep.mapping;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() { _step = _ImpStep.idle; });
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(e.toString().replaceFirst('Exception: ', '')),
+        behavior: SnackBarBehavior.floating, duration: const Duration(seconds: 6),
+      ));
     }
   }
 
@@ -831,7 +910,9 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
       _StageHeader(
         title: 'Stage 1 — Column Mapping',
         subtitle: 'Confirm how each uploaded column maps to the medicine database',
-        onBack: () => setState(() => _step = _ImpStep.idle),
+        onBack: widget.preloadedBytes != null
+            ? () => Navigator.of(context).maybePop()
+            : () => setState(() => _step = _ImpStep.idle),
         action: FilledButton(
           onPressed: _confirmMapping,
           style: FilledButton.styleFrom(backgroundColor: const Color(0xFF16A34A),
@@ -1095,12 +1176,20 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
           const SizedBox(height: 10),
           _SumRow(icon: Icons.remove_circle_outline, color: const Color(0xFF9CA3AF), label: 'Skipped', count: _skippedCount),
           const SizedBox(height: 28),
-          SizedBox(width: double.infinity, height: 48, child: FilledButton(
-            onPressed: () => setState(() => _step = _ImpStep.idle),
-            style: FilledButton.styleFrom(backgroundColor: const Color(0xFF16A34A),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
-            child: const Text('Import Another File', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
-          )),
+          if (widget.onImportComplete != null)
+            SizedBox(width: double.infinity, height: 48, child: FilledButton(
+              onPressed: () { widget.onImportComplete!(); Navigator.of(context).pop(); },
+              style: FilledButton.styleFrom(backgroundColor: const Color(0xFF16A34A),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+              child: const Text('Mark as Imported & Go Back', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+            ))
+          else
+            SizedBox(width: double.infinity, height: 48, child: FilledButton(
+              onPressed: () => setState(() => _step = _ImpStep.idle),
+              style: FilledButton.styleFrom(backgroundColor: const Color(0xFF16A34A),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+              child: const Text('Import Another File', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+            )),
         ]),
       )),
     ));

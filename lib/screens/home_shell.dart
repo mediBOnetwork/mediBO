@@ -1553,7 +1553,10 @@ class _LoginPanelContentState extends State<_LoginPanelContent> {
           .addPostFrameCallback((_) { if (mounted) widget.onClose(); });
     }
     _authSub = Supabase.instance.client.auth.onAuthStateChange.listen((s) {
-      if (s.event == AuthChangeEvent.signedIn && mounted) widget.onClose();
+      // During reset flow verifyOtp fires signedIn — don't close until password is set
+      if (s.event == AuthChangeEvent.signedIn && mounted && _resetStep == _ResetStep.none) {
+        widget.onClose();
+      }
     });
   }
 
@@ -1676,7 +1679,8 @@ class _LoginPanelContentState extends State<_LoginPanelContent> {
     setState(() { _resetLoading = true; _resetError = null; });
     try {
       await Supabase.instance.client.auth.updateUser(UserAttributes(password: newPass));
-      // session already active after verifyOtp — _authSub closes panel and routes
+      // updateUser fires userUpdated (not signedIn), so close explicitly; session already active
+      if (mounted) widget.onClose();
     } on AuthException catch (e) {
       if (mounted) setState(() { _resetError = e.message; _resetLoading = false; });
     } catch (_) {

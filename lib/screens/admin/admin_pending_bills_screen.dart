@@ -1,5 +1,3 @@
-import 'dart:typed_data';
-
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -23,17 +21,22 @@ class _PendingBillsScreenState extends State<PendingBillsScreen> {
   final Map<String, bool> _dismissing = {};
   final Map<String, bool> _approving = {};
 
+  RealtimeChannel? _channel;
+
   @override
   void initState() {
     super.initState();
-    _load();
+    _load().then((_) => _subscribeRealtime());
   }
 
   @override
   void dispose() {
     for (final c in _supplierCtrls.values) c.dispose();
+    _channel?.unsubscribe();
     super.dispose();
   }
+
+  // ── Data loading ──────────────────────────────────────────────────────────────
 
   Future<void> _load() async {
     setState(() { _loading = true; _error = null; });
@@ -56,11 +59,46 @@ class _PendingBillsScreenState extends State<PendingBillsScreen> {
           _supplierCtrls[id] = TextEditingController(text: bill['supplier_name'] ?? '');
         }
       }
-      setState(() { _bills = list; _loading = false; });
+      if (mounted) setState(() { _bills = list; _loading = false; });
     } catch (e) {
-      setState(() { _error = e.toString().replaceFirst('Exception: ', ''); _loading = false; });
+      if (mounted) setState(() { _error = e.toString().replaceFirst('Exception: ', ''); _loading = false; });
     }
   }
+
+  // ── Realtime subscription — auto-updates rows as scan completes ───────────────
+
+  void _subscribeRealtime() {
+    _channel?.unsubscribe();
+    _channel = Supabase.instance.client
+      .channel('pending_bills_scan_updates')
+      .onPostgresChanges(
+        event: PostgresChangeEvent.update,
+        schema: 'public',
+        table: 'pending_bills',
+        callback: (payload) {
+          if (!mounted) return;
+          final updated = Map<String, dynamic>.from(payload.newRecord);
+          final id = updated['id'] as String?;
+          if (id == null) return;
+          setState(() {
+            final idx = _bills.indexWhere((b) => b['id'] == id);
+            if (idx < 0) return;
+            final newStatus = updated['status'] as String? ?? 'pending';
+            if (newStatus == 'imported' || newStatus == 'dismissed') {
+              _bills.removeAt(idx);
+              _supplierCtrls[id]?.dispose();
+              _supplierCtrls.remove(id);
+              widget.onCountChanged?.call();
+            } else {
+              _bills[idx] = updated;
+            }
+          });
+        },
+      )
+      .subscribe();
+  }
+
+  // ── Actions ───────────────────────────────────────────────────────────────────
 
   Future<void> _dismiss(String id) async {
     setState(() => _dismissing[id] = true);
@@ -154,17 +192,14 @@ class _PendingBillsScreenState extends State<PendingBillsScreen> {
 
     setState(() => _approving[id] = true);
     try {
-      // Append sender_email to supplier's emails array
       await Supabase.instance.client.rpc('append_supplier_email', params: {
         'p_supplier_id': supplierId,
         'p_email': senderEmail,
       });
-      // Set verdict to 'real'
       await Supabase.instance.client
           .from('pending_bills')
           .update({'verdict': 'real'})
           .eq('id', id);
-      // Refresh
       setState(() => _approving.remove(id));
       await _load();
     } catch (e) {
@@ -172,6 +207,42 @@ class _PendingBillsScreenState extends State<PendingBillsScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text('Approval failed: ${e.toString().replaceFirst('Exception: ', '')}'),
+        behavior: SnackBarBehavior.floating,
+      ));
+    }
+  }
+
+  // Retry a failed scan by invoking the edge function directly (trigger only fires on INSERT)
+  Future<void> _retryScan(Map<String, dynamic> bill) async {
+    final id = bill['id'] as String;
+    try {
+      // Optimistically show scanning state
+      final idx = _bills.indexWhere((b) => b['id'] == id);
+      if (idx >= 0 && mounted) {
+        setState(() => _bills[idx] = Map.from(_bills[idx])
+          ..['scan_status'] = 'scanning'
+          ..['verdict'] = null
+          ..['scan_result'] = null);
+      }
+      // Update DB (realtime will broadcast to other clients)
+      await Supabase.instance.client.from('pending_bills').update({
+        'scan_status': 'scanning',
+        'verdict': null,
+        'scan_result': null,
+      }).eq('id', id);
+      // Fire scan — don't await; realtime picks up the result
+      // ignore: unawaited_futures
+      Supabase.instance.client.functions.invoke('scan-bill', body: {
+        'record': {
+          'id': id,
+          'file_path': bill['file_path'],
+          'sender_email': bill['sender_email'] ?? '',
+        },
+      });
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Retry failed: ${e.toString().replaceFirst('Exception: ', '')}'),
         behavior: SnackBarBehavior.floating,
       ));
     }
@@ -224,7 +295,11 @@ class _PendingBillsScreenState extends State<PendingBillsScreen> {
   }
 
   Widget _buildHeader(bool isDesktop) {
-    final pending = _bills.where((b) => (b['verdict'] as String?) != 'fake').length;
+    final actionable = _bills.where((b) {
+      final ss = b['scan_status'] as String? ?? 'pending';
+      final v = b['verdict'] as String?;
+      return ss == 'done' && (v == 'real' || v == 'needs_approval');
+    }).length;
     return Container(
       color: Colors.white,
       padding: EdgeInsets.fromLTRB(isDesktop ? 24 : 16, 16, isDesktop ? 24 : 16, 14),
@@ -234,7 +309,7 @@ class _PendingBillsScreenState extends State<PendingBillsScreen> {
           Row(children: [
             const Text('Pending Bills',
                 style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: Color(0xFF111827))),
-            if (!_loading && pending > 0) ...[
+            if (!_loading && actionable > 0) ...[
               const SizedBox(width: 10),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
@@ -242,7 +317,7 @@ class _PendingBillsScreenState extends State<PendingBillsScreen> {
                   color: const Color(0xFFDC2626),
                   borderRadius: BorderRadius.circular(10),
                 ),
-                child: Text('$pending',
+                child: Text('$actionable',
                   style: const TextStyle(fontSize: 12, color: Colors.white, fontWeight: FontWeight.w700)),
               ),
             ],
@@ -255,7 +330,7 @@ class _PendingBillsScreenState extends State<PendingBillsScreen> {
           ]),
           const SizedBox(height: 2),
           const Text(
-            'Supplier bills forwarded by email — auto-scanned by AI.',
+            'Supplier bills forwarded by email — auto-scanned by AI on arrival.',
             style: TextStyle(fontSize: 13, color: Color(0xFF6B7280)),
           ),
         ],
@@ -293,10 +368,15 @@ class _PendingBillsScreenState extends State<PendingBillsScreen> {
       ]));
     }
 
-    final scanning    = _bills.where((b) => b['verdict'] == null).toList();
-    final real        = _bills.where((b) => b['verdict'] == 'real').toList();
+    // Group by scan_status first, then by verdict for done rows
+    final scanning   = _bills.where((b) {
+      final ss = b['scan_status'] as String? ?? 'pending';
+      return ss == 'pending' || ss == 'scanning';
+    }).toList();
+    final scanError  = _bills.where((b) => (b['scan_status'] as String?) == 'error').toList();
+    final real       = _bills.where((b) => b['verdict'] == 'real').toList();
     final needsApproval = _bills.where((b) => b['verdict'] == 'needs_approval').toList();
-    final fake        = _bills.where((b) => b['verdict'] == 'fake').toList();
+    final fake       = _bills.where((b) => b['verdict'] == 'fake').toList();
 
     return RefreshIndicator(
       onRefresh: _load,
@@ -312,6 +392,15 @@ class _PendingBillsScreenState extends State<PendingBillsScreen> {
             badge: scanning.length,
             badgeColor: const Color(0xFF6B7280),
             bills: scanning,
+            isDesktop: isDesktop,
+          ),
+          if (scanError.isNotEmpty) _buildSection(
+            icon: Icons.error_outline,
+            iconColor: const Color(0xFFDC2626),
+            title: 'Scan Failed',
+            badge: scanError.length,
+            badgeColor: const Color(0xFFDC2626),
+            bills: scanError,
             isDesktop: isDesktop,
           ),
           if (needsApproval.isNotEmpty) _buildSection(
@@ -350,7 +439,6 @@ class _PendingBillsScreenState extends State<PendingBillsScreen> {
     return Padding(
       padding: const EdgeInsets.only(bottom: 20),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        // Section header
         Row(children: [
           Icon(icon, size: 16, color: iconColor),
           const SizedBox(width: 6),
@@ -473,6 +561,7 @@ class _PendingBillsScreenState extends State<PendingBillsScreen> {
             onImport: () => _importBill(bills[i]),
             onDismiss: () => _dismiss(bills[i]['id'] as String),
             onApprove: () => _approveBill(bills[i]),
+            onRetryScan: () => _retryScan(bills[i]),
           ),
       ]),
     );
@@ -495,6 +584,7 @@ class _PendingBillsScreenState extends State<PendingBillsScreen> {
       onImport: () => _importBill(bill),
       onDismiss: () => _dismiss(id),
       onApprove: () => _approveBill(bill),
+      onRetryScan: () => _retryScan(bill),
     );
   }
 }
@@ -506,14 +596,27 @@ const _kTh = TextStyle(
   color: Color(0xFF9CA3AF), letterSpacing: 0.5,
 );
 
-// ── Verdict badge ─────────────────────────────────────────────────────────────
+// ── Verdict / scan-status badge ───────────────────────────────────────────────
 
 class _VerdictBadge extends StatelessWidget {
   final String? verdict;
-  const _VerdictBadge(this.verdict);
+  final String? scanStatus;
+  const _VerdictBadge(this.verdict, {this.scanStatus});
 
   @override
   Widget build(BuildContext context) {
+    final ss = scanStatus ?? 'pending';
+    if (ss == 'pending' || ss == 'scanning') {
+      return Row(mainAxisSize: MainAxisSize.min, children: const [
+        SizedBox(width: 11, height: 11,
+          child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF9CA3AF))),
+        SizedBox(width: 5),
+        Text('scanning…', style: TextStyle(fontSize: 10, color: Color(0xFF9CA3AF), fontWeight: FontWeight.w500)),
+      ]);
+    }
+    if (ss == 'error') {
+      return _badge('SCAN ERROR', const Color(0xFFDC2626), const Color(0xFFFEE2E2));
+    }
     switch (verdict) {
       case 'real':
         return _badge('REAL', const Color(0xFF16A34A), const Color(0xFFDCFCE7));
@@ -522,13 +625,7 @@ class _VerdictBadge extends StatelessWidget {
       case 'fake':
         return _badge('FAKE', const Color(0xFFDC2626), const Color(0xFFFEE2E2));
       default:
-        return SizedBox(
-          width: 14, height: 14,
-          child: CircularProgressIndicator(
-            strokeWidth: 1.5,
-            color: const Color(0xFF9CA3AF),
-          ),
-        );
+        return _badge('UNKNOWN', const Color(0xFF6B7280), const Color(0xFFF3F4F6));
     }
   }
 
@@ -610,6 +707,7 @@ class _DesktopBillRow extends StatelessWidget {
   final VoidCallback onImport;
   final VoidCallback onDismiss;
   final VoidCallback onApprove;
+  final VoidCallback onRetryScan;
 
   const _DesktopBillRow({
     required this.bill, required this.isEven, required this.isLast,
@@ -618,6 +716,7 @@ class _DesktopBillRow extends StatelessWidget {
     required this.receivedStr, required this.isDownloading,
     required this.isDismissing, required this.isApproving,
     required this.onImport, required this.onDismiss, required this.onApprove,
+    required this.onRetryScan,
   });
 
   @override
@@ -625,6 +724,7 @@ class _DesktopBillRow extends StatelessWidget {
     final fileName = bill['file_name'] as String? ?? '—';
     final senderEmail = bill['sender_email'] as String? ?? '—';
     final verdict = bill['verdict'] as String?;
+    final scanStatus = bill['scan_status'] as String? ?? 'pending';
     final scanResult = bill['scan_result'] as Map<String, dynamic>?;
     final extractedSupplier = scanResult?['supplier_name'] as String?;
 
@@ -640,7 +740,7 @@ class _DesktopBillRow extends StatelessWidget {
           Text(fileName, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
               maxLines: 1, overflow: TextOverflow.ellipsis),
           const SizedBox(height: 3),
-          _VerdictBadge(verdict),
+          _VerdictBadge(verdict, scanStatus: scanStatus),
         ])),
         Expanded(flex: 4, child: Text(senderEmail,
             style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
@@ -650,13 +750,23 @@ class _DesktopBillRow extends StatelessWidget {
             maxLines: 1, overflow: TextOverflow.ellipsis)),
         Expanded(flex: 3, child: Text(receivedStr,
             style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF)))),
-        SizedBox(width: 200, child: _buildActions(verdict)),
+        SizedBox(width: 200, child: _buildActions(verdict, scanStatus)),
       ]),
     );
   }
 
-  Widget _buildActions(String? verdict) {
+  Widget _buildActions(String? verdict, String scanStatus) {
     final busy = isDownloading || isDismissing || isApproving;
+    if (scanStatus == 'pending' || scanStatus == 'scanning') {
+      return const SizedBox.shrink();
+    }
+    if (scanStatus == 'error') {
+      return _ActionBtn(
+        label: 'Retry Scan', icon: Icons.refresh_rounded,
+        color: const Color(0xFF7C3AED), loading: false,
+        onTap: onRetryScan,
+      );
+    }
     switch (verdict) {
       case 'real':
         return Row(children: [
@@ -700,12 +810,14 @@ class _MobileBillCard extends StatelessWidget {
   final VoidCallback onImport;
   final VoidCallback onDismiss;
   final VoidCallback onApprove;
+  final VoidCallback onRetryScan;
 
   const _MobileBillCard({
     required this.bill, required this.supplierCtrl, required this.onSaveSupplier,
     required this.fileIcon, required this.fileIconColor, required this.receivedStr,
     required this.isDownloading, required this.isDismissing, required this.isApproving,
     required this.onImport, required this.onDismiss, required this.onApprove,
+    required this.onRetryScan,
   });
 
   @override
@@ -713,6 +825,7 @@ class _MobileBillCard extends StatelessWidget {
     final fileName = bill['file_name'] as String? ?? '—';
     final senderEmail = bill['sender_email'] as String? ?? '—';
     final verdict = bill['verdict'] as String?;
+    final scanStatus = bill['scan_status'] as String? ?? 'pending';
     final scanResult = bill['scan_result'] as Map<String, dynamic>?;
     final extractedSupplier = scanResult?['supplier_name'] as String?;
     final busy = isDownloading || isDismissing || isApproving;
@@ -740,7 +853,7 @@ class _MobileBillCard extends StatelessWidget {
                 maxLines: 2, overflow: TextOverflow.ellipsis),
             const SizedBox(height: 4),
             Row(children: [
-              _VerdictBadge(verdict),
+              _VerdictBadge(verdict, scanStatus: scanStatus),
               if (extractedSupplier != null && extractedSupplier.isNotEmpty) ...[
                 const SizedBox(width: 6),
                 Expanded(child: Text(extractedSupplier,
@@ -755,12 +868,21 @@ class _MobileBillCard extends StatelessWidget {
         const SizedBox(height: 2),
         Text(receivedStr, style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
         const SizedBox(height: 12),
-        _buildMobileActions(verdict, busy),
+        _buildMobileActions(verdict, scanStatus, busy),
       ]),
     );
   }
 
-  Widget _buildMobileActions(String? verdict, bool busy) {
+  Widget _buildMobileActions(String? verdict, String scanStatus, bool busy) {
+    if (scanStatus == 'pending' || scanStatus == 'scanning') {
+      return const SizedBox.shrink();
+    }
+    if (scanStatus == 'error') {
+      return SizedBox(width: double.infinity,
+        child: _ActionBtn(label: 'Retry Scan', icon: Icons.refresh_rounded,
+            color: const Color(0xFF7C3AED), loading: false,
+            onTap: onRetryScan, expanded: true));
+    }
     switch (verdict) {
       case 'real':
         return Row(children: [

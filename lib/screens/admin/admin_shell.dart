@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../user_state.dart';
 import 'admin_add_admin_screen.dart';
+import 'admin_add_medicine_screen.dart';
 
 // ── Nav entry ────────────────────────────────────────────────────────────────
 
@@ -96,10 +97,12 @@ class _AdminShellState extends State<AdminShell> {
             onLogout: () => UserState.read(ctx).signOut(),
           ),
           Expanded(
-            child: _PageBody(
-              title: _kNav[_index].pageTitle,
-              icon: _kNav[_index].icon,
-            ),
+            child: _index == 0
+                ? const AdminAddMedicineScreen()
+                : _PageBody(
+                    title: _kNav[_index].pageTitle,
+                    icon: _kNav[_index].icon,
+                  ),
           ),
         ],
       ),
@@ -183,10 +186,12 @@ class _AdminShellState extends State<AdminShell> {
           ),
         ],
       ),
-      body: _PageBody(
-        title: _kNav[_index].pageTitle,
-        icon: _kNav[_index].icon,
-      ),
+      body: _index == 0
+          ? const AdminAddMedicineScreen()
+          : _PageBody(
+              title: _kNav[_index].pageTitle,
+              icon: _kNav[_index].icon,
+            ),
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _index,
         type: BottomNavigationBarType.fixed,

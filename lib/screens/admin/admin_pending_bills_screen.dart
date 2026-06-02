@@ -17,9 +17,11 @@ class _PendingBillsScreenState extends State<PendingBillsScreen> {
   List<Map<String, dynamic>> _bills = [];
   bool _loading = true;
   String? _error;
+  bool _fakeExpanded = false;
   final Map<String, TextEditingController> _supplierCtrls = {};
   final Map<String, bool> _downloading = {};
   final Map<String, bool> _dismissing = {};
+  final Map<String, bool> _approving = {};
 
   @override
   void initState() {
@@ -136,6 +138,45 @@ class _PendingBillsScreenState extends State<PendingBillsScreen> {
     }
   }
 
+  Future<void> _approveBill(Map<String, dynamic> bill) async {
+    final id = bill['id'] as String;
+    final scanResult = bill['scan_result'] as Map<String, dynamic>?;
+    final supplierId = scanResult?['matched_supplier_id'] as String?;
+    final senderEmail = (bill['sender_email'] as String? ?? '').toLowerCase().trim();
+
+    if (supplierId == null || senderEmail.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Cannot approve: no matched supplier in scan result.'),
+        behavior: SnackBarBehavior.floating,
+      ));
+      return;
+    }
+
+    setState(() => _approving[id] = true);
+    try {
+      // Append sender_email to supplier's emails array
+      await Supabase.instance.client.rpc('append_supplier_email', params: {
+        'p_supplier_id': supplierId,
+        'p_email': senderEmail,
+      });
+      // Set verdict to 'real'
+      await Supabase.instance.client
+          .from('pending_bills')
+          .update({'verdict': 'real'})
+          .eq('id', id);
+      // Refresh
+      setState(() => _approving.remove(id));
+      await _load();
+    } catch (e) {
+      setState(() => _approving.remove(id));
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Approval failed: ${e.toString().replaceFirst('Exception: ', '')}'),
+        behavior: SnackBarBehavior.floating,
+      ));
+    }
+  }
+
   // ── Helpers ───────────────────────────────────────────────────────────────────
 
   static IconData _fileIcon(String name) {
@@ -183,6 +224,7 @@ class _PendingBillsScreenState extends State<PendingBillsScreen> {
   }
 
   Widget _buildHeader(bool isDesktop) {
+    final pending = _bills.where((b) => (b['verdict'] as String?) != 'fake').length;
     return Container(
       color: Colors.white,
       padding: EdgeInsets.fromLTRB(isDesktop ? 24 : 16, 16, isDesktop ? 24 : 16, 14),
@@ -192,7 +234,7 @@ class _PendingBillsScreenState extends State<PendingBillsScreen> {
           Row(children: [
             const Text('Pending Bills',
                 style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: Color(0xFF111827))),
-            if (!_loading && _bills.isNotEmpty) ...[
+            if (!_loading && pending > 0) ...[
               const SizedBox(width: 10),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
@@ -200,10 +242,8 @@ class _PendingBillsScreenState extends State<PendingBillsScreen> {
                   color: const Color(0xFFDC2626),
                   borderRadius: BorderRadius.circular(10),
                 ),
-                child: Text(
-                  '${_bills.length}',
-                  style: const TextStyle(fontSize: 12, color: Colors.white, fontWeight: FontWeight.w700),
-                ),
+                child: Text('$pending',
+                  style: const TextStyle(fontSize: 12, color: Colors.white, fontWeight: FontWeight.w700)),
               ),
             ],
             const Spacer(),
@@ -215,7 +255,7 @@ class _PendingBillsScreenState extends State<PendingBillsScreen> {
           ]),
           const SizedBox(height: 2),
           const Text(
-            'Supplier bills forwarded by email — import or dismiss each one.',
+            'Supplier bills forwarded by email — auto-scanned by AI.',
             style: TextStyle(fontSize: 13, color: Color(0xFF6B7280)),
           ),
         ],
@@ -245,92 +285,216 @@ class _PendingBillsScreenState extends State<PendingBillsScreen> {
           decoration: BoxDecoration(color: const Color(0xFFECFDF5), borderRadius: BorderRadius.circular(18)),
           child: const Icon(Icons.inbox_outlined, size: 36, color: Color(0xFF16A34A))),
         const SizedBox(height: 18),
-        const Text('No pending bills', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+        const Text('No pending bills',
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
         const SizedBox(height: 6),
         const Text('Bills forwarded by the Gmail script will appear here.',
             style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
       ]));
     }
+
+    final scanning    = _bills.where((b) => b['verdict'] == null).toList();
+    final real        = _bills.where((b) => b['verdict'] == 'real').toList();
+    final needsApproval = _bills.where((b) => b['verdict'] == 'needs_approval').toList();
+    final fake        = _bills.where((b) => b['verdict'] == 'fake').toList();
+
     return RefreshIndicator(
       onRefresh: _load,
       color: const Color(0xFF16A34A),
-      child: isDesktop ? _buildDesktopList() : _buildMobileList(),
+      child: SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: EdgeInsets.all(isDesktop ? 20 : 12),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          if (scanning.isNotEmpty) _buildSection(
+            icon: Icons.radar_outlined,
+            iconColor: const Color(0xFF6B7280),
+            title: 'Scanning…',
+            badge: scanning.length,
+            badgeColor: const Color(0xFF6B7280),
+            bills: scanning,
+            isDesktop: isDesktop,
+          ),
+          if (needsApproval.isNotEmpty) _buildSection(
+            icon: Icons.pending_outlined,
+            iconColor: const Color(0xFFD97706),
+            title: 'Needs Approval',
+            badge: needsApproval.length,
+            badgeColor: const Color(0xFFD97706),
+            bills: needsApproval,
+            isDesktop: isDesktop,
+          ),
+          if (real.isNotEmpty) _buildSection(
+            icon: Icons.verified_outlined,
+            iconColor: const Color(0xFF16A34A),
+            title: 'Verified Real',
+            badge: real.length,
+            badgeColor: const Color(0xFF16A34A),
+            bills: real,
+            isDesktop: isDesktop,
+          ),
+          if (fake.isNotEmpty) _buildFakeSection(fake, isDesktop),
+        ]),
+      ),
     );
   }
 
-  // ── Desktop ───────────────────────────────────────────────────────────────────
-
-  Widget _buildDesktopList() {
-    return SingleChildScrollView(
-      physics: const AlwaysScrollableScrollPhysics(),
-      padding: const EdgeInsets.all(20),
-      child: Center(child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 1100),
-        child: Container(
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: const Color(0xFFE5E7EB)),
+  Widget _buildSection({
+    required IconData icon,
+    required Color iconColor,
+    required String title,
+    required int badge,
+    required Color badgeColor,
+    required List<Map<String, dynamic>> bills,
+    required bool isDesktop,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 20),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        // Section header
+        Row(children: [
+          Icon(icon, size: 16, color: iconColor),
+          const SizedBox(width: 6),
+          Text(title, style: TextStyle(
+              fontSize: 13, fontWeight: FontWeight.w700, color: iconColor)),
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+            decoration: BoxDecoration(
+              color: badgeColor.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text('$badge',
+                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: badgeColor)),
           ),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            // Table header
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
-              child: Row(children: const [
-                SizedBox(width: 40),
-                Expanded(flex: 5, child: Text('FILE', style: _kTh)),
-                Expanded(flex: 4, child: Text('FROM', style: _kTh)),
-                Expanded(flex: 4, child: Text('SUPPLIER', style: _kTh)),
-                Expanded(flex: 3, child: Text('RECEIVED', style: _kTh)),
-                SizedBox(width: 180, child: Text('ACTIONS', style: _kTh)),
+        ]),
+        const SizedBox(height: 8),
+        if (isDesktop)
+          _buildDesktopTable(bills)
+        else
+          ...bills.map((b) => Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: _buildMobileCard(b),
+          )),
+      ]),
+    );
+  }
+
+  Widget _buildFakeSection(List<Map<String, dynamic>> bills, bool isDesktop) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 20),
+      child: Container(
+        decoration: BoxDecoration(
+          border: Border.all(color: const Color(0xFFFECACA)),
+          borderRadius: BorderRadius.circular(10),
+          color: const Color(0xFFFFF5F5),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          InkWell(
+            onTap: () => setState(() => _fakeExpanded = !_fakeExpanded),
+            borderRadius: BorderRadius.circular(10),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              child: Row(children: [
+                const Icon(Icons.warning_amber_outlined, size: 16, color: Color(0xFFDC2626)),
+                const SizedBox(width: 6),
+                const Text('Fake / Unrecognised Bills',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFFDC2626))),
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFECACA),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text('${bills.length}',
+                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFFDC2626))),
+                ),
+                const Spacer(),
+                Icon(_fakeExpanded ? Icons.expand_less : Icons.expand_more,
+                    size: 18, color: const Color(0xFFDC2626)),
               ]),
             ),
-            const Divider(height: 1, color: Color(0xFFE5E7EB)),
-            for (int i = 0; i < _bills.length; i++)
-              _DesktopBillRow(
-                bill: _bills[i],
-                isEven: i % 2 == 0,
-                isLast: i == _bills.length - 1,
-                supplierCtrl: _supplierCtrls[_bills[i]['id']]!,
-                onSaveSupplier: () => _saveSupplier(_bills[i]['id'] as String),
-                fileIcon: _fileIcon(_bills[i]['file_name'] as String? ?? ''),
-                fileIconColor: _fileIconColor(_bills[i]['file_name'] as String? ?? ''),
-                receivedStr: _fmtDate(_bills[i]['received_at']),
-                isDownloading: _downloading[_bills[i]['id']] == true,
-                isDismissing: _dismissing[_bills[i]['id']] == true,
-                onImport: () => _importBill(_bills[i]),
-                onDismiss: () => _dismiss(_bills[i]['id'] as String),
-              ),
-          ]),
-        ),
-      )),
+          ),
+          if (_fakeExpanded) ...[
+            const Divider(height: 1, color: Color(0xFFFECACA)),
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                if (isDesktop)
+                  _buildDesktopTable(bills)
+                else
+                  ...bills.map((b) => Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: _buildMobileCard(b),
+                  )),
+              ]),
+            ),
+          ],
+        ]),
+      ),
     );
   }
 
-  // ── Mobile ────────────────────────────────────────────────────────────────────
+  // ── Desktop table ─────────────────────────────────────────────────────────────
 
-  Widget _buildMobileList() {
-    return ListView.separated(
-      physics: const AlwaysScrollableScrollPhysics(),
-      padding: const EdgeInsets.all(12),
-      itemCount: _bills.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 10),
-      itemBuilder: (_, i) {
-        final bill = _bills[i];
-        final id = bill['id'] as String;
-        return _MobileBillCard(
-          bill: bill,
-          supplierCtrl: _supplierCtrls[id]!,
-          onSaveSupplier: () => _saveSupplier(id),
-          fileIcon: _fileIcon(bill['file_name'] as String? ?? ''),
-          fileIconColor: _fileIconColor(bill['file_name'] as String? ?? ''),
-          receivedStr: _fmtDate(bill['received_at']),
-          isDownloading: _downloading[id] == true,
-          isDismissing: _dismissing[id] == true,
-          onImport: () => _importBill(bill),
-          onDismiss: () => _dismiss(id),
-        );
-      },
+  Widget _buildDesktopTable(List<Map<String, dynamic>> bills) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
+          child: Row(children: const [
+            SizedBox(width: 36),
+            Expanded(flex: 5, child: Text('FILE', style: _kTh)),
+            Expanded(flex: 4, child: Text('FROM', style: _kTh)),
+            Expanded(flex: 3, child: Text('SUPPLIER', style: _kTh)),
+            Expanded(flex: 3, child: Text('RECEIVED', style: _kTh)),
+            SizedBox(width: 200, child: Text('ACTIONS', style: _kTh)),
+          ]),
+        ),
+        const Divider(height: 1, color: Color(0xFFE5E7EB)),
+        for (int i = 0; i < bills.length; i++)
+          _DesktopBillRow(
+            bill: bills[i],
+            isEven: i % 2 == 0,
+            isLast: i == bills.length - 1,
+            supplierCtrl: _supplierCtrls[bills[i]['id']]!,
+            onSaveSupplier: () => _saveSupplier(bills[i]['id'] as String),
+            fileIcon: _fileIcon(bills[i]['file_name'] as String? ?? ''),
+            fileIconColor: _fileIconColor(bills[i]['file_name'] as String? ?? ''),
+            receivedStr: _fmtDate(bills[i]['received_at']),
+            isDownloading: _downloading[bills[i]['id']] == true,
+            isDismissing: _dismissing[bills[i]['id']] == true,
+            isApproving: _approving[bills[i]['id']] == true,
+            onImport: () => _importBill(bills[i]),
+            onDismiss: () => _dismiss(bills[i]['id'] as String),
+            onApprove: () => _approveBill(bills[i]),
+          ),
+      ]),
+    );
+  }
+
+  // ── Mobile card ───────────────────────────────────────────────────────────────
+
+  Widget _buildMobileCard(Map<String, dynamic> bill) {
+    final id = bill['id'] as String;
+    return _MobileBillCard(
+      bill: bill,
+      supplierCtrl: _supplierCtrls[id]!,
+      onSaveSupplier: () => _saveSupplier(id),
+      fileIcon: _fileIcon(bill['file_name'] as String? ?? ''),
+      fileIconColor: _fileIconColor(bill['file_name'] as String? ?? ''),
+      receivedStr: _fmtDate(bill['received_at']),
+      isDownloading: _downloading[id] == true,
+      isDismissing: _dismissing[id] == true,
+      isApproving: _approving[id] == true,
+      onImport: () => _importBill(bill),
+      onDismiss: () => _dismiss(id),
+      onApprove: () => _approveBill(bill),
     );
   }
 }
@@ -341,6 +505,93 @@ const _kTh = TextStyle(
   fontSize: 11, fontWeight: FontWeight.w600,
   color: Color(0xFF9CA3AF), letterSpacing: 0.5,
 );
+
+// ── Verdict badge ─────────────────────────────────────────────────────────────
+
+class _VerdictBadge extends StatelessWidget {
+  final String? verdict;
+  const _VerdictBadge(this.verdict);
+
+  @override
+  Widget build(BuildContext context) {
+    switch (verdict) {
+      case 'real':
+        return _badge('REAL', const Color(0xFF16A34A), const Color(0xFFDCFCE7));
+      case 'needs_approval':
+        return _badge('APPROVAL', const Color(0xFFD97706), const Color(0xFFFEF3C7));
+      case 'fake':
+        return _badge('FAKE', const Color(0xFFDC2626), const Color(0xFFFEE2E2));
+      default:
+        return SizedBox(
+          width: 14, height: 14,
+          child: CircularProgressIndicator(
+            strokeWidth: 1.5,
+            color: const Color(0xFF9CA3AF),
+          ),
+        );
+    }
+  }
+
+  Widget _badge(String label, Color fg, Color bg) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(4)),
+      child: Text(label, style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: fg, letterSpacing: 0.5)),
+    );
+  }
+}
+
+// ── Approval dropdown ─────────────────────────────────────────────────────────
+
+class _ApprovalDropdown extends StatefulWidget {
+  final bool loading;
+  final VoidCallback onApprove;
+  final VoidCallback onReject;
+  const _ApprovalDropdown({required this.loading, required this.onApprove, required this.onReject});
+
+  @override
+  State<_ApprovalDropdown> createState() => _ApprovalDropdownState();
+}
+
+class _ApprovalDropdownState extends State<_ApprovalDropdown> {
+  @override
+  Widget build(BuildContext context) {
+    if (widget.loading) {
+      return const SizedBox(width: 16, height: 16,
+          child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFD97706)));
+    }
+    return PopupMenuButton<String>(
+      onSelected: (v) => v == 'approve' ? widget.onApprove() : widget.onReject(),
+      itemBuilder: (_) => [
+        const PopupMenuItem(value: 'approve', child: Row(children: [
+          Icon(Icons.check_circle_outline, size: 16, color: Color(0xFF16A34A)),
+          SizedBox(width: 8),
+          Text('Approve sender', style: TextStyle(fontSize: 13)),
+        ])),
+        const PopupMenuItem(value: 'reject', child: Row(children: [
+          Icon(Icons.cancel_outlined, size: 16, color: Color(0xFFDC2626)),
+          SizedBox(width: 8),
+          Text('Reject bill', style: TextStyle(fontSize: 13)),
+        ])),
+      ],
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          border: Border.all(color: const Color(0xFFD97706).withValues(alpha: 0.5)),
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: const Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(Icons.pending_outlined, size: 14, color: Color(0xFFD97706)),
+          SizedBox(width: 4),
+          Text('Approval required',
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFFD97706))),
+          SizedBox(width: 4),
+          Icon(Icons.arrow_drop_down, size: 16, color: Color(0xFFD97706)),
+        ]),
+      ),
+    );
+  }
+}
 
 // ── Desktop bill row ──────────────────────────────────────────────────────────
 
@@ -355,21 +606,27 @@ class _DesktopBillRow extends StatelessWidget {
   final String receivedStr;
   final bool isDownloading;
   final bool isDismissing;
+  final bool isApproving;
   final VoidCallback onImport;
   final VoidCallback onDismiss;
+  final VoidCallback onApprove;
 
   const _DesktopBillRow({
     required this.bill, required this.isEven, required this.isLast,
     required this.supplierCtrl, required this.onSaveSupplier,
     required this.fileIcon, required this.fileIconColor,
     required this.receivedStr, required this.isDownloading,
-    required this.isDismissing, required this.onImport, required this.onDismiss,
+    required this.isDismissing, required this.isApproving,
+    required this.onImport, required this.onDismiss, required this.onApprove,
   });
 
   @override
   Widget build(BuildContext context) {
     final fileName = bill['file_name'] as String? ?? '—';
     final senderEmail = bill['sender_email'] as String? ?? '—';
+    final verdict = bill['verdict'] as String?;
+    final scanResult = bill['scan_result'] as Map<String, dynamic>?;
+    final extractedSupplier = scanResult?['supplier_name'] as String?;
 
     return Container(
       decoration: BoxDecoration(
@@ -378,36 +635,53 @@ class _DesktopBillRow extends StatelessWidget {
       ),
       padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
       child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-        SizedBox(width: 40, child: Icon(fileIcon, size: 22, color: fileIconColor)),
+        SizedBox(width: 36, child: Icon(fileIcon, size: 20, color: fileIconColor)),
         Expanded(flex: 5, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(fileName, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
-              maxLines: 2, overflow: TextOverflow.ellipsis),
+              maxLines: 1, overflow: TextOverflow.ellipsis),
+          const SizedBox(height: 3),
+          _VerdictBadge(verdict),
         ])),
         Expanded(flex: 4, child: Text(senderEmail,
             style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
             maxLines: 1, overflow: TextOverflow.ellipsis)),
-        Expanded(flex: 4, child: _SupplierField(ctrl: supplierCtrl, onSaved: onSaveSupplier)),
+        Expanded(flex: 3, child: Text(extractedSupplier ?? '',
+            style: const TextStyle(fontSize: 12, color: Color(0xFF374151)),
+            maxLines: 1, overflow: TextOverflow.ellipsis)),
         Expanded(flex: 3, child: Text(receivedStr,
             style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF)))),
-        SizedBox(width: 180, child: Row(children: [
-          _ActionBtn(
-            label: 'Import',
-            icon: Icons.upload_rounded,
-            color: const Color(0xFF16A34A),
-            loading: isDownloading,
-            onTap: isDownloading || isDismissing ? null : onImport,
-          ),
-          const SizedBox(width: 6),
-          _ActionBtn(
-            label: 'Dismiss',
-            icon: Icons.close_rounded,
-            color: const Color(0xFF6B7280),
-            loading: isDismissing,
-            onTap: isDownloading || isDismissing ? null : onDismiss,
-          ),
-        ])),
+        SizedBox(width: 200, child: _buildActions(verdict)),
       ]),
     );
+  }
+
+  Widget _buildActions(String? verdict) {
+    final busy = isDownloading || isDismissing || isApproving;
+    switch (verdict) {
+      case 'real':
+        return Row(children: [
+          _ActionBtn(label: 'Import', icon: Icons.upload_rounded,
+              color: const Color(0xFF16A34A), loading: isDownloading,
+              onTap: busy ? null : onImport),
+          const SizedBox(width: 6),
+          _ActionBtn(label: 'Dismiss', icon: Icons.close_rounded,
+              color: const Color(0xFF6B7280), loading: isDismissing,
+              onTap: busy ? null : onDismiss),
+        ]);
+      case 'needs_approval':
+        return Row(children: [
+          _ApprovalDropdown(loading: isApproving,
+              onApprove: onApprove, onReject: onDismiss),
+        ]);
+      case 'fake':
+        return Row(children: [
+          _ActionBtn(label: 'Dismiss', icon: Icons.close_rounded,
+              color: const Color(0xFF6B7280), loading: isDismissing,
+              onTap: busy ? null : onDismiss),
+        ]);
+      default:
+        return const SizedBox.shrink();
+    }
   }
 }
 
@@ -422,20 +696,26 @@ class _MobileBillCard extends StatelessWidget {
   final String receivedStr;
   final bool isDownloading;
   final bool isDismissing;
+  final bool isApproving;
   final VoidCallback onImport;
   final VoidCallback onDismiss;
+  final VoidCallback onApprove;
 
   const _MobileBillCard({
     required this.bill, required this.supplierCtrl, required this.onSaveSupplier,
     required this.fileIcon, required this.fileIconColor, required this.receivedStr,
-    required this.isDownloading, required this.isDismissing,
-    required this.onImport, required this.onDismiss,
+    required this.isDownloading, required this.isDismissing, required this.isApproving,
+    required this.onImport, required this.onDismiss, required this.onApprove,
   });
 
   @override
   Widget build(BuildContext context) {
     final fileName = bill['file_name'] as String? ?? '—';
     final senderEmail = bill['sender_email'] as String? ?? '—';
+    final verdict = bill['verdict'] as String?;
+    final scanResult = bill['scan_result'] as Map<String, dynamic>?;
+    final extractedSupplier = scanResult?['supplier_name'] as String?;
+    final busy = isDownloading || isDismissing || isApproving;
 
     return Container(
       decoration: BoxDecoration(
@@ -449,86 +729,62 @@ class _MobileBillCard extends StatelessWidget {
           Container(
             width: 40, height: 40,
             decoration: BoxDecoration(
-              color: fileIconColor.withOpacity(0.1),
+              color: fileIconColor.withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(10),
             ),
             child: Icon(fileIcon, size: 20, color: fileIconColor),
           ),
           const SizedBox(width: 12),
           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(fileName,
-                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
+            Text(fileName, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
                 maxLines: 2, overflow: TextOverflow.ellipsis),
-            const SizedBox(height: 2),
-            Text(senderEmail, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+            const SizedBox(height: 4),
+            Row(children: [
+              _VerdictBadge(verdict),
+              if (extractedSupplier != null && extractedSupplier.isNotEmpty) ...[
+                const SizedBox(width: 6),
+                Expanded(child: Text(extractedSupplier,
+                    style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280)),
+                    maxLines: 1, overflow: TextOverflow.ellipsis)),
+              ],
+            ]),
           ])),
         ]),
-        const SizedBox(height: 10),
-        _SupplierField(ctrl: supplierCtrl, onSaved: onSaveSupplier),
-        const SizedBox(height: 6),
+        const SizedBox(height: 8),
+        Text(senderEmail, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+        const SizedBox(height: 2),
         Text(receivedStr, style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
         const SizedBox(height: 12),
-        Row(children: [
-          Expanded(child: _ActionBtn(
-            label: 'Import',
-            icon: Icons.upload_rounded,
-            color: const Color(0xFF16A34A),
-            loading: isDownloading,
-            onTap: isDownloading || isDismissing ? null : onImport,
-            expanded: true,
-          )),
-          const SizedBox(width: 8),
-          Expanded(child: _ActionBtn(
-            label: 'Dismiss',
-            icon: Icons.close_rounded,
-            color: const Color(0xFF6B7280),
-            loading: isDismissing,
-            onTap: isDownloading || isDismissing ? null : onDismiss,
-            expanded: true,
-          )),
-        ]),
+        _buildMobileActions(verdict, busy),
       ]),
     );
   }
-}
 
-// ── Supplier inline field ─────────────────────────────────────────────────────
-
-class _SupplierField extends StatelessWidget {
-  final TextEditingController ctrl;
-  final VoidCallback onSaved;
-  const _SupplierField({required this.ctrl, required this.onSaved});
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      height: 32,
-      child: TextField(
-        controller: ctrl,
-        style: const TextStyle(fontSize: 12, color: Color(0xFF111827)),
-        decoration: InputDecoration(
-          hintText: 'Supplier name…',
-          hintStyle: const TextStyle(fontSize: 12, color: Color(0xFFD1D5DB)),
-          contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-          isDense: true,
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(6),
-            borderSide: const BorderSide(color: Color(0xFFE5E7EB)),
-          ),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(6),
-            borderSide: const BorderSide(color: Color(0xFFE5E7EB)),
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(6),
-            borderSide: const BorderSide(color: Color(0xFF16A34A), width: 1.5),
-          ),
-        ),
-        onSubmitted: (_) => onSaved(),
-        onTapOutside: (_) => onSaved(),
-        textInputAction: TextInputAction.done,
-      ),
-    );
+  Widget _buildMobileActions(String? verdict, bool busy) {
+    switch (verdict) {
+      case 'real':
+        return Row(children: [
+          Expanded(child: _ActionBtn(label: 'Import', icon: Icons.upload_rounded,
+              color: const Color(0xFF16A34A), loading: isDownloading,
+              onTap: busy ? null : onImport, expanded: true)),
+          const SizedBox(width: 8),
+          Expanded(child: _ActionBtn(label: 'Dismiss', icon: Icons.close_rounded,
+              color: const Color(0xFF6B7280), loading: isDismissing,
+              onTap: busy ? null : onDismiss, expanded: true)),
+        ]);
+      case 'needs_approval':
+        return SizedBox(width: double.infinity,
+          child: _ApprovalDropdown(loading: isApproving,
+              onApprove: onApprove, onReject: onDismiss));
+      case 'fake':
+        return Row(children: [
+          Expanded(child: _ActionBtn(label: 'Dismiss', icon: Icons.close_rounded,
+              color: const Color(0xFF6B7280), loading: isDismissing,
+              onTap: busy ? null : onDismiss, expanded: true)),
+        ]);
+      default:
+        return const SizedBox.shrink();
+    }
   }
 }
 
@@ -550,18 +806,15 @@ class _ActionBtn extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     Widget child = loading
-        ? SizedBox(
-            width: 14, height: 14,
-            child: CircularProgressIndicator(strokeWidth: 2, color: color),
-          )
+        ? SizedBox(width: 14, height: 14,
+            child: CircularProgressIndicator(strokeWidth: 2, color: color))
         : Row(mainAxisSize: MainAxisSize.min, children: [
             Icon(icon, size: 14, color: onTap != null ? color : const Color(0xFFD1D5DB)),
             const SizedBox(width: 4),
-            Text(label,
-                style: TextStyle(
-                  fontSize: 12, fontWeight: FontWeight.w600,
-                  color: onTap != null ? color : const Color(0xFFD1D5DB),
-                )),
+            Text(label, style: TextStyle(
+              fontSize: 12, fontWeight: FontWeight.w600,
+              color: onTap != null ? color : const Color(0xFFD1D5DB),
+            )),
           ]);
 
     final btn = InkWell(
@@ -570,13 +823,12 @@ class _ActionBtn extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
-          border: Border.all(color: onTap != null ? color.withOpacity(0.4) : const Color(0xFFE5E7EB)),
+          border: Border.all(color: onTap != null ? color.withValues(alpha: 0.4) : const Color(0xFFE5E7EB)),
           borderRadius: BorderRadius.circular(6),
         ),
         child: Center(child: child),
       ),
     );
-
     return expanded ? SizedBox(width: double.infinity, child: btn) : btn;
   }
 }

@@ -10,10 +10,14 @@ class AuthNotifier extends ChangeNotifier {
   bool _loading = true;
   bool _profileLoading = false;
   bool _needsProfile = false;
+  bool _isAdmin = false;
+  bool _isSuperAdmin = false;
 
   bool get loading => _loading;
   bool get profileLoading => _profileLoading;
   bool get needsProfile => _needsProfile;
+  bool get isAdmin => _isAdmin;
+  bool get isSuperAdmin => _isSuperAdmin;
   bool get isAuthenticated =>
       Supabase.instance.client.auth.currentUser != null;
   UserProfile? get profile => _profile;
@@ -23,6 +27,11 @@ class AuthNotifier extends ChangeNotifier {
 
   /// True when registered AND admin has approved the account.
   bool get canOrder => isRegistered && (_profile?.isApproved ?? false);
+
+  static const _superAdminEmails = {
+    'masteromprakashsahu@gmail.com',
+    'medibonetwork@gmail.com',
+  };
 
   late final StreamSubscription<AuthState> _sub;
 
@@ -34,7 +43,10 @@ class AuthNotifier extends ChangeNotifier {
   Future<void> _init() async {
     final user = Supabase.instance.client.auth.currentUser;
     if (user != null) {
-      await _loadProfile(user.id);
+      await Future.wait([
+        _loadProfile(user.id),
+        _checkAdminStatus(user.email ?? ''),
+      ]);
     }
     _loading = false;
     notifyListeners();
@@ -47,7 +59,10 @@ class AuthNotifier extends ChangeNotifier {
       if (user != null) {
         _profileLoading = true;
         notifyListeners();
-        await _loadProfile(user.id);
+        await Future.wait([
+          _loadProfile(user.id),
+          _checkAdminStatus(user.email ?? ''),
+        ]);
         _profileLoading = false;
         notifyListeners();
       }
@@ -55,6 +70,8 @@ class AuthNotifier extends ChangeNotifier {
       _profile = null;
       _needsProfile = false;
       _profileLoading = false;
+      _isAdmin = false;
+      _isSuperAdmin = false;
       notifyListeners();
     }
   }
@@ -75,6 +92,32 @@ class AuthNotifier extends ChangeNotifier {
       }
     } catch (_) {
       _needsProfile = true;
+    }
+  }
+
+  Future<void> _checkAdminStatus(String email) async {
+    if (email.isEmpty) {
+      _isAdmin = false;
+      _isSuperAdmin = false;
+      return;
+    }
+    final normalised = email.toLowerCase().trim();
+    if (_superAdminEmails.contains(normalised)) {
+      _isAdmin = true;
+      _isSuperAdmin = true;
+      return;
+    }
+    try {
+      final res = await Supabase.instance.client
+          .from('admins')
+          .select('email')
+          .eq('email', normalised)
+          .maybeSingle();
+      _isAdmin = res != null;
+      _isSuperAdmin = false;
+    } catch (_) {
+      _isAdmin = false;
+      _isSuperAdmin = false;
     }
   }
 

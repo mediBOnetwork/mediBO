@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'app_state.dart';
 import 'models/cart_model.dart';
+import 'screens/admin/admin_shell.dart';
 import 'screens/auth/login_screen.dart';
 import 'screens/home_shell.dart';
 import 'screens/about_screen.dart';
@@ -91,8 +92,8 @@ class _AppRoot extends StatelessWidget {
           return const _SplashScreen();
         }
 
-        // All users (guest, authenticated+unregistered, authenticated+registered)
-        // land on HomeShell. Registration is voluntary and accessed via profile.
+        // Admin users see the admin panel; everyone else sees the customer app.
+        if (auth.isAdmin) return const AdminShell();
         return const HomeShell();
       },
     );

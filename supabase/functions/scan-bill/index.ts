@@ -8,6 +8,13 @@ const cors = {
 
 const MAX_RETRIES = 3
 
+/** Extract bare email from "Display Name <email@example.com>" or plain "email@example.com" */
+function extractEmail(raw: string): string {
+  const trimmed = (raw ?? '').trim()
+  const match = trimmed.match(/<([^>]+)>/)
+  return (match ? match[1] : trimmed).toLowerCase().trim()
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors })
 
@@ -22,7 +29,7 @@ serve(async (req) => {
     const record = payload.record ?? payload
     billId = record.id
     const filePath: string = record.file_path
-    const senderEmail: string = (record.sender_email ?? '').toLowerCase().trim()
+    const senderEmail: string = extractEmail(record.sender_email ?? '')
 
     if (!billId || !filePath) {
       return new Response(JSON.stringify({ error: 'Missing id or file_path' }), {
@@ -50,6 +57,7 @@ serve(async (req) => {
       .eq('id', billId)
 
     const geminiKey = Deno.env.get('GEMINI_API_KEY') ?? ''
+    if (!geminiKey) throw new Error('GEMINI_API_KEY secret not set')
 
     // ── Download file ────────────────────────────────────────────────────────
     const { data: blob, error: dlErr } = await supabase.storage
@@ -60,7 +68,7 @@ serve(async (req) => {
     const buf = await blob.arrayBuffer()
     const bytes = new Uint8Array(buf)
     let b64 = ''
-    const chunkSize = 8192
+    const chunkSize = 8190 // must be divisible by 3 so btoa() never adds mid-string padding
     for (let i = 0; i < bytes.length; i += chunkSize) {
       b64 += btoa(String.fromCharCode(...bytes.subarray(i, i + chunkSize)))
     }
@@ -94,7 +102,7 @@ Extract:
 Known suppliers in our system:
 ${suppListJson}
 
-Sender email of this bill: "${senderEmail}"
+Sender email of this bill (already extracted, no display name): "${senderEmail}"
 
 Matching rules:
 1. Compare extracted gst and dl (case-insensitive, trimmed) against each supplier.
@@ -133,29 +141,38 @@ Return exactly this JSON shape:
       generationConfig: {
         temperature: 0.1,
         maxOutputTokens: 4096,
-        thinkingConfig: { thinkingBudget: 1024 },
+        thinkingConfig: { thinkingBudget: 0 },
       },
     }
 
     // ── Call Gemini with retries ──────────────────────────────────────────────
     let gJson: Record<string, unknown> | null = null
     let lastError = ''
-    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-      try {
-        const gResp = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${geminiKey}`,
-          { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(geminiBody) },
-        )
-        if (!gResp.ok) {
-          lastError = `Gemini HTTP ${gResp.status}: ${await gResp.text()}`
+    // Try gemini-2.5-flash first, fall back to gemini-2.0-flash
+    const models = ['gemini-2.5-flash', 'gemini-2.0-flash']
+    outer: for (const model of models) {
+      for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+        try {
+          const gResp = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiKey}`,
+            { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(geminiBody) },
+          )
+          if (!gResp.ok) {
+            const errText = await gResp.text()
+            lastError = `Gemini ${model} HTTP ${gResp.status}: ${errText}`
+            console.error(`[scan-bill] ${lastError}`)
+            if (gResp.status === 404) break  // model not found — try next model
+            if (attempt < MAX_RETRIES) await new Promise(r => setTimeout(r, attempt * 2000))
+            continue
+          }
+          gJson = await gResp.json() as Record<string, unknown>
+          console.log(`[scan-bill] Using model: ${model}`)
+          break outer
+        } catch (e: unknown) {
+          lastError = e instanceof Error ? e.message : String(e)
+          console.error(`[scan-bill] Fetch error attempt ${attempt}: ${lastError}`)
           if (attempt < MAX_RETRIES) await new Promise(r => setTimeout(r, attempt * 2000))
-          continue
         }
-        gJson = await gResp.json() as Record<string, unknown>
-        break
-      } catch (e: unknown) {
-        lastError = e instanceof Error ? e.message : String(e)
-        if (attempt < MAX_RETRIES) await new Promise(r => setTimeout(r, attempt * 2000))
       }
     }
     if (!gJson) throw new Error(lastError || 'Gemini failed after all retries')
@@ -166,7 +183,7 @@ Return exactly this JSON shape:
     const rawText = parts.filter(p => !p.thought).map(p => p.text ?? '').join('')
 
     const jsonMatch = rawText.match(/\{[\s\S]*\}/)
-    if (!jsonMatch) throw new Error('No JSON in Gemini response')
+    if (!jsonMatch) throw new Error(`No JSON in Gemini response. Raw: ${rawText.slice(0, 200)}`)
     const extracted = JSON.parse(jsonMatch[0]) as Record<string, unknown>
 
     const verdict: string = ['real', 'needs_approval', 'fake'].includes(extracted.verdict as string)
@@ -182,6 +199,7 @@ Return exactly this JSON shape:
       matched_supplier_id: extracted.matched_supplier_id ?? null,
       matched_supplier_name: extracted.matched_supplier_name ?? null,
       reasoning: extracted.reasoning ?? '',
+      sender_email_used: senderEmail,
       scanned_at: new Date().toISOString(),
     }
 
@@ -192,18 +210,18 @@ Return exactly this JSON shape:
       .eq('id', billId)
     if (updErr) throw new Error(`DB update failed: ${updErr.message}`)
 
+    console.log(`[scan-bill] Done: billId=${billId} verdict=${verdict}`)
     return new Response(JSON.stringify({ success: true, verdict, billId }), {
       headers: { ...cors, 'Content-Type': 'application/json' },
     })
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err)
-    console.error('[scan-bill]', msg)
-    // Mark error so the UI can show it and an admin can retry
+    console.error('[scan-bill] error:', msg)
     if (billId) {
       try {
         await supabase
           .from('pending_bills')
-          .update({ scan_status: 'error' })
+          .update({ scan_status: 'error', scan_result: { error: msg, scanned_at: new Date().toISOString() } })
           .eq('id', billId)
       } catch (_) { /* best-effort */ }
     }

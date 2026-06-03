@@ -257,12 +257,45 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     return LayoutBuilder(builder: (ctx, box) {
       final isDesktop = box.maxWidth >= 900;
       final rows = _active;
+
+      // Loading and empty states need the header + centred body.
+      if (_loading || rows.isEmpty) {
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildHeader(isDesktop),
+            Expanded(child: _buildBody(rows, isDesktop)),
+          ],
+        );
+      }
+
+      // When rows exist, wrap in SingleChildScrollView so accordion expansions
+      // (which can be many items tall) are fully reachable by scrolling.
+      // The header stays pinned above the scroll area; the table header and
+      // all rows scroll together inside the SingleChildScrollView.
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _buildHeader(isDesktop),
-          if (isDesktop && !_loading && rows.isNotEmpty) _buildTableHeader(),
-          Expanded(child: _buildBody(rows, isDesktop)),
+          Expanded(
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (isDesktop) _buildTableHeader(),
+                  ListView.builder(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    padding: const EdgeInsets.only(bottom: 32),
+                    itemCount: rows.length,
+                    itemBuilder: (_, i) => isDesktop
+                        ? _buildDesktopRow(rows[i])
+                        : _buildMobileCard(rows[i]),
+                  ),
+                ],
+              ),
+            ),
+          ),
         ],
       );
     });
@@ -355,7 +388,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     );
   }
 
-  // ── Body ──────────────────────────────────────────────────────────────────────
+  // ── Body (loading / empty only — list is handled in build) ───────────────────
 
   Widget _buildBody(List<_CustRow> rows, bool isDesktop) {
     if (_loading) {
@@ -363,26 +396,20 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
           child: CircularProgressIndicator(
               color: Color(0xFF1B5E20), strokeWidth: 2));
     }
-    if (rows.isEmpty) {
-      return Center(
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          const Icon(Icons.people_outline, size: 56, color: Color(0xFFD1D5DB)),
-          const SizedBox(height: 14),
-          Text(
-            _filter == _CustFilter.customerOrders
-                ? '0 orders'
-                : '0 customers with unpurchased cart items',
-            textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 14, color: Color(0xFF9CA3AF)),
-          ),
-        ]),
-      );
-    }
-    return ListView.builder(
-      padding: const EdgeInsets.only(bottom: 32),
-      itemCount: rows.length,
-      itemBuilder: (_, i) =>
-          isDesktop ? _buildDesktopRow(rows[i]) : _buildMobileCard(rows[i]),
+    // rows.isEmpty guaranteed here — list path lives in build() so accordion
+    // expansions of any height are fully scrollable via SingleChildScrollView.
+    return Center(
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        const Icon(Icons.people_outline, size: 56, color: Color(0xFFD1D5DB)),
+        const SizedBox(height: 14),
+        Text(
+          _filter == _CustFilter.customerOrders
+              ? '0 orders'
+              : '0 customers with unpurchased cart items',
+          textAlign: TextAlign.center,
+          style: const TextStyle(fontSize: 14, color: Color(0xFF9CA3AF)),
+        ),
+      ]),
     );
   }
 

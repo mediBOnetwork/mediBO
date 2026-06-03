@@ -402,17 +402,20 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       //   is now a child of the SSV's Column, which receives UNBOUNDED height;
       //   in that context Column(mainAxisSize:max) safely sizes to its children.
       //   The SSV then scrolls all content (tabs + rows) as one unit.
-      return Scrollbar(
+      return PrimaryScrollController(
         controller: _scrollCtrl,
-        thumbVisibility: true,
-        child: SingleChildScrollView(
+        child: Scrollbar(
           controller: _scrollCtrl,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _buildHeader(isDesktop),
-              _buildScrollContent(isDesktop),
-            ],
+          thumbVisibility: true,
+          child: SingleChildScrollView(
+            primary: true,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _buildHeader(isDesktop),
+                _buildScrollContent(isDesktop),
+              ],
+            ),
           ),
         ),
       );

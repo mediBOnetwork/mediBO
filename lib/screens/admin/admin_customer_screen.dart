@@ -393,22 +393,16 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           _buildHeader(isDesktop),
           Expanded(
-            child: SingleChildScrollView(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if (isDesktop) _buildRegTableHeader(),
-                  ListView.builder(
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    padding: const EdgeInsets.only(bottom: 32),
-                    itemCount: _regRows.length,
-                    itemBuilder: (_, i) => isDesktop
-                        ? _buildDesktopRegRow(_regRows[i])
-                        : _buildMobileRegCard(_regRows[i]),
-                  ),
-                ],
-              ),
+            child: ListView.builder(
+              padding: const EdgeInsets.only(bottom: 32),
+              itemCount: _regRows.length + (isDesktop ? 1 : 0),
+              itemBuilder: (_, i) {
+                if (isDesktop && i == 0) return _buildRegTableHeader();
+                final idx = isDesktop ? i - 1 : i;
+                return isDesktop
+                    ? _buildDesktopRegRow(_regRows[idx])
+                    : _buildMobileRegCard(_regRows[idx]);
+              },
             ),
           ),
         ]);
@@ -434,22 +428,16 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         children: [
           _buildHeader(isDesktop),
           Expanded(
-            child: SingleChildScrollView(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if (isDesktop) _buildCustTableHeader(),
-                  ListView.builder(
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    padding: const EdgeInsets.only(bottom: 32),
-                    itemCount: rows.length,
-                    itemBuilder: (_, i) => isDesktop
-                        ? _buildDesktopCustRow(rows[i])
-                        : _buildMobileCustCard(rows[i]),
-                  ),
-                ],
-              ),
+            child: ListView.builder(
+              padding: const EdgeInsets.only(bottom: 32),
+              itemCount: rows.length + (isDesktop ? 1 : 0),
+              itemBuilder: (_, i) {
+                if (isDesktop && i == 0) return _buildCustTableHeader();
+                final idx = isDesktop ? i - 1 : i;
+                return isDesktop
+                    ? _buildDesktopCustRow(rows[idx])
+                    : _buildMobileCustCard(rows[idx]);
+              },
             ),
           ),
         ],

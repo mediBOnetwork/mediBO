@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
-
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../screens/home_shell.dart';
 import '../../user_state.dart';
 import 'admin_add_medicine_screen.dart';
+import 'admin_customer_screen.dart';
+import 'admin_dashboard_screen.dart';
 import 'admin_manage_admins_screen.dart';
 import 'admin_pending_bills_screen.dart';
 
@@ -52,6 +54,7 @@ class AdminShell extends StatefulWidget {
 
 class _AdminShellState extends State<AdminShell> {
   int _index = 0;
+  bool _showDashboard = true;
   int _pendingBillsCount = 0;
 
   @override
@@ -70,35 +73,88 @@ class _AdminShellState extends State<AdminShell> {
     } catch (_) {}
   }
 
+  // ── Routing ───────────────────────────────────────────────────────────────
+
   void _navigateQuickLink(BuildContext ctx, String route, bool isSuperAdmin) {
     if (!mounted) return;
-    if (route == 'logout') {
-      UserState.read(ctx).signOut();
-      return;
+    switch (route) {
+      case 'logout':
+        UserState.read(ctx).signOut();
+        return;
+      case 'storefront':
+        // Open the customer-facing storefront; browser back returns to admin.
+        Navigator.of(ctx).push(
+          MaterialPageRoute(builder: (_) => const HomeShell()),
+        );
+        return;
+      case 'home':
+        // Legacy route used by mobile popup to show admin dashboard.
+        setState(() => _showDashboard = true);
+        return;
+      case 'add_medicine':
+        setState(() { _showDashboard = false; _index = 0; });
+        return;
+      case 'orders':
+        setState(() { _showDashboard = false; _index = 1; });
+        return;
+      case 'inquiry':
+        setState(() { _showDashboard = false; _index = 2; });
+        return;
+      case 'suppliers':
+        setState(() { _showDashboard = false; _index = 3; });
+        return;
+      case 'customers':
+        setState(() { _showDashboard = false; _index = 4; });
+        return;
+      case 'bills':
+        setState(() { _showDashboard = false; _index = 5; });
+        return;
+      case 'manage_admins':
+        if (!isSuperAdmin) {
+          ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(
+            content: Text('Only super-admins can manage admin accounts'),
+            backgroundColor: Color(0xFFDC2626),
+          ));
+          return;
+        }
+        setState(() { _showDashboard = false; _index = 6; });
+        return;
+      case 'add_supplier':
+        Navigator.of(ctx).push(MaterialPageRoute(
+          builder: (_) => const _QuickLinkPlaceholder(
+              title: 'Add Supplier', icon: Icons.add_business_outlined),
+        ));
+        return;
+      case 'add_customer':
+        Navigator.of(ctx).push(MaterialPageRoute(
+          builder: (_) => const _QuickLinkPlaceholder(
+              title: 'Add Customer', icon: Icons.person_add_outlined),
+        ));
+        return;
     }
-    if (route == 'manage_admins' && !isSuperAdmin) {
-      ScaffoldMessenger.of(ctx).showSnackBar(
-        const SnackBar(
-          content: Text('Only super-admins can manage admin accounts'),
-          backgroundColor: Color(0xFFDC2626),
-        ),
+  }
+
+  // ── Body ─────────────────────────────────────────────────────────────────
+
+  Widget _buildBody(bool isSuperAdmin) {
+    if (_showDashboard) {
+      return QuickLinkNavigator(
+        navigate: (route) => _navigateQuickLink(context, route, isSuperAdmin),
+        child: const AdminDashboardScreen(),
       );
-      return;
     }
-    Navigator.of(ctx).push(MaterialPageRoute(
-      builder: (_) => switch (route) {
-        'manage_admins' => const AdminManageAdminsScreen(),
-        'add_supplier' => const _QuickLinkPlaceholder(
-            title: 'Add Supplier',
-            icon: Icons.add_business_outlined),
-        'add_customer' => const _QuickLinkPlaceholder(
-            title: 'Add Customer',
-            icon: Icons.person_add_outlined),
-        _ => const _QuickLinkPlaceholder(
-            title: 'Coming Soon',
-            icon: Icons.construction_outlined),
-      },
-    ));
+    final nav = _effectiveNav(isSuperAdmin);
+    if (_index == 0) return const AdminAddMedicineScreen();
+    if (_index == 4) return const AdminCustomerScreen();
+    if (_index == 5) return PendingBillsScreen(onCountChanged: _loadPendingCount);
+    if (isSuperAdmin && _index == 6) return const AdminManageAdminsScreen();
+    if (_index < nav.length) {
+      return _PageBody(title: nav[_index].pageTitle, icon: nav[_index].icon);
+    }
+    return QuickLinkNavigator(
+      navigate: (route) => _navigateQuickLink(context, route, isSuperAdmin),
+      child: const AdminDashboardScreen(),
+    );
   }
 
   @override
@@ -112,19 +168,16 @@ class _AdminShellState extends State<AdminShell> {
     });
   }
 
-  // ── Web/desktop layout ───────────────────────────────────────────────────
+  // ── Desktop layout ────────────────────────────────────────────────────────
 
   Widget _buildDesktop(BuildContext ctx, bool isSuperAdmin) {
-    final nav = _effectiveNav(isSuperAdmin);
     return Scaffold(
       backgroundColor: const Color(0xFFF9FAFB),
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           _DesktopHeader(
-            currentIndex: _index,
-            nav: nav,
-            onNavTap: (i) => setState(() => _index = i),
+            onLogoTap: () => setState(() => _showDashboard = true),
             isSuperAdmin: isSuperAdmin,
             onQuickLink: (route) => _navigateQuickLink(ctx, route, isSuperAdmin),
             onLogout: () => UserState.read(ctx).signOut(),
@@ -136,50 +189,44 @@ class _AdminShellState extends State<AdminShell> {
     );
   }
 
-  Widget _buildBody(bool isSuperAdmin) {
-    final nav = _effectiveNav(isSuperAdmin);
-    if (_index == 0) return const AdminAddMedicineScreen();
-    if (_index == 5) return PendingBillsScreen(onCountChanged: _loadPendingCount);
-    if (isSuperAdmin && _index == 6) return const AdminManageAdminsScreen();
-    if (_index < nav.length) return _PageBody(title: nav[_index].pageTitle, icon: nav[_index].icon);
-    return const _PageBody(title: 'Coming Soon', icon: Icons.construction_outlined);
-  }
-
-  // ── Mobile layout ────────────────────────────────────────────────────────
+  // ── Mobile layout ─────────────────────────────────────────────────────────
 
   Widget _buildMobile(BuildContext ctx, bool isSuperAdmin) {
     final nav = _effectiveNav(isSuperAdmin);
-    // Clamp _index to valid range when nav length changes
     final safeIndex = _index.clamp(0, nav.length - 1);
-    if (safeIndex != _index) WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) setState(() => _index = safeIndex);
-    });
+    if (safeIndex != _index) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) setState(() => _index = safeIndex);
+      });
+    }
     return Scaffold(
       backgroundColor: const Color(0xFFF9FAFB),
       appBar: AppBar(
         backgroundColor: Colors.white,
         elevation: 0,
         centerTitle: false,
-        title: RichText(
-          text: const TextSpan(
-            children: [
-              TextSpan(
-                text: 'mediBO',
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w800,
-                  color: Color(0xFF1B5E20),
+        title: GestureDetector(
+          onTap: () => setState(() => _showDashboard = true),
+          child: MouseRegion(
+            cursor: SystemMouseCursors.click,
+            child: RichText(
+              text: const TextSpan(children: [
+                TextSpan(
+                  text: 'mediBO',
+                  style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                      color: Color(0xFF1B5E20)),
                 ),
-              ),
-              TextSpan(
-                text: ' Admin',
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w500,
-                  color: Color(0xFF6B7280),
+                TextSpan(
+                  text: ' Admin',
+                  style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                      color: Color(0xFF6B7280)),
                 ),
-              ),
-            ],
+              ]),
+            ),
           ),
         ),
         bottom: PreferredSize(
@@ -189,9 +236,18 @@ class _AdminShellState extends State<AdminShell> {
         actions: [
           PopupMenuButton<String>(
             icon: const Icon(Icons.more_vert, color: Color(0xFF374151)),
-            tooltip: 'Quick links',
+            tooltip: 'More options',
             onSelected: (route) => _navigateQuickLink(ctx, route, isSuperAdmin),
             itemBuilder: (_) => [
+              // Home = customer storefront (sections are in bottom nav)
+              const PopupMenuItem(
+                value: 'storefront',
+                child: _PopupRow(
+                  icon: Icons.storefront_outlined,
+                  label: 'Home (Storefront)',
+                ),
+              ),
+              const PopupMenuDivider(),
               if (isSuperAdmin)
                 const PopupMenuItem(
                   value: 'manage_admins',
@@ -204,25 +260,20 @@ class _AdminShellState extends State<AdminShell> {
               const PopupMenuItem(
                 value: 'add_supplier',
                 child: _PopupRow(
-                  icon: Icons.add_business_outlined,
-                  label: 'Add Supplier',
-                ),
+                    icon: Icons.add_business_outlined, label: 'Add Supplier'),
               ),
               const PopupMenuItem(
                 value: 'add_customer',
                 child: _PopupRow(
-                  icon: Icons.person_add_outlined,
-                  label: 'Add Customer',
-                ),
+                    icon: Icons.person_add_outlined, label: 'Add Customer'),
               ),
               const PopupMenuDivider(),
               const PopupMenuItem(
                 value: 'logout',
                 child: _PopupRow(
-                  icon: Icons.logout,
-                  label: 'Logout',
-                  color: Color(0xFFDC2626),
-                ),
+                    icon: Icons.logout,
+                    label: 'Logout',
+                    color: Color(0xFFDC2626)),
               ),
             ],
           ),
@@ -237,41 +288,39 @@ class _AdminShellState extends State<AdminShell> {
         selectedFontSize: 10,
         unselectedFontSize: 10,
         elevation: 8,
-        onTap: (i) => setState(() => _index = i),
+        onTap: (i) => setState(() { _showDashboard = false; _index = i; }),
         items: nav.asMap().entries.map((e) {
-              final i = e.key;
-              final n = e.value;
-              final hasBadge = i == 5 && _pendingBillsCount > 0;
-              return BottomNavigationBarItem(
-                icon: hasBadge
-                    ? Badge(label: Text('$_pendingBillsCount'), child: Icon(n.icon))
-                    : Icon(n.icon),
-                activeIcon: hasBadge
-                    ? Badge(label: Text('$_pendingBillsCount'), child: Icon(n.activeIcon))
-                    : Icon(n.activeIcon),
-                label: n.label,
-              );
-            }).toList(),
+          final i = e.key;
+          final n = e.value;
+          final hasBadge = i == 5 && _pendingBillsCount > 0;
+          return BottomNavigationBarItem(
+            icon: hasBadge
+                ? Badge(label: Text('$_pendingBillsCount'), child: Icon(n.icon))
+                : Icon(n.icon),
+            activeIcon: hasBadge
+                ? Badge(label: Text('$_pendingBillsCount'), child: Icon(n.activeIcon))
+                : Icon(n.activeIcon),
+            label: n.label,
+          );
+        }).toList(),
       ),
     );
   }
 }
 
-// ── Desktop header ───────────────────────────────────────────────────────────
+// ── Desktop header ────────────────────────────────────────────────────────────
+// Logo (→ dashboard) | Home | Add Medicine | Orders | Inquiry | Suppliers |
+// Customers | Bills🔴 | Quick Links (Admins, Add Supplier, Add Customer) | Logout
 
 class _DesktopHeader extends StatelessWidget {
-  final int currentIndex;
-  final List<_NavEntry> nav;
-  final ValueChanged<int> onNavTap;
-  final ValueChanged<String> onQuickLink;
+  final VoidCallback onLogoTap;
   final VoidCallback onLogout;
   final bool isSuperAdmin;
+  final ValueChanged<String> onQuickLink;
   final int pendingBillsCount;
 
   const _DesktopHeader({
-    required this.currentIndex,
-    required this.nav,
-    required this.onNavTap,
+    required this.onLogoTap,
     required this.onQuickLink,
     required this.onLogout,
     required this.isSuperAdmin,
@@ -282,162 +331,200 @@ class _DesktopHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       color: Colors.white,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
-            child: Row(
-              children: [
-                // Branding
-                RichText(
-                  text: const TextSpan(
-                    children: [
-                      TextSpan(
-                        text: 'mediBO',
-                        style: TextStyle(
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+          child: Row(children: [
+            // Logo → admin Dashboard
+            GestureDetector(
+              onTap: onLogoTap,
+              child: MouseRegion(
+                cursor: SystemMouseCursors.click,
+                child: RichText(
+                  text: const TextSpan(children: [
+                    TextSpan(
+                      text: 'mediBO',
+                      style: TextStyle(
                           fontSize: 20,
                           fontWeight: FontWeight.w800,
-                          color: Color(0xFF1B5E20),
-                        ),
-                      ),
-                      TextSpan(
-                        text: ' Admin',
-                        style: TextStyle(
+                          color: Color(0xFF1B5E20)),
+                    ),
+                    TextSpan(
+                      text: ' Admin',
+                      style: TextStyle(
                           fontSize: 13,
                           fontWeight: FontWeight.w500,
-                          color: Color(0xFF6B7280),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 32),
-                // Nav tabs
-                Expanded(
-                  child: SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: Row(
-                      children: List.generate(
-                        nav.length,
-                        (i) => _NavTab(
-                          icon: currentIndex == i
-                              ? nav[i].activeIcon
-                              : nav[i].icon,
-                          label: nav[i].label,
-                          selected: currentIndex == i,
-                          onTap: () => onNavTap(i),
-                          badge: i == 5 ? pendingBillsCount : 0,
-                        ),
-                      ),
+                          color: Color(0xFF6B7280)),
                     ),
-                  ),
+                  ]),
                 ),
-                const SizedBox(width: 16),
-                // Quick links dropdown
-                _QuickLinksButton(
-                  isSuperAdmin: isSuperAdmin,
-                  onSelected: onQuickLink,
-                ),
-                const SizedBox(width: 8),
-                // Logout
-                TextButton.icon(
-                  onPressed: onLogout,
-                  icon: const Icon(Icons.logout,
-                      size: 15, color: Color(0xFFDC2626)),
-                  label: const Text(
-                    'Logout',
-                    style: TextStyle(
-                        fontSize: 13, color: Color(0xFFDC2626)),
-                  ),
-                  style: TextButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 10, vertical: 8),
-                  ),
-                ),
-              ],
+              ),
             ),
-          ),
-          const Divider(height: 1, color: Color(0xFFE5E7EB)),
-        ],
-      ),
+            const SizedBox(width: 16),
+
+            // ── Primary nav row centered between logo and right actions
+            Expanded(
+              child: Center(
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    // Home → customer storefront
+                    _HdrBtn(
+                      label: 'Home',
+                      icon: Icons.storefront_outlined,
+                      onTap: () => onQuickLink('storefront'),
+                      color: const Color(0xFF1B5E20),
+                    ),
+                    const _HdrDivider(),
+                    _HdrBtn(
+                      label: 'Add Medicine',
+                      icon: Icons.medication_outlined,
+                      onTap: () => onQuickLink('add_medicine'),
+                    ),
+                    _HdrBtn(
+                      label: 'Orders',
+                      icon: Icons.receipt_long_outlined,
+                      onTap: () => onQuickLink('orders'),
+                    ),
+                    _HdrBtn(
+                      label: 'Inquiry',
+                      icon: Icons.help_outline,
+                      onTap: () => onQuickLink('inquiry'),
+                    ),
+                    _HdrBtn(
+                      label: 'Suppliers',
+                      icon: Icons.inventory_2_outlined,
+                      onTap: () => onQuickLink('suppliers'),
+                    ),
+                    _HdrBtn(
+                      label: 'Customers',
+                      icon: Icons.people_outline,
+                      onTap: () => onQuickLink('customers'),
+                    ),
+                    // Bills with live pending-count badge
+                    _BillsHdrBtn(
+                      count: pendingBillsCount,
+                      onTap: () => onQuickLink('bills'),
+                    ),
+                  ]),
+                ),
+              ),
+            ),
+
+            const SizedBox(width: 8),
+
+            // Quick Links — only items NOT already in the header
+            _QuickLinksButton(
+              isSuperAdmin: isSuperAdmin,
+              onSelected: onQuickLink,
+            ),
+            const SizedBox(width: 6),
+
+            // Logout
+            TextButton.icon(
+              onPressed: onLogout,
+              icon: const Icon(Icons.logout, size: 15, color: Color(0xFFDC2626)),
+              label: const Text('Logout',
+                  style: TextStyle(fontSize: 13, color: Color(0xFFDC2626))),
+              style: TextButton.styleFrom(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 8)),
+            ),
+          ]),
+        ),
+        const Divider(height: 1, color: Color(0xFFE5E7EB)),
+      ]),
     );
   }
 }
 
-// ── Desktop nav tab ──────────────────────────────────────────────────────────
+// ── Header nav button ─────────────────────────────────────────────────────────
 
-class _NavTab extends StatelessWidget {
-  final IconData icon;
+class _HdrBtn extends StatelessWidget {
   final String label;
-  final bool selected;
+  final IconData icon;
   final VoidCallback onTap;
-  final int badge;
+  final Color color;
 
-  const _NavTab({
-    required this.icon,
+  const _HdrBtn({
     required this.label,
-    required this.selected,
+    required this.icon,
     required this.onTap,
-    this.badge = 0,
+    this.color = const Color(0xFF374151),
   });
 
   @override
   Widget build(BuildContext context) {
-    Widget iconWidget = Icon(
-      icon, size: 15,
-      color: selected ? const Color(0xFF1B5E20) : const Color(0xFF6B7280),
-    );
-    if (badge > 0) {
-      iconWidget = Stack(clipBehavior: Clip.none, children: [
-        iconWidget,
-        Positioned(
-          right: -7, top: -5,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
-            decoration: BoxDecoration(
-              color: const Color(0xFFDC2626),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Text('$badge',
-                style: const TextStyle(fontSize: 9, color: Colors.white, fontWeight: FontWeight.w700)),
-          ),
-        ),
-      ]);
-    }
-    return Padding(
-      padding: const EdgeInsets.only(right: 4),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(8),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          decoration: BoxDecoration(
-            color: selected ? const Color(0xFFECFDF5) : Colors.transparent,
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              iconWidget,
-              const SizedBox(width: 6),
-              Text(
-                label,
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                  color: selected ? const Color(0xFF1B5E20) : const Color(0xFF6B7280),
-                ),
-              ),
-            ],
-          ),
-        ),
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(6),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(icon, size: 14, color: color),
+          const SizedBox(width: 4),
+          Text(label,
+              style: TextStyle(
+                  fontSize: 12, fontWeight: FontWeight.w500, color: color)),
+        ]),
       ),
     );
   }
 }
 
-// ── Quick links popup ────────────────────────────────────────────────────────
+// ── Bills nav button with live badge ─────────────────────────────────────────
+
+class _BillsHdrBtn extends StatelessWidget {
+  final int count;
+  final VoidCallback onTap;
+
+  const _BillsHdrBtn({required this.count, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    const color = Color(0xFF374151);
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(6),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          if (count > 0)
+            Badge(
+              label: Text('$count'),
+              child: const Icon(Icons.inbox_outlined, size: 14, color: color),
+            )
+          else
+            const Icon(Icons.inbox_outlined, size: 14, color: color),
+          const SizedBox(width: 4),
+          const Text('Bills',
+              style: TextStyle(
+                  fontSize: 12, fontWeight: FontWeight.w500, color: color)),
+        ]),
+      ),
+    );
+  }
+}
+
+// ── Header vertical divider ───────────────────────────────────────────────────
+
+class _HdrDivider extends StatelessWidget {
+  const _HdrDivider();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 1,
+      height: 16,
+      color: const Color(0xFFE5E7EB),
+      margin: const EdgeInsets.symmetric(horizontal: 6),
+    );
+  }
+}
+
+// ── Quick Links dropdown — ONLY items not already in the header ───────────────
+// Contains: Manage Admins (super-admin only), Add Supplier, Add Customer.
+// Dashboard → logo, Home/sections/Logout → header row. Zero duplication.
 
 class _QuickLinksButton extends StatelessWidget {
   final bool isSuperAdmin;
@@ -455,29 +542,22 @@ class _QuickLinksButton extends StatelessWidget {
       offset: const Offset(0, 44),
       onSelected: onSelected,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
         decoration: BoxDecoration(
           border: Border.all(color: const Color(0xFFE5E7EB)),
           borderRadius: BorderRadius.circular(8),
         ),
-        child: const Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.bolt, size: 15, color: Color(0xFF374151)),
-            SizedBox(width: 6),
-            Text(
-              'Quick Links',
+        child: Row(mainAxisSize: MainAxisSize.min, children: const [
+          Icon(Icons.bolt, size: 14, color: Color(0xFF374151)),
+          SizedBox(width: 5),
+          Text('Quick Links',
               style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w500,
-                color: Color(0xFF374151),
-              ),
-            ),
-            SizedBox(width: 2),
-            Icon(Icons.arrow_drop_down,
-                size: 18, color: Color(0xFF374151)),
-          ],
-        ),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                  color: Color(0xFF374151))),
+          SizedBox(width: 2),
+          Icon(Icons.arrow_drop_down, size: 17, color: Color(0xFF374151)),
+        ]),
       ),
       itemBuilder: (_) => [
         if (isSuperAdmin)
@@ -492,16 +572,12 @@ class _QuickLinksButton extends StatelessWidget {
         const PopupMenuItem(
           value: 'add_supplier',
           child: _PopupRow(
-            icon: Icons.add_business_outlined,
-            label: 'Add Supplier',
-          ),
+              icon: Icons.add_business_outlined, label: 'Add Supplier'),
         ),
         const PopupMenuItem(
           value: 'add_customer',
           child: _PopupRow(
-            icon: Icons.person_add_outlined,
-            label: 'Add Customer',
-          ),
+              icon: Icons.person_add_outlined, label: 'Add Customer'),
         ),
       ],
     );
@@ -523,21 +599,17 @@ class _PopupRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Icon(icon, size: 18, color: color),
-        const SizedBox(width: 10),
-        Text(label,
-            style: TextStyle(
-                fontSize: 14,
-                color: color,
-                fontWeight: FontWeight.w500)),
-      ],
-    );
+    return Row(children: [
+      Icon(icon, size: 18, color: color),
+      const SizedBox(width: 10),
+      Text(label,
+          style: TextStyle(
+              fontSize: 14, color: color, fontWeight: FontWeight.w500)),
+    ]);
   }
 }
 
-// ── Placeholder page body ────────────────────────────────────────────────────
+// ── Placeholder page body ─────────────────────────────────────────────────────
 
 class _PageBody extends StatelessWidget {
   final String title;
@@ -548,43 +620,34 @@ class _PageBody extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 80,
-            height: 80,
-            decoration: BoxDecoration(
-              color: const Color(0xFFECFDF5),
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: Icon(icon, size: 40, color: const Color(0xFF1B5E20)),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Container(
+          width: 80,
+          height: 80,
+          decoration: BoxDecoration(
+            color: const Color(0xFFECFDF5),
+            borderRadius: BorderRadius.circular(20),
           ),
-          const SizedBox(height: 20),
-          Text(
-            title,
+          child: Icon(icon, size: 40, color: const Color(0xFF1B5E20)),
+        ),
+        const SizedBox(height: 20),
+        Text(title,
             style: const TextStyle(
-              fontSize: 22,
-              fontWeight: FontWeight.w800,
-              color: Color(0xFF111827),
-            ),
-          ),
-          const SizedBox(height: 10),
-          const Text(
-            'Coming soon — this section will be built out.',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              fontSize: 14,
-              color: Color(0xFF6B7280),
-            ),
-          ),
-        ],
-      ),
+                fontSize: 22,
+                fontWeight: FontWeight.w800,
+                color: Color(0xFF111827))),
+        const SizedBox(height: 10),
+        const Text(
+          'Coming soon — this section will be built out.',
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 14, color: Color(0xFF6B7280)),
+        ),
+      ]),
     );
   }
 }
 
-// ── Quick-link placeholder screen ────────────────────────────────────────────
+// ── Quick-link placeholder screen ─────────────────────────────────────────────
 
 class _QuickLinkPlaceholder extends StatelessWidget {
   final String title;
@@ -606,49 +669,40 @@ class _QuickLinkPlaceholder extends StatelessWidget {
               size: 20, color: Color(0xFF1B5E20)),
           onPressed: () => Navigator.of(context).pop(),
         ),
-        title: Text(
-          title,
-          style: const TextStyle(
-            fontSize: 18,
-            fontWeight: FontWeight.w800,
-            color: Color(0xFF111827),
-          ),
-        ),
+        title: Text(title,
+            style: const TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w800,
+                color: Color(0xFF111827))),
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(1),
           child: Container(height: 1, color: const Color(0xFFE5E7EB)),
         ),
       ),
       body: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 80,
-              height: 80,
-              decoration: BoxDecoration(
-                color: const Color(0xFFECFDF5),
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Icon(icon, size: 40, color: const Color(0xFF1B5E20)),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Container(
+            width: 80,
+            height: 80,
+            decoration: BoxDecoration(
+              color: const Color(0xFFECFDF5),
+              borderRadius: BorderRadius.circular(20),
             ),
-            const SizedBox(height: 20),
-            Text(
-              title,
+            child: Icon(icon, size: 40, color: const Color(0xFF1B5E20)),
+          ),
+          const SizedBox(height: 20),
+          Text(title,
               style: const TextStyle(
-                fontSize: 22,
-                fontWeight: FontWeight.w800,
-                color: Color(0xFF111827),
-              ),
-            ),
-            const SizedBox(height: 10),
-            const Text(
-              'Coming soon — this section will be built out.',
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 14, color: Color(0xFF6B7280)),
-            ),
-          ],
-        ),
+                  fontSize: 22,
+                  fontWeight: FontWeight.w800,
+                  color: Color(0xFF111827))),
+          const SizedBox(height: 10),
+          const Text(
+            'Coming soon — this section will be built out.',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 14, color: Color(0xFF6B7280)),
+          ),
+        ]),
       ),
     );
   }

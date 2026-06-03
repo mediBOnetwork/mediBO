@@ -146,7 +146,9 @@ final _kSampleRows = <_MatchRow>[
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
 class BulkUploadScreen extends StatefulWidget {
-  const BulkUploadScreen({super.key});
+  final List<({String name, int qty})>? preloadedItems;
+  final String? preloadedTitle;
+  const BulkUploadScreen({super.key, this.preloadedItems, this.preloadedTitle});
 
   @override
   State<BulkUploadScreen> createState() => _BulkUploadScreenState();
@@ -232,7 +234,35 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
   @override
   void initState() {
     super.initState();
-    _loadSession();
+    if (widget.preloadedItems != null) {
+      _loadPreloadedItems();
+    } else {
+      _loadSession();
+    }
+  }
+
+  Future<void> _loadPreloadedItems() async {
+    final items = widget.preloadedItems!;
+    if (items.isEmpty) return;
+    setState(() {
+      _step = _LoadStep.matching;
+      _matchTotal = items.length;
+      _matchProgress = 0;
+    });
+    final rows = <_MatchRow>[];
+    for (final item in items) {
+      rows.add(await _matchOne(item.name, item.qty));
+      if (!mounted) return;
+      setState(() => _matchProgress = rows.length);
+    }
+    if (!mounted) return;
+    setState(() {
+      _rows = rows;
+      _isFromFile = true;
+      _fileName = widget.preloadedTitle;
+      _step = _LoadStep.idle;
+      _bulkLineItemMap = {};
+    });
   }
 
   Future<void> _loadSession() async {

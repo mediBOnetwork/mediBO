@@ -224,40 +224,42 @@ class _HomeShellState extends State<HomeShell> {
             ),
       body: Stack(
         children: [
-          Column(
-            children: [
-              _LocationHeader(
-                onCart: () => setState(() => _cartOpen = true),
-                onHome: _goHome,
-              ),
-              _MobileSearchBar(
-                controller: _searchCtrl,
-                isLoading: _searchLoading,
-                onSearch: (v) => setState(() {
-                  final q = v.trim();
-                  _category = 'All';
-                  _index = 0;
-                  if (q.length >= 2) {
-                    _query = v;
-                  } else {
-                    _query = '';
-                    _scrollToTopTrigger++;
-                  }
-                }),
-                onScrollToResults: () => setState(() => _scrollTrigger++),
-              ),
-              _MobileCategoryChips(
-                meta: _desktopMeta,
-                selected: _category,
-                onCategoryTap: (key) => _selectCategory(key),
-              ),
-              Expanded(
-                child: _FadingIndexedStack(
-                  index: _index,
-                  children: pages,
+          SizedBox.expand(
+            child: Column(
+              children: [
+                _LocationHeader(
+                  onCart: () => setState(() => _cartOpen = true),
+                  onHome: _goHome,
                 ),
-              ),
-            ],
+                _MobileSearchBar(
+                  controller: _searchCtrl,
+                  isLoading: _searchLoading,
+                  onSearch: (v) => setState(() {
+                    final q = v.trim();
+                    _category = 'All';
+                    _index = 0;
+                    if (q.length >= 2) {
+                      _query = v;
+                    } else {
+                      _query = '';
+                      _scrollToTopTrigger++;
+                    }
+                  }),
+                  onScrollToResults: () => setState(() => _scrollTrigger++),
+                ),
+                _MobileCategoryChips(
+                  meta: _desktopMeta,
+                  selected: _category,
+                  onCategoryTap: (key) => _selectCategory(key),
+                ),
+                Expanded(
+                  child: _FadingIndexedStack(
+                    index: _index,
+                    children: pages,
+                  ),
+                ),
+              ],
+            ),
           ),
           if (_index == 0 && AppState.of(context).distinctItems > 0)
             Positioned(
@@ -404,6 +406,7 @@ class _LocationHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cartItems = AppState.of(context).distinctItems;
+    final isAdmin = UserState.of(context).isAdmin;
     return SafeArea(
       bottom: false,
       child: Container(
@@ -468,8 +471,49 @@ class _LocationHeader extends StatelessWidget {
                 ),
               ),
             ),
+            if (isAdmin) ...[
+              const SizedBox(width: 4),
+              _AdminBackBtn(onTap: () => Navigator.pop(context)),
+            ],
             // RIGHT: cart icon
             _MobileCartIcon(cartItems: cartItems, onCart: onCart),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── Admin return button — storefront → admin shell ────────────────────────────
+
+class _AdminBackBtn extends StatelessWidget {
+  final VoidCallback onTap;
+  const _AdminBackBtn({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: const Color(0xFFECFDF5),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+              color: const Color(0xFF1B5E20).withValues(alpha: 0.35)),
+        ),
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.admin_panel_settings_outlined,
+                size: 14, color: Color(0xFF1B5E20)),
+            SizedBox(width: 4),
+            Text('Admin',
+                style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF1B5E20))),
           ],
         ),
       ),
@@ -2773,6 +2817,11 @@ class _DesktopHeaderState extends State<_DesktopHeader> {
               ),
             ),
           ),
+          if (UserState.of(context).isAdmin) ...[
+            const SizedBox(width: 4),
+            _AdminBackBtn(onTap: () => Navigator.pop(context)),
+            const SizedBox(width: 8),
+          ],
           // 2. Search bar — fills all remaining space, 24px margin each side
           Expanded(
             child: Padding(

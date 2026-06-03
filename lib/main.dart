@@ -92,8 +92,8 @@ class _AppRoot extends StatelessWidget {
           return const _SplashScreen();
         }
 
-        // Admin users see the admin panel; everyone else sees the customer app.
-        if (auth.isAdmin) return const AdminShell();
+        // Admin users see the admin panel with text selection enabled.
+        if (auth.isAdmin) return const SelectionArea(child: AdminShell());
         return const HomeShell();
       },
     );

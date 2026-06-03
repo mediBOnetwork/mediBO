@@ -13,52 +13,28 @@ String? _effectiveName(Map<String, dynamic>? scanResult) {
   return (trimmed != null && trimmed.isNotEmpty) ? trimmed : null;
 }
 
-/// Supplier name cell: handles real/fake/missing name cleanly.
+/// Supplier name cell: shows name plainly for all row types.
 Widget _supplierNameCell(String? name, bool isFake, {bool large = false}) {
-  if (isFake) {
-    if (name != null) {
-      return RichText(
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        text: TextSpan(children: [
-          TextSpan(
-            text: 'Probable: ',
-            style: TextStyle(
-              fontSize: large ? 12 : 11,
-              color: const Color(0xFF9CA3AF),
-              fontStyle: FontStyle.italic,
-            ),
-          ),
-          TextSpan(
-            text: name,
-            style: TextStyle(
-              fontSize: large ? 13 : 12,
-              fontWeight: FontWeight.w500,
-              color: const Color(0xFF374151),
-            ),
-          ),
-        ]),
-      );
-    }
+  if (name != null) {
     return Text(
-      'Unknown supplier',
+      name,
       style: TextStyle(
-        fontSize: large ? 13 : 12,
-        color: const Color(0xFFD1D5DB),
-        fontStyle: FontStyle.italic,
+        fontSize: large ? 14 : 13,
+        fontWeight: FontWeight.w600,
+        color: const Color(0xFF111827),
       ),
-      maxLines: 1,
+      maxLines: large ? 2 : 1,
       overflow: TextOverflow.ellipsis,
     );
   }
   return Text(
-    name ?? '—',
+    isFake ? 'Unknown supplier' : '—',
     style: TextStyle(
-      fontSize: large ? 14 : 13,
-      fontWeight: FontWeight.w600,
-      color: const Color(0xFF111827),
+      fontSize: large ? 13 : 12,
+      color: const Color(0xFFD1D5DB),
+      fontStyle: isFake ? FontStyle.italic : null,
     ),
-    maxLines: large ? 2 : 1,
+    maxLines: 1,
     overflow: TextOverflow.ellipsis,
   );
 }
@@ -411,12 +387,15 @@ class _DesktopBillRow extends StatelessWidget {
       return const SizedBox.shrink();
     }
     if (scanStatus == 'error') {
-      return _ActionBtn(
-        label: 'Retry Scan',
-        icon: Icons.refresh_rounded,
-        color: const Color(0xFF7C3AED),
-        loading: false,
-        onTap: onRetryScan,
+      return Align(
+        alignment: Alignment.centerLeft,
+        child: _ActionBtn(
+          label: 'Retry Scan',
+          icon: Icons.refresh_rounded,
+          color: const Color(0xFF7C3AED),
+          loading: false,
+          onTap: onRetryScan,
+        ),
       );
     }
     switch (verdict) {
@@ -445,12 +424,15 @@ class _DesktopBillRow extends StatelessWidget {
           onReject: onDismiss,
         );
       case 'fake':
-        return _ActionBtn(
-          label: 'Dismiss',
-          icon: Icons.close_rounded,
-          color: const Color(0xFF6B7280),
-          loading: isDismissing,
-          onTap: busy ? null : onDismiss,
+        return Align(
+          alignment: Alignment.centerLeft,
+          child: _ActionBtn(
+            label: 'Dismiss',
+            icon: Icons.close_rounded,
+            color: const Color(0xFF6B7280),
+            loading: isDismissing,
+            onTap: busy ? null : onDismiss,
+          ),
         );
       default:
         return const SizedBox.shrink();
@@ -651,6 +633,7 @@ class _PendingBillsScreenState extends State<PendingBillsScreen> {
   bool _loading = true;
   String? _error;
   bool _fakeExpanded = false;
+  DateTime _selectedDate = DateTime.now();
   final Map<String, bool> _downloading = {};
   final Map<String, bool> _dismissing = {};
   final Map<String, bool> _approving = {};
@@ -670,6 +653,37 @@ class _PendingBillsScreenState extends State<PendingBillsScreen> {
     super.dispose();
   }
 
+  // ── Date picker ───────────────────────────────────────────────────────────────
+
+  String _fmtDateLabel(DateTime d) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final sel = DateTime(d.year, d.month, d.day);
+    if (sel == today) return 'Today';
+    if (sel == today.subtract(const Duration(days: 1))) return 'Yesterday';
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return '${d.day} ${months[d.month - 1]} ${d.year}';
+  }
+
+  Future<void> _pickDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _selectedDate,
+      firstDate: DateTime(2024),
+      lastDate: DateTime.now(),
+      builder: (context, child) => Theme(
+        data: Theme.of(context).copyWith(
+          colorScheme: const ColorScheme.light(primary: Color(0xFF16A34A)),
+        ),
+        child: child!,
+      ),
+    );
+    if (picked != null && mounted) {
+      setState(() => _selectedDate = picked);
+      _load();
+    }
+  }
+
   // ── Data loading ──────────────────────────────────────────────────────────────
 
   Future<void> _load() async {
@@ -678,10 +692,14 @@ class _PendingBillsScreenState extends State<PendingBillsScreen> {
       _error = null;
     });
     try {
+      final dayStart = DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day).toUtc();
+      final dayEnd = dayStart.add(const Duration(days: 1));
       final rows = await Supabase.instance.client
           .from('pending_bills')
           .select()
           .eq('status', 'pending')
+          .gte('received_at', dayStart.toIso8601String())
+          .lt('received_at', dayEnd.toIso8601String())
           .order('received_at', ascending: false);
       final list = List<Map<String, dynamic>>.from(rows as List);
       if (mounted) setState(() { _bills = list; _loading = false; });
@@ -1002,17 +1020,35 @@ class _PendingBillsScreenState extends State<PendingBillsScreen> {
             ),
           ],
           const Spacer(),
+          // Date picker chip
+          InkWell(
+            onTap: _loading ? null : _pickDate,
+            borderRadius: BorderRadius.circular(8),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                border: Border.all(color: const Color(0xFFE5E7EB)),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                const Icon(Icons.calendar_today_outlined, size: 13, color: Color(0xFF6B7280)),
+                const SizedBox(width: 5),
+                Text(
+                  _fmtDateLabel(_selectedDate),
+                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF374151)),
+                ),
+                const SizedBox(width: 3),
+                const Icon(Icons.arrow_drop_down, size: 16, color: Color(0xFF6B7280)),
+              ]),
+            ),
+          ),
+          const SizedBox(width: 4),
           IconButton(
             icon: const Icon(Icons.refresh, size: 20, color: Color(0xFF6B7280)),
             tooltip: 'Refresh',
             onPressed: _loading ? null : _load,
           ),
         ]),
-        const SizedBox(height: 2),
-        const Text(
-          'Supplier bills forwarded by email — auto-scanned by AI on arrival.',
-          style: TextStyle(fontSize: 13, color: Color(0xFF6B7280)),
-        ),
       ]),
     );
   }

@@ -1840,13 +1840,6 @@ class _LoginPanelContentState extends State<_LoginPanelContent> {
           onPressed: _loading ? null : _onContinue,
           child: _loading
               ? _spinner()
-              : _emailEmpty
-              ? const Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                  _LoginPanelGoogleIcon(),
-                  SizedBox(width: 12),
-                  Text('Continue with Google',
-                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
-                ])
               : const Text('Continue',
                   style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
         ),

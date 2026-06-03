@@ -378,35 +378,43 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     return LayoutBuilder(builder: (ctx, box) {
       final isDesktop = box.maxWidth >= 900;
 
-      // Loading — no scroll needed, just fill the available space
+      // Loading: fill the bounded parent space with a centred spinner.
+      // No Column+Expanded here — just a single widget that fills its parent.
       if (_loading) {
-        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          _buildHeader(isDesktop),
-          const Expanded(
-              child: Center(
-                  child: CircularProgressIndicator(
-                      color: Color(0xFF1B5E20), strokeWidth: 2))),
-        ]);
+        return const Center(
+          child: CircularProgressIndicator(
+              color: Color(0xFF1B5E20), strokeWidth: 2),
+        );
       }
 
-      // Data view — sticky tab header + single vertical scrollable for all content.
-      // Using an explicit ScrollController so Scrollbar and SingleChildScrollView
-      // are tightly coupled and receive mouse-wheel / keyboard scroll events on web.
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _buildHeader(isDesktop),
-          Expanded(
-            child: Scrollbar(
-              controller: _scrollCtrl,
-              thumbVisibility: true,
-              child: SingleChildScrollView(
-                controller: _scrollCtrl,
-                child: _buildScrollContent(isDesktop),
-              ),
-            ),
+      // ── Single vertical scroll owner ─────────────────────────────────────────
+      // Scrollbar > SingleChildScrollView > Column([header, content])
+      //
+      // WHY this structure:
+      //   The old pattern was Column([_buildHeader, Expanded(child: SSV)]).
+      //   Flutter gives every non-flex Column child maxHeight = the Column's
+      //   full available height.  _buildHeader's inner Column has the default
+      //   mainAxisSize:max, so it claimed the entire viewport height, leaving
+      //   Expanded(SSV) with 0 px — nothing could scroll.
+      //
+      //   By making Scrollbar+SSV the outermost widget, the SSV fills the
+      //   bounded height given by admin_shell's Expanded directly.  _buildHeader
+      //   is now a child of the SSV's Column, which receives UNBOUNDED height;
+      //   in that context Column(mainAxisSize:max) safely sizes to its children.
+      //   The SSV then scrolls all content (tabs + rows) as one unit.
+      return Scrollbar(
+        controller: _scrollCtrl,
+        thumbVisibility: true,
+        child: SingleChildScrollView(
+          controller: _scrollCtrl,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildHeader(isDesktop),
+              _buildScrollContent(isDesktop),
+            ],
           ),
-        ],
+        ),
       );
     });
   }

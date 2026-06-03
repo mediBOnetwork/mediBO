@@ -129,11 +129,18 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   bool _loading = true;
   _CustFilter _filter = _CustFilter.customerOrders;
   final Set<String> _expanded = {};
+  final ScrollController _scrollCtrl = ScrollController();
 
   @override
   void initState() {
     super.initState();
     _load();
+  }
+
+  @override
+  void dispose() {
+    _scrollCtrl.dispose();
+    super.dispose();
   }
 
   // ── Data ──────────────────────────────────────────────────────────────────────
@@ -371,7 +378,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     return LayoutBuilder(builder: (ctx, box) {
       final isDesktop = box.maxWidth >= 900;
 
-      // Loading
+      // Loading — no scroll needed, just fill the available space
       if (_loading) {
         return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           _buildHeader(isDesktop),
@@ -382,67 +389,86 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         ]);
       }
 
-      // Registration view
-      if (_isRegView) {
-        if (_regRows.isEmpty) {
-          return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            _buildHeader(isDesktop),
-            Expanded(child: _emptyState('0 pending registrations')),
-          ]);
-        }
-        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          _buildHeader(isDesktop),
-          Expanded(
-            child: ListView.builder(
-              padding: const EdgeInsets.only(bottom: 32),
-              itemCount: _regRows.length + (isDesktop ? 1 : 0),
-              itemBuilder: (_, i) {
-                if (isDesktop && i == 0) return _buildRegTableHeader();
-                final idx = isDesktop ? i - 1 : i;
-                return isDesktop
-                    ? _buildDesktopRegRow(_regRows[idx])
-                    : _buildMobileRegCard(_regRows[idx]);
-              },
-            ),
-          ),
-        ]);
-      }
-
-      // Customer orders / cart views
-      final rows = _activeCust;
-      if (rows.isEmpty) {
-        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          _buildHeader(isDesktop),
-          Expanded(
-            child: _emptyState(
-              _filter == _CustFilter.customerOrders
-                  ? '0 orders'
-                  : '0 customers with unpurchased cart items',
-            ),
-          ),
-        ]);
-      }
-
+      // Data view — sticky tab header + single vertical scrollable for all content.
+      // Using an explicit ScrollController so Scrollbar and SingleChildScrollView
+      // are tightly coupled and receive mouse-wheel / keyboard scroll events on web.
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _buildHeader(isDesktop),
           Expanded(
-            child: ListView.builder(
-              padding: const EdgeInsets.only(bottom: 32),
-              itemCount: rows.length + (isDesktop ? 1 : 0),
-              itemBuilder: (_, i) {
-                if (isDesktop && i == 0) return _buildCustTableHeader();
-                final idx = isDesktop ? i - 1 : i;
-                return isDesktop
-                    ? _buildDesktopCustRow(rows[idx])
-                    : _buildMobileCustCard(rows[idx]);
-              },
+            child: Scrollbar(
+              controller: _scrollCtrl,
+              thumbVisibility: true,
+              child: SingleChildScrollView(
+                controller: _scrollCtrl,
+                child: _buildScrollContent(isDesktop),
+              ),
             ),
           ),
         ],
       );
     });
+  }
+
+  // All non-loading content rendered as a single Column inside SingleChildScrollView.
+  // No inner ListView — every row widget expands inline, so there is nothing to
+  // intercept the parent scroll.
+  Widget _buildScrollContent(bool isDesktop) {
+    // ── Pending registrations ─────────────────────────────────────────────────
+    if (_isRegView) {
+      if (_regRows.isEmpty) {
+        return _ssvEmptyState('0 pending registrations');
+      }
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (isDesktop) _buildRegTableHeader(),
+          ..._regRows.map(
+            (r) => isDesktop ? _buildDesktopRegRow(r) : _buildMobileRegCard(r)),
+          const SizedBox(height: 32),
+        ],
+      );
+    }
+
+    // ── Customer orders / cart ────────────────────────────────────────────────
+    final rows = _activeCust;
+    if (rows.isEmpty) {
+      return _ssvEmptyState(
+        _filter == _CustFilter.customerOrders
+            ? '0 orders'
+            : '0 customers with unpurchased cart items',
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (isDesktop) _buildCustTableHeader(),
+        ...rows.map(
+          (r) => isDesktop ? _buildDesktopCustRow(r) : _buildMobileCustCard(r)),
+        const SizedBox(height: 32),
+      ],
+    );
+  }
+
+  // Empty state suitable for SingleChildScrollView child (unbounded height —
+  // cannot use Center for vertical centering, so pad from top instead).
+  Widget _ssvEmptyState(String message) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 80),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          const Icon(Icons.people_outline, size: 56, color: Color(0xFFD1D5DB)),
+          const SizedBox(height: 14),
+          Text(message,
+              textAlign: TextAlign.center,
+              style:
+                  const TextStyle(fontSize: 14, color: Color(0xFF9CA3AF))),
+        ],
+      ),
+    );
   }
 
   // ── Shared header with 3 tabs ─────────────────────────────────────────────────
@@ -493,10 +519,13 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   Widget _tab(_CustFilter f, String label) {
     final active = _filter == f;
     return GestureDetector(
-      onTap: () => setState(() {
-        _filter = f;
-        _expanded.clear();
-      }),
+      onTap: () {
+        if (_scrollCtrl.hasClients) _scrollCtrl.jumpTo(0);
+        setState(() {
+          _filter = f;
+          _expanded.clear();
+        });
+      },
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 150),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),

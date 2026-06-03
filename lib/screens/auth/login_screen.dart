@@ -129,21 +129,19 @@ class _LoginScreenState extends State<LoginScreen> {
     final email = _emailCtrl.text.trim();
     setState(() { _resetLoading = true; _resetError = null; });
     try {
-      await Supabase.instance.client.auth.signInWithOtp(
-        email: email,
-        shouldCreateUser: false,
+      final exists = await Supabase.instance.client
+          .rpc('check_email_registered', params: {'p_email': email}) as bool;
+      if (!exists) {
+        if (mounted) setState(() { _resetError = 'No account found for this email.'; _resetLoading = false; });
+        return;
+      }
+      await Supabase.instance.client.auth.resetPasswordForEmail(
+        email,
+        redirectTo: 'https://medibo.in',
       );
       if (mounted) setState(() { _resetStep = _ResetStep.otpSent; _resetLoading = false; _otpCtrl.clear(); });
     } on AuthException catch (e) {
-      if (!mounted) return;
-      final notFound = e.message.toLowerCase().contains('user') ||
-          e.message.toLowerCase().contains('not found') ||
-          e.message.toLowerCase().contains('no account') ||
-          e.statusCode == '422' || e.statusCode == '400';
-      setState(() {
-        _resetError = notFound ? 'No account found for this email.' : e.message;
-        _resetLoading = false;
-      });
+      if (mounted) setState(() { _resetError = e.message; _resetLoading = false; });
     } catch (_) {
       if (mounted) setState(() { _resetError = 'Could not send code. Try again.'; _resetLoading = false; });
     }
@@ -155,10 +153,11 @@ class _LoginScreenState extends State<LoginScreen> {
     if (otp.length < 6) { setState(() => _resetError = 'Enter the 6-digit code.'); return; }
     setState(() { _resetLoading = true; _resetError = null; });
     try {
+      // OtpType.recovery fires passwordRecovery (not signedIn) so _AppRoot stays stable
       await Supabase.instance.client.auth.verifyOTP(
         email: email,
         token: otp,
-        type: OtpType.email,
+        type: OtpType.recovery,
       );
       if (mounted) setState(() { _resetStep = _ResetStep.newPassword; _resetLoading = false; _newPassCtrl.clear(); _confirmCtrl.clear(); });
     } on AuthException catch (e) {
@@ -169,6 +168,7 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _setNewPassword() async {
+    final email   = _emailCtrl.text.trim();
     final newPass = _newPassCtrl.text;
     final confirm = _confirmCtrl.text;
     if (newPass.length < 6) { setState(() => _resetError = 'Password must be at least 6 characters.'); return; }
@@ -176,6 +176,8 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() { _resetLoading = true; _resetError = null; });
     try {
       await Supabase.instance.client.auth.updateUser(UserAttributes(password: newPass));
+      // Re-sign in with new password so AuthNotifier fires signedIn → routes admin/home correctly
+      await Supabase.instance.client.auth.signInWithPassword(email: email, password: newPass);
       if (mounted) _close();
     } on AuthException catch (e) {
       if (mounted) setState(() { _resetError = e.message; _resetLoading = false; });

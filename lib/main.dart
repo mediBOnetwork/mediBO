@@ -87,8 +87,8 @@ class _AppRoot extends StatelessWidget {
     return ListenableBuilder(
       listenable: auth,
       builder: (context, _) {
-        // Show splash while checking initial session or loading profile
-        if (auth.loading || auth.profileLoading) {
+        // Show splash only during the very first session check, not on subsequent sign-ins
+        if (auth.loading) {
           return const _SplashScreen();
         }
 

@@ -1,9 +1,13 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../models/user_profile.dart';
 import '../../user_state.dart';
+
+enum _CodeStatus { idle, invalid, checking, available, taken }
 
 class BusinessDetailsScreen extends StatefulWidget {
   final String userId;
@@ -50,7 +54,8 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
   // Account
   String? _paymentTerm;
   final _customerCodeCtrl = TextEditingController();
-  String? _customerCodeError;
+  _CodeStatus _codeStatus = _CodeStatus.idle;
+  Timer? _codeDebounce;
 
   bool _saving = false;
   String? _saveError;
@@ -78,11 +83,45 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
     final stripped = widget.phone.replaceAll('+91', '').trim();
     if (stripped.length == 10) _whatsappCtrl.text = stripped;
     if (widget.email.isNotEmpty) _emailCtrl.text = widget.email;
-    _customerCodeCtrl.addListener(() {
-      if (_customerCodeError != null) {
-        setState(() => _customerCodeError = null);
-      }
-    });
+    _customerCodeCtrl.addListener(_onCodeChanged);
+  }
+
+  void _onCodeChanged() {
+    final raw = _customerCodeCtrl.text.trim().toUpperCase();
+    if (raw.isEmpty) {
+      _codeDebounce?.cancel();
+      setState(() => _codeStatus = _CodeStatus.idle);
+      return;
+    }
+    if (!RegExp(r'^[A-Za-z]{3}[0-9]{3}$').hasMatch(raw)) {
+      _codeDebounce?.cancel();
+      setState(() => _codeStatus = _CodeStatus.invalid);
+      return;
+    }
+    setState(() => _codeStatus = _CodeStatus.checking);
+    _codeDebounce?.cancel();
+    _codeDebounce = Timer(const Duration(milliseconds: 350), () => _checkCode(raw));
+  }
+
+  Future<void> _checkCode(String code) async {
+    try {
+      final res = await Supabase.instance.client
+          .from('pharmacy_profiles')
+          .select('customer_code')
+          .eq('customer_code', code)
+          .maybeSingle();
+      if (!mounted) return;
+      setState(() => _codeStatus = res != null ? _CodeStatus.taken : _CodeStatus.available);
+    } catch (_) {
+      if (mounted) setState(() => _codeStatus = _CodeStatus.idle);
+    }
+  }
+
+  bool get _blockedByCode {
+    if (_customerCodeCtrl.text.trim().isEmpty) return false;
+    return _codeStatus == _CodeStatus.invalid ||
+        _codeStatus == _CodeStatus.checking ||
+        _codeStatus == _CodeStatus.taken;
   }
 
   @override
@@ -100,12 +139,12 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
     _dl20bCtrl.dispose();
     _dl21bCtrl.dispose();
     _gstCtrl.dispose();
+    _codeDebounce?.cancel();
     _customerCodeCtrl.dispose();
     super.dispose();
   }
 
   Future<void> _save() async {
-    setState(() => _customerCodeError = null);
     if (!_formKey.currentState!.validate()) return;
     setState(() {
       _saving = true;
@@ -139,23 +178,79 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
         customerCode: _customerCodeCtrl.text.trim().toUpperCase(),
       );
       await UserState.read(context).saveProfile(profile);
-      if (context.mounted) Navigator.of(context).pop();
+      if (mounted) Navigator.of(context).pop();
     } on PostgrestException catch (e) {
+      if (!mounted) return;
       if (e.code == '23505') {
-        if (mounted) {
-          setState(() => _customerCodeError =
-              'This customer code is already taken, please choose another');
-        }
+        setState(() => _codeStatus = _CodeStatus.taken);
       } else {
-        if (mounted) {
-          setState(() => _saveError = 'Failed to save. Please try again.');
-        }
+        setState(() => _saveError = '[${e.code}] ${e.message}');
       }
-    } catch (_) {
-      if (mounted) setState(() => _saveError = 'Failed to save. Please try again.');
+    } catch (e) {
+      if (mounted) setState(() => _saveError = e.toString());
     } finally {
       if (mounted) setState(() => _saving = false);
     }
+  }
+
+  Widget _buildCodeStatus() {
+    switch (_codeStatus) {
+      case _CodeStatus.idle:
+        return const Padding(
+          padding: EdgeInsets.only(top: 6),
+          child: Text(
+            'Format: 3 letters + 3 digits (e.g. ABC123). Must be unique.',
+            style: TextStyle(fontSize: 11, color: Color(0xFF9CA3AF)),
+          ),
+        );
+      case _CodeStatus.invalid:
+        return _codeStatusRow(
+          icon: Icons.error_outline,
+          color: const Color(0xFFDC2626),
+          text: '3 letters + 3 digits (e.g. ABC123)',
+        );
+      case _CodeStatus.checking:
+        return const Padding(
+          padding: EdgeInsets.only(top: 6),
+          child: Row(children: [
+            SizedBox(
+              width: 12,
+              height: 12,
+              child: CircularProgressIndicator(
+                  strokeWidth: 1.5, color: Color(0xFF6B7280)),
+            ),
+            SizedBox(width: 6),
+            Text('Checking availability…',
+                style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+          ]),
+        );
+      case _CodeStatus.available:
+        return _codeStatusRow(
+          icon: Icons.check_circle_outline,
+          color: const Color(0xFF16A34A),
+          text: 'Available',
+        );
+      case _CodeStatus.taken:
+        return _codeStatusRow(
+          icon: Icons.cancel_outlined,
+          color: const Color(0xFFDC2626),
+          text: 'Already taken — choose a different code',
+        );
+    }
+  }
+
+  Widget _codeStatusRow(
+      {required IconData icon, required Color color, required String text}) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: Row(children: [
+        Icon(icon, size: 14, color: color),
+        const SizedBox(width: 4),
+        Flexible(
+            child: Text(text,
+                style: TextStyle(fontSize: 12, color: color))),
+      ]),
+    );
   }
 
   @override
@@ -470,7 +565,6 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
                       hint: 'ABC123',
                       maxLength: 6,
                       capitalization: TextCapitalization.characters,
-                      externalError: _customerCodeError,
                       inputFormatters: [
                         LengthLimitingTextInputFormatter(6),
                       ],
@@ -483,12 +577,7 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
                         return null;
                       },
                     ),
-                    const SizedBox(height: 6),
-                    const Text(
-                      'Format: 3 letters + 3 digits (e.g. ABC123). Must be unique across all accounts.',
-                      style:
-                          TextStyle(fontSize: 11, color: Color(0xFF9CA3AF)),
-                    ),
+                    _buildCodeStatus(),
 
                     if (_saveError != null) ...[
                       const SizedBox(height: 16),
@@ -503,7 +592,7 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
                     SizedBox(
                       height: 52,
                       child: FilledButton(
-                        onPressed: _saving ? null : _save,
+                        onPressed: (_saving || _blockedByCode) ? null : _save,
                         style: FilledButton.styleFrom(
                           backgroundColor: const Color(0xFF1B5E20),
                           disabledBackgroundColor:
@@ -589,7 +678,6 @@ class _Field extends StatelessWidget {
   final int maxLines;
   final TextCapitalization capitalization;
   final List<TextInputFormatter>? inputFormatters;
-  final String? externalError;
   final bool readOnly;
 
   const _Field({
@@ -603,7 +691,6 @@ class _Field extends StatelessWidget {
     this.maxLines = 1,
     this.capitalization = TextCapitalization.words,
     this.inputFormatters,
-    this.externalError,
     this.readOnly = false,
   });
 
@@ -692,13 +779,6 @@ class _Field extends StatelessWidget {
                 : const Color(0xFFFAFAFA),
           ),
         ),
-        if (externalError != null) ...[
-          const SizedBox(height: 4),
-          Text(
-            externalError!,
-            style: const TextStyle(fontSize: 12, color: Color(0xFFDC2626)),
-          ),
-        ],
       ],
     );
   }

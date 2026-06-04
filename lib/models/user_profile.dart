@@ -93,6 +93,7 @@ class UserProfile {
         'pharmacy_name': pharmacyName,
         'store_type': storeType,
         'range_zone': rangeZone,
+        'address': addressLocal,       // NOT NULL column — must always be populated
         'address_local': addressLocal,
         'city': city,
         'state': state,

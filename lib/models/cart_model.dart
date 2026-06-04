@@ -389,28 +389,85 @@ class CartModel extends ChangeNotifier {
   // ── Guest → Supabase merge on login ───────────────────────────────────────
 
   Future<void> _mergeGuestCartToSupabase() async {
-    if (_lines.isEmpty) return;
+    final uid = Supabase.instance.client.auth.currentUser?.id;
+    if (uid == null) return;
+    final guestUid = _getGuestUid();
+
     try {
-      final uid = Supabase.instance.client.auth.currentUser?.id;
-      if (uid == null) return;
-      final rows = await Supabase.instance.client
+      // 1. Load guest rows from Supabase by guestUid.
+      //    This handles OAuth/Google redirect logins where the page reloads before
+      //    _mergeGuestCartToSupabase fires, clearing _lines before we can read them.
+      final Map<String, Map<String, dynamic>> toUpsert = {};
+      if (guestUid != null) {
+        final rows = await Supabase.instance.client
+            .from('cart_items')
+            .select()
+            .eq('user_id', guestUid);
+        for (final r in rows as List) {
+          final pid = r['product_id'] as String;
+          toUpsert[pid] = Map<String, dynamic>.from(r as Map);
+        }
+      }
+
+      // 2. Supplement with any in-memory lines not yet in the DB guest rows
+      //    (same-page OTP login: guest uid may not have been assigned yet).
+      for (final line in _lines.values.where((l) => !l.isSample)) {
+        if (!toUpsert.containsKey(line.product.id)) {
+          toUpsert[line.product.id] = {
+            'product_id': line.product.id,
+            'product_name': line.product.name,
+            'price': line.product.b2bPrice,
+            'mrp': line.product.mrp,
+            'image_url': line.product.imageUrl,
+            'manufacturer': line.product.manufacturer,
+            'pack_size': line.product.packSize,
+            'category': line.product.category,
+            'gst_percent': line.product.gstPercent.toInt(),
+            'quantity': line.quantity,
+          };
+        }
+      }
+
+      if (toUpsert.isEmpty) {
+        // Nothing to merge — still clean up guest artifacts if present.
+        if (guestUid != null) {
+          await Supabase.instance.client
+              .from('cart_items').delete().eq('user_id', guestUid);
+          try { html.window.localStorage.remove(_guestUidKey); } catch (_) {}
+        }
+        _clearLocalStorage();
+        return;
+      }
+
+      // 3. Fetch existing auth-uid rows to merge quantities (no doubling).
+      final existingRows = await Supabase.instance.client
           .from('cart_items')
           .select('product_id, quantity')
           .eq('user_id', uid);
       final existing = <String, int>{
-        for (final r in rows) r['product_id'] as String: r['quantity'] as int,
+        for (final r in existingRows as List)
+          r['product_id'] as String: r['quantity'] as int,
       };
-      for (final line in _lines.values.where((l) => !l.isSample)) {
-        final merged = (existing[line.product.id] ?? 0) + line.quantity;
-        await _upsertToSupabase(line.product, merged);
+
+      // 4. Upsert each guest item under the real auth uid.
+      for (final item in toUpsert.values) {
+        final pid = item['product_id'] as String;
+        final mergedQty = (existing[pid] ?? 0) + (item['quantity'] as int);
+        await Supabase.instance.client.from('cart_items').upsert(
+          {
+            ...item,
+            'user_id': uid,
+            'quantity': mergedQty,
+            'updated_at': DateTime.now().toIso8601String(),
+          },
+          onConflict: 'user_id,product_id',
+        );
       }
-      // Delete the old guest-UUID rows from Supabase so they don't linger
-      final guestUid = _getGuestUid();
+
+      // 5. Delete old guest rows and clean up localStorage.
       if (guestUid != null) {
         await Supabase.instance.client
-            .from('cart_items')
-            .delete()
-            .eq('user_id', guestUid);
+            .from('cart_items').delete().eq('user_id', guestUid);
         try { html.window.localStorage.remove(_guestUidKey); } catch (_) {}
       }
       _clearLocalStorage();

@@ -307,12 +307,22 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         client.from('pharmacy_profiles').select(),
         client.from('orders').select().order('created_at', ascending: false),
         client.from('cart_items').select(),
+        client.rpc('get_unregistered_users').catchError((_) => <dynamic>[]),
       ]);
 
       final upRows    = results[0] as List;
       final ppRows    = results[1] as List;
       final orderRows = results[2] as List;
       final cartRows  = results[3] as List;
+      final authRows  = results[4] as List;
+
+      // Auth users with no pharmacy_profile (logged-in but unregistered)
+      final authMap = <String, Map<String, dynamic>>{};
+      for (final r in authRows) {
+        final m = Map<String, dynamic>.from(r as Map);
+        final uid = m['auth_uid'] as String?;
+        if (uid != null) authMap[uid] = m;
+      }
 
       // Profile lookups
       final upMap = <String, Map<String, dynamic>>{};
@@ -386,9 +396,13 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
 
         carts.add(_CustRow(
           userId:       uid,
-          name:         (up == null && pp == null) ? 'Guest' : _name(up, pp, null),
+          name:         (up == null && pp == null)
+              ? _nameFromAuth(authMap[uid])
+              : _name(up, pp, null),
           pharmacy:     _pharmacy(up, pp, null),
-          phone:        _phone(up, pp, null),
+          phone:        (up == null && pp == null)
+              ? (authMap[uid]?['phone'] as String? ?? '')
+              : _phone(up, pp, null),
           source:       'cart_only',
           orderId:      null,
           orderStatus:  'cart_only',
@@ -586,6 +600,15 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     final ph = (up?['phone'] ?? pp?['whatsapp_no'] ?? pp?['phone']) as String?;
     if (ph != null && ph.trim().isNotEmpty) return ph.trim();
     return order?['phone'] as String? ?? '';
+  }
+
+  static String _nameFromAuth(Map? auth) {
+    if (auth == null) return 'Guest';
+    final name = auth['full_name'] as String?;
+    if (name != null && name.trim().isNotEmpty) return name.trim();
+    final email = auth['email'] as String?;
+    if (email != null && email.trim().isNotEmpty) return email.trim();
+    return 'Guest';
   }
 
   static List<_ItemLine> _parseItems(dynamic items) {

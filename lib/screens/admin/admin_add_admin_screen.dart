@@ -118,7 +118,7 @@ class _AdminAddAdminScreenState extends State<AdminAddAdminScreen> {
           elevation: 0,
           leading: IconButton(
             icon: const Icon(Icons.arrow_back_ios_new,
-                size: 20, color: Color(0xFF1B5E20)),
+                size: 20, color: Color(0xFF1B7A43)),
             onPressed: () => Navigator.of(context).pop(),
           ),
           title: const Text('Add New Admin',
@@ -156,7 +156,7 @@ class _AdminAddAdminScreenState extends State<AdminAddAdminScreen> {
         centerTitle: false,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_new,
-              size: 20, color: Color(0xFF1B5E20)),
+              size: 20, color: Color(0xFF1B7A43)),
           onPressed: () => Navigator.of(context).pop(),
         ),
         title: const Text(
@@ -184,8 +184,14 @@ class _AdminAddAdminScreenState extends State<AdminAddAdminScreen> {
                   padding: const EdgeInsets.all(20),
                   decoration: BoxDecoration(
                     color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: const Color(0xFFE5E7EB)),
+                    borderRadius: BorderRadius.circular(14),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.06),
+                        blurRadius: 10,
+                        offset: const Offset(0, 3),
+                      ),
+                    ],
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -230,7 +236,7 @@ class _AdminAddAdminScreenState extends State<AdminAddAdminScreen> {
                           focusedBorder: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(8),
                             borderSide: const BorderSide(
-                                color: Color(0xFF1B5E20), width: 1.5),
+                                color: Color(0xFF1B7A43), width: 1.5),
                           ),
                           filled: true,
                           fillColor: const Color(0xFFFAFAFA),
@@ -256,8 +262,8 @@ class _AdminAddAdminScreenState extends State<AdminAddAdminScreen> {
                         child: FilledButton(
                           onPressed: _adding ? null : _addAdmin,
                           style: FilledButton.styleFrom(
-                            backgroundColor: const Color(0xFF1B5E20),
-                            disabledBackgroundColor: const Color(0xFF1B5E20)
+                            backgroundColor: const Color(0xFF1B7A43),
+                            disabledBackgroundColor: const Color(0xFF1B7A43)
                                 .withValues(alpha: 0.5),
                             shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(8)),
@@ -315,7 +321,7 @@ class _AdminAddAdminScreenState extends State<AdminAddAdminScreen> {
                     child: Padding(
                       padding: EdgeInsets.all(24),
                       child: CircularProgressIndicator(
-                          color: Color(0xFF1B5E20), strokeWidth: 2),
+                          color: Color(0xFF1B7A43), strokeWidth: 2),
                     ),
                   )
                 else if (_admins.isEmpty)
@@ -365,7 +371,7 @@ class _AdminAddAdminScreenState extends State<AdminAddAdminScreen> {
                                     child: const Icon(
                                       Icons.admin_panel_settings_outlined,
                                       size: 18,
-                                      color: Color(0xFF1B5E20),
+                                      color: Color(0xFF1B7A43),
                                     ),
                                   ),
                                   const SizedBox(width: 12),

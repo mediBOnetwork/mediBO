@@ -66,15 +66,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
-        const Row(children: [
-          Icon(Icons.warning_amber_rounded, size: 16, color: Color(0xFFD97706)),
-          SizedBox(width: 6),
-          Text('Action Required',
-              style: TextStyle(
-                  fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF374151))),
-        ]),
-        const SizedBox(height: 10),
-        // Wrap instead of horizontal scroll so cards stack on narrow screens
         Wrap(
           spacing: 12,
           runSpacing: 12,
@@ -118,10 +109,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
-        const Text('Overview',
-            style: TextStyle(
-                fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF374151))),
-        const SizedBox(height: 10),
         Wrap(spacing: 16, runSpacing: 16, children: [
           _StatCard(
             label: 'Pending Bills',
@@ -133,17 +120,29 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
             label: 'Medicines',
             value: '$_totalMedicines',
             icon: Icons.medication_outlined,
-            color: const Color(0xFF1B5E20),
+            color: const Color(0xFF1B7A43),
           ),
         ]),
       ],
     );
   }
 
+  static Widget _sectionLabel(String text) => Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: Text(
+          text.toUpperCase(),
+          style: const TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+            color: Color(0xFF9CA3AF),
+            letterSpacing: 0.8,
+          ),
+        ),
+      );
+
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(builder: (ctx, box) {
-      // Tighter padding on narrow screens so cards don't overflow
       final isNarrow = box.maxWidth < 600;
       final pad = isNarrow ? 16.0 : 28.0;
 
@@ -155,40 +154,47 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
             // Dashboard header
             Row(children: [
               Container(
-                width: 44,
-                height: 44,
+                width: 48,
+                height: 48,
                 decoration: BoxDecoration(
                   color: const Color(0xFFECFDF5),
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(14),
+                  boxShadow: [
+                    BoxShadow(
+                      color: const Color(0xFF1B7A43).withValues(alpha: 0.15),
+                      blurRadius: 8,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
                 ),
                 child: const Icon(Icons.dashboard_outlined,
-                    size: 22, color: Color(0xFF1B5E20)),
+                    size: 24, color: Color(0xFF1B7A43)),
               ),
-              const SizedBox(width: 14),
+              const SizedBox(width: 16),
               const Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('Dashboard',
+                    Text('Admin Dashboard',
                         style: TextStyle(
                             fontSize: 22,
                             fontWeight: FontWeight.w800,
                             color: Color(0xFF111827))),
                     SizedBox(height: 2),
-                    Text('mediBO admin panel',
+                    Text('mediBO operations panel',
                         style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
                   ],
                 ),
               ),
             ]),
-            const SizedBox(height: 24),
+            const SizedBox(height: 28),
 
             if (_loading)
               const Center(
                 child: Padding(
                   padding: EdgeInsets.all(32),
                   child: CircularProgressIndicator(
-                      color: Color(0xFF1B5E20), strokeWidth: 2.5),
+                      color: Color(0xFF1B7A43), strokeWidth: 2.5),
                 ),
               )
             else
@@ -196,16 +202,13 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  _sectionLabel('Action Required'),
                   _buildActionRequired(),
-                  const SizedBox(height: 28),
+                  const SizedBox(height: 32),
+                  _sectionLabel('Overview'),
                   _buildOverview(),
                   const SizedBox(height: 32),
-                  const Text('Sections',
-                      style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700,
-                          color: Color(0xFF374151))),
-                  const SizedBox(height: 12),
+                  _sectionLabel('Quick Navigation'),
                   Wrap(spacing: 12, runSpacing: 12, children: const [
                     _QuickTile(
                         label: 'Add Medicine',
@@ -264,29 +267,33 @@ class _ActionCard extends StatelessWidget {
     final color = isActive ? activeColor : const Color(0xFF9CA3AF);
     return InkWell(
       onTap: () => QuickLinkNavigator.of(context)?.navigate(route),
-      borderRadius: BorderRadius.circular(10),
+      borderRadius: BorderRadius.circular(12),
       child: Container(
-        // 156px wide — 2 fit per row at ≥340px content width (with 12px gap)
-        width: 156,
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        width: 168,
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
         decoration: BoxDecoration(
-          color: isActive ? activeColor.withValues(alpha: 0.05) : Colors.white,
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(
-            color: isActive
-                ? activeColor.withValues(alpha: 0.35)
-                : const Color(0xFFE5E7EB),
-          ),
+          color: isActive ? activeColor.withValues(alpha: 0.04) : Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.06),
+              blurRadius: 8,
+              offset: const Offset(0, 2),
+            ),
+          ],
+          border: isActive
+              ? Border.all(color: activeColor.withValues(alpha: 0.2))
+              : null,
         ),
         child: Row(children: [
           Container(
-            width: 34,
-            height: 34,
+            width: 36,
+            height: 36,
             decoration: BoxDecoration(
               color: color.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(8),
+              borderRadius: BorderRadius.circular(9),
             ),
-            child: Icon(icon, size: 17, color: color),
+            child: Icon(icon, size: 18, color: color),
           ),
           const SizedBox(width: 10),
           Expanded(
@@ -297,7 +304,7 @@ class _ActionCard extends StatelessWidget {
                 Text(
                   '$count',
                   style: TextStyle(
-                    fontSize: 20,
+                    fontSize: 22,
                     fontWeight: FontWeight.w800,
                     color: isActive ? activeColor : const Color(0xFF374151),
                   ),
@@ -335,27 +342,33 @@ class _StatCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 170,
+      width: 200,
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.06),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
+          ),
+        ],
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Container(
-          width: 40,
-          height: 40,
+          width: 42,
+          height: 42,
           decoration: BoxDecoration(
             color: color.withValues(alpha: 0.1),
             borderRadius: BorderRadius.circular(10),
           ),
           child: Icon(icon, size: 22, color: color),
         ),
-        const SizedBox(height: 14),
+        const SizedBox(height: 16),
         Text(value,
             style: const TextStyle(
-                fontSize: 28, fontWeight: FontWeight.w800, color: Color(0xFF111827))),
+                fontSize: 30, fontWeight: FontWeight.w800, color: Color(0xFF111827))),
         const SizedBox(height: 4),
         Text(label,
             style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
@@ -381,18 +394,32 @@ class _QuickTile extends StatelessWidget {
   Widget build(BuildContext context) {
     return InkWell(
       onTap: () => QuickLinkNavigator.of(context)?.navigate(route),
-      borderRadius: BorderRadius.circular(10),
+      borderRadius: BorderRadius.circular(12),
       child: Container(
-        width: 130,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        width: 140,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
         decoration: BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: const Color(0xFFE5E7EB)),
+          borderRadius: BorderRadius.circular(12),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.05),
+              blurRadius: 8,
+              offset: const Offset(0, 2),
+            ),
+          ],
         ),
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Icon(icon, size: 24, color: const Color(0xFF1B5E20)),
-          const SizedBox(height: 8),
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: const Color(0xFFECFDF5),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(icon, size: 22, color: const Color(0xFF1B7A43)),
+          ),
+          const SizedBox(height: 10),
           Text(label,
               textAlign: TextAlign.center,
               style: const TextStyle(

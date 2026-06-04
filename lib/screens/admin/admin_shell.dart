@@ -227,7 +227,7 @@ class _AdminShellState extends State<AdminShell> {
                   style: TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.w800,
-                      color: Color(0xFF1B5E20)),
+                      color: Color(0xFF1B7A43)),
                 ),
                 TextSpan(
                   text: ' Admin',
@@ -265,7 +265,7 @@ class _AdminShellState extends State<AdminShell> {
                   child: _PopupRow(
                     icon: Icons.admin_panel_settings_outlined,
                     label: 'Manage Admins',
-                    color: Color(0xFF1B5E20),
+                    color: Color(0xFF1B7A43),
                   ),
                 ),
               const PopupMenuItem(
@@ -294,7 +294,7 @@ class _AdminShellState extends State<AdminShell> {
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: safeIndex,
         type: BottomNavigationBarType.fixed,
-        selectedItemColor: const Color(0xFF1B5E20),
+        selectedItemColor: const Color(0xFF1B7A43),
         unselectedItemColor: const Color(0xFF9CA3AF),
         selectedFontSize: 10,
         unselectedFontSize: 10,
@@ -341,10 +341,15 @@ class _DesktopHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      color: Colors.white,
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        boxShadow: [
+          BoxShadow(color: Color(0x0A000000), blurRadius: 8, offset: Offset(0, 2)),
+        ],
+      ),
       child: Column(mainAxisSize: MainAxisSize.min, children: [
         Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
           child: Row(children: [
             // Logo → admin Dashboard
             GestureDetector(
@@ -358,7 +363,7 @@ class _DesktopHeader extends StatelessWidget {
                       style: TextStyle(
                           fontSize: 20,
                           fontWeight: FontWeight.w800,
-                          color: Color(0xFF1B5E20)),
+                          color: Color(0xFF1B7A43)),
                     ),
                     TextSpan(
                       text: ' Admin',
@@ -384,7 +389,7 @@ class _DesktopHeader extends StatelessWidget {
                       label: 'Home',
                       icon: Icons.storefront_outlined,
                       onTap: () => onQuickLink('storefront'),
-                      color: const Color(0xFF1B5E20),
+                      color: const Color(0xFF1B7A43),
                     ),
                     const _HdrDivider(),
                     _HdrBtn(
@@ -567,7 +572,7 @@ class _QuickLinksButton extends StatelessWidget {
             child: _PopupRow(
               icon: Icons.admin_panel_settings_outlined,
               label: 'Manage Admins',
-              color: Color(0xFF1B5E20),
+              color: Color(0xFF1B7A43),
             ),
           ),
         const PopupMenuItem(
@@ -629,7 +634,7 @@ class _PageBody extends StatelessWidget {
             color: const Color(0xFFECFDF5),
             borderRadius: BorderRadius.circular(20),
           ),
-          child: Icon(icon, size: 40, color: const Color(0xFF1B5E20)),
+          child: Icon(icon, size: 40, color: const Color(0xFF1B7A43)),
         ),
         const SizedBox(height: 20),
         Text(title,
@@ -667,7 +672,7 @@ class _QuickLinkPlaceholder extends StatelessWidget {
         centerTitle: false,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_new,
-              size: 20, color: Color(0xFF1B5E20)),
+              size: 20, color: Color(0xFF1B7A43)),
           onPressed: () => Navigator.of(context).pop(),
         ),
         title: Text(title,
@@ -689,7 +694,7 @@ class _QuickLinkPlaceholder extends StatelessWidget {
               color: const Color(0xFFECFDF5),
               borderRadius: BorderRadius.circular(20),
             ),
-            child: Icon(icon, size: 40, color: const Color(0xFF1B5E20)),
+            child: Icon(icon, size: 40, color: const Color(0xFF1B7A43)),
           ),
           const SizedBox(height: 20),
           Text(title,

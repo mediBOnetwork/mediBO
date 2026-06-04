@@ -817,14 +817,23 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
                   style: TextStyle(fontSize: 14, color: Color(0xFF6B7280))),
               const SizedBox(height: 36),
               Container(
-                decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: const Color(0xFFE5E7EB))),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(16),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.06),
+                      blurRadius: 12,
+                      offset: const Offset(0, 3),
+                    ),
+                  ],
+                ),
                 padding: const EdgeInsets.all(28),
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Row(children: [
                     Container(width: 44, height: 44,
                         decoration: BoxDecoration(color: const Color(0xFFECFDF5), borderRadius: BorderRadius.circular(12)),
-                        child: const Icon(Icons.upload_file, color: Color(0xFF16A34A), size: 22)),
+                        child: const Icon(Icons.upload_file, color: Color(0xFF1B7A43), size: 22)),
                     const SizedBox(width: 14),
                     const Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                       Text('Import', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
@@ -861,7 +870,7 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
                       onPressed: _pickFile,
                       icon: const Icon(Icons.upload_rounded, size: 18),
                       label: const Text('Import', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
-                      style: FilledButton.styleFrom(backgroundColor: const Color(0xFF16A34A),
+                      style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
                     ),
                   ),
@@ -879,7 +888,7 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
   Widget _buildLoading() {
     return Center(
       child: Column(mainAxisSize: MainAxisSize.min, children: [
-        const SizedBox(width: 40, height: 40, child: CircularProgressIndicator(color: Color(0xFF16A34A), strokeWidth: 3)),
+        const SizedBox(width: 40, height: 40, child: CircularProgressIndicator(color: Color(0xFF1B7A43), strokeWidth: 3)),
         const SizedBox(height: 18),
         Text(_statusMsg, style: const TextStyle(fontSize: 14, color: Color(0xFF6B7280))),
       ]),
@@ -898,7 +907,7 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
         Text('$_matchProgress of $_matchTotal rows', style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
         const SizedBox(height: 22),
         ClipRRect(borderRadius: BorderRadius.circular(4),
-            child: LinearProgressIndicator(value: pct, minHeight: 6, color: const Color(0xFF16A34A), backgroundColor: const Color(0xFFE5E7EB))),
+            child: LinearProgressIndicator(value: pct, minHeight: 6, color: const Color(0xFF1B7A43), backgroundColor: const Color(0xFFE5E7EB))),
       ])),
     ));
   }
@@ -915,7 +924,7 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
             : () => setState(() => _step = _ImpStep.idle),
         action: FilledButton(
           onPressed: _confirmMapping,
-          style: FilledButton.styleFrom(backgroundColor: const Color(0xFF16A34A),
+          style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
           child: const Text('Confirm & Match →', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
         ),
@@ -937,7 +946,7 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
           const SizedBox(height: 24),
           SizedBox(width: double.infinity, height: 48, child: FilledButton(
             onPressed: _confirmMapping,
-            style: FilledButton.styleFrom(backgroundColor: const Color(0xFF16A34A),
+            style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
             child: const Text('Confirm Mapping & Start Matching', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
           )),
@@ -972,7 +981,7 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
               contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
               border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
               enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
-              focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF16A34A))),
+              focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF1B7A43))),
               filled: true, fillColor: Colors.white,
             ),
             items: items,
@@ -1075,7 +1084,7 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
             const SizedBox(width: 6),
             FilledButton(
               onPressed: approved > 0 ? _doWrite : null,
-              style: FilledButton.styleFrom(backgroundColor: const Color(0xFF16A34A),
+              style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
               child: Text('Import $approved approved', style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
             ),
@@ -1097,7 +1106,7 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
       child: Center(child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 1100),
         child: Container(
-          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: const Color(0xFFE5E7EB))),
+          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 8, offset: const Offset(0, 2))]),
           child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
             Padding(padding: const EdgeInsets.fromLTRB(20, 12, 12, 12), child: Row(children: const [
               Expanded(flex: 18, child: Text('LINE ITEM', style: _kTh)),
@@ -1166,27 +1175,27 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           Container(width: 68, height: 68,
               decoration: BoxDecoration(color: const Color(0xFFECFDF5), borderRadius: BorderRadius.circular(18)),
-              child: const Icon(Icons.check_circle_outline, color: Color(0xFF16A34A), size: 38)),
+              child: const Icon(Icons.check_circle_outline, color: Color(0xFF1B7A43), size: 38)),
           const SizedBox(height: 18),
           const Text('Import Complete', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: Color(0xFF111827))),
           const SizedBox(height: 24),
           _SumRow(icon: Icons.edit_outlined, color: const Color(0xFF3B82F6), label: 'Updated', count: _updatedCount),
           const SizedBox(height: 10),
-          _SumRow(icon: Icons.add_circle_outline, color: const Color(0xFF16A34A), label: 'Inserted', count: _insertedCount),
+          _SumRow(icon: Icons.add_circle_outline, color: const Color(0xFF1B7A43), label: 'Inserted', count: _insertedCount),
           const SizedBox(height: 10),
           _SumRow(icon: Icons.remove_circle_outline, color: const Color(0xFF9CA3AF), label: 'Skipped', count: _skippedCount),
           const SizedBox(height: 28),
           if (widget.onImportComplete != null)
             SizedBox(width: double.infinity, height: 48, child: FilledButton(
               onPressed: () { widget.onImportComplete!(); Navigator.of(context).pop(); },
-              style: FilledButton.styleFrom(backgroundColor: const Color(0xFF16A34A),
+              style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
               child: const Text('Mark as Imported & Go Back', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
             ))
           else
             SizedBox(width: double.infinity, height: 48, child: FilledButton(
               onPressed: () => setState(() => _step = _ImpStep.idle),
-              style: FilledButton.styleFrom(backgroundColor: const Color(0xFF16A34A),
+              style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
               child: const Text('Import Another File', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
             )),
@@ -1420,7 +1429,7 @@ class _AltRowDesktop extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final nameColor = isSelected ? const Color(0xFF16A34A) : const Color(0xFF374151);
+    final nameColor = isSelected ? const Color(0xFF1B7A43) : const Color(0xFF374151);
     return GestureDetector(
       onTap: onTap,
       child: Container(
@@ -1614,7 +1623,7 @@ class _ImportMobileCardState extends State<_ImportMobileCard> with SingleTickerP
                           child: Row(children: [
                             SizedBox(width: nameW, child: Text(alts[k].$2.name, maxLines: 1, overflow: TextOverflow.ellipsis,
                                 style: TextStyle(fontSize: 12, fontWeight: row.selectedIndex == alts[k].$1 ? FontWeight.w600 : FontWeight.normal,
-                                    color: row.selectedIndex == alts[k].$1 ? const Color(0xFF16A34A) : const Color(0xFF374151)))),
+                                    color: row.selectedIndex == alts[k].$1 ? const Color(0xFF1B7A43) : const Color(0xFF374151)))),
                             const SizedBox(width: 8),
                             SizedBox(width: 44, child: Text(_iPackShort(alts[k].$2), maxLines: 1, overflow: TextOverflow.ellipsis,
                                 style: const TextStyle(fontSize: 11, color: Color(0xFF374151)))),
@@ -1623,7 +1632,7 @@ class _ImportMobileCardState extends State<_ImportMobileCard> with SingleTickerP
                                 style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF)))),
                             const SizedBox(width: 8),
                             Text(rupees(alts[k].$2.mrp), style: TextStyle(fontSize: 11, fontWeight: FontWeight.w500,
-                                color: row.selectedIndex == alts[k].$1 ? const Color(0xFF16A34A) : const Color(0xFF6B7280))),
+                                color: row.selectedIndex == alts[k].$1 ? const Color(0xFF1B7A43) : const Color(0xFF6B7280))),
                           ]),
                         ),
                       ),
@@ -1727,7 +1736,7 @@ class _SearchPanelState extends State<_SearchPanel> {
           contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
           enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
-          focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF16A34A))),
+          focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF1B7A43))),
           filled: true, fillColor: Colors.white,
         ),
         style: const TextStyle(fontSize: 13),

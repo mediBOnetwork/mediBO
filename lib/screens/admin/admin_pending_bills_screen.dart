@@ -143,7 +143,7 @@ class _ApprovalDropdownState extends State<_ApprovalDropdown> {
         const PopupMenuItem(
           value: 'approve',
           child: Row(children: [
-            Icon(Icons.check_circle_outline, size: 16, color: Color(0xFF16A34A)),
+            Icon(Icons.check_circle_outline, size: 16, color: Color(0xFF1B7A43)),
             SizedBox(width: 8),
             Text('Approve sender', style: TextStyle(fontSize: 13)),
           ]),
@@ -404,7 +404,7 @@ class _DesktopBillRow extends StatelessWidget {
           _ActionBtn(
             label: 'Import',
             icon: Icons.upload_rounded,
-            color: const Color(0xFF16A34A),
+            color: const Color(0xFF1B7A43),
             loading: isDownloading,
             onTap: busy ? null : onImport,
           ),
@@ -579,7 +579,7 @@ class _MobileBillCard extends StatelessWidget {
             child: _ActionBtn(
               label: 'Import',
               icon: Icons.upload_rounded,
-              color: const Color(0xFF16A34A),
+              color: const Color(0xFF1B7A43),
               loading: isDownloading,
               onTap: busy ? null : onImport,
               expanded: true,
@@ -673,7 +673,7 @@ class _PendingBillsScreenState extends State<PendingBillsScreen> {
       lastDate: DateTime.now(),
       builder: (context, child) => Theme(
         data: Theme.of(context).copyWith(
-          colorScheme: const ColorScheme.light(primary: Color(0xFF16A34A)),
+          colorScheme: const ColorScheme.light(primary: Color(0xFF1B7A43)),
         ),
         child: child!,
       ),
@@ -942,7 +942,7 @@ class _PendingBillsScreenState extends State<PendingBillsScreen> {
       case 'xls':
       case 'ods':
       case 'csv':
-        return const Color(0xFF16A34A);
+        return const Color(0xFF1B7A43);
       case 'jpg':
       case 'jpeg':
       case 'png':
@@ -1056,7 +1056,7 @@ class _PendingBillsScreenState extends State<PendingBillsScreen> {
   Widget _buildBody(bool isDesktop) {
     if (_loading) {
       return const Center(
-        child: CircularProgressIndicator(color: Color(0xFF16A34A), strokeWidth: 2.5),
+        child: CircularProgressIndicator(color: Color(0xFF1B7A43), strokeWidth: 2.5),
       );
     }
     if (_error != null) {
@@ -1068,7 +1068,7 @@ class _PendingBillsScreenState extends State<PendingBillsScreen> {
           const SizedBox(height: 16),
           FilledButton(
             onPressed: _load,
-            style: FilledButton.styleFrom(backgroundColor: const Color(0xFF16A34A)),
+            style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43)),
             child: const Text('Retry'),
           ),
         ]),
@@ -1084,7 +1084,7 @@ class _PendingBillsScreenState extends State<PendingBillsScreen> {
               color: const Color(0xFFECFDF5),
               borderRadius: BorderRadius.circular(18),
             ),
-            child: const Icon(Icons.inbox_outlined, size: 36, color: Color(0xFF16A34A)),
+            child: const Icon(Icons.inbox_outlined, size: 36, color: Color(0xFF1B7A43)),
           ),
           const SizedBox(height: 18),
           const Text(
@@ -1115,7 +1115,7 @@ class _PendingBillsScreenState extends State<PendingBillsScreen> {
 
     return RefreshIndicator(
       onRefresh: _load,
-      color: const Color(0xFF16A34A),
+      color: const Color(0xFF1B7A43),
       child: SingleChildScrollView(
         physics: const AlwaysScrollableScrollPhysics(),
         padding: EdgeInsets.all(isDesktop ? 20 : 12),
@@ -1153,10 +1153,10 @@ class _PendingBillsScreenState extends State<PendingBillsScreen> {
           if (real.isNotEmpty)
             _buildSection(
               icon: Icons.verified_outlined,
-              iconColor: const Color(0xFF16A34A),
+              iconColor: const Color(0xFF1B7A43),
               title: 'Verified Real',
               badge: real.length,
-              badgeColor: const Color(0xFF16A34A),
+              badgeColor: const Color(0xFF1B7A43),
               bills: real,
               isDesktop: isDesktop,
             ),
@@ -1295,8 +1295,14 @@ class _PendingBillsScreenState extends State<PendingBillsScreen> {
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.06),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         // Header — padding and widths must mirror the rows exactly.

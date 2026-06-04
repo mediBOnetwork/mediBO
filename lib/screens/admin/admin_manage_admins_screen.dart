@@ -126,7 +126,7 @@ class _AdminManageAdminsScreenState extends State<AdminManageAdminsScreen> {
       return const Center(
         child: Padding(
           padding: EdgeInsets.all(40),
-          child: CircularProgressIndicator(color: Color(0xFF1B5E20)),
+          child: CircularProgressIndicator(color: Color(0xFF1B7A43)),
         ),
       );
     }
@@ -146,11 +146,17 @@ class _AdminManageAdminsScreenState extends State<AdminManageAdminsScreen> {
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.06),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
+          ),
+        ],
       ),
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(14),
         child: Table(
           columnWidths: const {
             0: FlexColumnWidth(3),
@@ -182,7 +188,7 @@ class _AdminManageAdminsScreenState extends State<AdminManageAdminsScreen> {
                 children: [
                   _td(Row(children: [
                     if (locked) ...[
-                      const Icon(Icons.lock, size: 13, color: Color(0xFF1B5E20)),
+                      const Icon(Icons.lock, size: 13, color: Color(0xFF1B7A43)),
                       const SizedBox(width: 4),
                     ],
                     Expanded(child: Text(email, style: const TextStyle(fontSize: 13, color: Color(0xFF111827)))),
@@ -196,7 +202,7 @@ class _AdminManageAdminsScreenState extends State<AdminManageAdminsScreen> {
                       child: locked
                           ? const Tooltip(
                               message: 'Super-admin — cannot be removed',
-                              child: Icon(Icons.shield, size: 18, color: Color(0xFF1B5E20)),
+                              child: Icon(Icons.shield, size: 18, color: Color(0xFF1B7A43)),
                             )
                           : removing
                           ? const SizedBox(
@@ -242,7 +248,7 @@ class _AdminManageAdminsScreenState extends State<AdminManageAdminsScreen> {
         backgroundColor: Colors.white,
         elevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new, size: 18, color: Color(0xFF1B5E20)),
+          icon: const Icon(Icons.arrow_back_ios_new, size: 18, color: Color(0xFF1B7A43)),
           onPressed: () => Navigator.of(ctx).maybePop(),
         ),
         title: const Text('Manage Admins',
@@ -254,7 +260,7 @@ class _AdminManageAdminsScreenState extends State<AdminManageAdminsScreen> {
       ),
       body: RefreshIndicator(
         onRefresh: _fetchAdmins,
-        color: const Color(0xFF1B5E20),
+        color: const Color(0xFF1B7A43),
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
@@ -269,7 +275,7 @@ class _AdminManageAdminsScreenState extends State<AdminManageAdminsScreen> {
               const Center(
                 child: Padding(
                   padding: EdgeInsets.all(40),
-                  child: CircularProgressIndicator(color: Color(0xFF1B5E20)),
+                  child: CircularProgressIndicator(color: Color(0xFF1B7A43)),
                 ),
               )
             else if (_admins.isEmpty)
@@ -298,7 +304,7 @@ class _AdminManageAdminsScreenState extends State<AdminManageAdminsScreen> {
                       if (locked)
                         const Padding(
                           padding: EdgeInsets.only(right: 8),
-                          child: Icon(Icons.lock, size: 14, color: Color(0xFF1B5E20)),
+                          child: Icon(Icons.lock, size: 14, color: Color(0xFF1B7A43)),
                         ),
                       Expanded(
                         child: Column(
@@ -316,7 +322,7 @@ class _AdminManageAdminsScreenState extends State<AdminManageAdminsScreen> {
                       if (locked)
                         const Tooltip(
                           message: 'Super-admin — cannot be removed',
-                          child: Icon(Icons.shield, size: 18, color: Color(0xFF1B5E20)),
+                          child: Icon(Icons.shield, size: 18, color: Color(0xFF1B7A43)),
                         )
                       else if (removing)
                         const SizedBox(
@@ -395,8 +401,14 @@ class _AddAdminCard extends StatelessWidget {
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.06),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -424,7 +436,7 @@ class _AddAdminCard extends StatelessWidget {
                     ),
                     focusedBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(8),
-                      borderSide: const BorderSide(color: Color(0xFF1B5E20), width: 1.5),
+                      borderSide: const BorderSide(color: Color(0xFF1B7A43), width: 1.5),
                     ),
                     isDense: true,
                   ),
@@ -438,7 +450,7 @@ class _AddAdminCard extends StatelessWidget {
                 child: ElevatedButton(
                   onPressed: loading ? null : onAdd,
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF1B5E20),
+                    backgroundColor: const Color(0xFF1B7A43),
                     foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(horizontal: 18),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),

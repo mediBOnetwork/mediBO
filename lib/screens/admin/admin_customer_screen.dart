@@ -827,7 +827,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       if (_loading) {
         return const Center(
           child: CircularProgressIndicator(
-              color: Color(0xFF1B5E20), strokeWidth: 2),
+              color: Color(0xFF1B7A43), strokeWidth: 2),
         );
       }
 
@@ -988,7 +988,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         decoration: BoxDecoration(
           border: Border(
             bottom: BorderSide(
-              color: active ? const Color(0xFF1B5E20) : Colors.transparent,
+              color: active ? const Color(0xFF1B7A43) : Colors.transparent,
               width: 2,
             ),
           ),
@@ -998,7 +998,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
           style: TextStyle(
             fontSize: 13,
             fontWeight: active ? FontWeight.w700 : FontWeight.w500,
-            color: active ? const Color(0xFF1B5E20) : const Color(0xFF6B7280),
+            color: active ? const Color(0xFF1B7A43) : const Color(0xFF6B7280),
           ),
         ),
       ),
@@ -1087,7 +1087,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                     style: const TextStyle(
                         fontSize: 13,
                         fontWeight: FontWeight.w600,
-                        color: Color(0xFF1B5E20))),
+                        color: Color(0xFF1B7A43))),
               ),
             ] else ...[
               Expanded(
@@ -1187,7 +1187,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                     style: const TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w600,
-                        color: Color(0xFF1B5E20)),
+                        color: Color(0xFF1B7A43)),
                   ),
                 ]),
               ],
@@ -1335,7 +1335,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
               icon: const Icon(Icons.add, size: 14),
               label: const Text('Add Item', style: TextStyle(fontSize: 12)),
               style: TextButton.styleFrom(
-                foregroundColor: const Color(0xFF1B5E20),
+                foregroundColor: const Color(0xFF1B7A43),
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
               ),
@@ -1635,7 +1635,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                   style: const TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.w700,
-                      color: Color(0xFF1B5E20)))),
+                      color: Color(0xFF1B7A43)))),
           const Expanded(flex: 3, child: SizedBox()),
           const Expanded(flex: 2, child: SizedBox()),
           const Expanded(flex: 2, child: SizedBox()),
@@ -1652,7 +1652,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                   style: const TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w700,
-                      color: Color(0xFF1B5E20)))),
+                      color: Color(0xFF1B7A43)))),
           const SizedBox(width: 32),
         ]),
       );
@@ -1673,7 +1673,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
             style: const TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.w700,
-                color: Color(0xFF1B5E20)),
+                color: Color(0xFF1B7A43)),
           ),
         ),
         Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
@@ -1686,7 +1686,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
               style: const TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w700,
-                  color: Color(0xFF1B5E20))),
+                  color: Color(0xFF1B7A43))),
         ]),
       ]),
     );
@@ -1972,7 +1972,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                 _actionBtn(
                   row.isSuspended ? 'Reactivate' : 'Suspend',
                   row.isSuspended
-                      ? const Color(0xFF16A34A)
+                      ? const Color(0xFF1B7A43)
                       : const Color(0xFFDC2626),
                   () => row.isSuspended
                       ? _reactivateCustomer(row)
@@ -2079,7 +2079,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                   _actionBtn(
                     row.isSuspended ? 'Reactivate' : 'Suspend',
                     row.isSuspended
-                        ? const Color(0xFF16A34A)
+                        ? const Color(0xFF1B7A43)
                         : const Color(0xFFDC2626),
                     () => row.isSuspended
                         ? _reactivateCustomer(row)
@@ -2507,7 +2507,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
 
   Color _leadStatusColor(String status) {
     return switch (status) {
-      'Converted' => const Color(0xFF16A34A),
+      'Converted' => const Color(0xFF1B7A43),
       'Dropped'   => const Color(0xFFDC2626),
       'Interested'=> const Color(0xFF2563EB),
       'Contacted' => const Color(0xFFD97706),
@@ -2566,7 +2566,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         icon: const Icon(Icons.upload_file_outlined, size: 16),
         label: const Text('Upload CSV'),
         style: ElevatedButton.styleFrom(
-          backgroundColor: const Color(0xFF1B5E20),
+          backgroundColor: const Color(0xFF1B7A43),
           foregroundColor: Colors.white,
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
           textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
@@ -2620,7 +2620,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text('Imported $imported leads'
               '${skipped > 0 ? ' ($skipped skipped)' : ''}'),
-          backgroundColor: const Color(0xFF1B5E20),
+          backgroundColor: const Color(0xFF1B7A43),
         ));
         _loadLeads();
       }
@@ -2668,7 +2668,7 @@ class _SourceBadge extends StatelessWidget {
         icon  = Icons.language_outlined;
         break;
       case 'whatsapp':
-        color = const Color(0xFF16A34A);
+        color = const Color(0xFF1B7A43);
         label = 'WhatsApp';
         icon  = Icons.chat_outlined;
         break;
@@ -2744,7 +2744,7 @@ class _CustomerStatusBadge extends StatelessWidget {
         icon  = Icons.block_outlined;
         break;
       case 'approved':
-        color = const Color(0xFF16A34A);
+        color = const Color(0xFF1B7A43);
         label = 'Active';
         icon  = Icons.verified_outlined;
         break;
@@ -2803,14 +2803,14 @@ class _ConfirmActionsState extends State<_ConfirmActions> {
           width: 18,
           height: 18,
           child: CircularProgressIndicator(
-              strokeWidth: 2, color: Color(0xFF1B5E20)));
+              strokeWidth: 2, color: Color(0xFF1B7A43)));
     }
     final status = widget.row.orderStatus;
-    if (status == 'confirmed') return _chip('Confirmed', const Color(0xFF16A34A));
+    if (status == 'confirmed') return _chip('Confirmed', const Color(0xFF1B7A43));
     if (status == 'rejected')  return _chip('Rejected',  const Color(0xFFDC2626));
 
     return Row(mainAxisSize: MainAxisSize.min, children: [
-      _btn('Accept', const Color(0xFF16A34A), () => _act('confirmed')),
+      _btn('Accept', const Color(0xFF1B7A43), () => _act('confirmed')),
       const SizedBox(width: 4),
       _btn('Reject', const Color(0xFFDC2626), () => _act('rejected')),
     ]);
@@ -2882,10 +2882,10 @@ class _RegApproveActionsState extends State<_RegApproveActions> {
           width: 18,
           height: 18,
           child: CircularProgressIndicator(
-              strokeWidth: 2, color: Color(0xFF1B5E20)));
+              strokeWidth: 2, color: Color(0xFF1B7A43)));
     }
     return Row(mainAxisSize: MainAxisSize.min, children: [
-      _btn('Approve', const Color(0xFF16A34A), () => _act(widget.onApprove)),
+      _btn('Approve', const Color(0xFF1B7A43), () => _act(widget.onApprove)),
       const SizedBox(width: 4),
       _btn('Reject',  const Color(0xFFDC2626), () => _act(widget.onReject)),
     ]);
@@ -2929,17 +2929,17 @@ class _ActionCell extends StatelessWidget {
             color: const Color(0xFFF0FDF4),
             borderRadius: BorderRadius.circular(8),
             border: Border.all(
-                color: const Color(0xFF16A34A).withValues(alpha: 0.4)),
+                color: const Color(0xFF1B7A43).withValues(alpha: 0.4)),
           ),
           child: const Row(mainAxisSize: MainAxisSize.min, children: [
             Icon(Icons.upload_file_outlined,
-                size: 14, color: Color(0xFF16A34A)),
+                size: 14, color: Color(0xFF1B7A43)),
             SizedBox(width: 4),
             Text('Import',
                 style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
-                    color: Color(0xFF16A34A))),
+                    color: Color(0xFF1B7A43))),
           ]),
         ),
       );
@@ -2954,16 +2954,16 @@ class _ActionCell extends StatelessWidget {
           color: const Color(0xFFECFDF5),
           borderRadius: BorderRadius.circular(8),
           border: Border.all(
-              color: const Color(0xFF1B5E20).withValues(alpha: 0.3)),
+              color: const Color(0xFF1B7A43).withValues(alpha: 0.3)),
         ),
         child: const Row(mainAxisSize: MainAxisSize.min, children: [
-          Icon(Icons.check_circle_outline, size: 14, color: Color(0xFF1B5E20)),
+          Icon(Icons.check_circle_outline, size: 14, color: Color(0xFF1B7A43)),
           SizedBox(width: 4),
           Text('Imported',
               style: TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w600,
-                  color: Color(0xFF1B5E20))),
+                  color: Color(0xFF1B7A43))),
         ]),
       ),
     );
@@ -3198,7 +3198,7 @@ class _AdminAddItemDialogState extends State<_AdminAddItemDialog> {
                   child: FilledButton(
                     onPressed: _adding ? null : _addItem,
                     style: FilledButton.styleFrom(
-                      backgroundColor: const Color(0xFF1B5E20),
+                      backgroundColor: const Color(0xFF1B7A43),
                       shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(8)),
                       padding: const EdgeInsets.symmetric(vertical: 10),
@@ -3334,19 +3334,19 @@ class _StepperButton extends StatelessWidget {
         height: 36,
         decoration: BoxDecoration(
           color: enabled
-              ? const Color(0xFF1B5E20).withValues(alpha: 0.08)
+              ? const Color(0xFF1B7A43).withValues(alpha: 0.08)
               : const Color(0xFFF3F4F6),
           borderRadius: BorderRadius.circular(8),
           border: Border.all(
             color: enabled
-                ? const Color(0xFF1B5E20).withValues(alpha: 0.3)
+                ? const Color(0xFF1B7A43).withValues(alpha: 0.3)
                 : const Color(0xFFE5E7EB),
           ),
         ),
         child: Icon(icon,
             size: 18,
             color: enabled
-                ? const Color(0xFF1B5E20)
+                ? const Color(0xFF1B7A43)
                 : const Color(0xFFD1D5DB)),
       ),
     );
@@ -3543,7 +3543,7 @@ class _CustomerEditDialogState extends State<_CustomerEditDialog> {
                 child: FilledButton(
                   onPressed: _saving ? null : _save,
                   style: FilledButton.styleFrom(
-                    backgroundColor: const Color(0xFF1B5E20),
+                    backgroundColor: const Color(0xFF1B7A43),
                     shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(8)),
                     padding: const EdgeInsets.symmetric(vertical: 11),

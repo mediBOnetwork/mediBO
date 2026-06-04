@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -131,23 +133,58 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   final Set<String> _expanded = {};
   final ScrollController _scrollCtrl = ScrollController();
 
+  RealtimeChannel? _realtimeChannel;
+  Timer? _debounce;
+
   @override
   void initState() {
     super.initState();
     _load();
+    _subscribeRealtime();
   }
 
   @override
   void dispose() {
+    _debounce?.cancel();
+    _realtimeChannel?.unsubscribe();
     _scrollCtrl.dispose();
     super.dispose();
   }
 
+  void _subscribeRealtime() {
+    _realtimeChannel = Supabase.instance.client
+        .channel('admin_customer_dashboard')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'cart_items',
+          callback: (_) => _debouncedLoad(),
+        )
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'orders',
+          callback: (_) => _debouncedLoad(),
+        )
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'user_profiles',
+          callback: (_) => _debouncedLoad(),
+        )
+        .subscribe();
+  }
+
+  void _debouncedLoad() {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 500), () => _load(showSpinner: false));
+  }
+
   // ── Data ──────────────────────────────────────────────────────────────────────
 
-  Future<void> _load() async {
+  Future<void> _load({bool showSpinner = true}) async {
     if (!mounted) return;
-    setState(() => _loading = true);
+    if (showSpinner) setState(() => _loading = true);
     try {
       final client = Supabase.instance.client;
       final results = await Future.wait<dynamic>([

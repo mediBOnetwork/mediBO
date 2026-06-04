@@ -272,7 +272,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
             .toList();
         carts.add(_CustRow(
           userId:       uid,
-          name:         _name(up, pp, null),
+          name:         (up == null && pp == null) ? 'Guest' : _name(up, pp, null),
           pharmacy:     _pharmacy(up, pp, null),
           phone:        _phone(up, pp, null),
           source:       'cart_only',

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 // ignore: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
@@ -47,8 +48,10 @@ class Order {
   int get itemCount => lines.fold(0, (sum, l) => sum + l.quantity);
 }
 
-/// Holds cart + order state. Persists to Supabase for logged-in users,
-/// localStorage for guests. Merges guest cart into Supabase on login.
+/// Holds cart + order state. Persists to Supabase for all users — logged-in
+/// users use their auth UID; guests use a stable UUID stored in localStorage
+/// so the admin dashboard can see their carts in real time. On login, the guest
+/// cart is merged into the real account and the guest Supabase rows are deleted.
 class CartModel extends ChangeNotifier {
   final Map<String, CartLine> _lines = {};
   final List<CartLine> _adminRemovedLines = [];
@@ -61,13 +64,45 @@ class CartModel extends ChangeNotifier {
   double _cachedSubtotal = 0;
   double _cachedTotalGst = 0;
 
-  static const _guestKey = 'medibo_guest_cart';
+  static const _guestKey    = 'medibo_guest_cart';
+  static const _guestUidKey = 'medibo_guest_uid';
   StreamSubscription<AuthState>? _authSub;
   RealtimeChannel? _cartChannel;
   bool _isLoggedIn = false;
 
   CartModel() {
     _initPersistence();
+  }
+
+  // ── Guest UUID helpers ────────────────────────────────────────────────────
+
+  String? _getGuestUid() {
+    try {
+      final v = html.window.localStorage[_guestUidKey];
+      return (v != null && v.isNotEmpty) ? v : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  String _getOrCreateGuestUid() {
+    var uid = _getGuestUid();
+    if (uid == null) {
+      uid = _generateUuid();
+      try {
+        html.window.localStorage[_guestUidKey] = uid;
+      } catch (_) {}
+    }
+    return uid;
+  }
+
+  static String _generateUuid() {
+    final rnd = Random.secure();
+    final bytes = List<int>.generate(16, (_) => rnd.nextInt(256));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    final h = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+    return '${h.substring(0, 8)}-${h.substring(8, 12)}-${h.substring(12, 16)}-${h.substring(16, 20)}-${h.substring(20)}';
   }
 
   void _initPersistence() {
@@ -79,7 +114,15 @@ class CartModel extends ChangeNotifier {
       final uid = client.auth.currentUser?.id;
       if (uid != null) _subscribeToCartRealtime(uid);
     } else {
-      _loadFromLocalStorage();
+      // Guest: check for a pre-existing stable guest UUID and load from Supabase
+      final guestUid = _getGuestUid();
+      if (guestUid != null) {
+        _loadFromSupabase(guestUid);
+        _subscribeToCartRealtime(guestUid);
+      } else {
+        // First-ever visit: try localStorage (pre-existing carts from before this fix)
+        _loadFromLocalStorage();
+      }
     }
   }
 
@@ -96,6 +139,7 @@ class CartModel extends ChangeNotifier {
       _cartChannel?.unsubscribe();
       _cartChannel = null;
       _clearLocalStorage();
+      try { html.window.localStorage.remove(_guestUidKey); } catch (_) {}
       _lines.clear();
       _adminRemovedLines.clear();
       _recomputeTotals();
@@ -117,16 +161,18 @@ class CartModel extends ChangeNotifier {
             column: 'user_id',
             value: uid,
           ),
-          callback: (_) => _loadFromSupabase(),
+          // For guests pass the captured uid; for logged-in users pass null
+          // so _loadFromSupabase picks up the current auth UID.
+          callback: (_) => _loadFromSupabase(_isLoggedIn ? null : uid),
         )
         .subscribe();
   }
 
   // ── Supabase ──────────────────────────────────────────────────────────────
 
-  Future<void> _loadFromSupabase() async {
+  Future<void> _loadFromSupabase([String? overrideUid]) async {
     try {
-      final uid = Supabase.instance.client.auth.currentUser?.id;
+      final uid = overrideUid ?? Supabase.instance.client.auth.currentUser?.id;
       if (uid == null) return;
       final rows = await Supabase.instance.client
           .from('cart_items')
@@ -159,9 +205,9 @@ class CartModel extends ChangeNotifier {
     } catch (_) {}
   }
 
-  Future<void> _upsertToSupabase(Product product, int quantity) async {
+  Future<void> _upsertToSupabase(Product product, int quantity, [String? overrideUid]) async {
     try {
-      final uid = Supabase.instance.client.auth.currentUser?.id;
+      final uid = overrideUid ?? Supabase.instance.client.auth.currentUser?.id;
       if (uid == null) return;
       await Supabase.instance.client.from('cart_items').upsert(
         {
@@ -183,9 +229,9 @@ class CartModel extends ChangeNotifier {
     } catch (_) {}
   }
 
-  Future<void> _deleteFromSupabase(String productId) async {
+  Future<void> _deleteFromSupabase(String productId, [String? overrideUid]) async {
     try {
-      final uid = Supabase.instance.client.auth.currentUser?.id;
+      final uid = overrideUid ?? Supabase.instance.client.auth.currentUser?.id;
       if (uid == null) return;
       await Supabase.instance.client
           .from('cart_items')
@@ -195,9 +241,9 @@ class CartModel extends ChangeNotifier {
     } catch (_) {}
   }
 
-  Future<void> _clearSupabase() async {
+  Future<void> _clearSupabase([String? overrideUid]) async {
     try {
-      final uid = Supabase.instance.client.auth.currentUser?.id;
+      final uid = overrideUid ?? Supabase.instance.client.auth.currentUser?.id;
       if (uid == null) return;
       await Supabase.instance.client
           .from('cart_items')
@@ -206,7 +252,7 @@ class CartModel extends ChangeNotifier {
     } catch (_) {}
   }
 
-  // ── localStorage (guest) ──────────────────────────────────────────────────
+  // ── localStorage (guest offline fallback) ─────────────────────────────────
 
   void _loadFromLocalStorage() {
     try {
@@ -280,6 +326,15 @@ class CartModel extends ChangeNotifier {
         final merged = (existing[line.product.id] ?? 0) + line.quantity;
         await _upsertToSupabase(line.product, merged);
       }
+      // Delete the old guest-UUID rows from Supabase so they don't linger
+      final guestUid = _getGuestUid();
+      if (guestUid != null) {
+        await Supabase.instance.client
+            .from('cart_items')
+            .delete()
+            .eq('user_id', guestUid);
+        try { html.window.localStorage.remove(_guestUidKey); } catch (_) {}
+      }
       _clearLocalStorage();
     } catch (_) {}
   }
@@ -290,7 +345,12 @@ class CartModel extends ChangeNotifier {
     if (_isLoggedIn) {
       _upsertToSupabase(product, quantity);
     } else {
-      _saveToLocalStorage();
+      // Guest: write to Supabase via stable guest UUID so the admin dashboard
+      // can see this cart in real time without the user being logged in.
+      final guestUid = _getOrCreateGuestUid();
+      _upsertToSupabase(product, quantity, guestUid);
+      if (_cartChannel == null) _subscribeToCartRealtime(guestUid);
+      _saveToLocalStorage(); // offline fallback
     }
   }
 
@@ -298,6 +358,8 @@ class CartModel extends ChangeNotifier {
     if (_isLoggedIn) {
       _deleteFromSupabase(productId);
     } else {
+      final guestUid = _getGuestUid();
+      if (guestUid != null) _deleteFromSupabase(productId, guestUid);
       _saveToLocalStorage();
     }
   }
@@ -444,6 +506,11 @@ class CartModel extends ChangeNotifier {
     if (_isLoggedIn) {
       _clearSupabase();
     } else {
+      final guestUid = _getGuestUid();
+      if (guestUid != null) {
+        _clearSupabase(guestUid);
+        try { html.window.localStorage.remove(_guestUidKey); } catch (_) {}
+      }
       _clearLocalStorage();
     }
   }
@@ -501,6 +568,11 @@ class CartModel extends ChangeNotifier {
     if (_isLoggedIn) {
       _clearSupabase();
     } else {
+      final guestUid = _getGuestUid();
+      if (guestUid != null) {
+        _clearSupabase(guestUid);
+        try { html.window.localStorage.remove(_guestUidKey); } catch (_) {}
+      }
       _clearLocalStorage();
     }
     return order;

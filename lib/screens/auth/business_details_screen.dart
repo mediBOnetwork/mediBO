@@ -111,6 +111,7 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
           .eq('customer_code', code)
           .maybeSingle();
       if (!mounted) return;
+      if (_customerCodeCtrl.text.trim().toUpperCase() != code) return;
       setState(() => _codeStatus = res != null ? _CodeStatus.taken : _CodeStatus.available);
     } catch (_) {
       if (mounted) setState(() => _codeStatus = _CodeStatus.idle);

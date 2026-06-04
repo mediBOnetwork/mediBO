@@ -200,7 +200,8 @@ class CartModel extends ChangeNotifier {
       final rows = await Supabase.instance.client
           .from('cart_items')
           .select()
-          .eq('user_id', uid);
+          .eq('user_id', uid)
+          .order('id', ascending: true);
       _lines.clear();
       _adminRemovedLines.clear();
       for (final row in rows) {

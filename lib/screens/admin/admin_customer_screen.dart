@@ -306,7 +306,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         client.from('user_profiles').select(),
         client.from('pharmacy_profiles').select(),
         client.from('orders').select().order('created_at', ascending: false),
-        client.from('cart_items').select(),
+        client.from('cart_items').select().order('id', ascending: true),
         client.rpc('get_unregistered_users').catchError((_) => <dynamic>[]),
       ]);
 

@@ -1175,7 +1175,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
     final response = await http.post(
       Uri.parse(
-          'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$geminiApiKey'),
+          'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=$geminiApiKey'),
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({
         'contents': [
@@ -2061,7 +2061,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
       final response = await http.post(
         Uri.parse(
-            'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$geminiApiKey'),
+            'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=$geminiApiKey'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
           'contents': [

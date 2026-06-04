@@ -401,7 +401,7 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
         : [{'inline_data': {'mime_type': pdfMime, 'data': b64}}, {'text': prompt}];
 
     final resp = await http.post(
-      Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$geminiApiKey'),
+      Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=$geminiApiKey'),
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({'contents': [{'parts': parts}], 'generationConfig': {'temperature': 0.1, 'maxOutputTokens': 4096}}),
     ).timeout(const Duration(seconds: 60));
@@ -462,7 +462,7 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
 
     try {
       final resp = await http.post(
-        Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$geminiApiKey'),
+        Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=$geminiApiKey'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({'contents': [{'parts': [{'text': prompt}]}], 'generationConfig': {'temperature': 0.1, 'maxOutputTokens': 1024}}),
       ).timeout(const Duration(seconds: 30));

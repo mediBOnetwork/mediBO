@@ -1,4 +1,5 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
+import 'dart:async';
 import 'dart:convert';
 import 'dart:html' as html;
 import 'dart:typed_data';
@@ -42,6 +43,9 @@ class _MatchRow {
   // Set after canvas processing in _pickAndProcess; never serialized.
   Uint8List? processedCrop;
 
+  // Product chosen via the per-line manual search field (overrides selectedIndex).
+  Product? _manualProduct;
+
   _MatchRow({
     required this.lineItem,
     required this.qty,
@@ -72,8 +76,10 @@ class _MatchRow {
     }
   }
 
-  Product? get selectedProduct =>
-      candidates.isEmpty ? null : candidates[selectedIndex];
+  Product? get selectedProduct {
+    if (_manualProduct != null) return _manualProduct;
+    return candidates.isEmpty ? null : candidates[selectedIndex];
+  }
 
   String get matchedSku {
     final p = selectedProduct;
@@ -91,6 +97,7 @@ class _MatchRow {
         'isHidden': isHidden,
         if (_preHideStatus != null) 'preHideStatus': _preHideStatus!.name,
         'candidates': candidates.map((p) => p.toJson()).toList(),
+        if (_manualProduct != null) 'manualProduct': _manualProduct!.toJson(),
         if (bbox != null) 'bbox': {'x': bbox!.left, 'y': bbox!.top, 'w': bbox!.width, 'h': bbox!.height},
       };
 
@@ -111,7 +118,7 @@ class _MatchRow {
       final bh = (bm['h'] as num?)?.toDouble() ?? 0;
       if (bw > 0 && bh > 0) bbox = Rect.fromLTWH(bx, by, bw, bh);
     }
-    return _MatchRow(
+    final row = _MatchRow(
       lineItem: (m['lineItem'] as String?) ?? '',
       qty: (m['qty'] as int?) ?? 1,
       status: _MatchStatus.values.firstWhere(
@@ -127,6 +134,9 @@ class _MatchRow {
           [],
       bbox: bbox,
     );
+    final mp = m['manualProduct'] as Map<String, dynamic>?;
+    if (mp != null) row._manualProduct = Product.fromJson(mp);
+    return row;
   }
 }
 
@@ -1659,6 +1669,11 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     //   but preserve decimal points in dosage numbers ("30.5mg" → keep "." before digit)
     final term = name
         .replaceAll(RegExp(r'[,()*%]'), ' ')
+        // Join single-letter abbreviation dots before generic period-strip so
+        // "L.S." → "LS" and "E.R." → "ER" instead of "L S" / "E R".
+        // This prevents "s" in "L.S." from falsely matching products containing "S"
+        // (e.g. "Endogain-S") while keeping real "LS" tokens for correct matching.
+        .replaceAll(RegExp(r'(?<=[A-Za-z])\.(?=[A-Za-z])'), '')
         .replaceAll(RegExp(r'\.(?!\d)'), ' ')
         .trim()
         .replaceAll(RegExp(r'\s+'), ' ');
@@ -1677,7 +1692,10 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       return _MatchRow(
         lineItem: name,
         qty: qty,
-        status: topScore >= 0.40 ? _MatchStatus.matched : _MatchStatus.partial,
+        // Threshold 0.55: scores below this indicate a low-confidence or garbled-OCR
+        // match that should not be auto-ticked. The previous 0.40 threshold allowed
+        // form-bonus-inflated (~0.41) wrong matches like "Eptoin LS"→"Endogain-S".
+        status: topScore >= 0.55 ? _MatchStatus.matched : _MatchStatus.partial,
         candidates: products,
         bbox: bbox,
       );
@@ -3536,7 +3554,6 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
   Widget build(BuildContext context) {
     final row = widget.row;
     final isEven = widget.index % 2 == 0;
-    final hasCandidates = row.candidates.isNotEmpty;
 
     // Status badge styling
     Color badgeColor;
@@ -3593,7 +3610,7 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         GestureDetector(
-          onTap: hasCandidates && !row.isHidden ? widget.onToggle : null,
+          onTap: !row.isHidden ? widget.onToggle : null,
           child: Container(
             decoration: BoxDecoration(
               color: isEven ? Colors.white : const Color(0xFFFAFAFA),
@@ -3661,23 +3678,31 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
                           fontWeight: FontWeight.w500,
                           color: Color(0xFF374151))),
                 ),
-                // STATUS column — badge fills column
+                // STATUS column — badge + search hint icon
                 Expanded(
                   flex: 10,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
-                    decoration: BoxDecoration(
-                      color: badgeColor,
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Text(label,
-                        textAlign: TextAlign.center,
-                        overflow: TextOverflow.ellipsis,
-                        maxLines: 1,
-                        style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
-                            color: badgeText)),
+                  child: Row(
+                    children: [
+                      Flexible(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: badgeColor,
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Text(label,
+                              textAlign: TextAlign.center,
+                              overflow: TextOverflow.ellipsis,
+                              maxLines: 1,
+                              style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                  color: badgeText)),
+                        ),
+                      ),
+                      const SizedBox(width: 3),
+                      const Icon(Icons.search_rounded, size: 11, color: Color(0xFFD1D5DB)),
+                    ],
                   ),
                 ),
                 // HIDE column — eye icon centered under its header
@@ -3772,6 +3797,16 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                // Manual search — always available regardless of alternates
+                _ManualSearchField(
+                  row: row,
+                  onRowChanged: () {
+                    widget.onToggle(); // collapse after selection
+                    widget.onRowChanged();
+                  },
+                ),
+                if (alts.isNotEmpty)
+                  const Divider(height: 1, thickness: 1, color: Color(0xFFE5E7EB)),
                 for (int k = 0; k < alts.length; k++)
                   _AlternativeRow(
                     product: alts[k].$2,
@@ -3780,6 +3815,7 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
                     onTap: () {
                       setState(() {
                         row.selectedIndex = alts[k].$1;
+                        row._manualProduct = null; // clear any manual override
                         row.status = _MatchStatus.manuallyMatched;
                       });
                       widget.onToggle();
@@ -3960,6 +3996,7 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
       onTap: () {
         setState(() {
           row.selectedIndex = origIndex;
+          row._manualProduct = null; // clear any manual override
           row.status = _MatchStatus.manuallyMatched;
         });
         widget.onToggle();
@@ -4019,7 +4056,6 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
   @override
   Widget build(BuildContext context) {
     final row = widget.row;
-    final hasCandidates = row.candidates.isNotEmpty;
 
     Color badgeColor, badgeText, accentColor;
     String label;
@@ -4069,7 +4105,7 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
       return Opacity(
         opacity: row.isHidden ? 0.45 : 1.0,
         child: GestureDetector(
-          onTap: hasCandidates && !row.isHidden ? widget.onToggle : null,
+          onTap: !row.isHidden ? widget.onToggle : null,
           child: Container(
             // Fill the full available width so controls are always at the right edge.
             width: double.infinity,
@@ -4279,12 +4315,23 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                                   style: const TextStyle(
                                       fontSize: 12, color: Color(0xFF9CA3AF))),
                         ),
-                        // ── Expandable alternates — same container = shared column grid ──
+                        // ── Expandable section: manual search + alternates ───
                         SizeTransition(
                           sizeFactor: _anim,
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
+                              // Manual search — always available
+                              _ManualSearchField(
+                                row: row,
+                                isMobile: true,
+                                onRowChanged: () {
+                                  widget.onToggle(); // collapse after selection
+                                  widget.onRowChanged();
+                                },
+                              ),
+                              if (alts.isNotEmpty)
+                                const Divider(height: 1, thickness: 1, color: Color(0xFFE5E7EB)),
                               for (int k = 0; k < alts.length; k++)
                                 _altRow(alts[k].$2, alts[k].$1, k == alts.length - 1, nameColW),
                               const Divider(height: 1, thickness: 1, color: Color(0xFFE5E7EB)),
@@ -4576,6 +4623,216 @@ bool _formMatches(String productName, String form) {
     case 'topical':   return n.contains('cream') || n.contains('oint') || n.contains('gel') || n.contains('lotion') || n.contains('spray');
     case 'sachet':    return n.contains('sachet') || n.contains('powder') || n.contains('granule');
     default:          return false;
+  }
+}
+
+// ─── Manual search helpers ────────────────────────────────────────────────────
+
+/// Queries MEDICINE via the priority RPC (falls back to ILIKE) and returns
+/// up to 8 candidates for manual override.
+Future<List<Product>> _manualSearchProducts(String query) async {
+  final q = query.trim();
+  if (q.isEmpty) return [];
+  try {
+    final rows = await Supabase.instance.client.rpc('search_medicines_priority', params: {
+      'search_term': q,
+      'category_filter': 'All',
+      'page_offset': 0,
+      'page_limit': 8,
+    });
+    return List<Map<String, dynamic>>.from(rows as List)
+        .map((m) => Product.fromMap(m))
+        .toList();
+  } catch (_) {
+    try {
+      final results = await Supabase.instance.client
+          .from('MEDICINE')
+          .select()
+          .ilike('product_name', '%$q%')
+          .eq('status', 'Available')
+          .order('sales_count', ascending: false)
+          .limit(8);
+      return List<Map<String, dynamic>>.from(results)
+          .map((m) => Product.fromMap(m))
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+}
+
+/// Per-row "Search / change match" input shown inside the expandable panel.
+/// Typing queries MEDICINE; selecting a result sets Manually Matched + auto-ticked.
+class _ManualSearchField extends StatefulWidget {
+  final _MatchRow row;
+  final VoidCallback onRowChanged;
+  final bool isMobile;
+
+  const _ManualSearchField({
+    required this.row,
+    required this.onRowChanged,
+    this.isMobile = false,
+  });
+
+  @override
+  State<_ManualSearchField> createState() => _ManualSearchFieldState();
+}
+
+class _ManualSearchFieldState extends State<_ManualSearchField> {
+  final _ctrl = TextEditingController();
+  List<Product> _results = [];
+  bool _loading = false;
+  Timer? _debounce;
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    _debounce?.cancel();
+    super.dispose();
+  }
+
+  void _onChanged(String v) {
+    _debounce?.cancel();
+    if (v.trim().isEmpty) {
+      setState(() { _results = []; _loading = false; });
+      return;
+    }
+    setState(() => _loading = true);
+    _debounce = Timer(const Duration(milliseconds: 380), () async {
+      final res = await _manualSearchProducts(v);
+      if (mounted) setState(() { _results = res; _loading = false; });
+    });
+  }
+
+  void _select(Product p) {
+    widget.row._manualProduct = p;
+    widget.row.status = _MatchStatus.manuallyMatched;
+    _ctrl.clear();
+    setState(() { _results = []; _loading = false; });
+    widget.onRowChanged();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final hPad = widget.isMobile ? 12.0 : 17.0;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: EdgeInsets.fromLTRB(hPad, 8, 12, 4),
+          child: TextField(
+            controller: _ctrl,
+            onChanged: _onChanged,
+            decoration: InputDecoration(
+              hintText: 'Search / change match…',
+              hintStyle: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+              prefixIcon: const Icon(Icons.search_rounded, size: 15, color: Color(0xFF9CA3AF)),
+              suffixIcon: _loading
+                  ? const Padding(
+                      padding: EdgeInsets.all(10),
+                      child: SizedBox(
+                        width: 14, height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 1.8, color: Color(0xFF6B7280)),
+                      ),
+                    )
+                  : _ctrl.text.isNotEmpty
+                      ? GestureDetector(
+                          onTap: () { _ctrl.clear(); setState(() { _results = []; _loading = false; }); },
+                          child: const Icon(Icons.close, size: 14, color: Color(0xFF9CA3AF)),
+                        )
+                      : null,
+              isDense: true,
+              contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              filled: true,
+              fillColor: Colors.white,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(6),
+                borderSide: const BorderSide(color: Color(0xFFD1D5DB)),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(6),
+                borderSide: const BorderSide(color: Color(0xFFD1D5DB)),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(6),
+                borderSide: const BorderSide(color: Color(0xFF16A34A), width: 1.5),
+              ),
+            ),
+            style: const TextStyle(fontSize: 13),
+          ),
+        ),
+        // Search result rows
+        for (final p in _results)
+          _SearchResultRow(product: p, onTap: () => _select(p)),
+        if (_results.isNotEmpty) const SizedBox(height: 4),
+      ],
+    );
+  }
+}
+
+/// A single result row shown below the manual search field.
+class _SearchResultRow extends StatelessWidget {
+  final Product product;
+  final VoidCallback onTap;
+
+  const _SearchResultRow({required this.product, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(17, 6, 12, 6),
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          border: Border(top: BorderSide(color: Color(0xFFE5E7EB))),
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              flex: 5,
+              child: Text(
+                product.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: Color(0xFF111827)),
+              ),
+            ),
+            const SizedBox(width: 6),
+            SizedBox(
+              width: 48,
+              child: Text(
+                product.packSize,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 11, color: Color(0xFF374151)),
+              ),
+            ),
+            const SizedBox(width: 6),
+            Expanded(
+              flex: 2,
+              child: Text(
+                product.manufacturer,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280)),
+              ),
+            ),
+            const SizedBox(width: 6),
+            SizedBox(
+              width: 52,
+              child: Text(
+                rupees(product.mrp),
+                textAlign: TextAlign.right,
+                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: Color(0xFF16A34A)),
+              ),
+            ),
+            const SizedBox(width: 6),
+            const Icon(Icons.add_circle_outline_rounded, size: 14, color: Color(0xFF16A34A)),
+          ],
+        ),
+      ),
+    );
   }
 }
 

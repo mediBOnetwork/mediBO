@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:html' as html;
 
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -181,13 +182,48 @@ class _ApprovedRow {
   bool   get isSuspended  => status == 'suspended';
 }
 
+// ── Lead item model ───────────────────────────────────────────────────────────
+
+class _LeadItem {
+  final String key;        // auth_uid for logged-in leads, leads.id for others
+  String? leadsId;         // null until a leads row exists for this item
+  final String? authUid;
+  final String name;
+  final String email;
+  final String mobile;
+  final String source;     // 'logged_in', 'manual', 'csv'
+  String status;
+  String? assignedTo;      // admin user id
+
+  _LeadItem({
+    required this.key,
+    this.leadsId,
+    this.authUid,
+    required this.name,
+    required this.email,
+    required this.mobile,
+    required this.source,
+    this.status = 'New',
+    this.assignedTo,
+  });
+}
+
+// ── Admin entry (for assigned-to dropdown) ────────────────────────────────────
+
+class _AdminEntry {
+  final String id;
+  final String email;
+  const _AdminEntry({required this.id, required this.email});
+}
+
 // ── Filter ────────────────────────────────────────────────────────────────────
 
 enum _CustFilter {
+  approvedCustomers,
   customerOrders,
   cartNotOrdered,
   pendingRegistrations,
-  approvedCustomers,
+  leads,
 }
 
 // ── Screen ────────────────────────────────────────────────────────────────────
@@ -204,8 +240,12 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   List<_CustRow>     _cartRows     = [];
   List<_RegRow>      _regRows      = [];
   List<_ApprovedRow> _approvedRows = [];
+  List<_LeadItem> _loggedInLeads = [];
+  List<_LeadItem> _otherLeads    = [];
+  List<_AdminEntry> _admins      = [];
+  final Set<String> _expandedLeads = {};
   bool _loading = true;
-  _CustFilter _filter = _CustFilter.customerOrders;
+  _CustFilter _filter = _CustFilter.approvedCustomers;
   final Set<String> _expanded = {};
   final ScrollController _scrollCtrl = ScrollController();
 
@@ -404,6 +444,106 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         ));
       }
     }
+    _loadLeads();
+  }
+
+  Future<void> _loadLeads() async {
+    try {
+      final client = Supabase.instance.client;
+
+      // Fetch all leads rows
+      final leadsRows = await client.from('leads').select();
+      // Build a quick lookup: auth_uid or id → lead row
+      final leadsByAuthUid = <String, Map<String, dynamic>>{};
+      final otherLeadsRaw  = <Map<String, dynamic>>[];
+      for (final r in leadsRows as List) {
+        final m = Map<String, dynamic>.from(r as Map);
+        final src = (m['source'] as String?) ?? 'manual';
+        final uid = m['auth_uid'] as String?;
+        if (src == 'logged_in' && uid != null) {
+          leadsByAuthUid[uid] = m;
+        } else {
+          otherLeadsRaw.add(m);
+        }
+      }
+
+      // Fetch admins list
+      final adminsRows = await client.from('admins').select('id, email');
+      final adminsList = (adminsRows as List).map((r) {
+        final m = Map<String, dynamic>.from(r as Map);
+        return _AdminEntry(
+          id:    m['id'] as String,
+          email: m['email'] as String,
+        );
+      }).toList();
+
+      // Logged-in section: pharmacy_profiles with approved=false
+      // + auth users with no profile (from RPC)
+      final seen = <String>{};
+      final loggedIn = <_LeadItem>[];
+
+      // From pharmacy_profiles (unapproved)
+      for (final reg in _regRows) {
+        final uid = reg.rawData['user_id'] as String? ?? reg.id;
+        if (seen.contains(uid)) continue;
+        seen.add(uid);
+        final lr = leadsByAuthUid[uid];
+        loggedIn.add(_LeadItem(
+          key:        uid,
+          leadsId:    lr?['id'] as String?,
+          authUid:    uid,
+          name:       reg.fullName.isNotEmpty ? reg.fullName : reg.businessName,
+          email:      reg.email ?? '',
+          mobile:     reg.phone,
+          source:     'logged_in',
+          status:     (lr?['status'] as String?) ?? 'New',
+          assignedTo: lr?['assigned_to'] as String?,
+        ));
+      }
+
+      // From RPC: users with no pharmacy_profile
+      try {
+        final rpcRows = await client.rpc('get_unregistered_users');
+        for (final r in rpcRows as List) {
+          final m = Map<String, dynamic>.from(r as Map);
+          final uid = m['auth_uid'] as String? ?? '';
+          if (uid.isEmpty || seen.contains(uid)) continue;
+          seen.add(uid);
+          final lr = leadsByAuthUid[uid];
+          loggedIn.add(_LeadItem(
+            key:        uid,
+            leadsId:    lr?['id'] as String?,
+            authUid:    uid,
+            name:       (m['full_name'] as String?) ?? '',
+            email:      (m['email'] as String?) ?? '',
+            mobile:     (m['phone'] as String?) ?? '',
+            source:     'logged_in',
+            status:     (lr?['status'] as String?) ?? 'New',
+            assignedTo: lr?['assigned_to'] as String?,
+          ));
+        }
+      } catch (_) {}
+
+      // Other leads (manual + csv)
+      final others = otherLeadsRaw.map((m) => _LeadItem(
+        key:        m['id'] as String,
+        leadsId:    m['id'] as String,
+        name:       (m['name'] as String?) ?? '',
+        email:      (m['email'] as String?) ?? '',
+        mobile:     (m['mobile'] as String?) ?? '',
+        source:     (m['source'] as String?) ?? 'manual',
+        status:     (m['status'] as String?) ?? 'New',
+        assignedTo: m['assigned_to'] as String?,
+      )).toList();
+
+      if (mounted) {
+        setState(() {
+          _loggedInLeads = loggedIn;
+          _otherLeads    = others;
+          _admins        = adminsList;
+        });
+      }
+    } catch (_) {}
   }
 
   // ── Net payable helpers ────────────────────────────────────────────────────
@@ -471,12 +611,14 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       case _CustFilter.customerOrders:       return _orderRows;
       case _CustFilter.cartNotOrdered:       return _cartRows;
       case _CustFilter.pendingRegistrations:
-      case _CustFilter.approvedCustomers:    return [];
+      case _CustFilter.approvedCustomers:
+      case _CustFilter.leads:                return [];
     }
   }
 
   bool get _isRegView      => _filter == _CustFilter.pendingRegistrations;
   bool get _isApprovedView => _filter == _CustFilter.approvedCustomers;
+  bool get _isLeadsView    => _filter == _CustFilter.leads;
 
   // ── Approve / Reject registrations ────────────────────────────────────────
 
@@ -680,6 +822,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   }
 
   Widget _buildScrollContent(bool isDesktop) {
+    // Leads tab
+    if (_isLeadsView) return _buildLeadsContent(isDesktop);
     // Approved customers view
     if (_isApprovedView) {
       if (_approvedRows.isEmpty) {
@@ -782,17 +926,20 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         SingleChildScrollView(
           scrollDirection: Axis.horizontal,
           child: Row(children: [
+            _tab(_CustFilter.approvedCustomers,
+                'Customers (${_approvedRows.length})'),
+            const SizedBox(width: 4),
             _tab(_CustFilter.customerOrders,
                 'Customer Orders (${_orderRows.length})'),
             const SizedBox(width: 4),
             _tab(_CustFilter.cartNotOrdered,
-                'Cart — Not Ordered (${_cartRows.length})'),
+                'Cart (${_cartRows.length})'),
             const SizedBox(width: 4),
             _tab(_CustFilter.pendingRegistrations,
-                'Pending Registrations (${_regRows.length})'),
+                'Pending Approval (${_regRows.length})'),
             const SizedBox(width: 4),
-            _tab(_CustFilter.approvedCustomers,
-                'Customers (${_approvedRows.length})'),
+            _tab(_CustFilter.leads,
+                'Leads (${_loggedInLeads.length + _otherLeads.length})'),
           ]),
         ),
       ]),
@@ -2112,6 +2259,362 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                   color: color)),
         ),
       );
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // LEADS TAB
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  Widget _buildLeadsContent(bool isDesktop) {
+    final pad = isDesktop ? 28.0 : 16.0;
+    return Padding(
+      padding: EdgeInsets.fromLTRB(pad, 16, pad, 32),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Section A: Logged-in users
+          const Text('Logged in',
+              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700,
+                  color: Color(0xFF111827))),
+          const SizedBox(height: 2),
+          const Text('Authenticated users who have not completed registration',
+              style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+          const SizedBox(height: 10),
+          if (_loggedInLeads.isEmpty)
+            const Padding(
+              padding: EdgeInsets.only(bottom: 16),
+              child: Text('No logged-in leads',
+                  style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
+            )
+          else
+            for (final lead in _loggedInLeads)
+              _buildLeadRow(lead, isDesktop),
+
+          const SizedBox(height: 24),
+
+          // Section B: Other leads
+          const Text('Other leads',
+              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700,
+                  color: Color(0xFF111827))),
+          const SizedBox(height: 2),
+          const Text('Manually added and CSV-imported leads',
+              style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+          const SizedBox(height: 10),
+          if (_otherLeads.isEmpty)
+            const Text('No leads yet',
+                style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)))
+          else
+            for (final lead in _otherLeads)
+              _buildLeadRow(lead, isDesktop),
+
+          const SizedBox(height: 32),
+
+          // CSV upload
+          _buildCsvUpload(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLeadRow(_LeadItem lead, bool isDesktop) {
+    final isExpanded = _expandedLeads.contains(lead.key);
+    final displayName = lead.name.isNotEmpty ? lead.name : lead.email;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 1),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // Whole-row header — clickable to expand
+        InkWell(
+          onTap: () => setState(() =>
+              isExpanded ? _expandedLeads.remove(lead.key) : _expandedLeads.add(lead.key)),
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(8)),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            child: Row(children: [
+              Icon(isExpanded ? Icons.expand_less : Icons.expand_more,
+                  size: 18, color: const Color(0xFF6B7280)),
+              const SizedBox(width: 10),
+              Expanded(
+                child: isDesktop
+                    ? Row(children: [
+                        _leadCell(displayName, flex: 3, bold: true),
+                        _leadCell(lead.email, flex: 3),
+                        _leadCell(lead.mobile.isNotEmpty ? lead.mobile : '—', flex: 2),
+                      ])
+                    : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Text(displayName,
+                            style: const TextStyle(fontSize: 13,
+                                fontWeight: FontWeight.w600, color: Color(0xFF111827))),
+                        if (lead.email.isNotEmpty)
+                          Text(lead.email,
+                              style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+                      ]),
+              ),
+              // Status chip preview
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: _leadStatusColor(lead.status).withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(lead.status,
+                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
+                        color: _leadStatusColor(lead.status))),
+              ),
+            ]),
+          ),
+        ),
+        // Expanded details
+        if (isExpanded)
+          Container(
+            padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+            decoration: const BoxDecoration(
+              border: Border(top: BorderSide(color: Color(0xFFE5E7EB))),
+            ),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const SizedBox(height: 12),
+              Wrap(spacing: 20, runSpacing: 12, children: [
+                if (lead.name.isNotEmpty)
+                  _detailChip('Name', lead.name),
+                if (lead.email.isNotEmpty)
+                  _detailChip('Email', lead.email),
+                if (lead.mobile.isNotEmpty)
+                  _detailChip('Mobile', lead.mobile),
+              ]),
+              const SizedBox(height: 16),
+              // Dropdowns row
+              Wrap(spacing: 16, runSpacing: 12, children: [
+                // Status dropdown
+                _leadDropdown<String>(
+                  label: 'Status',
+                  value: lead.status,
+                  items: const ['New', 'Contacted', 'Interested', 'Converted', 'Dropped'],
+                  display: (v) => v,
+                  onChanged: (v) {
+                    if (v == null) return;
+                    setState(() => lead.status = v);
+                    _persistLeadUpdate(lead, status: v);
+                  },
+                ),
+                // Assigned-to dropdown
+                _leadDropdown<String?>(
+                  label: 'Assigned to',
+                  value: lead.assignedTo,
+                  items: [null, ..._admins.map((a) => a.id)],
+                  display: (v) => v == null
+                      ? 'Unassigned'
+                      : (_admins.firstWhere((a) => a.id == v,
+                              orElse: () => _AdminEntry(id: v.toString(), email: v.toString()))
+                          .email),
+                  onChanged: (v) {
+                    setState(() => lead.assignedTo = v);
+                    _persistLeadUpdate(lead, assignedTo: v);
+                  },
+                ),
+              ]),
+            ]),
+          ),
+      ]),
+    );
+  }
+
+  Widget _leadCell(String text, {int flex = 1, bool bold = false}) {
+    return Expanded(
+      flex: flex,
+      child: Text(text,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+              fontSize: 13,
+              fontWeight: bold ? FontWeight.w600 : FontWeight.normal,
+              color: bold ? const Color(0xFF111827) : const Color(0xFF374151))),
+    );
+  }
+
+  Widget _detailChip(String label, String value) {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(label,
+          style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF),
+              fontWeight: FontWeight.w500)),
+      const SizedBox(height: 2),
+      Text(value,
+          style: const TextStyle(fontSize: 13, color: Color(0xFF111827))),
+    ]);
+  }
+
+  Widget _leadDropdown<T>({
+    required String label,
+    required T value,
+    required List<T> items,
+    required String Function(T) display,
+    required ValueChanged<T?> onChanged,
+  }) {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(label,
+          style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280),
+              fontWeight: FontWeight.w500)),
+      const SizedBox(height: 4),
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
+        decoration: BoxDecoration(
+          border: Border.all(color: const Color(0xFFD1D5DB)),
+          borderRadius: BorderRadius.circular(6),
+          color: Colors.white,
+        ),
+        child: DropdownButtonHideUnderline(
+          child: DropdownButton<T>(
+            value: value,
+            isDense: true,
+            items: items.map((v) => DropdownMenuItem<T>(
+              value: v,
+              child: Text(display(v), style: const TextStyle(fontSize: 13)),
+            )).toList(),
+            onChanged: onChanged,
+          ),
+        ),
+      ),
+    ]);
+  }
+
+  Color _leadStatusColor(String status) {
+    return switch (status) {
+      'Converted' => const Color(0xFF16A34A),
+      'Dropped'   => const Color(0xFFDC2626),
+      'Interested'=> const Color(0xFF2563EB),
+      'Contacted' => const Color(0xFFD97706),
+      _           => const Color(0xFF6B7280), // New
+    };
+  }
+
+  Future<void> _persistLeadUpdate(_LeadItem lead, {String? status, String? assignedTo}) async {
+    try {
+      final client = Supabase.instance.client;
+      if (lead.leadsId != null) {
+        // Update existing leads row
+        final update = <String, dynamic>{};
+        if (status != null)     update['status']      = status;
+        if (assignedTo != null) update['assigned_to'] = assignedTo;
+        if (update.isNotEmpty) {
+          await client.from('leads').update(update).eq('id', lead.leadsId!);
+        }
+      } else {
+        // Insert new leads row (upsert for logged_in avoids duplicates)
+        final insert = <String, dynamic>{
+          'name':        lead.name,
+          'email':       lead.email,
+          'mobile':      lead.mobile,
+          'source':      lead.source,
+          'status':      lead.status,
+          'assigned_to': lead.assignedTo,
+        };
+        if (lead.authUid != null) insert['auth_uid'] = lead.authUid;
+        final res = await client.from('leads').upsert(
+          insert,
+          onConflict: lead.authUid != null ? 'auth_uid' : null,
+        ).select('id').single();
+        // Update local leadsId so subsequent changes update rather than insert
+        final newId = res['id'] as String?;
+        if (newId != null) lead.leadsId = newId;
+      }
+    } catch (_) {}
+  }
+
+  // ── CSV upload ───────────────────────────────────────────────────────────────
+
+  Widget _buildCsvUpload() {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      const Divider(),
+      const SizedBox(height: 8),
+      const Text('Import CSV',
+          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600,
+              color: Color(0xFF111827))),
+      const SizedBox(height: 4),
+      const Text('Columns: name, email, mobile (header row required; order flexible)',
+          style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+      const SizedBox(height: 10),
+      ElevatedButton.icon(
+        onPressed: _pickAndImportCsv,
+        icon: const Icon(Icons.upload_file_outlined, size: 16),
+        label: const Text('Upload CSV'),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: const Color(0xFF1B5E20),
+          foregroundColor: Colors.white,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+        ),
+      ),
+    ]);
+  }
+
+  Future<void> _pickAndImportCsv() async {
+    try {
+      // Create file input element and trigger click
+      final input = html.FileUploadInputElement()..accept = '.csv,text/csv';
+      input.click();
+      await input.onChange.first;
+      final file = input.files?.first;
+      if (file == null) return;
+
+      final reader = html.FileReader();
+      reader.readAsText(file);
+      await reader.onLoad.first;
+      final csvText = reader.result as String;
+
+      final lines = csvText.split(RegExp(r'\r?\n'));
+      if (lines.isEmpty) return;
+
+      // Parse header
+      final header = lines.first.split(',').map((h) => h.trim().toLowerCase()).toList();
+      final nameIdx  = _csvCol(header, ['name', 'full_name', 'fullname']);
+      final emailIdx = _csvCol(header, ['email', 'email_address', 'emailaddress']);
+      final mobIdx   = _csvCol(header, ['mobile', 'phone', 'mobile_number', 'phonenumber', 'contact']);
+
+      int imported = 0, skipped = 0;
+      final toInsert = <Map<String, dynamic>>[];
+
+      for (final raw in lines.skip(1)) {
+        final row = raw.split(',').map((c) => c.trim()).toList();
+        if (row.every((c) => c.isEmpty)) { skipped++; continue; }
+        final name  = nameIdx  != null && nameIdx  < row.length ? row[nameIdx]  : '';
+        final email = emailIdx != null && emailIdx < row.length ? row[emailIdx] : '';
+        final mob   = mobIdx   != null && mobIdx   < row.length ? row[mobIdx]   : '';
+        if (name.isEmpty && email.isEmpty && mob.isEmpty) { skipped++; continue; }
+        toInsert.add({'name': name, 'email': email, 'mobile': mob, 'source': 'csv'});
+        imported++;
+      }
+
+      if (toInsert.isNotEmpty) {
+        await Supabase.instance.client.from('leads').insert(toInsert);
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Imported $imported leads'
+              '${skipped > 0 ? ' ($skipped skipped)' : ''}'),
+          backgroundColor: const Color(0xFF1B5E20),
+        ));
+        _loadLeads();
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('CSV import failed: $e'),
+          backgroundColor: const Color(0xFFDC2626),
+        ));
+      }
+    }
+  }
+
+  int? _csvCol(List<String> header, List<String> names) {
+    for (final n in names) {
+      final i = header.indexOf(n);
+      if (i != -1) return i;
+    }
+    return null;
+  }
 }
 
 

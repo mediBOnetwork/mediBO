@@ -24,10 +24,6 @@ class _NavEntry {
 const _kNavBase = [
   _NavEntry(Icons.medication_outlined, Icons.medication,
       'Add Medicine', 'Add Medicine Details'),
-  _NavEntry(Icons.receipt_long_outlined, Icons.receipt_long,
-      'Orders', 'Orders'),
-  _NavEntry(Icons.help_outline, Icons.help,
-      'Inquiry', 'Inquiry'),
   _NavEntry(Icons.inventory_2_outlined, Icons.inventory_2,
       'Suppliers', 'Supplier Dashboard'),
   _NavEntry(Icons.people_outline, Icons.people,
@@ -104,20 +100,14 @@ class _AdminShellState extends State<AdminShell> {
       case 'add_medicine':
         setState(() { _showDashboard = false; _index = 0; });
         return;
-      case 'orders':
+      case 'suppliers':
         setState(() { _showDashboard = false; _index = 1; });
         return;
-      case 'inquiry':
+      case 'customers':
         setState(() { _showDashboard = false; _index = 2; });
         return;
-      case 'suppliers':
-        setState(() { _showDashboard = false; _index = 3; });
-        return;
-      case 'customers':
-        setState(() { _showDashboard = false; _index = 4; });
-        return;
       case 'bills':
-        setState(() { _showDashboard = false; _index = 5; });
+        setState(() { _showDashboard = false; _index = 3; });
         return;
       case 'manage_admins':
         if (!isSuperAdmin) {
@@ -127,7 +117,7 @@ class _AdminShellState extends State<AdminShell> {
           ));
           return;
         }
-        setState(() { _showDashboard = false; _index = 6; });
+        setState(() { _showDashboard = false; _index = 4; });
         return;
       case 'add_supplier':
         Navigator.of(ctx).push(MaterialPageRoute(
@@ -155,9 +145,9 @@ class _AdminShellState extends State<AdminShell> {
     }
     final nav = _effectiveNav(isSuperAdmin);
     if (_index == 0) return const AdminAddMedicineScreen();
-    if (_index == 4) return const AdminCustomerScreen();
-    if (_index == 5) return PendingBillsScreen(onCountChanged: _loadPendingCount);
-    if (isSuperAdmin && _index == 6) return const AdminManageAdminsScreen();
+    if (_index == 2) return const AdminCustomerScreen();
+    if (_index == 3) return PendingBillsScreen(onCountChanged: _loadPendingCount);
+    if (isSuperAdmin && _index == 4) return const AdminManageAdminsScreen();
     if (_index < nav.length) {
       return _PageBody(title: nav[_index].pageTitle, icon: nav[_index].icon);
     }
@@ -204,7 +194,8 @@ class _AdminShellState extends State<AdminShell> {
   // ── Mobile layout ─────────────────────────────────────────────────────────
 
   Widget _buildMobile(BuildContext ctx, bool isSuperAdmin) {
-    final nav = _effectiveNav(isSuperAdmin);
+    // Mobile bottom-nav uses only _kNavBase (Admin/Home live in the ⋮ popup).
+    final nav = _kNavBase;
     final safeIndex = _index.clamp(0, nav.length - 1);
     if (safeIndex != _index) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -305,7 +296,7 @@ class _AdminShellState extends State<AdminShell> {
         items: nav.asMap().entries.map((e) {
           final i = e.key;
           final n = e.value;
-          final hasBadge = i == 5 && _pendingBillsCount > 0;
+          final hasBadge = i == 3 && _pendingBillsCount > 0;
           return BottomNavigationBarItem(
             icon: hasBadge
                 ? Badge(label: Text('$_pendingBillsCount'), child: Icon(n.icon))
@@ -322,8 +313,8 @@ class _AdminShellState extends State<AdminShell> {
 }
 
 // ── Desktop header ────────────────────────────────────────────────────────────
-// Logo (→ dashboard) | Home | Add Medicine | Orders | Inquiry | Suppliers |
-// Customers | Bills🔴 | Quick Links (Admins, Add Supplier, Add Customer) | Logout
+// Logo (→ dashboard) | Home | Add Medicine | Suppliers | Customers | Bills🔴 |
+// Quick Links (Manage Admins, Add Supplier, Add Customer) | Logout
 
 class _DesktopHeader extends StatelessWidget {
   final VoidCallback onLogoTap;
@@ -393,16 +384,6 @@ class _DesktopHeader extends StatelessWidget {
                       label: 'Add Medicine',
                       icon: Icons.medication_outlined,
                       onTap: () => onQuickLink('add_medicine'),
-                    ),
-                    _HdrBtn(
-                      label: 'Orders',
-                      icon: Icons.receipt_long_outlined,
-                      onTap: () => onQuickLink('orders'),
-                    ),
-                    _HdrBtn(
-                      label: 'Inquiry',
-                      icon: Icons.help_outline,
-                      onTap: () => onQuickLink('inquiry'),
                     ),
                     _HdrBtn(
                       label: 'Suppliers',

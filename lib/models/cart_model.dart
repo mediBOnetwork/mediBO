@@ -432,7 +432,7 @@ class CartModel extends ChangeNotifier {
         // Nothing to merge — still clean up guest artifacts if present.
         if (guestUid != null) {
           await Supabase.instance.client
-              .from('cart_items').delete().eq('user_id', guestUid);
+              .rpc('delete_guest_cart', params: {'p_guest_uid': guestUid});
           try { html.window.localStorage.remove(_guestUidKey); } catch (_) {}
         }
         _clearLocalStorage();
@@ -465,9 +465,11 @@ class CartModel extends ChangeNotifier {
       }
 
       // 5. Delete old guest rows and clean up localStorage.
+      // Uses a security-definer RPC because the authenticated DELETE policy
+      // only covers rows owned by auth.uid(); guest rows have a foreign UUID.
       if (guestUid != null) {
         await Supabase.instance.client
-            .from('cart_items').delete().eq('user_id', guestUid);
+            .rpc('delete_guest_cart', params: {'p_guest_uid': guestUid});
         try { html.window.localStorage.remove(_guestUidKey); } catch (_) {}
       }
       _clearLocalStorage();

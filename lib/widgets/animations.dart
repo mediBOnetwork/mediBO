@@ -63,6 +63,42 @@ class SmoothScrollBehavior extends MaterialScrollBehavior {
       child;
 }
 
+/// Admin-panel scroll behavior: same device support as [SmoothScrollBehavior]
+/// but with always-visible scrollbar thumbs on desktop/web so admins can see
+/// and drag the scrollbar on every long page.
+class AdminScrollBehavior extends MaterialScrollBehavior {
+  const AdminScrollBehavior();
+
+  @override
+  Set<PointerDeviceKind> get dragDevices => {
+        PointerDeviceKind.touch,
+        PointerDeviceKind.mouse,
+        PointerDeviceKind.trackpad,
+        PointerDeviceKind.stylus,
+      };
+
+  @override
+  ScrollPhysics getScrollPhysics(BuildContext context) =>
+      platformScrollPhysics();
+
+  @override
+  Widget buildScrollbar(
+      BuildContext context, Widget child, ScrollableDetails details) {
+    switch (getPlatform(context)) {
+      case TargetPlatform.linux:
+      case TargetPlatform.macOS:
+      case TargetPlatform.windows:
+        return Scrollbar(
+          controller: details.controller,
+          thumbVisibility: true,
+          child: child,
+        );
+      default:
+        return child;
+    }
+  }
+}
+
 /// Web: ClampingScrollPhysics so the scroll position tracks the wheel delta
 /// exactly and stops the instant the wheel stops.
 /// Mobile: MomentumScrollPhysics with tuned friction for a native-feel fling.

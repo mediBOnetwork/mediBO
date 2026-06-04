@@ -92,8 +92,14 @@ class _AppRoot extends StatelessWidget {
           return const _SplashScreen();
         }
 
-        // Admin users see the admin panel with text selection enabled.
-        if (auth.isAdmin) return const SelectionArea(child: AdminShell());
+        // Admin users: text selection + admin scroll behavior (visible scrollbar
+        // thumbs + all device kinds for wheel/trackpad/mouse drag).
+        if (auth.isAdmin) return const SelectionArea(
+          child: ScrollConfiguration(
+            behavior: AdminScrollBehavior(),
+            child: AdminShell(),
+          ),
+        );
         return const HomeShell();
       },
     );

@@ -424,35 +424,19 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         );
       }
 
-      // ── Single vertical scroll owner ─────────────────────────────────────────
-      // Scrollbar > SingleChildScrollView > Column([header, content])
-      //
-      // WHY this structure:
-      //   The old pattern was Column([_buildHeader, Expanded(child: SSV)]).
-      //   Flutter gives every non-flex Column child maxHeight = the Column's
-      //   full available height.  _buildHeader's inner Column has the default
-      //   mainAxisSize:max, so it claimed the entire viewport height, leaving
-      //   Expanded(SSV) with 0 px — nothing could scroll.
-      //
-      //   By making Scrollbar+SSV the outermost widget, the SSV fills the
-      //   bounded height given by admin_shell's Expanded directly.  _buildHeader
-      //   is now a child of the SSV's Column, which receives UNBOUNDED height;
-      //   in that context Column(mainAxisSize:max) safely sizes to its children.
-      //   The SSV then scrolls all content (tabs + rows) as one unit.
+      // PrimaryScrollController lets AdminScrollBehavior's auto-injected
+      // Scrollbar use _scrollCtrl (for thumb drag + programmatic jumpTo).
+      // primary:true on SSV routes wheel/trackpad PointerScrollEvents here.
       return PrimaryScrollController(
         controller: _scrollCtrl,
-        child: Scrollbar(
-          controller: _scrollCtrl,
-          thumbVisibility: true,
-          child: SingleChildScrollView(
-            primary: true,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _buildHeader(isDesktop),
-                _buildScrollContent(isDesktop),
-              ],
-            ),
+        child: SingleChildScrollView(
+          primary: true,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildHeader(isDesktop),
+              _buildScrollContent(isDesktop),
+            ],
           ),
         ),
       );

@@ -70,6 +70,8 @@ class _CartScreenState extends State<CartScreen> {
     ].where((s) => s.isNotEmpty).join(', ');
 
     try {
+      // orderNumber was captured before this await — the same value goes into
+      // the DB row and into the dialog, so the displayed PO always matches.
       await Supabase.instance.client.from('orders').insert({
         'user_id':       userId,
         'pharmacy_name': profile?.pharmacyName ?? '',
@@ -85,8 +87,7 @@ class _CartScreenState extends State<CartScreen> {
         }).toList(),
         'total_amount':  netPayable,
         'status':        'pending',
-        // payment_id repurposed as order reference until DB migration is applied
-        'payment_id':    orderNumber,
+        'payment_id':    orderNumber, // same variable shown in the success dialog
       });
 
       if (!mounted) return;
@@ -2154,62 +2155,70 @@ class _OrderPlacedDialog extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDesktop = MediaQuery.of(context).size.width >= 900;
+
     return Dialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       backgroundColor: Colors.white,
-      child: Padding(
-        padding: const EdgeInsets.all(28),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 72,
-              height: 72,
-              decoration: const BoxDecoration(
-                color: Color(0xFFDCFCE7),
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(Icons.check_circle_rounded,
-                  color: Color(0xFF16A34A), size: 44),
-            ),
-            const SizedBox(height: 20),
-            const Text(
-              'Order Placed!',
-              style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w800,
-                  color: Color(0xFF111827)),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Order $orderNumber • $amount',
-              style: const TextStyle(fontSize: 14, color: Color(0xFF374151)),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 6),
-            const Text(
-              'Your order has been placed and is pending confirmation.\nOur team will contact you shortly.',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                  fontSize: 12, color: Color(0xFF6B7280), height: 1.5),
-            ),
-            const SizedBox(height: 24),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton(
-                onPressed: onDone,
-                style: FilledButton.styleFrom(
-                  backgroundColor: const Color(0xFF1B5E20),
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10)),
+      insetPadding: isDesktop
+          ? const EdgeInsets.symmetric(horizontal: 24, vertical: 24)
+          : const EdgeInsets.symmetric(horizontal: 20, vertical: 40),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: isDesktop ? 440 : double.infinity),
+        child: Padding(
+          padding: const EdgeInsets.all(28),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 72,
+                height: 72,
+                decoration: const BoxDecoration(
+                  color: Color(0xFFDCFCE7),
+                  shape: BoxShape.circle,
                 ),
-                child: const Text('View Orders',
-                    style: TextStyle(
-                        fontSize: 15, fontWeight: FontWeight.w700)),
+                child: const Icon(Icons.check_circle_rounded,
+                    color: Color(0xFF16A34A), size: 44),
               ),
-            ),
-          ],
+              const SizedBox(height: 20),
+              const Text(
+                'Order Placed!',
+                style: TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.w800,
+                    color: Color(0xFF111827)),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Order $orderNumber • $amount',
+                style: const TextStyle(fontSize: 14, color: Color(0xFF374151)),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                'Your order has been placed and is pending confirmation.\nOur team will contact you shortly.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                    fontSize: 12, color: Color(0xFF6B7280), height: 1.5),
+              ),
+              const SizedBox(height: 24),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  onPressed: onDone,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFF1B5E20),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10)),
+                  ),
+                  child: const Text('View Orders',
+                      style: TextStyle(
+                          fontSize: 15, fontWeight: FontWeight.w700)),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

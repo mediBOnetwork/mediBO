@@ -44,6 +44,7 @@ class _CustRow {
   final String phone;
   final String source;
   final String? orderId;
+  final String? orderNumber;
   final String orderStatus;
   final List<_ItemLine> items;
   final List<_ItemLine> removedItems;
@@ -57,6 +58,7 @@ class _CustRow {
     required this.phone,
     required this.source,
     this.orderId,
+    this.orderNumber,
     required this.orderStatus,
     required this.items,
     this.removedItems = const [],
@@ -345,6 +347,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
           phone:       _phone(up, pp, mo),
           source:      mo['source'] as String? ?? 'website',
           orderId:     mo['id'] as String?,
+          orderNumber: mo['payment_id'] as String?,
           orderStatus: mo['status'] as String? ?? 'unknown',
           items:       _parseItems(mo['items']),
           total:       (mo['total_amount'] as num?)?.toDouble(),
@@ -1067,9 +1070,9 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
               Expanded(
                   flex: 2,
                   child: Text(
-                    row.orderId != null
+                    row.orderNumber ?? (row.orderId != null
                         ? '#${row.orderId!.substring(0, row.orderId!.length.clamp(0, 8))}'
-                        : '—',
+                        : '—'),
                     style: const TextStyle(
                         fontSize: 11,
                         color: Color(0xFF6B7280),
@@ -1167,14 +1170,14 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                   ),
                 ]),
               ],
-              if (row.orderId != null) ...[
+              if (row.orderId != null || row.orderNumber != null) ...[
                 const SizedBox(height: 6),
                 Row(children: [
                   const Icon(Icons.receipt_outlined,
                       size: 13, color: Color(0xFF9CA3AF)),
                   const SizedBox(width: 4),
                   Text(
-                      '#${row.orderId!.substring(0, row.orderId!.length.clamp(0, 8))}',
+                      row.orderNumber ?? '#${row.orderId!.substring(0, row.orderId!.length.clamp(0, 8))}',
                       style: const TextStyle(
                           fontSize: 11,
                           color: Color(0xFF6B7280),

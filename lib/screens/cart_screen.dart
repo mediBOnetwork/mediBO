@@ -91,8 +91,9 @@ class _CartScreenState extends State<CartScreen> {
 
       if (!mounted) return;
 
-      // Clear cart + add to local order history
+      // Clear cart + add to local order history, then sync from DB
       cart.checkout();
+      cart.fetchOrders(); // refresh order list from Supabase (fire and forget)
 
       showDialog(
         context: context,

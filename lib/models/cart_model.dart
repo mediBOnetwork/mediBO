@@ -222,6 +222,53 @@ class CartModel extends ChangeNotifier {
       }
       _recomputeTotals();
       notifyListeners();
+
+      // Load order history from DB for authenticated users (no guest overrideUid).
+      if (overrideUid == null) await fetchOrders();
+    } catch (_) {}
+  }
+
+  /// Loads this user's order history from public.orders and replaces _orders.
+  Future<void> fetchOrders() async {
+    try {
+      final uid = Supabase.instance.client.auth.currentUser?.id;
+      if (uid == null) return;
+      final rows = await Supabase.instance.client
+          .from('orders')
+          .select()
+          .eq('user_id', uid)
+          .order('created_at', ascending: true);
+      final loaded = <Order>[];
+      for (final row in rows) {
+        final items = (row['items'] as List<dynamic>?) ?? [];
+        final lines = <CartLine>[];
+        for (int i = 0; i < items.length; i++) {
+          final item = items[i] as Map<String, dynamic>;
+          final product = Product.fromCartData(
+            id: 'order_item_$i',
+            name: (item['product_name'] as String?) ?? '',
+            b2bPrice: (item['price'] as num?)?.toDouble() ?? 0.0,
+            mrp: (item['mrp'] as num?)?.toDouble() ?? 0.0,
+            gstPercent: (item['gst_percent'] as num?)?.toDouble() ?? 12.0,
+          );
+          lines.add(CartLine(product, (item['quantity'] as num?)?.toInt() ?? 1));
+        }
+        final total = (row['total_amount'] as num?)?.toDouble() ?? 0.0;
+        final rawStatus = (row['status'] as String?) ?? 'pending';
+        final status = rawStatus[0].toUpperCase() + rawStatus.substring(1);
+        loaded.add(Order(
+          number: (row['payment_id'] as String?) ?? (row['id'] as String),
+          placedAt: DateTime.parse(row['created_at'] as String),
+          lines: lines,
+          grandTotal: total,
+          netPayable: total,
+          status: status,
+        ));
+      }
+      _orders
+        ..clear()
+        ..addAll(loaded);
+      notifyListeners();
     } catch (_) {}
   }
 

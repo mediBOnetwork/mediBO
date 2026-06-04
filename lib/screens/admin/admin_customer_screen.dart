@@ -3,9 +3,10 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../util.dart';
 import '../bulk_upload_screen.dart';
 
-// ── Order-row models ───────────────────────────────────────────────────────────
+// ── Item model ────────────────────────────────────────────────────────────────
 
 class _ItemLine {
   final int? id;
@@ -13,18 +14,27 @@ class _ItemLine {
   final String name;
   final int qty;
   final double? price;
+  final double? mrp;
+  final int? gstPercent;
+  final String? packSize;
   final String addedBy;
   final bool removedByAdmin;
+
   const _ItemLine({
     this.id,
     this.productId,
     required this.name,
     required this.qty,
     this.price,
+    this.mrp,
+    this.gstPercent,
+    this.packSize,
     this.addedBy = 'customer',
     this.removedByAdmin = false,
   });
 }
+
+// ── Customer row model ────────────────────────────────────────────────────────
 
 class _CustRow {
   final String userId;
@@ -37,6 +47,7 @@ class _CustRow {
   final List<_ItemLine> items;
   final List<_ItemLine> removedItems;
   final double? total;
+  final double netPayable; // computed net payable for cart rows
 
   const _CustRow({
     required this.userId,
@@ -49,34 +60,35 @@ class _CustRow {
     required this.items,
     this.removedItems = const [],
     this.total,
+    this.netPayable = 0.0,
   });
 
   bool get isOrder    => source == 'website' || source == 'whatsapp';
   bool get isCartOnly => source == 'cart_only';
 }
 
-// ── Registration-row model ─────────────────────────────────────────────────────
+// ── Registration-row model ────────────────────────────────────────────────────
 
 class _RegRow {
-  final String id;           // user_profiles.id  (= auth user UUID)
-  final String fullName;     // full_name
-  final String businessName; // business_name
-  final String phone;        // phone
-  final String? customerId;  // customer_id  ("3-letter + 3-digit code")
-  final String? paymentTerm; // payment_term  (Advance / COD / etc.)
-  final String? storeType;   // store_type
-  final String? range;       // range
-  final String? addressLine; // address_line
-  final String? city;        // city
-  final String? state;       // state
-  final String? pincode;     // pincode
-  final String? whatsappNumber; // whatsapp_number
-  final String? otherContact;   // other_contact
-  final String? dl1;            // dl1
-  final String? dl2;            // dl2
-  final String? gstin;          // gstin
-  final String? googleMapLink;  // google_map_link
-  final DateTime? createdAt;    // created_at
+  final String id;
+  final String fullName;
+  final String businessName;
+  final String phone;
+  final String? customerId;
+  final String? paymentTerm;
+  final String? storeType;
+  final String? range;
+  final String? addressLine;
+  final String? city;
+  final String? state;
+  final String? pincode;
+  final String? whatsappNumber;
+  final String? otherContact;
+  final String? dl1;
+  final String? dl2;
+  final String? gstin;
+  final String? googleMapLink;
+  final DateTime? createdAt;
 
   const _RegRow({
     required this.id,
@@ -101,31 +113,31 @@ class _RegRow {
   });
 
   factory _RegRow.fromMap(Map<String, dynamic> m) => _RegRow(
-        id:            m['id'] as String,
-        fullName:      m['full_name'] as String? ?? '',
-        businessName:  m['business_name'] as String? ?? '',
-        phone:         m['phone'] as String? ?? '',
-        customerId:    m['customer_id'] as String?,
-        paymentTerm:   m['payment_term'] as String?,
-        storeType:     m['store_type'] as String?,
-        range:         m['range'] as String?,
-        addressLine:   m['address_line'] as String?,
-        city:          m['city'] as String?,
-        state:         m['state'] as String?,
-        pincode:       m['pincode'] as String?,
+        id:             m['id'] as String,
+        fullName:       m['full_name'] as String? ?? '',
+        businessName:   m['business_name'] as String? ?? '',
+        phone:          m['phone'] as String? ?? '',
+        customerId:     m['customer_id'] as String?,
+        paymentTerm:    m['payment_term'] as String?,
+        storeType:      m['store_type'] as String?,
+        range:          m['range'] as String?,
+        addressLine:    m['address_line'] as String?,
+        city:           m['city'] as String?,
+        state:          m['state'] as String?,
+        pincode:        m['pincode'] as String?,
         whatsappNumber: m['whatsapp_number'] as String?,
-        otherContact:  m['other_contact'] as String?,
-        dl1:           m['dl1'] as String?,
-        dl2:           m['dl2'] as String?,
-        gstin:         m['gstin'] as String?,
-        googleMapLink: m['google_map_link'] as String?,
-        createdAt:     m['created_at'] != null
+        otherContact:   m['other_contact'] as String?,
+        dl1:            m['dl1'] as String?,
+        dl2:            m['dl2'] as String?,
+        gstin:          m['gstin'] as String?,
+        googleMapLink:  m['google_map_link'] as String?,
+        createdAt:      m['created_at'] != null
             ? DateTime.tryParse(m['created_at'] as String)
             : null,
       );
 }
 
-// ── Filter ─────────────────────────────────────────────────────────────────────
+// ── Filter ────────────────────────────────────────────────────────────────────
 
 enum _CustFilter { customerOrders, cartNotOrdered, pendingRegistrations }
 
@@ -190,7 +202,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     _debounce = Timer(const Duration(milliseconds: 500), () => _load(showSpinner: false));
   }
 
-  // ── Data ──────────────────────────────────────────────────────────────────────
+  // ── Data ─────────────────────────────────────────────────────────────────────
 
   Future<void> _load({bool showSpinner = true}) async {
     if (!mounted) return;
@@ -248,7 +260,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         ));
       }
 
-      // Cart-only rows
+      // Cart-only rows — skip carts with 0 active items (Task 3)
       final orderedUids = {
         for (final o in orderRows) (o as Map)['user_id'] as String? ?? ''
       };
@@ -265,11 +277,21 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                   name:           ci['product_name'] as String? ?? '',
                   qty:            (ci['quantity'] as num?)?.toInt() ?? 1,
                   price:          (ci['price'] as num?)?.toDouble(),
+                  mrp:            (ci['mrp'] as num?)?.toDouble(),
+                  gstPercent:     (ci['gst_percent'] as num?)?.toInt(),
+                  packSize:       ci['pack_size'] as String?,
                   addedBy:        ci['added_by'] as String? ?? 'customer',
                   removedByAdmin: (ci['removed_by_admin'] as bool?) ?? false,
                 ))
             .where((i) => i.name.isNotEmpty)
             .toList();
+
+        final activeItems  = allItems.where((i) => !i.removedByAdmin).toList();
+        final removedItems = allItems.where((i) => i.removedByAdmin).toList();
+
+        // Task 3: skip carts with no active items
+        if (activeItems.isEmpty) continue;
+
         carts.add(_CustRow(
           userId:       uid,
           name:         (up == null && pp == null) ? 'Guest' : _name(up, pp, null),
@@ -278,9 +300,10 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
           source:       'cart_only',
           orderId:      null,
           orderStatus:  'cart_only',
-          items:        allItems.where((i) => !i.removedByAdmin).toList(),
-          removedItems: allItems.where((i) => i.removedByAdmin).toList(),
+          items:        activeItems,
+          removedItems: removedItems,
           total:        null,
+          netPayable:   _computeNetPayable(activeItems),
         ));
       }
 
@@ -292,7 +315,6 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
           regs.add(_RegRow.fromMap(m));
         }
       }
-      // Sort newest first
       regs.sort((a, b) {
         if (a.createdAt == null && b.createdAt == null) return 0;
         if (a.createdAt == null) return 1;
@@ -318,6 +340,27 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       }
     }
   }
+
+  // ── Net payable helpers (mirrors CartModel._computeNetPayable) ─────────────
+
+  static double _computeNetPayable(List<_ItemLine> items) {
+    if (items.isEmpty) return 0.0;
+    final mrpSum = items.fold(0.0, (s, i) => s + (i.mrp ?? 0) * i.qty);
+    final discPct = cartDiscountPercent(mrpSum);
+    final groupMrp = <int, double>{};
+    for (final item in items) {
+      final rate = item.gstPercent ?? 12;
+      groupMrp[rate] = (groupMrp[rate] ?? 0) + (item.mrp ?? 0) * item.qty;
+    }
+    double total = 0.0;
+    for (final entry in groupMrp.entries) {
+      final taxable = entry.value * (1 - discPct / 100);
+      total += taxable * (1 + entry.key / 100);
+    }
+    return total + cartDeliveryFee(mrpSum);
+  }
+
+  // ── Profile/name helpers ──────────────────────────────────────────────────────
 
   static String _name(Map? up, Map? pp, Map? order) {
     final n = (up?['full_name'] ?? pp?['owner_name']) as String?;
@@ -358,11 +401,10 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
 
   // ── Active list ───────────────────────────────────────────────────────────────
 
-  // For order / cart filters returns _CustRow list; reg filter is handled separately
   List<_CustRow> get _activeCust {
     switch (_filter) {
-      case _CustFilter.customerOrders:  return _orderRows;
-      case _CustFilter.cartNotOrdered:  return _cartRows;
+      case _CustFilter.customerOrders:       return _orderRows;
+      case _CustFilter.cartNotOrdered:       return _cartRows;
       case _CustFilter.pendingRegistrations: return [];
     }
   }
@@ -456,8 +498,6 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     return LayoutBuilder(builder: (ctx, box) {
       final isDesktop = box.maxWidth >= 900;
 
-      // Loading: fill the bounded parent space with a centred spinner.
-      // No Column+Expanded here — just a single widget that fills its parent.
       if (_loading) {
         return const Center(
           child: CircularProgressIndicator(
@@ -465,9 +505,6 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         );
       }
 
-      // PrimaryScrollController lets AdminScrollBehavior's auto-injected
-      // Scrollbar use _scrollCtrl (for thumb drag + programmatic jumpTo).
-      // primary:true on SSV routes wheel/trackpad PointerScrollEvents here.
       return PrimaryScrollController(
         controller: _scrollCtrl,
         child: SingleChildScrollView(
@@ -484,11 +521,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     });
   }
 
-  // All non-loading content rendered as a single Column inside SingleChildScrollView.
-  // No inner ListView — every row widget expands inline, so there is nothing to
-  // intercept the parent scroll.
   Widget _buildScrollContent(bool isDesktop) {
-    // ── Pending registrations ─────────────────────────────────────────────────
+    // Pending registrations
     if (_isRegView) {
       if (_regRows.isEmpty) {
         return _ssvEmptyState('0 pending registrations');
@@ -504,7 +538,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       );
     }
 
-    // ── Customer orders / cart ────────────────────────────────────────────────
+    // Customer orders / cart
     final rows = _activeCust;
     if (rows.isEmpty) {
       return _ssvEmptyState(
@@ -519,13 +553,14 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         if (isDesktop) _buildCustTableHeader(),
         ...rows.map(
           (r) => isDesktop ? _buildDesktopCustRow(r) : _buildMobileCustCard(r)),
+        // Task 2: totals footer for cart view
+        if (_filter == _CustFilter.cartNotOrdered)
+          _buildCartTotalsFooter(isDesktop),
         const SizedBox(height: 32),
       ],
     );
   }
 
-  // Empty state suitable for SingleChildScrollView child (unbounded height —
-  // cannot use Center for vertical centering, so pad from top instead).
   Widget _ssvEmptyState(String message) {
     return Padding(
       padding: const EdgeInsets.only(top: 80),
@@ -544,7 +579,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     );
   }
 
-  // ── Shared header with 3 tabs ─────────────────────────────────────────────────
+  // ── Header with 3 tabs ────────────────────────────────────────────────────────
 
   Widget _buildHeader(bool isDesktop) {
     final pad = isDesktop ? 28.0 : 16.0;
@@ -624,22 +659,14 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     );
   }
 
-  Widget _emptyState(String message) => Center(
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          const Icon(Icons.people_outline, size: 56, color: Color(0xFFD1D5DB)),
-          const SizedBox(height: 14),
-          Text(message,
-              textAlign: TextAlign.center,
-              style:
-                  const TextStyle(fontSize: 14, color: Color(0xFF9CA3AF))),
-        ]),
-      );
-
   // ═══════════════════════════════════════════════════════════════════════════
   // CUSTOMER ORDERS / CART views
   // ═══════════════════════════════════════════════════════════════════════════
 
+  // Task 1 + 2: Conditional columns — Order ID hidden for cart view,
+  // Items + Value added for cart view.
   Widget _buildCustTableHeader() {
+    final isCart = _filter == _CustFilter.cartNotOrdered;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 10),
       color: const Color(0xFFF3F4F6),
@@ -648,90 +675,127 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         _th('Pharmacy', flex: 3),
         _th('Phone', flex: 2),
         _th('Source', flex: 2),
-        _th('Order ID', flex: 2),
-        if (_filter == _CustFilter.customerOrders) ...[
+        if (isCart) ...[
+          _th('Items', flex: 1),
+          _th('Value', flex: 2),
+          const SizedBox(width: 32), // chevron column
+        ] else ...[
+          _th('Order ID', flex: 2),
           _th('Confirmation', flex: 3),
           _th('Action', flex: 2),
+          const SizedBox(width: 32), // chevron column
         ],
       ]),
     );
   }
 
+  // Task 4: Whole row is an InkWell. Chevron rotates on expand.
+  // Task 1 + 2: Conditional columns per view.
   Widget _buildDesktopCustRow(_CustRow row) {
     final key        = row.orderId ?? row.userId;
     final isExpanded = _expanded.contains(key);
-    final showOrderCols = _filter == _CustFilter.customerOrders;
+    final isCart     = _filter == _CustFilter.cartNotOrdered;
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Container(
-        padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 13),
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
-        ),
-        child: Row(children: [
-          Expanded(
-              flex: 3,
-              child: Text(row.name,
+      InkWell(
+        onTap: () => _toggleExpand(key),
+        mouseCursor: SystemMouseCursors.click,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 13),
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
+          ),
+          child: Row(children: [
+            Expanded(
+                flex: 3,
+                child: Text(row.name,
+                    style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF111827)),
+                    overflow: TextOverflow.ellipsis)),
+            Expanded(
+                flex: 3,
+                child: Text(row.pharmacy.isNotEmpty ? row.pharmacy : '—',
+                    style: const TextStyle(
+                        fontSize: 13, color: Color(0xFF374151)),
+                    overflow: TextOverflow.ellipsis)),
+            Expanded(
+                flex: 2,
+                child: Text(row.phone.isNotEmpty ? row.phone : '—',
+                    style: const TextStyle(
+                        fontSize: 12, color: Color(0xFF6B7280)))),
+            Expanded(
+              flex: 2,
+              child: _SourceBadge(source: row.source),
+            ),
+            if (isCart) ...[
+              // Task 2: Items count
+              Expanded(
+                flex: 1,
+                child: Text(
+                  '${row.items.length}',
                   style: const TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w600,
-                      color: Color(0xFF111827)),
-                  overflow: TextOverflow.ellipsis)),
-          Expanded(
-              flex: 3,
-              child: Text(row.pharmacy.isNotEmpty ? row.pharmacy : '—',
-                  style: const TextStyle(
-                      fontSize: 13, color: Color(0xFF374151)),
-                  overflow: TextOverflow.ellipsis)),
-          Expanded(
-              flex: 2,
-              child: Text(row.phone.isNotEmpty ? row.phone : '—',
-                  style: const TextStyle(
-                      fontSize: 12, color: Color(0xFF6B7280)))),
-          Expanded(
-            flex: 2,
-            child: InkWell(
-              onTap: row.items.isNotEmpty
-                  ? () => _toggleExpand(key)
-                  : null,
-              borderRadius: BorderRadius.circular(20),
-              child: _SourceBadge(
-                  source: row.source,
-                  hasItems: row.items.isNotEmpty,
-                  isExpanded: isExpanded),
-            ),
-          ),
-          Expanded(
-              flex: 2,
-              child: Text(
-                row.orderId != null
-                    ? '#${row.orderId!.substring(0, row.orderId!.length.clamp(0, 8))}'
-                    : '—',
-                style: const TextStyle(
-                    fontSize: 11,
-                    color: Color(0xFF6B7280),
-                    fontFamily: 'monospace'),
-              )),
-          if (showOrderCols) ...[
-            Expanded(
-                flex: 3,
-                child: _ConfirmActions(
-                    row: row, onUpdate: _updateStatus)),
-            Expanded(
+                      color: Color(0xFF374151)),
+                ),
+              ),
+              // Task 2: Net payable value
+              Expanded(
                 flex: 2,
-                child: _ActionCell(
-                    row: row, onImport: () => _openImport(row))),
-          ],
-        ]),
+                child: Text(
+                  '₹${row.netPayable.toStringAsFixed(0)}',
+                  style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF1B5E20)),
+                ),
+              ),
+            ] else ...[
+              Expanded(
+                  flex: 2,
+                  child: Text(
+                    row.orderId != null
+                        ? '#${row.orderId!.substring(0, row.orderId!.length.clamp(0, 8))}'
+                        : '—',
+                    style: const TextStyle(
+                        fontSize: 11,
+                        color: Color(0xFF6B7280),
+                        fontFamily: 'monospace'),
+                  )),
+              Expanded(
+                  flex: 3,
+                  child: _ConfirmActions(
+                      row: row, onUpdate: _updateStatus)),
+              Expanded(
+                  flex: 2,
+                  child: _ActionCell(
+                      row: row, onImport: () => _openImport(row))),
+            ],
+            // Task 4: Rotating chevron
+            SizedBox(
+              width: 32,
+              child: AnimatedRotation(
+                turns: isExpanded ? 0.5 : 0.0,
+                duration: const Duration(milliseconds: 200),
+                child: const Icon(Icons.expand_more,
+                    size: 18, color: Color(0xFF6B7280)),
+              ),
+            ),
+          ]),
+        ),
       ),
       if (isExpanded) _buildExpandedItems(row, isDesktop: true),
     ]);
   }
 
+  // Task 4: Whole card is tappable. Task 2: show items + value for cart rows.
   Widget _buildMobileCustCard(_CustRow row) {
     final key        = row.orderId ?? row.userId;
     final isExpanded = _expanded.contains(key);
+    final isCart     = _filter == _CustFilter.cartNotOrdered;
     final showOrderCols = _filter == _CustFilter.customerOrders;
 
     return Container(
@@ -741,91 +805,92 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: const Color(0xFFE5E7EB)),
       ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Padding(
-          padding: const EdgeInsets.all(14),
-          child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-            Row(children: [
-              Expanded(
-                  child: Text(row.name,
-                      style: const TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700,
-                          color: Color(0xFF111827)),
-                      overflow: TextOverflow.ellipsis)),
-              const SizedBox(width: 8),
-              _SourceBadge(
-                  source: row.source,
-                  hasItems: false,
-                  isExpanded: false),
-            ]),
-            if (row.pharmacy.isNotEmpty) ...[
-              const SizedBox(height: 3),
-              Text(row.pharmacy,
-                  style: const TextStyle(
-                      fontSize: 12, color: Color(0xFF6B7280)),
-                  overflow: TextOverflow.ellipsis),
-            ],
-            if (row.phone.isNotEmpty) ...[
-              const SizedBox(height: 2),
-              Text(row.phone,
-                  style: const TextStyle(
-                      fontSize: 12, color: Color(0xFF6B7280))),
-            ],
-            if (row.orderId != null) ...[
-              const SizedBox(height: 6),
+      child: GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onTap: () => _toggleExpand(key),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Padding(
+            padding: const EdgeInsets.all(14),
+            child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+              // Name + source badge + rotating chevron
               Row(children: [
-                const Icon(Icons.receipt_outlined,
-                    size: 13, color: Color(0xFF9CA3AF)),
+                Expanded(
+                    child: Text(row.name,
+                        style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w700,
+                            color: Color(0xFF111827)),
+                        overflow: TextOverflow.ellipsis)),
+                const SizedBox(width: 6),
+                _SourceBadge(source: row.source),
                 const SizedBox(width: 4),
-                Text(
-                    '#${row.orderId!.substring(0, row.orderId!.length.clamp(0, 8))}',
-                    style: const TextStyle(
-                        fontSize: 11,
-                        color: Color(0xFF6B7280),
-                        fontFamily: 'monospace')),
-              ]),
-            ],
-            if (showOrderCols) ...[
-              const SizedBox(height: 10),
-              _ConfirmActions(row: row, onUpdate: _updateStatus),
-            ],
-            const SizedBox(height: 10),
-            Row(children: [
-              if (row.items.isNotEmpty)
-                GestureDetector(
-                  onTap: () => _toggleExpand(key),
-                  child: Row(mainAxisSize: MainAxisSize.min, children: [
-                    Text(
-                      isExpanded
-                          ? 'Hide items'
-                          : 'View ${row.items.length} items',
-                      style: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: Color(0xFF2563EB)),
-                    ),
-                    Icon(
-                        isExpanded
-                            ? Icons.expand_less
-                            : Icons.expand_more,
-                        size: 16,
-                        color: const Color(0xFF2563EB)),
-                  ]),
+                AnimatedRotation(
+                  turns: isExpanded ? 0.5 : 0.0,
+                  duration: const Duration(milliseconds: 200),
+                  child: const Icon(Icons.expand_more,
+                      size: 18, color: Color(0xFF9CA3AF)),
                 ),
-              const Spacer(),
-              if (showOrderCols)
+              ]),
+              if (row.pharmacy.isNotEmpty) ...[
+                const SizedBox(height: 3),
+                Text(row.pharmacy,
+                    style: const TextStyle(
+                        fontSize: 12, color: Color(0xFF6B7280)),
+                    overflow: TextOverflow.ellipsis),
+              ],
+              if (row.phone.isNotEmpty) ...[
+                const SizedBox(height: 2),
+                Text(row.phone,
+                    style: const TextStyle(
+                        fontSize: 12, color: Color(0xFF6B7280))),
+              ],
+              // Task 2: Items + value for cart rows
+              if (isCart && row.items.isNotEmpty) ...[
+                const SizedBox(height: 5),
+                Row(children: [
+                  const Icon(Icons.shopping_cart_outlined,
+                      size: 12, color: Color(0xFF9CA3AF)),
+                  const SizedBox(width: 4),
+                  Text(
+                    '${row.items.length} item${row.items.length == 1 ? '' : 's'}'
+                    '  ·  ₹${row.netPayable.toStringAsFixed(0)}',
+                    style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF1B5E20)),
+                  ),
+                ]),
+              ],
+              if (row.orderId != null) ...[
+                const SizedBox(height: 6),
+                Row(children: [
+                  const Icon(Icons.receipt_outlined,
+                      size: 13, color: Color(0xFF9CA3AF)),
+                  const SizedBox(width: 4),
+                  Text(
+                      '#${row.orderId!.substring(0, row.orderId!.length.clamp(0, 8))}',
+                      style: const TextStyle(
+                          fontSize: 11,
+                          color: Color(0xFF6B7280),
+                          fontFamily: 'monospace')),
+                ]),
+              ],
+              if (showOrderCols) ...[
+                const SizedBox(height: 10),
+                _ConfirmActions(row: row, onUpdate: _updateStatus),
+                const SizedBox(height: 6),
                 _ActionCell(row: row, onImport: () => _openImport(row)),
+              ],
             ]),
-          ]),
-        ),
-        if (isExpanded) ...[
-          const Divider(height: 1, color: Color(0xFFE5E7EB)),
-          _buildExpandedItems(row, isDesktop: false),
-        ],
-      ]),
+          ),
+          if (isExpanded) ...[
+            const Divider(height: 1, color: Color(0xFFE5E7EB)),
+            _buildExpandedItems(row, isDesktop: false),
+          ],
+        ]),
+      ),
     );
   }
 
@@ -838,8 +903,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         color: const Color(0xFFF9FAFB),
         padding: EdgeInsets.fromLTRB(lpad, 10, rpad, 14),
         child: const Text(
-          'WhatsApp order items unavailable — orders.source column and '
-          'whatsapp_orders table do not yet exist.',
+          'WhatsApp order items unavailable.',
           style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
         ),
       );
@@ -921,7 +985,9 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     );
   }
 
-  Widget _buildCartExpandedItems(_CustRow row, {required double lpad, required double rpad}) {
+  // Task 5: Expanded cart items — Product | Qty | Pack size | MRP | Remove
+  Widget _buildCartExpandedItems(_CustRow row,
+      {required double lpad, required double rpad}) {
     return Container(
       color: const Color(0xFFF9FAFB),
       padding: EdgeInsets.fromLTRB(lpad, 10, rpad, 14),
@@ -931,7 +997,9 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
           Text(
             'Cart Items (${row.items.length})',
             style: const TextStyle(
-                fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFF374151)),
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                color: Color(0xFF374151)),
           ),
           const Spacer(),
           TextButton.icon(
@@ -955,9 +1023,10 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                 style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF))),
           )
         else ...[
-          Row(children: const [
+          // Task 5: Column headers — Product | Qty | Pack size | MRP | [Remove]
+          const Row(children: [
             Expanded(
-                flex: 5,
+                flex: 4,
                 child: Text('Product',
                     style: TextStyle(
                         fontSize: 11,
@@ -972,7 +1041,14 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                         color: Color(0xFF9CA3AF)))),
             SizedBox(
                 width: 80,
-                child: Text('Price',
+                child: Text('Pack size',
+                    style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF9CA3AF)))),
+            SizedBox(
+                width: 74,
+                child: Text('MRP',
                     style: TextStyle(
                         fontSize: 11,
                         fontWeight: FontWeight.w600,
@@ -982,9 +1058,10 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
           const SizedBox(height: 4),
           ...row.items.map((item) => Padding(
                 padding: const EdgeInsets.only(top: 5),
-                child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+                child: Row(crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
                   Expanded(
-                      flex: 5,
+                      flex: 4,
                       child: Row(children: [
                         Flexible(
                           child: Text(item.name,
@@ -1015,11 +1092,22 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                       child: Text('×${item.qty}',
                           style: const TextStyle(
                               fontSize: 12, color: Color(0xFF6B7280)))),
+                  // Task 5: Pack size
                   SizedBox(
                       width: 80,
                       child: Text(
-                          item.price != null
-                              ? '₹${item.price!.toStringAsFixed(2)}'
+                          (item.packSize != null && item.packSize!.isNotEmpty)
+                              ? item.packSize!
+                              : '—',
+                          style: const TextStyle(
+                              fontSize: 12, color: Color(0xFF6B7280)),
+                          overflow: TextOverflow.ellipsis)),
+                  // Task 5: MRP
+                  SizedBox(
+                      width: 74,
+                      child: Text(
+                          item.mrp != null
+                              ? '₹${item.mrp!.toStringAsFixed(0)}'
                               : '—',
                           style: const TextStyle(
                               fontSize: 12, color: Color(0xFF374151)))),
@@ -1030,12 +1118,15 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                             onPressed: () => _adminSoftRemoveItem(item.id!),
                             style: TextButton.styleFrom(
                               foregroundColor: const Color(0xFFDC2626),
-                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 6, vertical: 2),
                               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                               minimumSize: Size.zero,
                             ),
                             child: const Text('Remove',
-                                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
+                                style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w600)),
                           )
                         : const SizedBox(),
                   ),
@@ -1043,7 +1134,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
               )),
         ],
 
-        // Removed by admin section
+        // Removed by admin
         if (row.removedItems.isNotEmpty) ...[
           const SizedBox(height: 12),
           const Divider(height: 1, color: Color(0xFFE5E7EB)),
@@ -1051,14 +1142,16 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
           Text(
             'Removed by admin (${row.removedItems.length})',
             style: const TextStyle(
-                fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF9CA3AF)),
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFF9CA3AF)),
           ),
           const SizedBox(height: 4),
           ...row.removedItems.map((item) => Padding(
                 padding: const EdgeInsets.only(top: 4),
                 child: Row(children: [
                   Expanded(
-                      flex: 5,
+                      flex: 4,
                       child: Text(item.name,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
@@ -1075,8 +1168,16 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                   SizedBox(
                       width: 80,
                       child: Text(
-                          item.price != null
-                              ? '₹${item.price!.toStringAsFixed(2)}'
+                          (item.packSize != null && item.packSize!.isNotEmpty)
+                              ? item.packSize!
+                              : '—',
+                          style: const TextStyle(
+                              fontSize: 12, color: Color(0xFFD1D5DB)))),
+                  SizedBox(
+                      width: 74,
+                      child: Text(
+                          item.mrp != null
+                              ? '₹${item.mrp!.toStringAsFixed(0)}'
                               : '—',
                           style: const TextStyle(
                               fontSize: 12, color: Color(0xFFD1D5DB)))),
@@ -1084,6 +1185,85 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                 ]),
               )),
         ],
+      ]),
+    );
+  }
+
+  // Task 2: Totals footer for cart view
+  Widget _buildCartTotalsFooter(bool isDesktop) {
+    final totalItems = _cartRows.fold(0, (s, r) => s + r.items.length);
+    final totalValue = _cartRows.fold(0.0, (s, r) => s + r.netPayable);
+
+    if (isDesktop) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 12),
+        decoration: const BoxDecoration(
+          color: Color(0xFFF0FDF4),
+          border: Border(
+            top: BorderSide(color: Color(0xFFBBF7D0), width: 2),
+          ),
+        ),
+        child: Row(children: [
+          Expanded(
+              flex: 3,
+              child: Text('Total (${_cartRows.length} cart${_cartRows.length == 1 ? '' : 's'})',
+                  style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF1B5E20)))),
+          const Expanded(flex: 3, child: SizedBox()),
+          const Expanded(flex: 2, child: SizedBox()),
+          const Expanded(flex: 2, child: SizedBox()),
+          Expanded(
+              flex: 1,
+              child: Text('$totalItems',
+                  style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF111827)))),
+          Expanded(
+              flex: 2,
+              child: Text('₹${totalValue.toStringAsFixed(0)}',
+                  style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF1B5E20)))),
+          const SizedBox(width: 32),
+        ]),
+      );
+    }
+
+    // Mobile totals
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF0FDF4),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFBBF7D0), width: 1.5),
+      ),
+      child: Row(children: [
+        Expanded(
+          child: Text(
+            'Total (${_cartRows.length} cart${_cartRows.length == 1 ? '' : 's'})',
+            style: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                color: Color(0xFF1B5E20)),
+          ),
+        ),
+        Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+          Text('$totalItems items',
+              style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFF111827))),
+          Text('₹${totalValue.toStringAsFixed(0)}',
+              style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFF1B5E20))),
+        ]),
       ]),
     );
   }
@@ -1179,12 +1359,12 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
               borderRadius: BorderRadius.circular(6),
               child: Padding(
                 padding: const EdgeInsets.all(4),
-                child: Icon(
-                    isExpanded
-                        ? Icons.expand_less
-                        : Icons.expand_more,
-                    size: 18,
-                    color: const Color(0xFF6B7280)),
+                child: AnimatedRotation(
+                  turns: isExpanded ? 0.5 : 0.0,
+                  duration: const Duration(milliseconds: 200),
+                  child: const Icon(Icons.expand_more,
+                      size: 18, color: Color(0xFF6B7280)),
+                ),
               ),
             ),
           ),
@@ -1209,7 +1389,6 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
           child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-            // Name + pending badge
             Row(children: [
               Expanded(
                   child: Text(
@@ -1235,7 +1414,6 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                   style: const TextStyle(
                       fontSize: 12, color: Color(0xFF6B7280))),
             ],
-            // Quick fields row
             const SizedBox(height: 8),
             Wrap(spacing: 12, runSpacing: 4, children: [
               if (row.customerId?.isNotEmpty == true)
@@ -1251,13 +1429,11 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
               if (row.pincode?.isNotEmpty == true)
                 _mobileField('PIN', row.pincode!),
             ]),
-            // Approve / Reject
             const SizedBox(height: 12),
             _RegApproveActions(
                 id: row.id,
                 onApprove: () => _approveReg(row.id),
                 onReject: () => _rejectReg(row.id)),
-            // Expand details
             const SizedBox(height: 10),
             GestureDetector(
               onTap: () => _toggleExpand(row.id),
@@ -1269,12 +1445,12 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                       fontWeight: FontWeight.w600,
                       color: Color(0xFF2563EB)),
                 ),
-                Icon(
-                    isExpanded
-                        ? Icons.expand_less
-                        : Icons.expand_more,
-                    size: 16,
-                    color: const Color(0xFF2563EB)),
+                AnimatedRotation(
+                  turns: isExpanded ? 0.5 : 0.0,
+                  duration: const Duration(milliseconds: 200),
+                  child: const Icon(Icons.expand_more,
+                      size: 16, color: Color(0xFF2563EB)),
+                ),
               ]),
             ),
           ]),
@@ -1287,7 +1463,6 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     );
   }
 
-  // Expanded registration details panel — shows ALL remaining fields
   Widget _buildRegDetails(_RegRow row, {required bool isDesktop}) {
     final lpad = isDesktop ? 44.0 : 16.0;
     final rpad = isDesktop ? 28.0 : 16.0;
@@ -1371,13 +1546,12 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       );
 
   static Widget _pendingBadge() => Container(
-        padding:
-            const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
         decoration: BoxDecoration(
           color: const Color(0xFFFEF3C7),
           borderRadius: BorderRadius.circular(20),
-          border:
-              Border.all(color: const Color(0xFFD97706).withValues(alpha: 0.4)),
+          border: Border.all(
+              color: const Color(0xFFD97706).withValues(alpha: 0.4)),
         ),
         child: const Text('Pending',
             style: TextStyle(
@@ -1404,28 +1578,25 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       );
 }
 
-// Small value holder used for the details panel
+// ── Field pair ────────────────────────────────────────────────────────────────
+
 class _FieldPair {
   final String label;
   final String value;
   const _FieldPair(this.label, this.value);
 }
 
-// Extension used for String pipeline in build
+// ── Extension ─────────────────────────────────────────────────────────────────
+
 extension _Let<T> on T {
   R let<R>(R Function(T) fn) => fn(this);
 }
 
-// ── Source badge ───────────────────────────────────────────────────────────────
+// ── Source badge ──────────────────────────────────────────────────────────────
 
 class _SourceBadge extends StatelessWidget {
   final String source;
-  final bool hasItems;
-  final bool isExpanded;
-  const _SourceBadge(
-      {required this.source,
-      required this.hasItems,
-      required this.isExpanded});
+  const _SourceBadge({required this.source});
 
   @override
   Widget build(BuildContext context) {
@@ -1453,37 +1624,27 @@ class _SourceBadge extends StatelessWidget {
         label = source;
         icon = Icons.help_outline;
     }
-    return Row(mainAxisSize: MainAxisSize.min, children: [
-      Container(
-        padding:
-            const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.1),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: color.withValues(alpha: 0.3)),
-        ),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          Icon(icon, size: 11, color: color),
-          const SizedBox(width: 3),
-          Text(label,
-              style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
-                  color: color)),
-        ]),
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withValues(alpha: 0.3)),
       ),
-      if (hasItems) ...[
-        const SizedBox(width: 2),
-        Icon(
-            isExpanded ? Icons.expand_less : Icons.expand_more,
-            size: 14,
-            color: const Color(0xFF9CA3AF)),
-      ],
-    ]);
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(icon, size: 11, color: color),
+        const SizedBox(width: 3),
+        Text(label,
+            style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                color: color)),
+      ]),
+    );
   }
 }
 
-// ── Payment term badge ─────────────────────────────────────────────────────────
+// ── Payment term badge ────────────────────────────────────────────────────────
 
 class _PaymentBadge extends StatelessWidget {
   final String term;
@@ -1512,7 +1673,7 @@ class _PaymentBadge extends StatelessWidget {
   }
 }
 
-// ── Order confirmation (Accept / Reject) ──────────────────────────────────────
+// ── Order confirmation ────────────────────────────────────────────────────────
 
 class _ConfirmActions extends StatefulWidget {
   final _CustRow row;
@@ -1560,8 +1721,7 @@ class _ConfirmActionsState extends State<_ConfirmActions> {
   }
 
   Widget _chip(String label, Color color) => Container(
-        padding:
-            const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
         decoration: BoxDecoration(
             color: color.withValues(alpha: 0.1),
             borderRadius: BorderRadius.circular(20)),
@@ -1592,7 +1752,7 @@ class _ConfirmActionsState extends State<_ConfirmActions> {
       );
 }
 
-// ── Registration Approve / Reject ──────────────────────────────────────────────
+// ── Registration Approve / Reject ─────────────────────────────────────────────
 
 class _RegApproveActions extends StatefulWidget {
   final String id;
@@ -1664,7 +1824,7 @@ class _RegApproveActionsState extends State<_RegApproveActions> {
       );
 }
 
-// ── Action cell (website = Imported, whatsapp = Import button) ─────────────────
+// ── Action cell ───────────────────────────────────────────────────────────────
 
 class _ActionCell extends StatelessWidget {
   final _CustRow row;
@@ -1680,8 +1840,7 @@ class _ActionCell extends StatelessWidget {
         onTap: onImport,
         borderRadius: BorderRadius.circular(8),
         child: Container(
-          padding:
-              const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
           decoration: BoxDecoration(
             color: const Color(0xFFF0FDF4),
             borderRadius: BorderRadius.circular(8),
@@ -1702,7 +1861,6 @@ class _ActionCell extends StatelessWidget {
       );
     }
 
-    // Website order — items already in DB
     return InkWell(
       onTap: row.items.isNotEmpty ? onImport : null,
       borderRadius: BorderRadius.circular(8),
@@ -1729,7 +1887,7 @@ class _ActionCell extends StatelessWidget {
   }
 }
 
-// ── Admin add-to-cart dialog ───────────────────────────────────────────────────
+// ── Admin add-to-cart dialog ──────────────────────────────────────────────────
 
 class _AdminAddItemDialog extends StatefulWidget {
   final String userId;
@@ -1783,7 +1941,6 @@ class _AdminAddItemDialogState extends State<_AdminAddItemDialog> {
       final productId = item['id'].toString();
       final mrp = _parseMrp(item['mrp']);
 
-      // Check for existing row (active or removed)
       final existingList = await Supabase.instance.client
           .from('cart_items')
           .select('id, quantity, removed_by_admin')
@@ -1880,8 +2037,10 @@ class _AdminAddItemDialogState extends State<_AdminAddItemDialog> {
                             child: CircularProgressIndicator(strokeWidth: 2),
                           ))
                       : null,
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8)),
+                  contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 12, vertical: 10),
                   isDense: true,
                 ),
                 onChanged: _search,
@@ -1889,49 +2048,71 @@ class _AdminAddItemDialogState extends State<_AdminAddItemDialog> {
               const SizedBox(height: 8),
               if (_selected != null) ...[
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 12, vertical: 8),
                   decoration: BoxDecoration(
                     color: const Color(0xFFF0FDF4),
                     borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: const Color(0xFF86EFAC)),
+                    border:
+                        Border.all(color: const Color(0xFF86EFAC)),
                   ),
-                  child: Row(children: [
-                    Expanded(
-                      child: Text(_selected!['product_name'] as String? ?? '',
-                          style: const TextStyle(
-                              fontSize: 13, fontWeight: FontWeight.w600),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis),
-                    ),
-                    const SizedBox(width: 8),
-                    const Text('Qty:',
-                        style: TextStyle(fontSize: 12, color: Color(0xFF374151))),
-                    const SizedBox(width: 6),
-                    SizedBox(
-                      width: 52,
-                      child: TextFormField(
-                        initialValue: '1',
-                        keyboardType: TextInputType.number,
-                        textAlign: TextAlign.center,
-                        decoration: const InputDecoration(
-                          isDense: true,
-                          contentPadding: EdgeInsets.symmetric(horizontal: 6, vertical: 6),
-                          border: OutlineInputBorder(),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(children: [
+                        Expanded(
+                          child: Text(
+                              _selected!['product_name'] as String? ?? '',
+                              style: const TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis),
                         ),
-                        onChanged: (v) {
-                          final n = int.tryParse(v);
-                          if (n != null && n > 0) setState(() => _qty = n);
-                        },
+                        IconButton(
+                          onPressed: () =>
+                              setState(() => _selected = null),
+                          icon: const Icon(Icons.close,
+                              size: 14, color: Color(0xFF6B7280)),
+                          visualDensity: VisualDensity.compact,
+                          padding: EdgeInsets.zero,
+                        ),
+                      ]),
+                      const SizedBox(height: 10),
+                      // Task 6: Qty stepper [−] qty [+]
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Text('Qty:',
+                              style: TextStyle(
+                                  fontSize: 13,
+                                  color: Color(0xFF374151))),
+                          const SizedBox(width: 12),
+                          _StepperButton(
+                            icon: Icons.remove,
+                            onTap: _qty > 1
+                                ? () => setState(() => _qty--)
+                                : null,
+                          ),
+                          Container(
+                            width: 52,
+                            alignment: Alignment.center,
+                            child: Text(
+                              '$_qty',
+                              style: const TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w700,
+                                  color: Color(0xFF111827)),
+                            ),
+                          ),
+                          _StepperButton(
+                            icon: Icons.add,
+                            onTap: () => setState(() => _qty++),
+                          ),
+                        ],
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    IconButton(
-                      onPressed: () => setState(() => _selected = null),
-                      icon: const Icon(Icons.close, size: 14, color: Color(0xFF6B7280)),
-                      visualDensity: VisualDensity.compact,
-                      padding: EdgeInsets.zero,
-                    ),
-                  ]),
+                    ],
+                  ),
                 ),
                 const SizedBox(height: 10),
                 SizedBox(
@@ -1940,16 +2121,20 @@ class _AdminAddItemDialogState extends State<_AdminAddItemDialog> {
                     onPressed: _adding ? null : _addItem,
                     style: FilledButton.styleFrom(
                       backgroundColor: const Color(0xFF1B5E20),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8)),
                       padding: const EdgeInsets.symmetric(vertical: 10),
                     ),
                     child: _adding
                         ? const SizedBox(
-                            width: 16, height: 16,
+                            width: 16,
+                            height: 16,
                             child: CircularProgressIndicator(
-                                strokeWidth: 2, color: Colors.white))
+                                strokeWidth: 2,
+                                color: Colors.white))
                         : const Text('Add to Cart',
-                            style: TextStyle(fontWeight: FontWeight.w600)),
+                            style: TextStyle(
+                                fontWeight: FontWeight.w600)),
                   ),
                 ),
                 const SizedBox(height: 6),
@@ -1980,27 +2165,37 @@ class _AdminAddItemDialogState extends State<_AdminAddItemDialog> {
                                   horizontal: 8, vertical: 8),
                               decoration: const BoxDecoration(
                                 border: Border(
-                                    bottom: BorderSide(color: Color(0xFFE5E7EB))),
+                                    bottom: BorderSide(
+                                        color: Color(0xFFE5E7EB))),
                               ),
                               child: Row(children: [
                                 Expanded(
                                   child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
                                     children: [
-                                      Text(item['product_name'] as String? ?? '',
+                                      Text(
+                                          item['product_name']
+                                                  as String? ??
+                                              '',
                                           style: const TextStyle(
                                               fontSize: 12,
                                               fontWeight: FontWeight.w600,
                                               color: Color(0xFF111827)),
                                           maxLines: 1,
-                                          overflow: TextOverflow.ellipsis),
-                                      if ((item['marketer'] as String?)?.isNotEmpty == true)
+                                          overflow:
+                                              TextOverflow.ellipsis),
+                                      if ((item['marketer'] as String?)
+                                              ?.isNotEmpty ==
+                                          true)
                                         Text(item['marketer'] as String,
                                             style: const TextStyle(
                                                 fontSize: 11,
-                                                color: Color(0xFF6B7280)),
+                                                color:
+                                                    Color(0xFF6B7280)),
                                             maxLines: 1,
-                                            overflow: TextOverflow.ellipsis),
+                                            overflow:
+                                                TextOverflow.ellipsis),
                                     ],
                                   ),
                                 ),
@@ -2020,6 +2215,45 @@ class _AdminAddItemDialogState extends State<_AdminAddItemDialog> {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Qty stepper button ────────────────────────────────────────────────────────
+
+class _StepperButton extends StatelessWidget {
+  final IconData icon;
+  final VoidCallback? onTap;
+  const _StepperButton({required this.icon, this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = onTap != null;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        width: 36,
+        height: 36,
+        decoration: BoxDecoration(
+          color: enabled
+              ? const Color(0xFF1B5E20).withValues(alpha: 0.08)
+              : const Color(0xFFF3F4F6),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: enabled
+                ? const Color(0xFF1B5E20).withValues(alpha: 0.3)
+                : const Color(0xFFE5E7EB),
+          ),
+        ),
+        child: Icon(
+          icon,
+          size: 18,
+          color: enabled
+              ? const Color(0xFF1B5E20)
+              : const Color(0xFFD1D5DB),
         ),
       ),
     );

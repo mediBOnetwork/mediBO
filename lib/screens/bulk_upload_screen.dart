@@ -45,6 +45,8 @@ class _MatchRow {
 
   // Product chosen via the per-line manual search field (overrides selectedIndex).
   Product? _manualProduct;
+  // The product that was line-1 before the last manual pick (demoted to line-2).
+  Product? _previousLine1;
 
   _MatchRow({
     required this.lineItem,
@@ -98,6 +100,7 @@ class _MatchRow {
         if (_preHideStatus != null) 'preHideStatus': _preHideStatus!.name,
         'candidates': candidates.map((p) => p.toJson()).toList(),
         if (_manualProduct != null) 'manualProduct': _manualProduct!.toJson(),
+        if (_previousLine1 != null) 'previousLine1': _previousLine1!.toJson(),
         if (bbox != null) 'bbox': {'x': bbox!.left, 'y': bbox!.top, 'w': bbox!.width, 'h': bbox!.height},
       };
 
@@ -136,6 +139,8 @@ class _MatchRow {
     );
     final mp = m['manualProduct'] as Map<String, dynamic>?;
     if (mp != null) row._manualProduct = Product.fromJson(mp);
+    final pl1 = m['previousLine1'] as Map<String, dynamic>?;
+    if (pl1 != null) row._previousLine1 = Product.fromJson(pl1);
     return row;
   }
 }
@@ -3590,12 +3595,6 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
       }
     }
 
-    // Top 4 alternates excluding the currently selected candidate, in similarity order
-    final alts = <(int, Product)>[];
-    for (int i = 0; i < row.candidates.length && alts.length < 4; i++) {
-      if (i != row.selectedIndex) alts.add((i, row.candidates[i]));
-    }
-
     final bottomBorder = (!widget.last || widget.isExpanded)
         ? const BorderSide(color: Color(0xFFEEEEEE))
         : BorderSide.none;
@@ -3791,38 +3790,14 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
           sizeFactor: _anim,
           child: Container(
             decoration: const BoxDecoration(
-              color: Color(0xFFF3F4F6),
               border: Border(left: BorderSide(color: Color(0xFFE5E7EB), width: 3)),
             ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                // Manual search — always available regardless of alternates
-                _ManualSearchField(
-                  row: row,
-                  onRowChanged: () {
-                    widget.onToggle(); // collapse after selection
-                    widget.onRowChanged();
-                  },
-                ),
-                if (alts.isNotEmpty)
-                  const Divider(height: 1, thickness: 1, color: Color(0xFFE5E7EB)),
-                for (int k = 0; k < alts.length; k++)
-                  _AlternativeRow(
-                    product: alts[k].$2,
-                    isSelected: false,
-                    isLast: k == alts.length - 1,
-                    onTap: () {
-                      setState(() {
-                        row.selectedIndex = alts[k].$1;
-                        row._manualProduct = null; // clear any manual override
-                        row.status = _MatchStatus.manuallyMatched;
-                      });
-                      widget.onToggle();
-                      widget.onRowChanged();
-                    },
-                  ),
-              ],
+            child: _MatchPanel(
+              row: row,
+              onRowChanged: () {
+                widget.onToggle(); // collapse after pick
+                widget.onRowChanged();
+              },
             ),
           ),
         ),
@@ -3987,72 +3962,6 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
     widget.onRowChanged();
   }
 
-  Widget _altRow(Product p, int origIndex, bool isLast, double nameColW) {
-    final row = widget.row;
-    final isSelected = row.selectedIndex == origIndex;
-    final nameColor = isSelected ? const Color(0xFF16A34A) : const Color(0xFF374151);
-    final pack = _packShort(p);
-    return GestureDetector(
-      onTap: () {
-        setState(() {
-          row.selectedIndex = origIndex;
-          row._manualProduct = null; // clear any manual override
-          row.status = _MatchStatus.manuallyMatched;
-        });
-        widget.onToggle();
-        widget.onRowChanged();
-      },
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(12, 7, 12, 7),
-        decoration: BoxDecoration(
-          color: isSelected ? const Color(0xFFDCFCE7) : const Color(0xFFF3F4F6),
-          border: const Border(top: BorderSide(color: Color(0xFFE5E7EB))),
-        ),
-        child: Row(
-          children: [
-            SizedBox(
-              width: nameColW,
-              child: Text(p.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
-                    color: nameColor,
-                  )),
-            ),
-            const SizedBox(width: 8),
-            SizedBox(
-              width: 48,
-              child: Text(pack,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 11, color: Color(0xFF374151))),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(p.manufacturer,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
-            ),
-            const SizedBox(width: 8),
-            SizedBox(
-              width: 52,
-              child: Text(rupees(p.mrp),
-                  textAlign: TextAlign.right,
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w500,
-                    color: nameColor,
-                  )),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final row = widget.row;
@@ -4087,11 +3996,6 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
           accentColor = const Color(0xFFDC2626);
           label = 'Unrecognized';
       }
-    }
-
-    final alts = <(int, Product)>[];
-    for (int i = 0; i < row.candidates.length && alts.length < 4; i++) {
-      if (i != row.selectedIndex) alts.add((i, row.candidates[i]));
     }
 
     final p = row.selectedProduct;
@@ -4315,27 +4219,16 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                                   style: const TextStyle(
                                       fontSize: 12, color: Color(0xFF9CA3AF))),
                         ),
-                        // ── Expandable section: manual search + alternates ───
+                        // ── Expandable section: fixed 6-line match panel ────
                         SizeTransition(
                           sizeFactor: _anim,
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              // Manual search — always available
-                              _ManualSearchField(
-                                row: row,
-                                isMobile: true,
-                                onRowChanged: () {
-                                  widget.onToggle(); // collapse after selection
-                                  widget.onRowChanged();
-                                },
-                              ),
-                              if (alts.isNotEmpty)
-                                const Divider(height: 1, thickness: 1, color: Color(0xFFE5E7EB)),
-                              for (int k = 0; k < alts.length; k++)
-                                _altRow(alts[k].$2, alts[k].$1, k == alts.length - 1, nameColW),
-                              const Divider(height: 1, thickness: 1, color: Color(0xFFE5E7EB)),
-                            ],
+                          child: _MatchPanel(
+                            row: row,
+                            isMobile: true,
+                            onRowChanged: () {
+                              widget.onToggle(); // collapse after pick
+                              widget.onRowChanged();
+                            },
                           ),
                         ),
                       ],
@@ -4628,9 +4521,9 @@ bool _formMatches(String productName, String form) {
 
 // ─── Manual search helpers ────────────────────────────────────────────────────
 
-/// Queries MEDICINE via the priority RPC (falls back to ILIKE) and returns
-/// up to 8 candidates for manual override.
-Future<List<Product>> _manualSearchProducts(String query) async {
+/// Queries MEDICINE via the priority RPC (falls back to ILIKE).
+/// Returns up to [limit] candidates.
+Future<List<Product>> _manualSearchProducts(String query, {int limit = 3}) async {
   final q = query.trim();
   if (q.isEmpty) return [];
   try {
@@ -4638,7 +4531,7 @@ Future<List<Product>> _manualSearchProducts(String query) async {
       'search_term': q,
       'category_filter': 'All',
       'page_offset': 0,
-      'page_limit': 8,
+      'page_limit': limit,
     });
     return List<Map<String, dynamic>>.from(rows as List)
         .map((m) => Product.fromMap(m))
@@ -4651,7 +4544,7 @@ Future<List<Product>> _manualSearchProducts(String query) async {
           .ilike('product_name', '%$q%')
           .eq('status', 'Available')
           .order('sales_count', ascending: false)
-          .limit(8);
+          .limit(limit);
       return List<Map<String, dynamic>>.from(results)
           .map((m) => Product.fromMap(m))
           .toList();
@@ -4661,116 +4554,203 @@ Future<List<Product>> _manualSearchProducts(String query) async {
   }
 }
 
-/// Per-row "Search / change match" input shown inside the expandable panel.
-/// Typing queries MEDICINE; selecting a result sets Manually Matched + auto-ticked.
-class _ManualSearchField extends StatefulWidget {
+// ─── Fixed 6-line match panel ─────────────────────────────────────────────────
+// Layout:
+//   Line 1        : current selected match (green bg, tick, not tappable).
+//   Lines 2–5     : up to 4 fuzzy candidates excl. line-1 (normal styling, tappable).
+//   After a pick  : line-1 = new pick, line-2 = demoted old match, lines 3–5 = 3 fuzzy.
+//   Line 6 (last) : search row — prefilled with raw OCR text, fires on icon-tap / Enter.
+//   Below search  : top-3 search results (panel expands); candidate rows stay visible.
+class _MatchPanel extends StatefulWidget {
   final _MatchRow row;
-  final VoidCallback onRowChanged;
+  final VoidCallback onRowChanged; // called after pick — parent handles close + refresh
   final bool isMobile;
 
-  const _ManualSearchField({
+  const _MatchPanel({
     required this.row,
     required this.onRowChanged,
     this.isMobile = false,
   });
 
   @override
-  State<_ManualSearchField> createState() => _ManualSearchFieldState();
+  State<_MatchPanel> createState() => _MatchPanelState();
 }
 
-class _ManualSearchFieldState extends State<_ManualSearchField> {
-  final _ctrl = TextEditingController();
-  List<Product> _results = [];
-  bool _loading = false;
-  Timer? _debounce;
+class _MatchPanelState extends State<_MatchPanel> {
+  late final TextEditingController _ctrl;
+  final FocusNode _focusNode = FocusNode();
+  List<Product> _searchResults = [];
+  bool _searching = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // Pre-fill with raw OCR/parsed line-item text (Task 4d).
+    _ctrl = TextEditingController(text: widget.row.lineItem);
+    // Rebuild when text changes so X-button visibility updates.
+    _ctrl.addListener(() => setState(() {}));
+  }
 
   @override
   void dispose() {
     _ctrl.dispose();
-    _debounce?.cancel();
+    _focusNode.dispose();
     super.dispose();
   }
 
-  void _onChanged(String v) {
-    _debounce?.cancel();
-    if (v.trim().isEmpty) {
-      setState(() { _results = []; _loading = false; });
-      return;
-    }
-    setState(() => _loading = true);
-    _debounce = Timer(const Duration(milliseconds: 380), () async {
-      final res = await _manualSearchProducts(v);
-      if (mounted) setState(() { _results = res; _loading = false; });
-    });
+  // ── Search fires ONLY on icon-tap or Enter — no live keystroke search ────────
+  Future<void> _fireSearch() async {
+    final q = _ctrl.text.trim();
+    if (q.isEmpty) { setState(() => _searchResults = []); return; }
+    setState(() => _searching = true);
+    final all = await _manualSearchProducts(q, limit: 3);
+    if (mounted) setState(() { _searchResults = all; _searching = false; });
   }
 
-  void _select(Product p) {
-    widget.row._manualProduct = p;
-    widget.row.status = _MatchStatus.manuallyMatched;
+  // ── X clears input AND hides results ─────────────────────────────────────────
+  void _clearSearch() {
     _ctrl.clear();
-    setState(() { _results = []; _loading = false; });
-    widget.onRowChanged();
+    setState(() => _searchResults = []);
+  }
+
+  // ── Pick: save old line-1, set new manual override, reorder ──────────────────
+  void _pick(Product p) {
+    final row = widget.row;
+    row._previousLine1 = row.selectedProduct; // demote current line-1
+    row._manualProduct = p;
+    row.status = _MatchStatus.manuallyMatched;
+    setState(() => _searchResults = []);
+    widget.onRowChanged(); // parent collapses panel + refreshes status counts
+  }
+
+  // ── Build ordered candidate rows (max 5, no duplicates) ─────────────────────
+  // Default : [active(selected), fuzzy×4]
+  // After pick: [active(selected), demoted-prev, fuzzy×3]
+  List<({Product product, bool isSelected})> _candidateRows() {
+    final row = widget.row;
+    final active   = row.selectedProduct;
+    final prev     = row._previousLine1;
+    final activeId = active?.id;
+    // Only treat prev as a real demoted row when it differs from active.
+    final prevId   = (prev != null && prev.id != activeId) ? prev.id : null;
+
+    final out = <({Product product, bool isSelected})>[];
+
+    if (active != null) out.add((product: active,  isSelected: true));
+    if (prevId  != null) out.add((product: prev!,   isSelected: false));
+
+    final maxFuzzy = prevId != null ? 3 : 4;
+    int n = 0;
+    for (final c in row.candidates) {
+      if (n >= maxFuzzy) break;
+      if (c.id == activeId || c.id == prevId) continue;
+      out.add((product: c, isSelected: false));
+      n++;
+    }
+    return out;
   }
 
   @override
   Widget build(BuildContext context) {
+    final candidates = _candidateRows();
     final hPad = widget.isMobile ? 12.0 : 17.0;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Padding(
-          padding: EdgeInsets.fromLTRB(hPad, 8, 12, 4),
-          child: TextField(
-            controller: _ctrl,
-            onChanged: _onChanged,
-            decoration: InputDecoration(
-              hintText: 'Search / change match…',
-              hintStyle: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
-              prefixIcon: const Icon(Icons.search_rounded, size: 15, color: Color(0xFF9CA3AF)),
-              suffixIcon: _loading
-                  ? const Padding(
-                      padding: EdgeInsets.all(10),
-                      child: SizedBox(
-                        width: 14, height: 14,
-                        child: CircularProgressIndicator(strokeWidth: 1.8, color: Color(0xFF6B7280)),
-                      ),
-                    )
-                  : _ctrl.text.isNotEmpty
-                      ? GestureDetector(
-                          onTap: () { _ctrl.clear(); setState(() { _results = []; _loading = false; }); },
-                          child: const Icon(Icons.close, size: 14, color: Color(0xFF9CA3AF)),
+        // ── Lines 1–N: candidate rows (max 5) ────────────────────────────────
+        for (int i = 0; i < candidates.length; i++)
+          _AlternativeRow(
+            product:    candidates[i].product,
+            isSelected: candidates[i].isSelected,
+            // No bottom border on the last candidate row — search row follows immediately
+            isLast: i == candidates.length - 1,
+            isMobile: widget.isMobile,
+            // Selected row (line-1) is not tappable; others trigger a pick
+            onTap: candidates[i].isSelected ? () {} : () => _pick(candidates[i].product),
+          ),
+
+        // ── Line 6: search row ────────────────────────────────────────────────
+        Container(
+          color: const Color(0xFFF3F4F6),
+          padding: EdgeInsets.fromLTRB(hPad, 7, 12, 7),
+          decoration: const BoxDecoration(
+            border: Border(top: BorderSide(color: Color(0xFFE5E7EB))),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _ctrl,
+                  focusNode: _focusNode,
+                  onSubmitted: (_) => _fireSearch(), // Enter fires search
+                  // No onChanged — search is explicit only (Task 3)
+                  decoration: InputDecoration(
+                    hintText: 'Search / change match…',
+                    hintStyle: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                    filled: true,
+                    fillColor: Colors.white,
+                    suffixIcon: _ctrl.text.isNotEmpty
+                        ? GestureDetector(
+                            onTap: _clearSearch,
+                            child: const Icon(Icons.close_rounded, size: 14,
+                                color: Color(0xFF9CA3AF)),
+                          )
+                        : null,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(6),
+                      borderSide: const BorderSide(color: Color(0xFFD1D5DB)),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(6),
+                      borderSide: const BorderSide(color: Color(0xFFD1D5DB)),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(6),
+                      borderSide: const BorderSide(color: Color(0xFF16A34A), width: 1.5),
+                    ),
+                  ),
+                  style: const TextStyle(fontSize: 12),
+                ),
+              ),
+              const SizedBox(width: 6),
+              // Green search-icon button — explicit search trigger (Task 3a)
+              GestureDetector(
+                onTap: _searching ? null : _fireSearch,
+                child: Container(
+                  width: 30,
+                  height: 30,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF16A34A),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: _searching
+                      ? const Padding(
+                          padding: EdgeInsets.all(7),
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                          ),
                         )
-                      : null,
-              isDense: true,
-              contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-              filled: true,
-              fillColor: Colors.white,
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(6),
-                borderSide: const BorderSide(color: Color(0xFFD1D5DB)),
+                      : const Icon(Icons.search_rounded, size: 16, color: Colors.white),
+                ),
               ),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(6),
-                borderSide: const BorderSide(color: Color(0xFFD1D5DB)),
-              ),
-              focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(6),
-                borderSide: const BorderSide(color: Color(0xFF16A34A), width: 1.5),
-              ),
-            ),
-            style: const TextStyle(fontSize: 13),
+            ],
           ),
         ),
-        // Search result rows
-        for (final p in _results)
-          _SearchResultRow(product: p, onTap: () => _select(p)),
-        if (_results.isNotEmpty) const SizedBox(height: 4),
+
+        // ── Top-3 search results expand below search row ──────────────────────
+        for (final p in _searchResults)
+          _SearchResultRow(product: p, onTap: () => _pick(p)),
       ],
     );
   }
 }
 
-/// A single result row shown below the manual search field.
+/// A search-result row shown below the search field after an explicit search.
+/// Shows name + pack + company + MRP + (+) icon; tapping triggers a pick.
 class _SearchResultRow extends StatelessWidget {
   final Product product;
   final VoidCallback onTap;
@@ -4782,7 +4762,7 @@ class _SearchResultRow extends StatelessWidget {
     return InkWell(
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.fromLTRB(17, 6, 12, 6),
+        padding: const EdgeInsets.fromLTRB(17, 7, 12, 7),
         decoration: const BoxDecoration(
           color: Colors.white,
           border: Border(top: BorderSide(color: Color(0xFFE5E7EB))),
@@ -4791,41 +4771,35 @@ class _SearchResultRow extends StatelessWidget {
           children: [
             Expanded(
               flex: 5,
-              child: Text(
-                product.name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: Color(0xFF111827)),
-              ),
+              child: Text(product.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      fontSize: 12, fontWeight: FontWeight.w500, color: Color(0xFF111827))),
             ),
             const SizedBox(width: 6),
             SizedBox(
-              width: 48,
-              child: Text(
-                product.packSize,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 11, color: Color(0xFF374151)),
-              ),
+              width: 46,
+              child: Text(_packShort(product),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 11, color: Color(0xFF374151))),
             ),
             const SizedBox(width: 6),
             Expanded(
               flex: 2,
-              child: Text(
-                product.manufacturer,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280)),
-              ),
+              child: Text(product.manufacturer,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
             ),
             const SizedBox(width: 6),
             SizedBox(
               width: 52,
-              child: Text(
-                rupees(product.mrp),
-                textAlign: TextAlign.right,
-                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: Color(0xFF16A34A)),
-              ),
+              child: Text(rupees(product.mrp),
+                  textAlign: TextAlign.right,
+                  style: const TextStyle(
+                      fontSize: 11, fontWeight: FontWeight.w500, color: Color(0xFF16A34A))),
             ),
             const SizedBox(width: 6),
             const Icon(Icons.add_circle_outline_rounded, size: 14, color: Color(0xFF16A34A)),

@@ -133,7 +133,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   final Set<String> _expanded = {};
   final ScrollController _scrollCtrl = ScrollController();
 
-  RealtimeChannel? _realtimeChannel;
+  final List<RealtimeChannel> _realtimeChannels = [];
   Timer? _debounce;
 
   @override
@@ -146,33 +146,29 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   @override
   void dispose() {
     _debounce?.cancel();
-    _realtimeChannel?.unsubscribe();
+    for (final ch in _realtimeChannels) {
+      ch.unsubscribe();
+    }
+    _realtimeChannels.clear();
     _scrollCtrl.dispose();
     super.dispose();
   }
 
   void _subscribeRealtime() {
-    _realtimeChannel = Supabase.instance.client
-        .channel('admin_customer_dashboard')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.all,
-          schema: 'public',
-          table: 'cart_items',
-          callback: (_) => _debouncedLoad(),
-        )
-        .onPostgresChanges(
-          event: PostgresChangeEvent.all,
-          schema: 'public',
-          table: 'orders',
-          callback: (_) => _debouncedLoad(),
-        )
-        .onPostgresChanges(
-          event: PostgresChangeEvent.all,
-          schema: 'public',
-          table: 'user_profiles',
-          callback: (_) => _debouncedLoad(),
-        )
-        .subscribe();
+    final client = Supabase.instance.client;
+    final ts = DateTime.now().millisecondsSinceEpoch;
+    for (final table in ['cart_items', 'orders', 'user_profiles']) {
+      final ch = client
+          .channel('admin_${table}_$ts')
+          .onPostgresChanges(
+            event: PostgresChangeEvent.all,
+            schema: 'public',
+            table: table,
+            callback: (_) => _debouncedLoad(),
+          )
+          .subscribe();
+      _realtimeChannels.add(ch);
+    }
   }
 
   void _debouncedLoad() {

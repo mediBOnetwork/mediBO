@@ -4743,7 +4743,7 @@ class _MatchPanelState extends State<_MatchPanel> {
 
         // ── Top-3 search results expand below search row ──────────────────────
         for (final p in _searchResults)
-          _SearchResultRow(product: p, onTap: () => _pick(p)),
+          _SearchResultRow(product: p, onTap: () => _pick(p), isMobile: widget.isMobile),
       ],
     );
   }
@@ -4754,11 +4754,67 @@ class _MatchPanelState extends State<_MatchPanel> {
 class _SearchResultRow extends StatelessWidget {
   final Product product;
   final VoidCallback onTap;
+  final bool isMobile;
 
-  const _SearchResultRow({required this.product, required this.onTap});
+  const _SearchResultRow({required this.product, required this.onTap, this.isMobile = false});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) =>
+      isMobile ? _buildMobile() : _buildWeb();
+
+  // Mobile: 12px left pad + 18px blank placeholder + 4px gap → name at same x
+  // as _AlternativeRow._buildMobile() (whether selected or unselected).
+  Widget _buildMobile() {
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          border: Border(top: BorderSide(color: Color(0xFFE5E7EB))),
+        ),
+        child: Row(
+          children: [
+            // 18px blank aligns with the check-icon slot in _AlternativeRow
+            const SizedBox(width: 18),
+            const SizedBox(width: 4),
+            Expanded(
+              child: Text(product.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                      color: Color(0xFF111827))),
+            ),
+            const SizedBox(width: 6),
+            SizedBox(
+              width: 40,
+              child: Text(_packShort(product),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 11, color: Color(0xFF374151))),
+            ),
+            const SizedBox(width: 6),
+            SizedBox(
+              width: 52,
+              child: Text(rupees(product.mrp),
+                  textAlign: TextAlign.right,
+                  style: const TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w500,
+                      color: Color(0xFF16A34A))),
+            ),
+            const SizedBox(width: 6),
+            const Icon(Icons.add_circle_outline_rounded, size: 14, color: Color(0xFF16A34A)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // Web: unchanged — flex-based layout for wider screens
+  Widget _buildWeb() {
     return InkWell(
       onTap: onTap,
       child: Container(
@@ -4904,12 +4960,15 @@ class _AlternativeRow extends StatelessWidget {
   }
 
   Widget _buildMobile() {
-    final textColor = isSelected ? const Color(0xFF16A34A) : const Color(0xFF374151);
-    final packShort = _packShort(product);
+    // Mobile-only layout: no 100px blank indent, Expanded name prevents overflow.
+    // Fixed 18px leading slot (check icon on selected, empty on others) keeps
+    // every row's name text at the identical left x regardless of selection state.
+    final nameColor = isSelected ? const Color(0xFF16A34A) : const Color(0xFF374151);
+    final mrpColor  = isSelected ? const Color(0xFF16A34A) : const Color(0xFF6B7280);
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.fromLTRB(9, 9, 4, 9),
+        padding: const EdgeInsets.fromLTRB(12, 9, 8, 9),
         decoration: BoxDecoration(
           color: isSelected ? const Color(0xFFDCFCE7) : const Color(0xFFF3F4F6),
           border: isLast
@@ -4918,10 +4977,18 @@ class _AlternativeRow extends StatelessWidget {
         ),
         child: Row(
           children: [
-            // LINE ITEM column — blank (indent under parent)
-            const SizedBox(width: 100),
+            // Leading indicator — identical width for selected AND unselected so
+            // product names share the same vertical line on every row.
             SizedBox(
-              width: 120,
+              width: 18,
+              child: isSelected
+                  ? const Icon(Icons.check_circle_rounded,
+                      size: 14, color: Color(0xFF16A34A))
+                  : null,
+            ),
+            const SizedBox(width: 4),
+            // Name — Expanded avoids any overflow on narrow screens
+            Expanded(
               child: Text(
                 product.name,
                 maxLines: 1,
@@ -4929,39 +4996,31 @@ class _AlternativeRow extends StatelessWidget {
                 style: TextStyle(
                   fontSize: 12,
                   fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
-                  color: textColor,
+                  color: nameColor,
                 ),
               ),
             ),
+            const SizedBox(width: 6),
             SizedBox(
-              width: 48,
-              child: Text(packShort,
+              width: 40,
+              child: Text(_packShort(product),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
             ),
+            const SizedBox(width: 6),
             SizedBox(
-              width: 80,
-              child: Text(product.manufacturer,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
-            ),
-            // QTY column — blank
-            const SizedBox(width: 34),
-            SizedBox(
-              width: 54,
+              width: 52,
               child: Text(rupees(product.mrp),
+                  textAlign: TextAlign.right,
+                  maxLines: 1,
                   style: TextStyle(
-                      fontSize: 11, fontWeight: FontWeight.w500, color: textColor)),
+                      fontSize: 11, fontWeight: FontWeight.w500, color: mrpColor)),
             ),
-            SizedBox(
-              width: 116,
-              child: isSelected
-                  ? const Icon(Icons.check_circle, size: 14, color: Color(0xFF16A34A))
-                  : Text('Select',
-                      style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
-            ),
+            // Blank trailing slot (same width as search-result's + icon row)
+            // so MRP column ends at the same right edge across all panel rows.
+            const SizedBox(width: 6),
+            const SizedBox(width: 14),
           ],
         ),
       ),

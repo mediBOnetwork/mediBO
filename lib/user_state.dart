@@ -12,6 +12,7 @@ class AuthNotifier extends ChangeNotifier {
   bool _needsProfile = false;
   bool _isAdmin = false;
   bool _isSuperAdmin = false;
+  RealtimeChannel? _profileChannel;
 
   bool get loading => _loading;
   bool get profileLoading => _profileLoading;
@@ -74,6 +75,8 @@ class AuthNotifier extends ChangeNotifier {
       _profileLoading = false;
       _isAdmin = false;
       _isSuperAdmin = false;
+      _profileChannel?.unsubscribe();
+      _profileChannel = null;
       notifyListeners();
     }
   }
@@ -95,6 +98,48 @@ class AuthNotifier extends ChangeNotifier {
     } catch (_) {
       _needsProfile = true;
     }
+    _subscribeProfileRealtime(userId);
+  }
+
+  void _subscribeProfileRealtime(String userId) {
+    _profileChannel?.unsubscribe();
+    final ts = DateTime.now().millisecondsSinceEpoch;
+    _profileChannel = Supabase.instance.client
+        .channel('user_profile_$ts')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.update,
+          schema: 'public',
+          table: 'pharmacy_profiles',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'user_id',
+            value: userId,
+          ),
+          callback: (payload) async {
+            final newRecord = payload.newRecord;
+            if (newRecord.isNotEmpty) {
+              _profile = UserProfile.fromJson(newRecord);
+              notifyListeners();
+            } else {
+              await _loadProfileSilent(userId);
+            }
+          },
+        )
+        .subscribe();
+  }
+
+  Future<void> _loadProfileSilent(String userId) async {
+    try {
+      final res = await Supabase.instance.client
+          .from('pharmacy_profiles')
+          .select()
+          .eq('user_id', userId)
+          .maybeSingle();
+      if (res != null) {
+        _profile = UserProfile.fromJson(res);
+        notifyListeners();
+      }
+    } catch (_) {}
   }
 
   Future<void> _checkAdminStatus(String email) async {
@@ -146,6 +191,7 @@ class AuthNotifier extends ChangeNotifier {
   @override
   void dispose() {
     _sub.cancel();
+    _profileChannel?.unsubscribe();
     super.dispose();
   }
 }

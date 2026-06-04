@@ -42,9 +42,12 @@ class _CartScreenState extends State<CartScreen> {
       return;
     }
     if (!auth.canOrder) {
+      final isSuspended = auth.profile?.status == 'suspended';
       _showOrderGate(
-        title: 'Account pending approval',
-        message: 'Your account is pending admin approval. You will be notified once approved.',
+        title: isSuspended ? 'Account suspended' : 'Account pending approval',
+        message: isSuspended
+            ? 'Your account has been suspended and you cannot place orders. Please contact support to reactivate.'
+            : 'Your account is pending admin approval. You will be notified once approved.',
       );
       return;
     }

@@ -4586,6 +4586,11 @@ const double _kMobPanelMrpW     = 52.0;
 // Used to pin Line 2's Pack column at the same x as Line 1's Qty column.
 const double _kMobLineItemQtyFromRight = 232.0;
 
+// Offset used for every product-name column: name_width = maxWidth - _kMobNameColOffset
+// Derived: _kMobLineItemQtyFromRight + _kMobPanelLeftPad + _kMobPanelGap = 232 + 12 + 6 = 250
+// This places Pack's left edge at maxWidth - 232 (= Qty's left edge on Line 1).
+const double _kMobNameColOffset = _kMobLineItemQtyFromRight + _kMobPanelLeftPad + _kMobPanelGap;
+
 class _MatchPanel extends StatefulWidget {
   final _MatchRow row;
   final VoidCallback onRowChanged; // called after pick — parent handles close + refresh
@@ -4899,60 +4904,66 @@ class _SearchResultRow extends StatelessWidget {
   Widget build(BuildContext context) =>
       isMobile ? _buildMobile() : _buildWeb();
 
-  // Mobile: identical column grid to the selected-product row and shimmer skeleton.
-  // Widths come from _kMobPanel* constants — do not hard-code values here.
+  // Mobile: name column width fixed via _kMobNameColOffset so Pack aligns with
+  // the selected-product row (Line 2) and Line 1's Qty on the same vertical x.
+  // Expanded spacer between Company and MRP keeps MRP right-anchored.
   Widget _buildMobile() {
-    return InkWell(
-      onTap: onTap,
-      child: Container(
-        height: _kMatchRowH,
-        padding: const EdgeInsets.fromLTRB(
-            _kMobPanelLeftPad, 0, _kMobPanelRightPad, 0),
-        alignment: Alignment.centerLeft,
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          border: Border(top: BorderSide(color: Color(0xFFE5E7EB))),
+    return LayoutBuilder(builder: (_, constraints) {
+      return InkWell(
+        onTap: onTap,
+        child: Container(
+          height: _kMatchRowH,
+          padding: const EdgeInsets.fromLTRB(
+              _kMobPanelLeftPad, 0, _kMobPanelRightPad, 0),
+          alignment: Alignment.centerLeft,
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            border: Border(top: BorderSide(color: Color(0xFFE5E7EB))),
+          ),
+          child: Row(
+            children: [
+              SizedBox(
+                width: (constraints.maxWidth - _kMobNameColOffset)
+                    .clamp(0.0, double.infinity),
+                child: Text(product.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                        fontSize: 12, fontWeight: FontWeight.w500,
+                        color: Color(0xFF374151))),
+              ),
+              const SizedBox(width: _kMobPanelGap),
+              SizedBox(
+                width: _kMobPanelPackW,
+                child: Text(_packShort(product),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
+              ),
+              const SizedBox(width: _kMobPanelGap),
+              SizedBox(
+                width: _kMobPanelCompW,
+                child: Text(product.manufacturer,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
+              ),
+              const SizedBox(width: _kMobPanelGap),
+              const Expanded(child: SizedBox()),
+              SizedBox(
+                width: _kMobPanelMrpW,
+                child: Text(rupees(product.mrp),
+                    textAlign: TextAlign.right,
+                    maxLines: 1,
+                    style: const TextStyle(
+                        fontSize: 11, fontWeight: FontWeight.w500,
+                        color: Color(0xFF374151))),
+              ),
+            ],
+          ),
         ),
-        child: Row(
-          children: [
-            Expanded(
-              child: Text(product.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                      fontSize: 12, fontWeight: FontWeight.w500,
-                      color: Color(0xFF374151))),
-            ),
-            const SizedBox(width: _kMobPanelGap),
-            SizedBox(
-              width: _kMobPanelPackW,
-              child: Text(_packShort(product),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
-            ),
-            const SizedBox(width: _kMobPanelGap),
-            SizedBox(
-              width: _kMobPanelCompW,
-              child: Text(product.manufacturer,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
-            ),
-            const SizedBox(width: _kMobPanelGap),
-            SizedBox(
-              width: _kMobPanelMrpW,
-              child: Text(rupees(product.mrp),
-                  textAlign: TextAlign.right,
-                  maxLines: 1,
-                  style: const TextStyle(
-                      fontSize: 11, fontWeight: FontWeight.w500,
-                      color: Color(0xFF374151))),
-            ),
-          ],
-        ),
-      ),
-    );
+      );
+    });
   }
 
   // Web: flex layout aligned to the main table columns — same x per column as _AlternativeRow._buildWeb()
@@ -5114,63 +5125,67 @@ class _MobilePanelSkeletonRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      height: _kMatchRowH,
-      padding: const EdgeInsets.fromLTRB(
-          _kMobPanelLeftPad, 0, _kMobPanelRightPad, 0),
-      alignment: Alignment.centerLeft,
-      decoration: const BoxDecoration(
-        color: Color(0xFFF0FDF4),
-        border: Border(top: BorderSide(color: Color(0xFFE5E7EB))),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Container(
-              height: 10,
-              margin: const EdgeInsets.only(right: _kMobPanelGap),
-              decoration: BoxDecoration(
-                color: const Color(0xFFBBF7D0),
-                borderRadius: BorderRadius.circular(4),
+    return LayoutBuilder(builder: (_, constraints) {
+      return Container(
+        height: _kMatchRowH,
+        padding: const EdgeInsets.fromLTRB(
+            _kMobPanelLeftPad, 0, _kMobPanelRightPad, 0),
+        alignment: Alignment.centerLeft,
+        decoration: const BoxDecoration(
+          color: Color(0xFFF0FDF4),
+          border: Border(top: BorderSide(color: Color(0xFFE5E7EB))),
+        ),
+        child: Row(
+          children: [
+            SizedBox(
+              width: (constraints.maxWidth - _kMobNameColOffset)
+                  .clamp(0.0, double.infinity),
+              child: Container(
+                height: 10,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFBBF7D0),
+                  borderRadius: BorderRadius.circular(4),
+                ),
               ),
             ),
-          ),
-          const SizedBox(width: _kMobPanelGap),
-          SizedBox(
-            width: _kMobPanelPackW,
-            child: Container(
-              height: 10,
-              decoration: BoxDecoration(
-                color: const Color(0xFFBBF7D0),
-                borderRadius: BorderRadius.circular(4),
+            const SizedBox(width: _kMobPanelGap),
+            SizedBox(
+              width: _kMobPanelPackW,
+              child: Container(
+                height: 10,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFBBF7D0),
+                  borderRadius: BorderRadius.circular(4),
+                ),
               ),
             ),
-          ),
-          const SizedBox(width: _kMobPanelGap),
-          SizedBox(
-            width: _kMobPanelCompW,
-            child: Container(
-              height: 10,
-              decoration: BoxDecoration(
-                color: const Color(0xFFBBF7D0),
-                borderRadius: BorderRadius.circular(4),
+            const SizedBox(width: _kMobPanelGap),
+            SizedBox(
+              width: _kMobPanelCompW,
+              child: Container(
+                height: 10,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFBBF7D0),
+                  borderRadius: BorderRadius.circular(4),
+                ),
               ),
             ),
-          ),
-          const SizedBox(width: _kMobPanelGap),
-          SizedBox(
-            width: _kMobPanelMrpW,
-            child: Container(
-              height: 10,
-              decoration: BoxDecoration(
-                color: const Color(0xFFBBF7D0),
-                borderRadius: BorderRadius.circular(4),
+            const SizedBox(width: _kMobPanelGap),
+            const Expanded(child: SizedBox()),
+            SizedBox(
+              width: _kMobPanelMrpW,
+              child: Container(
+                height: 10,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFBBF7D0),
+                  borderRadius: BorderRadius.circular(4),
+                ),
               ),
             ),
-          ),
-        ],
-      ),
-    );
+          ],
+        ),
+      );
+    });
   }
 }
 

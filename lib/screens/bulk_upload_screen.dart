@@ -3999,8 +3999,7 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
     final isApproved = row.status == _MatchStatus.matched ||
         row.status == _MatchStatus.manuallyMatched;
 
-    return LayoutBuilder(builder: (context, constraints) {
-      final nameColW = (constraints.maxWidth - 252.0).clamp(50.0, 220.0);
+    return LayoutBuilder(builder: (context, _) {
       return Opacity(
         opacity: row.isHidden ? 0.45 : 1.0,
         child: GestureDetector(
@@ -4163,12 +4162,14 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                         ),
                         const Divider(height: 1, thickness: 1, color: Color(0xFFE5E7EB)),
                         // ── Selected matched product ─────────────────────────
+                        // Uses the same column constants as the panel rows below so
+                        // Product/Pack/Company/MRP sit on one shared vertical grid.
                         Padding(
-                          padding: const EdgeInsets.fromLTRB(12, 17, 12, 17),
+                          padding: const EdgeInsets.fromLTRB(
+                              _kMobPanelLeftPad, 17, _kMobPanelRightPad, 17),
                           child: p != null
                               ? Row(children: [
-                                  SizedBox(
-                                    width: nameColW,
+                                  Expanded(
                                     child: Text(p.name,
                                         maxLines: 1,
                                         overflow: TextOverflow.ellipsis,
@@ -4177,26 +4178,27 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                                             fontWeight: FontWeight.w600,
                                             color: Color(0xFF111827))),
                                   ),
-                                  const SizedBox(width: 8),
+                                  const SizedBox(width: _kMobPanelGap),
                                   SizedBox(
-                                    width: 48,
+                                    width: _kMobPanelPackW,
                                     child: Text(pack,
                                         maxLines: 1,
                                         overflow: TextOverflow.ellipsis,
                                         style: const TextStyle(
                                             fontSize: 11, color: Color(0xFF374151))),
                                   ),
-                                  const SizedBox(width: 8),
-                                  Expanded(
+                                  const SizedBox(width: _kMobPanelGap),
+                                  SizedBox(
+                                    width: _kMobPanelCompW,
                                     child: Text(p.manufacturer,
                                         maxLines: 1,
                                         overflow: TextOverflow.ellipsis,
                                         style: const TextStyle(
                                             fontSize: 11, color: Color(0xFF6B7280))),
                                   ),
-                                  const SizedBox(width: 8),
+                                  const SizedBox(width: _kMobPanelGap),
                                   SizedBox(
-                                    width: 52,
+                                    width: _kMobPanelMrpW,
                                     child: Text(row.price,
                                         textAlign: TextAlign.right,
                                         maxLines: 1,
@@ -4561,6 +4563,16 @@ Future<List<Product>> _manualSearchProducts(String query, {int limit = 3}) async
 // Constant ensures rows 2–5 always occupy exactly 4 × _kMatchRowH regardless of state.
 const double _kMatchRowH = 36.0;
 
+// Mobile match-panel shared column widths — every mobile row type
+// (selected product, fuzzy candidate, search result, shimmer skeleton)
+// MUST use these constants so every column sits on one vertical line.
+const double _kMobPanelLeftPad  = 12.0;
+const double _kMobPanelRightPad =  8.0;
+const double _kMobPanelGap      =  6.0;
+const double _kMobPanelPackW    = 38.0;
+const double _kMobPanelCompW    = 65.0;
+const double _kMobPanelMrpW     = 52.0;
+
 class _MatchPanel extends StatefulWidget {
   final _MatchRow row;
   final VoidCallback onRowChanged; // called after pick — parent handles close + refresh
@@ -4874,14 +4886,15 @@ class _SearchResultRow extends StatelessWidget {
   Widget build(BuildContext context) =>
       isMobile ? _buildMobile() : _buildWeb();
 
-  // Mobile: [name | pack(38) | company(65) | MRP(48)] — identical grid on every row.
-  // No + icon, all text black, _kMatchRowH height matches skeleton and empty filler.
+  // Mobile: identical column grid to the selected-product row and shimmer skeleton.
+  // Widths come from _kMobPanel* constants — do not hard-code values here.
   Widget _buildMobile() {
     return InkWell(
       onTap: onTap,
       child: Container(
         height: _kMatchRowH,
-        padding: const EdgeInsets.fromLTRB(12, 0, 8, 0),
+        padding: const EdgeInsets.fromLTRB(
+            _kMobPanelLeftPad, 0, _kMobPanelRightPad, 0),
         alignment: Alignment.centerLeft,
         decoration: const BoxDecoration(
           color: Colors.white,
@@ -4897,25 +4910,25 @@ class _SearchResultRow extends StatelessWidget {
                       fontSize: 12, fontWeight: FontWeight.w500,
                       color: Color(0xFF374151))),
             ),
-            const SizedBox(width: 6),
+            const SizedBox(width: _kMobPanelGap),
             SizedBox(
-              width: 38,
+              width: _kMobPanelPackW,
               child: Text(_packShort(product),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
             ),
-            const SizedBox(width: 6),
+            const SizedBox(width: _kMobPanelGap),
             SizedBox(
-              width: 65,
+              width: _kMobPanelCompW,
               child: Text(product.manufacturer,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
             ),
-            const SizedBox(width: 6),
+            const SizedBox(width: _kMobPanelGap),
             SizedBox(
-              width: 48,
+              width: _kMobPanelMrpW,
               child: Text(rupees(product.mrp),
                   textAlign: TextAlign.right,
                   maxLines: 1,
@@ -5080,6 +5093,8 @@ class _WebPanelEmptyRow extends StatelessWidget {
 }
 
 // ─── Mobile panel skeleton row (green shimmer during search loading) ──────────
+// Column widths mirror the selected-product row and _SearchResultRow._buildMobile()
+// so the shimmer bars sit on the same vertical grid as real content.
 
 class _MobilePanelSkeletonRow extends StatelessWidget {
   const _MobilePanelSkeletonRow();
@@ -5088,7 +5103,8 @@ class _MobilePanelSkeletonRow extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       height: _kMatchRowH,
-      padding: const EdgeInsets.fromLTRB(12, 0, 8, 0),
+      padding: const EdgeInsets.fromLTRB(
+          _kMobPanelLeftPad, 0, _kMobPanelRightPad, 0),
       alignment: Alignment.centerLeft,
       decoration: const BoxDecoration(
         color: Color(0xFFF0FDF4),
@@ -5099,16 +5115,16 @@ class _MobilePanelSkeletonRow extends StatelessWidget {
           Expanded(
             child: Container(
               height: 10,
-              margin: const EdgeInsets.only(right: 6),
+              margin: const EdgeInsets.only(right: _kMobPanelGap),
               decoration: BoxDecoration(
                 color: const Color(0xFFBBF7D0),
                 borderRadius: BorderRadius.circular(4),
               ),
             ),
           ),
-          const SizedBox(width: 6),
+          const SizedBox(width: _kMobPanelGap),
           SizedBox(
-            width: 38,
+            width: _kMobPanelPackW,
             child: Container(
               height: 10,
               decoration: BoxDecoration(
@@ -5117,9 +5133,9 @@ class _MobilePanelSkeletonRow extends StatelessWidget {
               ),
             ),
           ),
-          const SizedBox(width: 6),
+          const SizedBox(width: _kMobPanelGap),
           SizedBox(
-            width: 65,
+            width: _kMobPanelCompW,
             child: Container(
               height: 10,
               decoration: BoxDecoration(
@@ -5128,9 +5144,9 @@ class _MobilePanelSkeletonRow extends StatelessWidget {
               ),
             ),
           ),
-          const SizedBox(width: 6),
+          const SizedBox(width: _kMobPanelGap),
           SizedBox(
-            width: 48,
+            width: _kMobPanelMrpW,
             child: Container(
               height: 10,
               decoration: BoxDecoration(

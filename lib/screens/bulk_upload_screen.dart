@@ -3402,8 +3402,9 @@ Widget _lineItemCrop(_MatchRow row, Size? imageSize, {TextStyle? fallbackStyle})
             constraints.maxWidth.isFinite ? constraints.maxWidth : double.infinity;
 
         // Aspect ratio from bbox using the same formula as _processOneCrop.
-        double displayW = maxW;
-        double displayH = fixedH;
+        // naturalW: intrinsic width at fixedH. When naturalW > maxW, ClipRect
+        // shows the left portion at full height instead of squishing to a sliver.
+        double naturalW = maxW;
         final bbox = row.bbox;
         final imgSize = imageSize;
         if (bbox != null && imgSize != null &&
@@ -3415,26 +3416,29 @@ Widget _lineItemCrop(_MatchRow row, Size? imageSize, {TextStyle? fallbackStyle})
           final cropW  = (bRight - bLeft) * imgSize.width;
           final cropH  = (bBot   - bTop)  * imgSize.height;
           if (cropW > 0 && cropH > 0) {
-            final aspect = cropW / cropH;
-            displayW = fixedH * aspect;
-            if (displayW > maxW) {
-              displayW = maxW;
-              displayH = maxW / aspect;
-            }
+            naturalW = fixedH * (cropW / cropH);
           }
         }
+        final displayW = naturalW.clamp(0.0, maxW);
 
-        // Align releases the tight width constraint from Expanded so the SizedBox
-        // can be narrower than the full column (prevents BoxFit.fill distortion).
         return Align(
           alignment: Alignment.centerLeft,
-          child: SizedBox(
-            width: displayW,
-            height: displayH,
-            child: Image.memory(
-              row.processedCrop!,
-              fit: BoxFit.fill, // box is pre-sized to the correct aspect ratio
-              gaplessPlayback: true,
+          child: ClipRect(
+            child: SizedBox(
+              width: displayW,
+              height: fixedH,
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: SizedBox(
+                  width: naturalW,
+                  height: fixedH,
+                  child: Image.memory(
+                    row.processedCrop!,
+                    fit: BoxFit.fill,
+                    gaplessPlayback: true,
+                  ),
+                ),
+              ),
             ),
           ),
         );
@@ -4162,15 +4166,11 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                         ),
                         const Divider(height: 1, thickness: 1, color: Color(0xFFE5E7EB)),
                         // ── Selected matched product ─────────────────────────
-                        // Local LayoutBuilder captures post-border-inset width (same as fuzzy rows'
-                        // LayoutBuilders) so _buildMobPackRow receives identical cardWidth for all row types.
-                        LayoutBuilder(builder: (_, lc) {
-                          return Padding(
+                        Padding(
                           padding: const EdgeInsets.fromLTRB(
                               _kMobPanelLeftPad, 17, _kMobPanelRightPad, 17),
                           child: p != null
                               ? _buildMobPackRow(
-                                  cardWidth: lc.maxWidth,
                                   name: Text(p.name,
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
@@ -4203,8 +4203,7 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                                       : 'No match found',
                                   style: const TextStyle(
                                       fontSize: 12, color: Color(0xFF9CA3AF))),
-                        );
-                        }),
+                        ),
                         // ── Expandable section: fixed 6-line match panel ────
                         SizeTransition(
                           sizeFactor: _anim,
@@ -4561,34 +4560,20 @@ const double _kMobPanelGap      =  6.0;
 const double _kMobPanelPackW    = 38.0;
 const double _kMobPanelMrpW     = 52.0;
 
-// Distance from Qty's LEFT edge to the card's RIGHT edge in the Line 1 header row.
-// = right_pad(12) + checkbox(26) + gap(8) + status(112) + gap(8) + eye(22) + gap(8) + qty(36) = 232
-// Used to pin Line 2's Pack column at the same x as Line 1's Qty column.
-const double _kMobLineItemQtyFromRight = 232.0;
-
-// Offset used for every product-name column: name_width = maxWidth - _kMobNameColOffset
-// Derived: _kMobLineItemQtyFromRight + _kMobPanelLeftPad + _kMobPanelGap = 232 + 12 + 6 = 250
-// This places Pack's left edge at maxWidth - 232 (= Qty's left edge on Line 1).
-const double _kMobNameColOffset = _kMobLineItemQtyFromRight + _kMobPanelLeftPad + _kMobPanelGap;
-
-/// Shared mobile Row layout: [name SizedBox(maxWidth-_kMobNameColOffset)] | [gap] |
-/// [Pack _kMobPanelPackW] | [gap] | [Company Expanded+ellipsis] | [gap] | [MRP _kMobPanelMrpW]
+/// Shared mobile Row layout: [name Expanded(flex:3)] | [gap] |
+/// [Pack _kMobPanelPackW] | [gap] | [Company Expanded(flex:1)+ellipsis] | [gap] | [MRP _kMobPanelMrpW]
 ///
-/// All mobile row types (selected product, fuzzy/search candidates, shimmer skeleton) call this
-/// so Pack, Company, and MRP form three straight vertical lines regardless of row type.
-/// [cardWidth] must be constraints.maxWidth BEFORE the row's horizontal padding is applied.
+/// Name gets 3/4 of flexible space so long medicine names show without early truncation.
+/// Company gets 1/4, fills to MRP then ellipsis.
+/// All mobile row types call this so Pack aligns across every row at every card width.
 Widget _buildMobPackRow({
-  required double cardWidth,
   required Widget name,
   required Widget pack,
   required Widget company,
   required Widget mrp,
 }) {
   return Row(children: [
-    SizedBox(
-      width: (cardWidth - _kMobNameColOffset).clamp(0.0, double.infinity),
-      child: name,
-    ),
+    Expanded(flex: 3, child: name),
     const SizedBox(width: _kMobPanelGap),
     SizedBox(width: _kMobPanelPackW, child: pack),
     const SizedBox(width: _kMobPanelGap),
@@ -4914,44 +4899,41 @@ class _SearchResultRow extends StatelessWidget {
   // Mobile: delegates to _buildMobPackRow so column x-positions are identical
   // to the selected-product row (Line 2) and shimmer skeleton.
   Widget _buildMobile() {
-    return LayoutBuilder(builder: (_, constraints) {
-      return InkWell(
-        onTap: onTap,
-        child: Container(
-          height: _kMatchRowH,
-          padding: const EdgeInsets.fromLTRB(
-              _kMobPanelLeftPad, 0, _kMobPanelRightPad, 0),
-          alignment: Alignment.centerLeft,
-          decoration: const BoxDecoration(
-            color: Colors.white,
-            border: Border(top: BorderSide(color: Color(0xFFE5E7EB))),
-          ),
-          child: _buildMobPackRow(
-            cardWidth: constraints.maxWidth,
-            name: Text(product.name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                    fontSize: 12, fontWeight: FontWeight.w500,
-                    color: Color(0xFF374151))),
-            pack: Text(_packShort(product),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
-            company: Text(product.manufacturer,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
-            mrp: Text(rupees(product.mrp),
-                textAlign: TextAlign.right,
-                maxLines: 1,
-                style: const TextStyle(
-                    fontSize: 11, fontWeight: FontWeight.w500,
-                    color: Color(0xFF374151))),
-          ),
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        height: _kMatchRowH,
+        padding: const EdgeInsets.fromLTRB(
+            _kMobPanelLeftPad, 0, _kMobPanelRightPad, 0),
+        alignment: Alignment.centerLeft,
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          border: Border(top: BorderSide(color: Color(0xFFE5E7EB))),
         ),
-      );
-    });
+        child: _buildMobPackRow(
+          name: Text(product.name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                  fontSize: 12, fontWeight: FontWeight.w500,
+                  color: Color(0xFF374151))),
+          pack: Text(_packShort(product),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
+          company: Text(product.manufacturer,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
+          mrp: Text(rupees(product.mrp),
+              textAlign: TextAlign.right,
+              maxLines: 1,
+              style: const TextStyle(
+                  fontSize: 11, fontWeight: FontWeight.w500,
+                  color: Color(0xFF374151))),
+        ),
+      ),
+    );
   }
 
   // Web: flex layout aligned to the main table columns — same x per column as _AlternativeRow._buildWeb()
@@ -5117,25 +5099,22 @@ class _MobilePanelSkeletonRow extends StatelessWidget {
       color: Color(0xFFBBF7D0),
       borderRadius: BorderRadius.all(Radius.circular(4)),
     );
-    return LayoutBuilder(builder: (_, constraints) {
-      return Container(
-        height: _kMatchRowH,
-        padding: const EdgeInsets.fromLTRB(
-            _kMobPanelLeftPad, 0, _kMobPanelRightPad, 0),
-        alignment: Alignment.centerLeft,
-        decoration: const BoxDecoration(
-          color: Color(0xFFF0FDF4),
-          border: Border(top: BorderSide(color: Color(0xFFE5E7EB))),
-        ),
-        child: _buildMobPackRow(
-          cardWidth: constraints.maxWidth,
-          name: Container(height: 10, decoration: shimmer),
-          pack: Container(height: 10, decoration: shimmer),
-          company: Container(height: 10, decoration: shimmer),
-          mrp: Container(height: 10, decoration: shimmer),
-        ),
-      );
-    });
+    return Container(
+      height: _kMatchRowH,
+      padding: const EdgeInsets.fromLTRB(
+          _kMobPanelLeftPad, 0, _kMobPanelRightPad, 0),
+      alignment: Alignment.centerLeft,
+      decoration: const BoxDecoration(
+        color: Color(0xFFF0FDF4),
+        border: Border(top: BorderSide(color: Color(0xFFE5E7EB))),
+      ),
+      child: _buildMobPackRow(
+        name: Container(height: 10, decoration: shimmer),
+        pack: Container(height: 10, decoration: shimmer),
+        company: Container(height: 10, decoration: shimmer),
+        mrp: Container(height: 10, decoration: shimmer),
+      ),
+    );
   }
 }
 

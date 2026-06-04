@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 /// Brand palette mirroring the mediBO reference storefront
 /// (emerald primary, dark-green hero/footer, mint tints).
 class Brand {
-  static const Color green = Color(0xFF16A34A); // primary action / logo
+  static const Color green = Color(0xFF1B7A43); // primary action / logo
   static const Color greenDark = Color(0xFF0F4C35); // hero & footer bg
   static const Color greenDarker = Color(0xFF0A3527); // gradient end
   static const Color mint = Color(0xFFE7F6EE); // light tint / chips

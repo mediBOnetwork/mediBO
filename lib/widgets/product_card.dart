@@ -30,8 +30,15 @@ class ProductCard extends StatelessWidget {
           child: Container(
             decoration: BoxDecoration(
               color: Colors.white,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: const Color(0xFFE5E7EB)),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: const Color(0xFFE5E7EB), width: 0.5),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.06),
+                  blurRadius: 8,
+                  offset: const Offset(0, 2),
+                ),
+              ],
             ),
             clipBehavior: Clip.antiAlias,
             child: Column(
@@ -44,7 +51,7 @@ class ProductCard extends StatelessWidget {
                     isBestSeller: isBestSeller),
                 Expanded(
                   child: Padding(
-                    padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
+                    padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -54,13 +61,13 @@ class ProductCard extends StatelessWidget {
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
-                            fontSize: 9.5,
+                            fontSize: 10,
                             fontWeight: FontWeight.w600,
                             color: Color(0xFF9CA3AF),
-                            letterSpacing: 0.4,
+                            letterSpacing: 0.8,
                           ),
                         ),
-                        const SizedBox(height: 3),
+                        const SizedBox(height: 4),
                         // Line 2 — product name (1 line, ellipsis)
                         Text(
                           product.name,
@@ -68,12 +75,12 @@ class ProductCard extends StatelessWidget {
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
                             fontWeight: FontWeight.w700,
-                            fontSize: 13.5,
+                            fontSize: 14.5,
                             color: Color(0xFF111827),
                             height: 1.25,
                           ),
                         ),
-                        const SizedBox(height: 3),
+                        const SizedBox(height: 4),
                         // Line 3 — composition (1 line, ellipsis)
                         Text(
                           product.genericName.isNotEmpty
@@ -82,15 +89,15 @@ class ProductCard extends StatelessWidget {
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
-                            fontSize: 11,
+                            fontSize: 12,
                             color: Color(0xFF6B7280),
                             height: 1.3,
                           ),
                         ),
-                        const SizedBox(height: 5),
+                        const SizedBox(height: 6),
                         // Line 4 — pack size (left, ellipsis) + scheme badge (right, fixed)
                         _PackSizeRow(product: product),
-                        const SizedBox(height: 5),
+                        const SizedBox(height: 6),
                         // Line 5 — price row
                         _PriceRow(product: product),
                         const SizedBox(height: 8),
@@ -121,36 +128,52 @@ class _PriceRow extends StatelessWidget {
     final discPct = cartDiscountPercent(cart.mrpTotal);
     final salePrice = product.mrp * (1 - discPct / 100);
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
       children: [
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.baseline,
-          textBaseline: TextBaseline.alphabetic,
-          children: [
-            Text(
-              rupees(salePrice),
+        Text(
+          rupees(salePrice),
+          style: const TextStyle(
+            fontWeight: FontWeight.w700,
+            fontSize: 16,
+            color: Color(0xFF111827),
+          ),
+        ),
+        if (discPct > 0) ...[
+          const SizedBox(width: 6),
+          Flexible(
+            child: Text(
+              rupees(product.mrp),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: const TextStyle(
-                fontWeight: FontWeight.w800,
-                fontSize: 18,
-                color: Color(0xFF111827),
+                fontSize: 11,
+                color: Color(0xFF9CA3AF),
+                fontWeight: FontWeight.w400,
+                decoration: TextDecoration.lineThrough,
+                decorationColor: Color(0xFF9CA3AF),
               ),
             ),
-            if (discPct > 0) ...[
-              const SizedBox(width: 6),
-              Text(
-                rupees(product.mrp),
-                style: const TextStyle(
-                  fontSize: 12,
-                  color: Color(0xFF9CA3AF),
-                  fontWeight: FontWeight.w400,
-                  decoration: TextDecoration.lineThrough,
-                  decorationColor: Color(0xFF9CA3AF),
-                ),
+          ),
+          const SizedBox(width: 5),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+            decoration: BoxDecoration(
+              color: const Color(0xFFD1FAE5),
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: Text(
+              '${discPct.round()}% off',
+              style: const TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFF065F46),
+                height: 1,
+                leadingDistribution: TextLeadingDistribution.even,
               ),
-            ],
-          ],
-        ),
+            ),
+          ),
+        ],
       ],
     );
   }
@@ -269,10 +292,10 @@ class _CartControlState extends State<_CartControl>
                         child: SizedBox.expand(
                           child: FilledButton.icon(
                             style: FilledButton.styleFrom(
-                              backgroundColor: const Color(0xFF0d0d1a),
+                              backgroundColor: const Color(0xFF1B7A43),
                               foregroundColor: Colors.white,
                               shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(6)),
+                                  borderRadius: BorderRadius.circular(8)),
                               padding:
                                   const EdgeInsets.symmetric(horizontal: 12),
                               textStyle: const TextStyle(
@@ -299,7 +322,7 @@ class _CartControlState extends State<_CartControl>
                             disabledBackgroundColor: const Color(0xFFF3F4F6),
                             disabledForegroundColor: const Color(0xFF9CA3AF),
                             shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(6)),
+                                borderRadius: BorderRadius.circular(8)),
                             padding:
                                 const EdgeInsets.symmetric(horizontal: 12),
                             textStyle: const TextStyle(
@@ -779,7 +802,7 @@ class _CategoryImagePill extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
-        color: style.fg,
+        color: Colors.black.withValues(alpha: 0.52),
         borderRadius: BorderRadius.circular(6),
       ),
       child: Text(
@@ -788,7 +811,7 @@ class _CategoryImagePill extends StatelessWidget {
         overflow: TextOverflow.ellipsis,
         style: const TextStyle(
           fontSize: 10,
-          fontWeight: FontWeight.w700,
+          fontWeight: FontWeight.w600,
           color: Colors.white,
           height: 1.0,
           leadingDistribution: TextLeadingDistribution.even,
@@ -810,7 +833,7 @@ class _SchemePill extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
-        color: const Color(0xFFFFB800),
+        color: const Color(0xFFFEF3C7),
         borderRadius: BorderRadius.circular(6),
       ),
       child: Text(
@@ -818,7 +841,7 @@ class _SchemePill extends StatelessWidget {
         style: const TextStyle(
           fontSize: 10,
           fontWeight: FontWeight.w700,
-          color: Colors.white,
+          color: Color(0xFF92400E),
           letterSpacing: 0.2,
           height: 1.0,
           leadingDistribution: TextLeadingDistribution.even,
@@ -841,8 +864,8 @@ class _PackSizeRow extends StatelessWidget {
       maxLines: 1,
       overflow: TextOverflow.ellipsis,
       style: const TextStyle(
-        fontSize: 11,
-        color: Color(0xFF1D9E75),
+        fontSize: 12,
+        color: Color(0xFF6B7280),
         fontWeight: FontWeight.w500,
       ),
     );

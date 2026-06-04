@@ -126,8 +126,8 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
         ..text = '''
           ::-webkit-scrollbar { width: 5px; height: 5px; }
           ::-webkit-scrollbar-track { background: transparent; }
-          ::-webkit-scrollbar-thumb { background: rgba(22,163,74,0.45); border-radius: 8px; }
-          ::-webkit-scrollbar-thumb:hover { background: #16A34A; }
+          ::-webkit-scrollbar-thumb { background: rgba(27,122,67,0.45); border-radius: 8px; }
+          ::-webkit-scrollbar-thumb:hover { background: #1B7A43; }
         ''';
       html.document.head!.append(style);
     } catch (_) {}
@@ -1197,9 +1197,9 @@ class _ProductsSection extends StatelessWidget {
           addRepaintBoundaries: true,
           gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
             crossAxisCount: count,
-            mainAxisExtent: 355,
-            crossAxisSpacing: 14,
-            mainAxisSpacing: 14,
+            mainAxisExtent: 365,
+            crossAxisSpacing: 16,
+            mainAxisSpacing: 16,
           ),
           itemCount: items.length,
           itemBuilder: (context, i) {
@@ -1677,9 +1677,9 @@ class _SkeletonGrid extends StatelessWidget {
             addRepaintBoundaries: true,
             gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
               crossAxisCount: count,
-              mainAxisExtent: 355,
-              crossAxisSpacing: 14,
-              mainAxisSpacing: 14,
+              mainAxisExtent: 365,
+              crossAxisSpacing: 16,
+              mainAxisSpacing: 16,
             ),
             itemCount: count * 2,
             itemBuilder: (context, i) => const _SkeletonCard(),
@@ -1722,8 +1722,15 @@ class _SkeletonCard extends StatelessWidget {
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Brand.border),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Brand.border, width: 0.5),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.06),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
       ),
       clipBehavior: Clip.antiAlias,
       child: Column(
@@ -1731,7 +1738,7 @@ class _SkeletonCard extends StatelessWidget {
         children: const [
           SizedBox(
             width: double.infinity,
-            height: 138,
+            height: 148,
             child: ColoredBox(color: Brand.border),
           ),
           Padding(

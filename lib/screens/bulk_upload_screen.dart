@@ -377,17 +377,33 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
   // ── File picking & orchestration ───────────────────────────────────────────
 
+  // Desktop: open standard file browser (all supported types, no capture).
   Future<void> _pickAndProcess() async {
     final input = html.FileUploadInputElement()
       ..accept = '.csv,.xlsx,.xls,.pdf,.ods,.tsv,.txt,.docx,.doc,.html,.htm,.jpg,.jpeg,.png,.webp,.heic,.heif,.gif'
       ..multiple = false;
     input.click();
-
     await input.onChange.first;
     final files = input.files;
     if (files == null || files.isEmpty) return;
+    await _processPickedFile(files.first);
+  }
 
-    final file = files.first;
+  // Mobile — "Take Photo": opens rear camera via capture attribute.
+  Future<void> _pickAndProcessCamera() async {
+    final input = html.FileUploadInputElement()
+      ..accept = 'image/*'
+      ..multiple = false;
+    input.setAttribute('capture', 'environment');
+    input.click();
+    await input.onChange.first;
+    final files = input.files;
+    if (files == null || files.isEmpty) return;
+    await _processPickedFile(files.first);
+  }
+
+  // Shared processing pipeline — called by both _pickAndProcess and _pickAndProcessCamera.
+  Future<void> _processPickedFile(html.File file) async {
     setState(() {
       _step = _LoadStep.readingFile;
       _fileName = file.name;
@@ -2168,6 +2184,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
                     fileName: _fileName,
                     addingToCart: _addingToCart,
                     onPickFile: _pickAndProcess,
+                    onTakePhoto: _pickAndProcessCamera,
                     onAddToCart: _addMatchedToCart,
                     onHideToggle: _onRowHideToggle,
                     uploadedImageSize: _uploadedImageSize,
@@ -2235,6 +2252,7 @@ class _MainLayout extends StatelessWidget {
   final String? fileName;
   final bool addingToCart;
   final VoidCallback onPickFile;
+  final VoidCallback? onTakePhoto; // mobile-only: opens camera
   final Future<void> Function() onAddToCart;
   final void Function(int rowIndex) onHideToggle;
   final Size? uploadedImageSize;
@@ -2253,6 +2271,7 @@ class _MainLayout extends StatelessWidget {
     this.fileName,
     required this.addingToCart,
     required this.onPickFile,
+    this.onTakePhoto,
     required this.onAddToCart,
     required this.onHideToggle,
     this.uploadedImageSize,
@@ -2314,7 +2333,12 @@ class _MainLayout extends StatelessWidget {
         children: [
           const _WhatsAppCard(),
           const SizedBox(height: 16),
-          _UploadCard(onPickFile: onPickFile, fileName: fileName, isLoading: isLoading),
+          _UploadCard(
+            onPickFile: onPickFile,
+            onTakePhoto: onTakePhoto,
+            fileName: fileName,
+            isLoading: isLoading,
+          ),
           const SizedBox(height: 16),
           const _HowItWorksCard(),
           const SizedBox(height: 16),
@@ -2540,11 +2564,13 @@ class _WhatsAppCard extends StatelessWidget {
 
 class _UploadCard extends StatelessWidget {
   final VoidCallback onPickFile;
+  final VoidCallback? onTakePhoto; // non-null on mobile → renders two buttons
   final String? fileName;
   final bool isLoading;
 
   const _UploadCard({
     required this.onPickFile,
+    this.onTakePhoto,
     this.fileName,
     required this.isLoading,
   });
@@ -2632,53 +2658,105 @@ class _UploadCard extends StatelessWidget {
                       textColor: const Color(0xFF374151),
                     ),
                     const SizedBox(height: 48),
-                    SizedBox(
-                      height: 52,
-                      child: fileName != null && !isLoading
-                          ? OutlinedButton.icon(
-                              onPressed: onPickFile,
-                              icon: const Icon(Icons.check_circle_outline,
-                                  size: 18, color: Color(0xFF16A34A)),
-                              label: Text(
-                                fileName!.length > 22
-                                    ? '${fileName!.substring(0, 19)}...'
-                                    : fileName!,
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w700,
-                                  fontSize: 13,
-                                  color: Color(0xFF16A34A),
+                    // Mobile: two buttons (Take Photo + Choose File).
+                    // Desktop: single file-browser button.
+                    if (onTakePhoto != null) ...[
+                      Row(
+                        children: [
+                          Expanded(
+                            child: SizedBox(
+                              height: 52,
+                              child: FilledButton.icon(
+                                onPressed: isLoading ? null : onTakePhoto,
+                                icon: isLoading
+                                    ? const SizedBox(
+                                        width: 16, height: 16,
+                                        child: CircularProgressIndicator(
+                                            strokeWidth: 2, color: Colors.white),
+                                      )
+                                    : const Icon(Icons.camera_alt_outlined, size: 18),
+                                label: const Text('Take Photo',
+                                    style: TextStyle(
+                                        fontWeight: FontWeight.w700, fontSize: 12)),
+                                style: FilledButton.styleFrom(
+                                  backgroundColor: const Color(0xFF1e2a3a),
+                                  foregroundColor: Colors.white,
+                                  shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(10)),
+                                  elevation: 0,
                                 ),
                               ),
-                              style: OutlinedButton.styleFrom(
-                                side: const BorderSide(color: Color(0xFF16A34A)),
-                                shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(10)),
-                              ),
-                            )
-                          : FilledButton.icon(
-                              onPressed: isLoading ? null : onPickFile,
-                              icon: isLoading
-                                  ? const SizedBox(
-                                      width: 16,
-                                      height: 16,
-                                      child: CircularProgressIndicator(
-                                          strokeWidth: 2, color: Colors.white),
-                                    )
-                                  : const Icon(Icons.upload_file_outlined, size: 18),
-                              label: Text(
-                                isLoading ? 'Processing...' : 'Choose File to Upload',
-                                style: const TextStyle(
-                                    fontWeight: FontWeight.w700, fontSize: 12),
-                              ),
-                              style: FilledButton.styleFrom(
-                                backgroundColor: const Color(0xFF1e2a3a),
-                                foregroundColor: Colors.white,
-                                shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(10)),
-                                elevation: 0,
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: SizedBox(
+                              height: 52,
+                              child: OutlinedButton.icon(
+                                onPressed: isLoading ? null : onPickFile,
+                                icon: const Icon(Icons.folder_open_outlined, size: 18),
+                                label: const Text('Choose File',
+                                    style: TextStyle(
+                                        fontWeight: FontWeight.w700, fontSize: 12)),
+                                style: OutlinedButton.styleFrom(
+                                  side: const BorderSide(color: Color(0xFF1e2a3a)),
+                                  foregroundColor: const Color(0xFF1e2a3a),
+                                  shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(10)),
+                                ),
                               ),
                             ),
-                    ),
+                          ),
+                        ],
+                      ),
+                    ] else ...[
+                      SizedBox(
+                        height: 52,
+                        child: fileName != null && !isLoading
+                            ? OutlinedButton.icon(
+                                onPressed: onPickFile,
+                                icon: const Icon(Icons.check_circle_outline,
+                                    size: 18, color: Color(0xFF16A34A)),
+                                label: Text(
+                                  fileName!.length > 22
+                                      ? '${fileName!.substring(0, 19)}...'
+                                      : fileName!,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 13,
+                                    color: Color(0xFF16A34A),
+                                  ),
+                                ),
+                                style: OutlinedButton.styleFrom(
+                                  side: const BorderSide(color: Color(0xFF16A34A)),
+                                  shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(10)),
+                                ),
+                              )
+                            : FilledButton.icon(
+                                onPressed: isLoading ? null : onPickFile,
+                                icon: isLoading
+                                    ? const SizedBox(
+                                        width: 16, height: 16,
+                                        child: CircularProgressIndicator(
+                                            strokeWidth: 2, color: Colors.white),
+                                      )
+                                    : const Icon(Icons.upload_file_outlined, size: 18),
+                                label: Text(
+                                  isLoading ? 'Processing...' : 'Choose File to Upload',
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.w700, fontSize: 12),
+                                ),
+                                style: FilledButton.styleFrom(
+                                  backgroundColor: const Color(0xFF1e2a3a),
+                                  foregroundColor: Colors.white,
+                                  shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(10)),
+                                  elevation: 0,
+                                ),
+                              ),
+                      ),
+                    ],
                   ],
                 ),
               ),

@@ -1070,9 +1070,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
               Expanded(
                   flex: 2,
                   child: Text(
-                    row.orderNumber ?? (row.orderId != null
-                        ? '#${row.orderId!.substring(0, row.orderId!.length.clamp(0, 8))}'
-                        : '—'),
+                    row.orderNumber ?? '—',
                     style: const TextStyle(
                         fontSize: 11,
                         color: Color(0xFF6B7280),
@@ -1177,7 +1175,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                       size: 13, color: Color(0xFF9CA3AF)),
                   const SizedBox(width: 4),
                   Text(
-                      row.orderNumber ?? '#${row.orderId!.substring(0, row.orderId!.length.clamp(0, 8))}',
+                      row.orderNumber ?? '—',
                       style: const TextStyle(
                           fontSize: 11,
                           color: Color(0xFF6B7280),

@@ -8,8 +8,7 @@ import '../widgets/animations.dart';
 
 class _DbOrder {
   final String id;
-  final String number;  // payment_id (PO-YYMMDD-XXXX), fallback to short UUID
-  final String shortId; // #first8chars — matches what admin dashboard shows
+  final String number;  // payment_id (PO-YYMMDD-XXXX); falls back to '—'
   final DateTime placedAt;
   final List<_DbLine> lines;
   final double total;
@@ -18,7 +17,6 @@ class _DbOrder {
   _DbOrder({
     required this.id,
     required this.number,
-    required this.shortId,
     required this.placedAt,
     required this.lines,
     required this.total,
@@ -35,8 +33,7 @@ class _DbOrder {
         : 'Pending';
     return _DbOrder(
       id: id,
-      number: paymentId.isNotEmpty ? paymentId : '#${id.substring(0, 8)}',
-      shortId: '#${id.substring(0, 8)}',
+      number: paymentId.isNotEmpty ? paymentId : '—',
       placedAt: DateTime.parse(row['created_at'] as String).toLocal(),
       lines: items
           .map((item) => _DbLine.fromJson(item as Map<String, dynamic>))
@@ -201,9 +198,7 @@ class _OrderCard extends StatelessWidget {
         // Primary label: human-readable PO number (payment_id)
         title: Text(order.number,
             style: const TextStyle(fontWeight: FontWeight.bold)),
-        // Secondary: short UUID matches admin dashboard "#e1bfcc63" notation
-        subtitle: Text(
-            '${order.shortId} · ${_date(order.placedAt)} · ${order.itemCount} packs'),
+        subtitle: Text('${_date(order.placedAt)} · ${order.itemCount} packs'),
         trailing: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           crossAxisAlignment: CrossAxisAlignment.end,

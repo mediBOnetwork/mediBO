@@ -3999,7 +3999,7 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
     final isApproved = row.status == _MatchStatus.matched ||
         row.status == _MatchStatus.manuallyMatched;
 
-    return LayoutBuilder(builder: (context, _) {
+    return LayoutBuilder(builder: (context, constraints) {
       return Opacity(
         opacity: row.isHidden ? 0.45 : 1.0,
         child: GestureDetector(
@@ -4162,14 +4162,21 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                         ),
                         const Divider(height: 1, thickness: 1, color: Color(0xFFE5E7EB)),
                         // ── Selected matched product ─────────────────────────
-                        // Uses the same column constants as the panel rows below so
-                        // Pack/Company/MRP sit on one shared vertical grid across all rows.
+                        // Product-name width is fixed so Pack starts at the same x as
+                        // Line 1's Qty: left_pad + name_w + gap = maxWidth - _kMobLineItemQtyFromRight
+                        // → name_w = maxWidth - (_kMobLineItemQtyFromRight + left_pad + gap) = maxWidth - 250
+                        // Expanded spacer before MRP keeps MRP right-anchored at its original position.
                         Padding(
                           padding: const EdgeInsets.fromLTRB(
                               _kMobPanelLeftPad, 17, _kMobPanelRightPad, 17),
                           child: p != null
                               ? Row(children: [
-                                  Expanded(
+                                  SizedBox(
+                                    width: (constraints.maxWidth -
+                                            (_kMobLineItemQtyFromRight +
+                                             _kMobPanelLeftPad +
+                                             _kMobPanelGap))
+                                        .clamp(0.0, double.infinity),
                                     child: Text(p.name,
                                         maxLines: 1,
                                         overflow: TextOverflow.ellipsis,
@@ -4197,6 +4204,7 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                                             fontSize: 11, color: Color(0xFF6B7280))),
                                   ),
                                   const SizedBox(width: _kMobPanelGap),
+                                  const Expanded(child: SizedBox()),
                                   SizedBox(
                                     width: _kMobPanelMrpW,
                                     child: Text(row.price,
@@ -4572,6 +4580,11 @@ const double _kMobPanelGap      =  6.0;
 const double _kMobPanelPackW    = 38.0;
 const double _kMobPanelCompW    = 65.0;
 const double _kMobPanelMrpW     = 52.0;
+
+// Distance from Qty's LEFT edge to the card's RIGHT edge in the Line 1 header row.
+// = right_pad(12) + checkbox(26) + gap(8) + status(112) + gap(8) + eye(22) + gap(8) + qty(36) = 232
+// Used to pin Line 2's Pack column at the same x as Line 1's Qty column.
+const double _kMobLineItemQtyFromRight = 232.0;
 
 class _MatchPanel extends StatefulWidget {
   final _MatchRow row;

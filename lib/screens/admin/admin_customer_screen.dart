@@ -2099,74 +2099,83 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // DYNAMIC ALL-COLUMNS DETAILS  (Task 1)
+  // CUSTOMER DETAIL CARD  (deduplicated, explicit field list)
   // ═══════════════════════════════════════════════════════════════════════════
 
-  // Columns that are internal/system and must never be shown to admins.
-  static const _kSkipCols = {'id', 'user_id'};
-
-  // Nice human-readable label for a snake_case DB column name.
-  static String _fmtLabel(String col) {
-    const overrides = {
-      'whatsapp_no':        'WhatsApp No.',
-      'other_contact_no':   'Other Contact',
-      'dl_20b':             'Drug Licence 20B',
-      'dl_21b':             'Drug Licence 21B',
-      'gst_no':             'GST No.',
-      'gstin':              'GSTIN',
-      'store_location_link':'Store Location',
-      'range_zone':         'Range / Zone',
-      'address_local':      'Local Address',
-      'customer_code':      'Customer Code',
-      'payment_term':       'Payment Term',
-      'store_type':         'Store Type',
-      'pharmacy_name':      'Pharmacy Name',
-      'customer_name':      'Customer Name',
-      'owner_name':         'Owner Name',
-      'created_at':         'Registered',
-      'updated_at':         'Updated',
-      'approved_at':        'Approved At',
-      'approved_by':        'Approved By',
-      'drug_license':       'Drug License',
-    };
-    if (overrides.containsKey(col)) return overrides[col]!;
-    return col.split('_').map((w) {
-      if (w.isEmpty) return '';
-      return '${w[0].toUpperCase()}${w.substring(1)}';
-    }).join(' ');
+  // Stringify a rawData value; returns '' for null / empty / 'null'.
+  static String _str(dynamic v) {
+    if (v == null) return '';
+    if (v is bool) return v ? 'Yes' : 'No';
+    final s = v.toString().trim();
+    return (s == 'null') ? '' : s;
   }
 
-  // Format a column value for human display.
-  static String _fmtValue(String col, dynamic value) {
-    if (value == null) return '—';
-    if (value is bool) return value ? 'Yes' : 'No';
-    final s = value.toString().trim();
-    if (s.isEmpty || s == 'null') return '—';
-    // Timestamps → DD/MM/YYYY HH:MM
-    if (col.endsWith('_at') && s.length >= 10) {
-      try {
-        final dt = DateTime.parse(s).toLocal();
-        return '${dt.day.toString().padLeft(2, '0')}/'
-               '${dt.month.toString().padLeft(2, '0')}/'
-               '${dt.year}  '
-               '${dt.hour.toString().padLeft(2, '0')}:'
-               '${dt.minute.toString().padLeft(2, '0')}';
-      } catch (_) {}
+  // Format a DB timestamp value as DD/MM/YYYY HH:MM; returns '' on failure.
+  static String _fmtTs(dynamic v) {
+    final s = _str(v);
+    if (s.isEmpty) return '';
+    try {
+      final dt = DateTime.parse(s).toLocal();
+      return '${dt.day.toString().padLeft(2, '0')}/'
+             '${dt.month.toString().padLeft(2, '0')}/'
+             '${dt.year}  '
+             '${dt.hour.toString().padLeft(2, '0')}:'
+             '${dt.minute.toString().padLeft(2, '0')}';
+    } catch (_) {
+      return s;
     }
-    return s;
   }
 
-  // Responsive grid of all non-internal columns from rawData.
+  // Responsive detail card rendered from an explicit, deduplicated field list.
+  // Each logical datum appears exactly once; empty fields are omitted.
+  // Semantic duplicates in the DB schema are collapsed here:
+  //   customer_name / owner_name  →  "Owner Name"
+  //   address_local / address     →  "Address"
+  //   dl_20b / drug_license       →  "Drug Licence 20B"
+  //   gst_no / gstin              →  "GST No."
+  //   whatsapp_no / phone         →  "WhatsApp"
   Widget _buildDynamicDetails(
     Map<String, dynamic> rawData, {
     required double lpad,
     required double rpad,
   }) {
-    final entries = rawData.entries
-        .where((e) => !_kSkipCols.contains(e.key))
-        .toList();
+    final fields = <({String label, String value})>[];
 
-    if (entries.isEmpty) {
+    void add(String label, dynamic v, {bool isTs = false}) {
+      final s = isTs ? _fmtTs(v) : _str(v);
+      if (s.isNotEmpty) fields.add((label: label, value: s));
+    }
+
+    // ── Identity ──────────────────────────────────────────────────────────
+    add('Owner Name',     rawData['customer_name'] ?? rawData['owner_name']);
+    add('Pharmacy Name',  rawData['pharmacy_name']);
+    add('Customer Code',  rawData['customer_code']);
+    add('Email',          rawData['email']);
+    // ── Contact ───────────────────────────────────────────────────────────
+    add('WhatsApp',       rawData['whatsapp_no'] ?? rawData['phone']);
+    add('Other Contact',  rawData['other_contact_no']);
+    // ── Location ──────────────────────────────────────────────────────────
+    add('Address',        rawData['address_local'] ?? rawData['address']);
+    add('City',           rawData['city']);
+    add('State',          rawData['state']);
+    add('PIN Code',       rawData['pincode']);
+    add('Store Location', rawData['store_location_link']);
+    // ── Business ──────────────────────────────────────────────────────────
+    add('Payment Term',   rawData['payment_term']);
+    add('Store Type',     rawData['store_type']);
+    add('Range / Zone',   rawData['range_zone']);
+    // ── Compliance ────────────────────────────────────────────────────────
+    add('Drug Licence 20B', rawData['dl_20b'] ?? rawData['drug_license']);
+    add('Drug Licence 21B', rawData['dl_21b']);
+    add('GST No.',          rawData['gst_no'] ?? rawData['gstin']);
+    // ── Status / meta ─────────────────────────────────────────────────────
+    add('Status',        rawData['status']);
+    add('Approved By',   rawData['approved_by']);
+    add('Approved At',   rawData['approved_at'], isTs: true);
+    add('Registered',    rawData['created_at'],  isTs: true);
+    add('Updated',       rawData['updated_at'],  isTs: true);
+
+    if (fields.isEmpty) {
       return Container(
         color: const Color(0xFFF9FAFB),
         padding: EdgeInsets.fromLTRB(lpad, 10, rpad, 14),
@@ -2179,42 +2188,35 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       color: const Color(0xFFF9FAFB),
       padding: EdgeInsets.fromLTRB(lpad, 12, rpad, 16),
       child: LayoutBuilder(builder: (ctx, constraints) {
-        final w = constraints.maxWidth;
+        final w       = constraints.maxWidth;
         final cols    = w > 600 ? 3 : (w > 380 ? 2 : 1);
-        final spacing = 20.0;
+        const spacing = 20.0;
         final itemW   = ((w - spacing * (cols - 1)) / cols).clamp(80.0, 400.0);
         return Wrap(
           spacing: spacing,
           runSpacing: 14,
-          children: entries.map((e) {
-            final label = _fmtLabel(e.key);
-            final value = _fmtValue(e.key, e.value);
-            return SizedBox(
-              width: itemW,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    label,
-                    style: const TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.w600,
-                        color: Color(0xFF9CA3AF),
-                        letterSpacing: 0.4),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    value,
-                    style: TextStyle(
-                        fontSize: 12,
-                        color: value == '—'
-                            ? const Color(0xFFD1D5DB)
-                            : const Color(0xFF374151)),
-                  ),
-                ],
-              ),
-            );
-          }).toList(),
+          children: fields.map((entry) => SizedBox(
+            width: itemW,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  entry.label,
+                  style: const TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF9CA3AF),
+                      letterSpacing: 0.4),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  entry.value,
+                  style: const TextStyle(
+                      fontSize: 12, color: Color(0xFF374151)),
+                ),
+              ],
+            ),
+          )).toList(),
         );
       }),
     );

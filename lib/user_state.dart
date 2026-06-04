@@ -25,8 +25,10 @@ class AuthNotifier extends ChangeNotifier {
   /// True when logged in AND has submitted a pharmacy_profiles row.
   bool get isRegistered => isAuthenticated && _profile != null;
 
-  /// True when registered AND admin has approved the account.
-  bool get canOrder => isRegistered && (_profile?.isApproved ?? false);
+  /// True when registered AND admin has approved the account AND not suspended.
+  bool get canOrder => isRegistered &&
+      (_profile?.isApproved ?? false) &&
+      (_profile?.status != 'suspended');
 
   static const _superAdminEmails = {
     'masteromprakashsahu@gmail.com',

@@ -191,6 +191,37 @@ class ProfileScreen extends StatelessWidget {
                   ),
                 ],
 
+                // Suspended: account blocked notice
+                if (isRegistered &&
+                    (profile?.isApproved ?? false) &&
+                    profile?.status == 'suspended') ...[
+                  Container(
+                    margin: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFF1F2),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: const Color(0xFFFCA5A5)),
+                    ),
+                    child: const Row(
+                      children: [
+                        Icon(Icons.block, size: 16, color: Color(0xFFDC2626)),
+                        SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Your account has been suspended. You cannot place orders. Contact support to reactivate.',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Color(0xFF991B1B),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+
                 // Registered: profile fields
                 if (isRegistered) ...[
                   Container(
@@ -414,6 +445,11 @@ class _AccountStatusBadge extends StatelessWidget {
       fg = const Color(0xFF6B7280);
       icon = Icons.person_off_outlined;
       label = 'Not Registered';
+    } else if (isApproved && status == 'suspended') {
+      bg = const Color(0xFFFFE4E6);
+      fg = const Color(0xFFDC2626);
+      icon = Icons.block;
+      label = 'Suspended';
     } else if (isApproved) {
       bg = const Color(0xFFDCFCE7);
       fg = const Color(0xFF15803D);

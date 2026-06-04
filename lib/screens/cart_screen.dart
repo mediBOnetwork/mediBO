@@ -1150,6 +1150,9 @@ class _BillingBreakdownSection extends StatelessWidget {
 String? _orderGateMessage(AuthNotifier auth) {
   if (!auth.isAuthenticated) return 'Login and register to place orders';
   if (!auth.isRegistered) return 'Complete registration to place orders';
+  if (auth.profile?.status == 'suspended') {
+    return 'Your account has been suspended. Contact support.';
+  }
   if (!auth.canOrder) return 'Your account is pending approval';
   return null;
 }

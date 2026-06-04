@@ -41,13 +41,13 @@ class _CustRow {
   final String name;
   final String pharmacy;
   final String phone;
-  final String source; // 'website' | 'whatsapp' | 'cart_only'
+  final String source;
   final String? orderId;
   final String orderStatus;
   final List<_ItemLine> items;
   final List<_ItemLine> removedItems;
   final double? total;
-  final double netPayable; // computed net payable for cart rows
+  final double netPayable;
 
   const _CustRow({
     required this.userId,
@@ -90,6 +90,7 @@ class _RegRow {
   final String? googleMapLink;
   final String? email;
   final DateTime? createdAt;
+  final Map<String, dynamic> rawData; // full row for dynamic display
 
   const _RegRow({
     required this.id,
@@ -112,10 +113,12 @@ class _RegRow {
     this.googleMapLink,
     this.email,
     this.createdAt,
+    required this.rawData,
   });
 
   factory _RegRow.fromMap(Map<String, dynamic> m) => _RegRow(
         id:             m['id'] as String,
+        rawData:        Map<String, dynamic>.from(m),
         fullName:       m['customer_name'] as String? ?? m['owner_name'] as String? ?? '',
         businessName:   m['pharmacy_name'] as String? ?? '',
         phone:          m['whatsapp_no'] as String? ?? m['phone'] as String? ?? '',
@@ -140,9 +143,52 @@ class _RegRow {
       );
 }
 
+// ── Approved-customer row model ───────────────────────────────────────────────
+
+class _ApprovedRow {
+  final String id;
+  final Map<String, dynamic> rawData;
+
+  const _ApprovedRow({required this.id, required this.rawData});
+
+  factory _ApprovedRow.fromMap(Map<String, dynamic> m) => _ApprovedRow(
+        id:      m['id'] as String,
+        rawData: Map<String, dynamic>.from(m),
+      );
+
+  String get pharmacyName {
+    final n = rawData['pharmacy_name'] as String? ?? '';
+    return n.trim();
+  }
+
+  String get customerName {
+    final n = rawData['customer_name'] as String? ??
+        rawData['owner_name'] as String? ?? '';
+    return n.trim();
+  }
+
+  String get phone {
+    final p = rawData['whatsapp_no'] as String? ??
+        rawData['phone'] as String? ?? '';
+    return p.trim();
+  }
+
+  String get customerCode => (rawData['customer_code'] as String? ?? '').trim();
+  String get paymentTerm  => (rawData['payment_term']  as String? ?? '').trim();
+  String get city         => (rawData['city']          as String? ?? '').trim();
+  String get state        => (rawData['state']         as String? ?? '').trim();
+  String get status       =>  rawData['status']        as String? ?? 'approved';
+  bool   get isSuspended  => status == 'suspended';
+}
+
 // ── Filter ────────────────────────────────────────────────────────────────────
 
-enum _CustFilter { customerOrders, cartNotOrdered, pendingRegistrations }
+enum _CustFilter {
+  customerOrders,
+  cartNotOrdered,
+  pendingRegistrations,
+  approvedCustomers,
+}
 
 // ── Screen ────────────────────────────────────────────────────────────────────
 
@@ -154,9 +200,10 @@ class AdminCustomerScreen extends StatefulWidget {
 }
 
 class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
-  List<_CustRow> _orderRows = [];
-  List<_CustRow> _cartRows  = [];
-  List<_RegRow>  _regRows   = [];
+  List<_CustRow>     _orderRows    = [];
+  List<_CustRow>     _cartRows     = [];
+  List<_RegRow>      _regRows      = [];
+  List<_ApprovedRow> _approvedRows = [];
   bool _loading = true;
   _CustFilter _filter = _CustFilter.customerOrders;
   final Set<String> _expanded = {};
@@ -202,7 +249,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
 
   void _debouncedLoad() {
     _debounce?.cancel();
-    _debounce = Timer(const Duration(milliseconds: 500), () => _load(showSpinner: false));
+    _debounce = Timer(
+        const Duration(milliseconds: 500), () => _load(showSpinner: false));
   }
 
   // ── Data ─────────────────────────────────────────────────────────────────────
@@ -263,7 +311,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         ));
       }
 
-      // Cart-only rows — skip carts with 0 active items (Task 3)
+      // Cart-only rows
       final orderedUids = {
         for (final o in orderRows) (o as Map)['user_id'] as String? ?? ''
       };
@@ -290,9 +338,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
             .toList();
 
         final activeItems  = allItems.where((i) => !i.removedByAdmin).toList();
-        final removedItems = allItems.where((i) => i.removedByAdmin).toList();
-
-        // Task 3: skip carts with no active items
+        final removedItems = allItems.where((i) =>  i.removedByAdmin).toList();
         if (activeItems.isEmpty) continue;
 
         carts.add(_CustRow(
@@ -310,14 +356,20 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         ));
       }
 
-      // Pending registrations — pharmacy_profiles WHERE approved IS NOT TRUE
+      // Pending registrations (approved != true)
       final regs = <_RegRow>[];
+      // Approved customers (approved == true, includes suspended)
+      final approved = <_ApprovedRow>[];
+
       for (final p in ppRows) {
         final m = Map<String, dynamic>.from(p as Map);
-        if (m['approved'] != true) {
+        if (m['approved'] == true) {
+          approved.add(_ApprovedRow.fromMap(m));
+        } else {
           regs.add(_RegRow.fromMap(m));
         }
       }
+
       regs.sort((a, b) {
         if (a.createdAt == null && b.createdAt == null) return 0;
         if (a.createdAt == null) return 1;
@@ -325,12 +377,22 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         return b.createdAt!.compareTo(a.createdAt!);
       });
 
+      approved.sort((a, b) {
+        final aAt = a.rawData['approved_at'] as String?;
+        final bAt = b.rawData['approved_at'] as String?;
+        if (aAt == null && bAt == null) return 0;
+        if (aAt == null) return 1;
+        if (bAt == null) return -1;
+        return bAt.compareTo(aAt);
+      });
+
       if (mounted) {
         setState(() {
-          _orderRows = orders;
-          _cartRows  = carts;
-          _regRows   = regs;
-          _loading   = false;
+          _orderRows    = orders;
+          _cartRows     = carts;
+          _regRows      = regs;
+          _approvedRows = approved;
+          _loading      = false;
         });
       }
     } catch (e) {
@@ -344,7 +406,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     }
   }
 
-  // ── Net payable helpers (mirrors CartModel._computeNetPayable) ─────────────
+  // ── Net payable helpers ────────────────────────────────────────────────────
 
   static double _computeNetPayable(List<_ItemLine> items) {
     if (items.isEmpty) return 0.0;
@@ -363,7 +425,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     return total + cartDeliveryFee(mrpSum);
   }
 
-  // ── Profile/name helpers ──────────────────────────────────────────────────────
+  // ── Profile helpers ────────────────────────────────────────────────────────
 
   static String _name(Map? up, Map? pp, Map? order) {
     final n = (up?['full_name'] ?? pp?['customer_name'] ?? pp?['owner_name']) as String?;
@@ -402,19 +464,21 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     }
   }
 
-  // ── Active list ───────────────────────────────────────────────────────────────
+  // ── Active list ────────────────────────────────────────────────────────────
 
   List<_CustRow> get _activeCust {
     switch (_filter) {
       case _CustFilter.customerOrders:       return _orderRows;
       case _CustFilter.cartNotOrdered:       return _cartRows;
-      case _CustFilter.pendingRegistrations: return [];
+      case _CustFilter.pendingRegistrations:
+      case _CustFilter.approvedCustomers:    return [];
     }
   }
 
-  bool get _isRegView => _filter == _CustFilter.pendingRegistrations;
+  bool get _isRegView      => _filter == _CustFilter.pendingRegistrations;
+  bool get _isApprovedView => _filter == _CustFilter.approvedCustomers;
 
-  // ── Approve / Reject registrations ───────────────────────────────────────────
+  // ── Approve / Reject registrations ────────────────────────────────────────
 
   Future<void> _approveReg(_RegRow row) async {
     await Supabase.instance.client.from('pharmacy_profiles').update({
@@ -437,18 +501,91 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   }
 
   void _notifyRegistration(_RegRow row, {required bool isApproved}) {
-    Supabase.instance.client.functions.invoke(
-      'notify-registration',
-      body: {
-        'action': isApproved ? 'approve' : 'reject',
-        'pharmacyName': row.businessName,
-        'email': row.email,
-        'whatsappNo': row.whatsappNumber,
-      },
-    ).catchError((_) {});
+    Supabase.instance.client.functions
+        .invoke(
+          'notify-registration',
+          body: {
+            'action': isApproved ? 'approve' : 'reject',
+            'pharmacyName': row.businessName,
+            'email': row.email,
+            'whatsappNo': row.whatsappNumber,
+          },
+        )
+        .then((_) {})
+        .catchError((_) {});
   }
 
-  // ── Order status ──────────────────────────────────────────────────────────────
+  // ── Suspend / Reactivate approved customers ────────────────────────────────
+
+  Future<void> _suspendCustomer(_ApprovedRow row) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        title: const Text('Suspend Customer',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+        content: Text(
+          'Suspend ${row.pharmacyName.isNotEmpty ? row.pharmacyName : row.customerName}? '
+          'They will be blocked from placing orders until reactivated.',
+          style: const TextStyle(fontSize: 13),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: FilledButton.styleFrom(backgroundColor: const Color(0xFFDC2626)),
+            child: const Text('Suspend'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    try {
+      await Supabase.instance.client
+          .from('pharmacy_profiles')
+          .update({'status': 'suspended'})
+          .eq('id', row.id);
+      _load(showSpinner: false);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Suspend failed: $e'),
+          backgroundColor: const Color(0xFFDC2626),
+        ));
+      }
+    }
+  }
+
+  Future<void> _reactivateCustomer(_ApprovedRow row) async {
+    try {
+      await Supabase.instance.client
+          .from('pharmacy_profiles')
+          .update({'status': 'approved'})
+          .eq('id', row.id);
+      _load(showSpinner: false);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Reactivate failed: $e'),
+          backgroundColor: const Color(0xFFDC2626),
+        ));
+      }
+    }
+  }
+
+  Future<void> _editCustomer(_ApprovedRow row) async {
+    final saved = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => _CustomerEditDialog(row: row),
+    );
+    if (saved == true) _load(showSpinner: false);
+  }
+
+  // ── Order status ───────────────────────────────────────────────────────────
 
   Future<void> _updateStatus(String orderId, String status) async {
     try {
@@ -512,7 +649,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   void _toggleExpand(String key) => setState(
       () => _expanded.contains(key) ? _expanded.remove(key) : _expanded.add(key));
 
-  // ── Build ─────────────────────────────────────────────────────────────────────
+  // ── Build ──────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -543,6 +680,22 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   }
 
   Widget _buildScrollContent(bool isDesktop) {
+    // Approved customers view
+    if (_isApprovedView) {
+      if (_approvedRows.isEmpty) {
+        return _ssvEmptyState('0 approved customers');
+      }
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (isDesktop) _buildApprovedTableHeader(),
+          ..._approvedRows.map((r) =>
+              isDesktop ? _buildDesktopApprovedRow(r) : _buildMobileApprovedCard(r)),
+          const SizedBox(height: 32),
+        ],
+      );
+    }
+
     // Pending registrations
     if (_isRegView) {
       if (_regRows.isEmpty) {
@@ -553,7 +706,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         children: [
           if (isDesktop) _buildRegTableHeader(),
           ..._regRows.map(
-            (r) => isDesktop ? _buildDesktopRegRow(r) : _buildMobileRegCard(r)),
+              (r) => isDesktop ? _buildDesktopRegRow(r) : _buildMobileRegCard(r)),
           const SizedBox(height: 32),
         ],
       );
@@ -574,7 +727,6 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         if (isDesktop) _buildCustTableHeader(),
         ...rows.map(
           (r) => isDesktop ? _buildDesktopCustRow(r) : _buildMobileCustCard(r)),
-        // Task 2: totals footer for cart view
         if (_filter == _CustFilter.cartNotOrdered)
           _buildCartTotalsFooter(isDesktop),
         const SizedBox(height: 32),
@@ -593,14 +745,13 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
           const SizedBox(height: 14),
           Text(message,
               textAlign: TextAlign.center,
-              style:
-                  const TextStyle(fontSize: 14, color: Color(0xFF9CA3AF))),
+              style: const TextStyle(fontSize: 14, color: Color(0xFF9CA3AF))),
         ],
       ),
     );
   }
 
-  // ── Header with 3 tabs ────────────────────────────────────────────────────────
+  // ── Header with 4 tabs ─────────────────────────────────────────────────────
 
   Widget _buildHeader(bool isDesktop) {
     final pad = isDesktop ? 28.0 : 16.0;
@@ -639,6 +790,9 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
             const SizedBox(width: 4),
             _tab(_CustFilter.pendingRegistrations,
                 'Pending Registrations (${_regRows.length})'),
+            const SizedBox(width: 4),
+            _tab(_CustFilter.approvedCustomers,
+                'Customers (${_approvedRows.length})'),
           ]),
         ),
       ]),
@@ -671,9 +825,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
           style: TextStyle(
             fontSize: 13,
             fontWeight: active ? FontWeight.w700 : FontWeight.w500,
-            color: active
-                ? const Color(0xFF1B5E20)
-                : const Color(0xFF6B7280),
+            color: active ? const Color(0xFF1B5E20) : const Color(0xFF6B7280),
           ),
         ),
       ),
@@ -681,11 +833,9 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // CUSTOMER ORDERS / CART views
+  // CUSTOMER ORDERS / CART views (unchanged)
   // ═══════════════════════════════════════════════════════════════════════════
 
-  // Task 1 + 2: Conditional columns — Order ID hidden for cart view,
-  // Items + Value added for cart view.
   Widget _buildCustTableHeader() {
     final isCart = _filter == _CustFilter.cartNotOrdered;
     return Container(
@@ -699,19 +849,17 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         if (isCart) ...[
           _th('Items', flex: 1),
           _th('Value', flex: 2),
-          const SizedBox(width: 32), // chevron column
+          const SizedBox(width: 32),
         ] else ...[
           _th('Order ID', flex: 2),
           _th('Confirmation', flex: 3),
           _th('Action', flex: 2),
-          const SizedBox(width: 32), // chevron column
+          const SizedBox(width: 32),
         ],
       ]),
     );
   }
 
-  // Task 4: Whole row is an InkWell. Chevron rotates on expand.
-  // Task 1 + 2: Conditional columns per view.
   Widget _buildDesktopCustRow(_CustRow row) {
     final key        = row.orderId ?? row.userId;
     final isExpanded = _expanded.contains(key);
@@ -752,27 +900,21 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
               child: _SourceBadge(source: row.source),
             ),
             if (isCart) ...[
-              // Task 2: Items count
               Expanded(
                 flex: 1,
-                child: Text(
-                  '${row.items.length}',
-                  style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF374151)),
-                ),
+                child: Text('${row.items.length}',
+                    style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF374151))),
               ),
-              // Task 2: Net payable value
               Expanded(
                 flex: 2,
-                child: Text(
-                  '₹${row.netPayable.toStringAsFixed(0)}',
-                  style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF1B5E20)),
-                ),
+                child: Text('₹${row.netPayable.toStringAsFixed(0)}',
+                    style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF1B5E20))),
               ),
             ] else ...[
               Expanded(
@@ -788,14 +930,11 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                   )),
               Expanded(
                   flex: 3,
-                  child: _ConfirmActions(
-                      row: row, onUpdate: _updateStatus)),
+                  child: _ConfirmActions(row: row, onUpdate: _updateStatus)),
               Expanded(
                   flex: 2,
-                  child: _ActionCell(
-                      row: row, onImport: () => _openImport(row))),
+                  child: _ActionCell(row: row, onImport: () => _openImport(row))),
             ],
-            // Task 4: Rotating chevron
             SizedBox(
               width: 32,
               child: AnimatedRotation(
@@ -812,7 +951,6 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     ]);
   }
 
-  // Task 4: Whole card is tappable. Task 2: show items + value for cart rows.
   Widget _buildMobileCustCard(_CustRow row) {
     final key        = row.orderId ?? row.userId;
     final isExpanded = _expanded.contains(key);
@@ -835,7 +973,6 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
             child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-              // Name + source badge + rotating chevron
               Row(children: [
                 Expanded(
                     child: Text(row.name,
@@ -867,7 +1004,6 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                     style: const TextStyle(
                         fontSize: 12, color: Color(0xFF6B7280))),
               ],
-              // Task 2: Items + value for cart rows
               if (isCart && row.items.isNotEmpty) ...[
                 const SizedBox(height: 5),
                 Row(children: [
@@ -1006,7 +1142,6 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     );
   }
 
-  // Tasks 1+2+3: Expanded cart items with responsive layout + Added/Removed by column
   Widget _buildCartExpandedItems(_CustRow row,
       {required double lpad, required double rpad}) {
     return Container(
@@ -1015,7 +1150,6 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       child: LayoutBuilder(builder: (ctx, constraints) {
         final isWide = constraints.maxWidth > 560;
         return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          // Header + Add button
           Row(children: [
             Text(
               'Cart Items (${row.items.length})',
@@ -1031,15 +1165,12 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
               label: const Text('Add Item', style: TextStyle(fontSize: 12)),
               style: TextButton.styleFrom(
                 foregroundColor: const Color(0xFF1B5E20),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
               ),
             ),
           ]),
           const SizedBox(height: 6),
-
-          // ── Active items ──────────────────────────────────────────────
           if (row.items.isEmpty)
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 6),
@@ -1048,36 +1179,35 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
             )
           else ...[
             if (isWide) ...[
-              // Wide column headers
-              Row(children: [
-                const Expanded(
+              Row(children: const [
+                Expanded(
                     child: Text('Product',
                         style: TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.w600,
                             color: Color(0xFF9CA3AF)))),
-                const SizedBox(
+                SizedBox(
                     width: 44,
                     child: Text('Qty',
                         style: TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.w600,
                             color: Color(0xFF9CA3AF)))),
-                const SizedBox(
+                SizedBox(
                     width: 130,
                     child: Text('Pack size',
                         style: TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.w600,
                             color: Color(0xFF9CA3AF)))),
-                const SizedBox(
+                SizedBox(
                     width: 80,
                     child: Text('MRP',
                         style: TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.w600,
                             color: Color(0xFF9CA3AF)))),
-                const SizedBox(
+                SizedBox(
                     width: 120,
                     child: Text('Added/Removed by',
                         maxLines: 2,
@@ -1085,7 +1215,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                             fontSize: 11,
                             fontWeight: FontWeight.w600,
                             color: Color(0xFF9CA3AF)))),
-                const SizedBox(width: 72),
+                SizedBox(width: 72),
               ]),
               const SizedBox(height: 4),
               ...row.items.map((item) => Padding(
@@ -1149,7 +1279,6 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                     ]),
                   )),
             ] else ...[
-              // Narrow 2-row layout per item
               ...row.items.map((item) => Padding(
                     padding: const EdgeInsets.only(top: 6),
                     child: Column(
@@ -1207,8 +1336,6 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                   )),
             ],
           ],
-
-          // ── Removed by admin ──────────────────────────────────────────
           if (row.removedItems.isNotEmpty) ...[
             const SizedBox(height: 12),
             const Divider(height: 1, color: Color(0xFFE5E7EB)),
@@ -1317,7 +1444,6 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     );
   }
 
-  // Task 2: Totals footer for cart view
   Widget _buildCartTotalsFooter(bool isDesktop) {
     final totalItems = _cartRows.fold(0, (s, r) => s + r.items.length);
     final totalValue = _cartRows.fold(0.0, (s, r) => s + r.netPayable);
@@ -1328,13 +1454,13 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         decoration: const BoxDecoration(
           color: Color(0xFFF0FDF4),
           border: Border(
-            top: BorderSide(color: Color(0xFFBBF7D0), width: 2),
-          ),
+              top: BorderSide(color: Color(0xFFBBF7D0), width: 2)),
         ),
         child: Row(children: [
           Expanded(
               flex: 4,
-              child: Text('Total (${_cartRows.length} cart${_cartRows.length == 1 ? '' : 's'})',
+              child: Text(
+                  'Total (${_cartRows.length} cart${_cartRows.length == 1 ? '' : 's'})',
                   style: const TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.w700,
@@ -1361,7 +1487,6 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       );
     }
 
-    // Mobile totals
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 10, 16, 0),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -1397,7 +1522,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // PENDING REGISTRATIONS view
+  // PENDING REGISTRATIONS view  (Tasks 1 + 2)
   // ═══════════════════════════════════════════════════════════════════════════
 
   Widget _buildRegTableHeader() {
@@ -1412,96 +1537,97 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         _th('Payment', flex: 2),
         _th('City / State', flex: 2),
         _th('Approval', flex: 3),
-        _th('Details', flex: 1),
+        const SizedBox(width: 32),
       ]),
     );
   }
 
+  // Task 2: entire row is now an InkWell; Approve/Reject (inner InkWells) absorb tap naturally.
   Widget _buildDesktopRegRow(_RegRow row) {
     final isExpanded = _expanded.contains(row.id);
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Container(
-        padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 13),
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
-        ),
-        child: Row(children: [
-          Expanded(
-              flex: 3,
-              child: Text(
-                  row.fullName.isNotEmpty ? row.fullName : '—',
-                  style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF111827)),
-                  overflow: TextOverflow.ellipsis)),
-          Expanded(
-              flex: 3,
-              child: Text(
-                  row.businessName.isNotEmpty ? row.businessName : '—',
-                  style: const TextStyle(
-                      fontSize: 13, color: Color(0xFF374151)),
-                  overflow: TextOverflow.ellipsis)),
-          Expanded(
-              flex: 2,
-              child: Text(row.phone.isNotEmpty ? row.phone : '—',
-                  style: const TextStyle(
-                      fontSize: 12, color: Color(0xFF6B7280)))),
-          Expanded(
-              flex: 2,
-              child: Text(row.customerId?.isNotEmpty == true
-                  ? row.customerId!
-                  : '—',
-                  style: const TextStyle(
-                      fontSize: 12,
-                      color: Color(0xFF374151),
-                      fontFamily: 'monospace'))),
-          Expanded(
-              flex: 2,
-              child: row.paymentTerm?.isNotEmpty == true
-                  ? _PaymentBadge(term: row.paymentTerm!)
-                  : const Text('—',
-                      style: TextStyle(
-                          fontSize: 12, color: Color(0xFF9CA3AF)))),
-          Expanded(
-              flex: 2,
-              child: Text(
-                  [row.city, row.state]
-                      .where((s) => s != null && s.isNotEmpty)
-                      .join(', ')
-                      .let((s) => s.isNotEmpty ? s : '—'),
-                  style: const TextStyle(
-                      fontSize: 12, color: Color(0xFF6B7280)),
-                  overflow: TextOverflow.ellipsis)),
-          Expanded(
-              flex: 3,
-              child: _RegApproveActions(
-                  id: row.id,
-                  onApprove: () => _approveReg(row),
-                  onReject: () => _rejectReg(row))),
-          Expanded(
-            flex: 1,
-            child: InkWell(
-              onTap: () => _toggleExpand(row.id),
-              borderRadius: BorderRadius.circular(6),
-              child: Padding(
-                padding: const EdgeInsets.all(4),
-                child: AnimatedRotation(
-                  turns: isExpanded ? 0.5 : 0.0,
-                  duration: const Duration(milliseconds: 200),
-                  child: const Icon(Icons.expand_more,
-                      size: 18, color: Color(0xFF6B7280)),
-                ),
+      InkWell(
+        onTap: () => _toggleExpand(row.id),
+        mouseCursor: SystemMouseCursors.click,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 13),
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
+          ),
+          child: Row(children: [
+            Expanded(
+                flex: 3,
+                child: Text(
+                    row.fullName.isNotEmpty ? row.fullName : '—',
+                    style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF111827)),
+                    overflow: TextOverflow.ellipsis)),
+            Expanded(
+                flex: 3,
+                child: Text(
+                    row.businessName.isNotEmpty ? row.businessName : '—',
+                    style: const TextStyle(
+                        fontSize: 13, color: Color(0xFF374151)),
+                    overflow: TextOverflow.ellipsis)),
+            Expanded(
+                flex: 2,
+                child: Text(row.phone.isNotEmpty ? row.phone : '—',
+                    style: const TextStyle(
+                        fontSize: 12, color: Color(0xFF6B7280)))),
+            Expanded(
+                flex: 2,
+                child: Text(
+                    row.customerId?.isNotEmpty == true ? row.customerId! : '—',
+                    style: const TextStyle(
+                        fontSize: 12,
+                        color: Color(0xFF374151),
+                        fontFamily: 'monospace'))),
+            Expanded(
+                flex: 2,
+                child: row.paymentTerm?.isNotEmpty == true
+                    ? _PaymentBadge(term: row.paymentTerm!)
+                    : const Text('—',
+                        style: TextStyle(
+                            fontSize: 12, color: Color(0xFF9CA3AF)))),
+            Expanded(
+                flex: 2,
+                child: Text(
+                    [row.city, row.state]
+                        .where((s) => s != null && s.isNotEmpty)
+                        .join(', ')
+                        .let((s) => s.isNotEmpty ? s : '—'),
+                    style: const TextStyle(
+                        fontSize: 12, color: Color(0xFF6B7280)),
+                    overflow: TextOverflow.ellipsis)),
+            // Approve/Reject buttons (inner InkWells — absorb tap, don't propagate to outer InkWell)
+            Expanded(
+                flex: 3,
+                child: _RegApproveActions(
+                    id: row.id,
+                    onApprove: () => _approveReg(row),
+                    onReject:  () => _rejectReg(row))),
+            // Rotating chevron
+            SizedBox(
+              width: 32,
+              child: AnimatedRotation(
+                turns: isExpanded ? 0.5 : 0.0,
+                duration: const Duration(milliseconds: 200),
+                child: const Icon(Icons.expand_more,
+                    size: 18, color: Color(0xFF6B7280)),
               ),
             ),
-          ),
-        ]),
+          ]),
+        ),
       ),
-      if (isExpanded) _buildRegDetails(row, isDesktop: true),
+      // Task 1: dynamic all-columns dropdown
+      if (isExpanded) _buildDynamicDetails(row.rawData, lpad: 44, rpad: 28),
     ]);
   }
 
+  // Task 2: entire card is tappable; chevron moved to header row.
   Widget _buildMobileRegCard(_RegRow row) {
     final isExpanded = _expanded.contains(row.id);
     return Container(
@@ -1511,120 +1637,365 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: const Color(0xFFE5E7EB)),
       ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Padding(
-          padding: const EdgeInsets.all(14),
-          child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-            Row(children: [
-              Expanded(
-                  child: Text(
-                      row.fullName.isNotEmpty ? row.fullName : 'Unknown',
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(12),
+        child: InkWell(
+          onTap: () => _toggleExpand(row.id),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                // Name + pending badge + rotating chevron
+                Row(children: [
+                  Expanded(
+                      child: Text(
+                          row.fullName.isNotEmpty ? row.fullName : 'Unknown',
+                          style: const TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                              color: Color(0xFF111827)),
+                          overflow: TextOverflow.ellipsis)),
+                  const SizedBox(width: 8),
+                  _pendingBadge(),
+                  const SizedBox(width: 4),
+                  AnimatedRotation(
+                    turns: isExpanded ? 0.5 : 0.0,
+                    duration: const Duration(milliseconds: 200),
+                    child: const Icon(Icons.expand_more,
+                        size: 18, color: Color(0xFF9CA3AF)),
+                  ),
+                ]),
+                if (row.businessName.isNotEmpty) ...[
+                  const SizedBox(height: 3),
+                  Text(row.businessName,
                       style: const TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700,
-                          color: Color(0xFF111827)),
-                      overflow: TextOverflow.ellipsis)),
-              const SizedBox(width: 8),
-              _pendingBadge(),
-            ]),
-            if (row.businessName.isNotEmpty) ...[
-              const SizedBox(height: 3),
-              Text(row.businessName,
-                  style: const TextStyle(
-                      fontSize: 12, color: Color(0xFF6B7280)),
-                  overflow: TextOverflow.ellipsis),
-            ],
-            if (row.phone.isNotEmpty) ...[
-              const SizedBox(height: 2),
-              Text(row.phone,
-                  style: const TextStyle(
-                      fontSize: 12, color: Color(0xFF6B7280))),
-            ],
-            const SizedBox(height: 8),
-            Wrap(spacing: 12, runSpacing: 4, children: [
-              if (row.customerId?.isNotEmpty == true)
-                _mobileField('Code', row.customerId!),
-              if (row.paymentTerm?.isNotEmpty == true)
-                _mobileField('Payment', row.paymentTerm!),
-              if (row.city?.isNotEmpty == true)
-                _mobileField(
-                    'City',
-                    [row.city, row.state]
-                        .where((s) => s != null && s.isNotEmpty)
-                        .join(', ')),
-              if (row.pincode?.isNotEmpty == true)
-                _mobileField('PIN', row.pincode!),
-            ]),
-            const SizedBox(height: 12),
-            _RegApproveActions(
-                id: row.id,
-                onApprove: () => _approveReg(row),
-                onReject: () => _rejectReg(row)),
-            const SizedBox(height: 10),
-            GestureDetector(
-              onTap: () => _toggleExpand(row.id),
-              child: Row(mainAxisSize: MainAxisSize.min, children: [
-                Text(
-                  isExpanded ? 'Hide details' : 'View full details',
-                  style: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF2563EB)),
-                ),
-                AnimatedRotation(
-                  turns: isExpanded ? 0.5 : 0.0,
-                  duration: const Duration(milliseconds: 200),
-                  child: const Icon(Icons.expand_more,
-                      size: 16, color: Color(0xFF2563EB)),
-                ),
+                          fontSize: 12, color: Color(0xFF6B7280)),
+                      overflow: TextOverflow.ellipsis),
+                ],
+                if (row.phone.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(row.phone,
+                      style: const TextStyle(
+                          fontSize: 12, color: Color(0xFF6B7280))),
+                ],
+                const SizedBox(height: 8),
+                Wrap(spacing: 12, runSpacing: 4, children: [
+                  if (row.customerId?.isNotEmpty == true)
+                    _mobileField('Code', row.customerId!),
+                  if (row.paymentTerm?.isNotEmpty == true)
+                    _mobileField('Payment', row.paymentTerm!),
+                  if (row.city?.isNotEmpty == true)
+                    _mobileField(
+                        'City',
+                        [row.city, row.state]
+                            .where((s) => s != null && s.isNotEmpty)
+                            .join(', ')),
+                  if (row.pincode?.isNotEmpty == true)
+                    _mobileField('PIN', row.pincode!),
+                ]),
+                const SizedBox(height: 12),
+                // Approve/Reject (inner InkWells — stop propagation to outer InkWell)
+                _RegApproveActions(
+                    id: row.id,
+                    onApprove: () => _approveReg(row),
+                    onReject:  () => _rejectReg(row)),
               ]),
             ),
+            // Task 1: dynamic all-columns dropdown
+            if (isExpanded) ...[
+              const Divider(height: 1, color: Color(0xFFE5E7EB)),
+              _buildDynamicDetails(row.rawData, lpad: 16, rpad: 16),
+            ],
           ]),
         ),
-        if (isExpanded) ...[
-          const Divider(height: 1, color: Color(0xFFE5E7EB)),
-          _buildRegDetails(row, isDesktop: false),
-        ],
+      ),
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // APPROVED CUSTOMERS view  (Tasks 3 + 4)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  Widget _buildApprovedTableHeader() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 10),
+      color: const Color(0xFFF3F4F6),
+      child: Row(children: [
+        _th('Pharmacy', flex: 4),
+        _th('Contact', flex: 3),
+        _th('Phone', flex: 2),
+        _th('Code', flex: 2),
+        _th('City', flex: 2),
+        _th('Status', flex: 2),
+        const SizedBox(width: 160), // actions column
+        const SizedBox(width: 32),  // chevron
       ]),
     );
   }
 
-  Widget _buildRegDetails(_RegRow row, {required bool isDesktop}) {
-    final lpad = isDesktop ? 44.0 : 16.0;
-    final rpad = isDesktop ? 28.0 : 16.0;
+  Widget _buildDesktopApprovedRow(_ApprovedRow row) {
+    final isExpanded = row.id.let((id) => _expanded.contains(id));
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      InkWell(
+        onTap: () => _toggleExpand(row.id),
+        mouseCursor: SystemMouseCursors.click,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 13),
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
+          ),
+          child: Row(children: [
+            Expanded(
+                flex: 4,
+                child: Text(
+                    row.pharmacyName.isNotEmpty ? row.pharmacyName : '—',
+                    style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF111827)),
+                    overflow: TextOverflow.ellipsis)),
+            Expanded(
+                flex: 3,
+                child: Text(
+                    row.customerName.isNotEmpty ? row.customerName : '—',
+                    style: const TextStyle(
+                        fontSize: 13, color: Color(0xFF374151)),
+                    overflow: TextOverflow.ellipsis)),
+            Expanded(
+                flex: 2,
+                child: Text(row.phone.isNotEmpty ? row.phone : '—',
+                    style: const TextStyle(
+                        fontSize: 12, color: Color(0xFF6B7280)))),
+            Expanded(
+                flex: 2,
+                child: Text(
+                    row.customerCode.isNotEmpty ? row.customerCode : '—',
+                    style: const TextStyle(
+                        fontSize: 12,
+                        color: Color(0xFF374151),
+                        fontFamily: 'monospace'))),
+            Expanded(
+                flex: 2,
+                child: Text(
+                    [row.city, row.state]
+                        .where((s) => s.isNotEmpty)
+                        .join(', ')
+                        .let((s) => s.isNotEmpty ? s : '—'),
+                    style: const TextStyle(
+                        fontSize: 12, color: Color(0xFF6B7280)),
+                    overflow: TextOverflow.ellipsis)),
+            Expanded(
+              flex: 2,
+              child: _CustomerStatusBadge(status: row.status),
+            ),
+            // Edit + Suspend/Reactivate actions (inner InkWells — absorb tap)
+            SizedBox(
+              width: 160,
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                _actionBtn('Edit', const Color(0xFF2563EB),
+                    () => _editCustomer(row)),
+                const SizedBox(width: 6),
+                _actionBtn(
+                  row.isSuspended ? 'Reactivate' : 'Suspend',
+                  row.isSuspended
+                      ? const Color(0xFF16A34A)
+                      : const Color(0xFFDC2626),
+                  () => row.isSuspended
+                      ? _reactivateCustomer(row)
+                      : _suspendCustomer(row),
+                ),
+              ]),
+            ),
+            // Rotating chevron
+            SizedBox(
+              width: 32,
+              child: AnimatedRotation(
+                turns: isExpanded ? 0.5 : 0.0,
+                duration: const Duration(milliseconds: 200),
+                child: const Icon(Icons.expand_more,
+                    size: 18, color: Color(0xFF6B7280)),
+              ),
+            ),
+          ]),
+        ),
+      ),
+      if (isExpanded) _buildDynamicDetails(row.rawData, lpad: 44, rpad: 28),
+    ]);
+  }
 
-    final fields = <_FieldPair>[
-      if (row.storeType?.isNotEmpty == true)
-        _FieldPair('Store Type', row.storeType!),
-      if (row.range?.isNotEmpty == true)
-        _FieldPair('Range / Zone', row.range!),
-      if (row.addressLine?.isNotEmpty == true)
-        _FieldPair('Address', row.addressLine!),
-      if (row.pincode?.isNotEmpty == true)
-        _FieldPair('Pincode', row.pincode!),
-      if (row.whatsappNumber?.isNotEmpty == true)
-        _FieldPair('WhatsApp', row.whatsappNumber!),
-      if (row.otherContact?.isNotEmpty == true)
-        _FieldPair('Other Contact', row.otherContact!),
-      if (row.dl1?.isNotEmpty == true)
-        _FieldPair('Drug Licence 1', row.dl1!),
-      if (row.dl2?.isNotEmpty == true)
-        _FieldPair('Drug Licence 2', row.dl2!),
-      if (row.gstin?.isNotEmpty == true)
-        _FieldPair('GSTIN', row.gstin!),
-      if (row.googleMapLink?.isNotEmpty == true)
-        _FieldPair('Map Link', row.googleMapLink!),
-      if (row.createdAt != null)
-        _FieldPair(
-            'Registered',
-            '${row.createdAt!.day.toString().padLeft(2, '0')}/'
-            '${row.createdAt!.month.toString().padLeft(2, '0')}/'
-            '${row.createdAt!.year}'),
-    ];
+  Widget _buildMobileApprovedCard(_ApprovedRow row) {
+    final isExpanded = _expanded.contains(row.id);
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: row.isSuspended
+              ? const Color(0xFFFECACA)
+              : const Color(0xFFE5E7EB),
+        ),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(12),
+        child: InkWell(
+          onTap: () => _toggleExpand(row.id),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                // Pharmacy name + status badge + chevron
+                Row(children: [
+                  Expanded(
+                      child: Text(
+                          row.pharmacyName.isNotEmpty
+                              ? row.pharmacyName
+                              : row.customerName.isNotEmpty
+                                  ? row.customerName
+                                  : 'Unknown',
+                          style: const TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                              color: Color(0xFF111827)),
+                          overflow: TextOverflow.ellipsis)),
+                  const SizedBox(width: 8),
+                  _CustomerStatusBadge(status: row.status),
+                  const SizedBox(width: 4),
+                  AnimatedRotation(
+                    turns: isExpanded ? 0.5 : 0.0,
+                    duration: const Duration(milliseconds: 200),
+                    child: const Icon(Icons.expand_more,
+                        size: 18, color: Color(0xFF9CA3AF)),
+                  ),
+                ]),
+                if (row.customerName.isNotEmpty) ...[
+                  const SizedBox(height: 3),
+                  Text(row.customerName,
+                      style: const TextStyle(
+                          fontSize: 12, color: Color(0xFF6B7280)),
+                      overflow: TextOverflow.ellipsis),
+                ],
+                if (row.phone.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(row.phone,
+                      style: const TextStyle(
+                          fontSize: 12, color: Color(0xFF6B7280))),
+                ],
+                const SizedBox(height: 8),
+                Wrap(spacing: 12, runSpacing: 4, children: [
+                  if (row.customerCode.isNotEmpty)
+                    _mobileField('Code', row.customerCode),
+                  if (row.paymentTerm.isNotEmpty)
+                    _mobileField('Payment', row.paymentTerm),
+                  if (row.city.isNotEmpty)
+                    _mobileField(
+                        'City',
+                        [row.city, row.state]
+                            .where((s) => s.isNotEmpty)
+                            .join(', ')),
+                ]),
+                const SizedBox(height: 12),
+                // Action buttons (inner InkWells — absorb tap)
+                Row(children: [
+                  _actionBtn('Edit', const Color(0xFF2563EB),
+                      () => _editCustomer(row)),
+                  const SizedBox(width: 8),
+                  _actionBtn(
+                    row.isSuspended ? 'Reactivate' : 'Suspend',
+                    row.isSuspended
+                        ? const Color(0xFF16A34A)
+                        : const Color(0xFFDC2626),
+                    () => row.isSuspended
+                        ? _reactivateCustomer(row)
+                        : _suspendCustomer(row),
+                  ),
+                ]),
+              ]),
+            ),
+            if (isExpanded) ...[
+              const Divider(height: 1, color: Color(0xFFE5E7EB)),
+              _buildDynamicDetails(row.rawData, lpad: 16, rpad: 16),
+            ],
+          ]),
+        ),
+      ),
+    );
+  }
 
-    if (fields.isEmpty) {
+  // ═══════════════════════════════════════════════════════════════════════════
+  // DYNAMIC ALL-COLUMNS DETAILS  (Task 1)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // Columns that are internal/system and must never be shown to admins.
+  static const _kSkipCols = {'id', 'user_id'};
+
+  // Nice human-readable label for a snake_case DB column name.
+  static String _fmtLabel(String col) {
+    const overrides = {
+      'whatsapp_no':        'WhatsApp No.',
+      'other_contact_no':   'Other Contact',
+      'dl_20b':             'Drug Licence 20B',
+      'dl_21b':             'Drug Licence 21B',
+      'gst_no':             'GST No.',
+      'gstin':              'GSTIN',
+      'store_location_link':'Store Location',
+      'range_zone':         'Range / Zone',
+      'address_local':      'Local Address',
+      'customer_code':      'Customer Code',
+      'payment_term':       'Payment Term',
+      'store_type':         'Store Type',
+      'pharmacy_name':      'Pharmacy Name',
+      'customer_name':      'Customer Name',
+      'owner_name':         'Owner Name',
+      'created_at':         'Registered',
+      'updated_at':         'Updated',
+      'approved_at':        'Approved At',
+      'approved_by':        'Approved By',
+      'drug_license':       'Drug License',
+    };
+    if (overrides.containsKey(col)) return overrides[col]!;
+    return col.split('_').map((w) {
+      if (w.isEmpty) return '';
+      return '${w[0].toUpperCase()}${w.substring(1)}';
+    }).join(' ');
+  }
+
+  // Format a column value for human display.
+  static String _fmtValue(String col, dynamic value) {
+    if (value == null) return '—';
+    if (value is bool) return value ? 'Yes' : 'No';
+    final s = value.toString().trim();
+    if (s.isEmpty || s == 'null') return '—';
+    // Timestamps → DD/MM/YYYY HH:MM
+    if (col.endsWith('_at') && s.length >= 10) {
+      try {
+        final dt = DateTime.parse(s).toLocal();
+        return '${dt.day.toString().padLeft(2, '0')}/'
+               '${dt.month.toString().padLeft(2, '0')}/'
+               '${dt.year}  '
+               '${dt.hour.toString().padLeft(2, '0')}:'
+               '${dt.minute.toString().padLeft(2, '0')}';
+      } catch (_) {}
+    }
+    return s;
+  }
+
+  // Responsive grid of all non-internal columns from rawData.
+  Widget _buildDynamicDetails(
+    Map<String, dynamic> rawData, {
+    required double lpad,
+    required double rpad,
+  }) {
+    final entries = rawData.entries
+        .where((e) => !_kSkipCols.contains(e.key))
+        .toList();
+
+    if (entries.isEmpty) {
       return Container(
         color: const Color(0xFFF9FAFB),
         padding: EdgeInsets.fromLTRB(lpad, 10, rpad, 14),
@@ -1636,33 +2007,49 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     return Container(
       color: const Color(0xFFF9FAFB),
       padding: EdgeInsets.fromLTRB(lpad, 12, rpad, 16),
-      child: Wrap(
-        spacing: isDesktop ? 40 : 20,
-        runSpacing: 10,
-        children: fields
-            .map((f) => SizedBox(
-                  width: isDesktop ? 200 : double.infinity,
-                  child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                    Text(f.label,
-                        style: const TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.w600,
-                            color: Color(0xFF9CA3AF),
-                            letterSpacing: 0.4)),
-                    const SizedBox(height: 2),
-                    Text(f.value,
-                        style: const TextStyle(
-                            fontSize: 12, color: Color(0xFF374151))),
-                  ]),
-                ))
-            .toList(),
-      ),
+      child: LayoutBuilder(builder: (ctx, constraints) {
+        final w = constraints.maxWidth;
+        final cols    = w > 600 ? 3 : (w > 380 ? 2 : 1);
+        final spacing = 20.0;
+        final itemW   = ((w - spacing * (cols - 1)) / cols).clamp(80.0, 400.0);
+        return Wrap(
+          spacing: spacing,
+          runSpacing: 14,
+          children: entries.map((e) {
+            final label = _fmtLabel(e.key);
+            final value = _fmtValue(e.key, e.value);
+            return SizedBox(
+              width: itemW,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
+                    style: const TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF9CA3AF),
+                        letterSpacing: 0.4),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    value,
+                    style: TextStyle(
+                        fontSize: 12,
+                        color: value == '—'
+                            ? const Color(0xFFD1D5DB)
+                            : const Color(0xFF374151)),
+                  ),
+                ],
+              ),
+            );
+          }).toList(),
+        );
+      }),
     );
   }
 
-  // ── Helpers ───────────────────────────────────────────────────────────────────
+  // ── Helpers ────────────────────────────────────────────────────────────────
 
   static Widget _th(String label, {int flex = 1}) => Expanded(
         flex: flex,
@@ -1704,15 +2091,29 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
           ],
         ),
       );
+
+  // Small action button used for Edit/Suspend/Reactivate.
+  // Using InkWell so it absorbs tap and prevents the parent row InkWell from firing.
+  static Widget _actionBtn(String label, Color color, VoidCallback onTap) =>
+      InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(6),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.07),
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: color.withValues(alpha: 0.3)),
+          ),
+          child: Text(label,
+              style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: color)),
+        ),
+      );
 }
 
-// ── Field pair ────────────────────────────────────────────────────────────────
-
-class _FieldPair {
-  final String label;
-  final String value;
-  const _FieldPair(this.label, this.value);
-}
 
 // ── Extension ─────────────────────────────────────────────────────────────────
 
@@ -1735,22 +2136,22 @@ class _SourceBadge extends StatelessWidget {
       case 'website':
         color = const Color(0xFF2563EB);
         label = 'Website';
-        icon = Icons.language_outlined;
+        icon  = Icons.language_outlined;
         break;
       case 'whatsapp':
         color = const Color(0xFF16A34A);
         label = 'WhatsApp';
-        icon = Icons.chat_outlined;
+        icon  = Icons.chat_outlined;
         break;
       case 'cart_only':
         color = const Color(0xFFD97706);
         label = 'Cart';
-        icon = Icons.shopping_cart_outlined;
+        icon  = Icons.shopping_cart_outlined;
         break;
       default:
         color = const Color(0xFF6B7280);
         label = source;
-        icon = Icons.help_outline;
+        icon  = Icons.help_outline;
     }
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
@@ -1764,9 +2165,7 @@ class _SourceBadge extends StatelessWidget {
         const SizedBox(width: 3),
         Text(label,
             style: TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w600,
-                color: color)),
+                fontSize: 11, fontWeight: FontWeight.w600, color: color)),
       ]),
     );
   }
@@ -1782,9 +2181,8 @@ class _PaymentBadge extends StatelessWidget {
   Widget build(BuildContext context) {
     final isAdvance =
         term.toLowerCase().contains('advance') || term.toLowerCase() == 'adv';
-    final color = isAdvance
-        ? const Color(0xFF7C3AED)
-        : const Color(0xFF0891B2);
+    final color =
+        isAdvance ? const Color(0xFF7C3AED) : const Color(0xFF0891B2);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
       decoration: BoxDecoration(
@@ -1794,9 +2192,52 @@ class _PaymentBadge extends StatelessWidget {
       ),
       child: Text(term,
           style: TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-              color: color)),
+              fontSize: 11, fontWeight: FontWeight.w600, color: color)),
+    );
+  }
+}
+
+// ── Customer status badge ─────────────────────────────────────────────────────
+
+class _CustomerStatusBadge extends StatelessWidget {
+  final String status;
+  const _CustomerStatusBadge({required this.status});
+
+  @override
+  Widget build(BuildContext context) {
+    final Color color;
+    final String label;
+    final IconData icon;
+    switch (status) {
+      case 'suspended':
+        color = const Color(0xFFDC2626);
+        label = 'Suspended';
+        icon  = Icons.block_outlined;
+        break;
+      case 'approved':
+        color = const Color(0xFF16A34A);
+        label = 'Active';
+        icon  = Icons.verified_outlined;
+        break;
+      default:
+        color = const Color(0xFFD97706);
+        label = status.isNotEmpty ? status : 'Active';
+        icon  = Icons.info_outline;
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withValues(alpha: 0.3)),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(icon, size: 11, color: color),
+        const SizedBox(width: 3),
+        Text(label,
+            style: TextStyle(
+                fontSize: 11, fontWeight: FontWeight.w600, color: color)),
+      ]),
     );
   }
 }
@@ -1836,10 +2277,8 @@ class _ConfirmActionsState extends State<_ConfirmActions> {
               strokeWidth: 2, color: Color(0xFF1B5E20)));
     }
     final status = widget.row.orderStatus;
-    if (status == 'confirmed')
-      return _chip('Confirmed', const Color(0xFF16A34A));
-    if (status == 'rejected')
-      return _chip('Rejected', const Color(0xFFDC2626));
+    if (status == 'confirmed') return _chip('Confirmed', const Color(0xFF16A34A));
+    if (status == 'rejected')  return _chip('Rejected',  const Color(0xFFDC2626));
 
     return Row(mainAxisSize: MainAxisSize.min, children: [
       _btn('Accept', const Color(0xFF16A34A), () => _act('confirmed')),
@@ -1855,13 +2294,10 @@ class _ConfirmActionsState extends State<_ConfirmActions> {
             borderRadius: BorderRadius.circular(20)),
         child: Text(label,
             style: TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w600,
-                color: color)),
+                fontSize: 11, fontWeight: FontWeight.w600, color: color)),
       );
 
-  Widget _btn(String label, Color color, VoidCallback onTap) =>
-      InkWell(
+  Widget _btn(String label, Color color, VoidCallback onTap) => InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(6),
         child: Container(
@@ -1873,9 +2309,7 @@ class _ConfirmActionsState extends State<_ConfirmActions> {
           ),
           child: Text(label,
               style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
-                  color: color)),
+                  fontSize: 11, fontWeight: FontWeight.w600, color: color)),
         ),
       );
 }
@@ -1887,9 +2321,7 @@ class _RegApproveActions extends StatefulWidget {
   final Future<void> Function() onApprove;
   final Future<void> Function() onReject;
   const _RegApproveActions(
-      {required this.id,
-      required this.onApprove,
-      required this.onReject});
+      {required this.id, required this.onApprove, required this.onReject});
 
   @override
   State<_RegApproveActions> createState() => _RegApproveActionsState();
@@ -1924,16 +2356,13 @@ class _RegApproveActionsState extends State<_RegApproveActions> {
               strokeWidth: 2, color: Color(0xFF1B5E20)));
     }
     return Row(mainAxisSize: MainAxisSize.min, children: [
-      _btn('Approve', const Color(0xFF16A34A),
-          () => _act(widget.onApprove)),
+      _btn('Approve', const Color(0xFF16A34A), () => _act(widget.onApprove)),
       const SizedBox(width: 4),
-      _btn('Reject', const Color(0xFFDC2626),
-          () => _act(widget.onReject)),
+      _btn('Reject',  const Color(0xFFDC2626), () => _act(widget.onReject)),
     ]);
   }
 
-  Widget _btn(String label, Color color, VoidCallback onTap) =>
-      InkWell(
+  Widget _btn(String label, Color color, VoidCallback onTap) => InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(6),
         child: Container(
@@ -1945,9 +2374,7 @@ class _RegApproveActionsState extends State<_RegApproveActions> {
           ),
           child: Text(label,
               style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
-                  color: color)),
+                  fontSize: 11, fontWeight: FontWeight.w600, color: color)),
         ),
       );
 }
@@ -2001,8 +2428,7 @@ class _ActionCell extends StatelessWidget {
               color: const Color(0xFF1B5E20).withValues(alpha: 0.3)),
         ),
         child: const Row(mainAxisSize: MainAxisSize.min, children: [
-          Icon(Icons.check_circle_outline,
-              size: 14, color: Color(0xFF1B5E20)),
+          Icon(Icons.check_circle_outline, size: 14, color: Color(0xFF1B5E20)),
           SizedBox(width: 4),
           Text('Imported',
               style: TextStyle(
@@ -2020,6 +2446,7 @@ class _ActionCell extends StatelessWidget {
 class _AdminAddItemDialog extends StatefulWidget {
   final String userId;
   const _AdminAddItemDialog({required this.userId});
+
   @override
   State<_AdminAddItemDialog> createState() => _AdminAddItemDialogState();
 }
@@ -2078,15 +2505,13 @@ class _AdminAddItemDialogState extends State<_AdminAddItemDialog> {
       if (existingList.isNotEmpty) {
         final existing = Map<String, dynamic>.from(existingList.first as Map);
         final wasRemoved = (existing['removed_by_admin'] as bool?) ?? false;
-        final newQty = wasRemoved ? _qty : (existing['quantity'] as int) + _qty;
-        await Supabase.instance.client
-            .from('cart_items')
-            .update({
-              'quantity': newQty,
-              'removed_by_admin': false,
-              'updated_at': DateTime.now().toIso8601String(),
-            })
-            .eq('id', existing['id'] as int);
+        final newQty =
+            wasRemoved ? _qty : (existing['quantity'] as int) + _qty;
+        await Supabase.instance.client.from('cart_items').update({
+          'quantity': newQty,
+          'removed_by_admin': false,
+          'updated_at': DateTime.now().toIso8601String(),
+        }).eq('id', existing['id'] as int);
       } else {
         await Supabase.instance.client.from('cart_items').insert({
           'user_id':      widget.userId,
@@ -2096,8 +2521,9 @@ class _AdminAddItemDialogState extends State<_AdminAddItemDialog> {
           'mrp':          mrp,
           'quantity':     _qty,
           'image_url':    (item['image_url_1'] as String?) ?? '',
-          'manufacturer': (item['marketer'] as String?) ?? '',
-          'pack_size':    (item['pack_qty'] as String?) ?? (item['pack_size'] as String?) ?? '',
+          'manufacturer': (item['marketer']    as String?) ?? '',
+          'pack_size':    (item['pack_qty']    as String?) ??
+              (item['pack_size'] as String?) ?? '',
           'category':     (item['therapeutic_class'] as String?) ?? 'Other',
           'gst_percent':  (item['gst_percent'] as num?)?.toInt() ?? 12,
           'added_by':     'admin',
@@ -2159,7 +2585,8 @@ class _AdminAddItemDialogState extends State<_AdminAddItemDialog> {
                   prefixIcon: const Icon(Icons.search, size: 18),
                   suffixIcon: _searching
                       ? const SizedBox(
-                          width: 18, height: 18,
+                          width: 18,
+                          height: 18,
                           child: Padding(
                             padding: EdgeInsets.all(10),
                             child: CircularProgressIndicator(strokeWidth: 2),
@@ -2181,8 +2608,7 @@ class _AdminAddItemDialogState extends State<_AdminAddItemDialog> {
                   decoration: BoxDecoration(
                     color: const Color(0xFFF0FDF4),
                     borderRadius: BorderRadius.circular(8),
-                    border:
-                        Border.all(color: const Color(0xFF86EFAC)),
+                    border: Border.all(color: const Color(0xFF86EFAC)),
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -2198,8 +2624,7 @@ class _AdminAddItemDialogState extends State<_AdminAddItemDialog> {
                               overflow: TextOverflow.ellipsis),
                         ),
                         IconButton(
-                          onPressed: () =>
-                              setState(() => _selected = null),
+                          onPressed: () => setState(() => _selected = null),
                           icon: const Icon(Icons.close,
                               size: 14, color: Color(0xFF6B7280)),
                           visualDensity: VisualDensity.compact,
@@ -2207,14 +2632,12 @@ class _AdminAddItemDialogState extends State<_AdminAddItemDialog> {
                         ),
                       ]),
                       const SizedBox(height: 10),
-                      // Task 6: Qty stepper [−] qty [+]
                       Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
                           const Text('Qty:',
                               style: TextStyle(
-                                  fontSize: 13,
-                                  color: Color(0xFF374151))),
+                                  fontSize: 13, color: Color(0xFF374151))),
                           const SizedBox(width: 12),
                           _StepperButton(
                             icon: Icons.remove,
@@ -2225,13 +2648,11 @@ class _AdminAddItemDialogState extends State<_AdminAddItemDialog> {
                           Container(
                             width: 52,
                             alignment: Alignment.center,
-                            child: Text(
-                              '$_qty',
-                              style: const TextStyle(
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.w700,
-                                  color: Color(0xFF111827)),
-                            ),
+                            child: Text('$_qty',
+                                style: const TextStyle(
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.w700,
+                                    color: Color(0xFF111827))),
                           ),
                           _StepperButton(
                             icon: Icons.add,
@@ -2258,11 +2679,9 @@ class _AdminAddItemDialogState extends State<_AdminAddItemDialog> {
                             width: 16,
                             height: 16,
                             child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: Colors.white))
+                                strokeWidth: 2, color: Colors.white))
                         : const Text('Add to Cart',
-                            style: TextStyle(
-                                fontWeight: FontWeight.w600)),
+                            style: TextStyle(fontWeight: FontWeight.w600)),
                   ),
                 ),
                 const SizedBox(height: 6),
@@ -2285,8 +2704,8 @@ class _AdminAddItemDialogState extends State<_AdminAddItemDialog> {
                           return InkWell(
                             onTap: () => setState(() {
                               _selected = item;
-                              _results = [];
-                              _qty = 1;
+                              _results  = [];
+                              _qty      = 1;
                             }),
                             child: Container(
                               padding: const EdgeInsets.symmetric(
@@ -2303,27 +2722,22 @@ class _AdminAddItemDialogState extends State<_AdminAddItemDialog> {
                                         CrossAxisAlignment.start,
                                     children: [
                                       Text(
-                                          item['product_name']
-                                                  as String? ??
-                                              '',
+                                          item['product_name'] as String? ?? '',
                                           style: const TextStyle(
                                               fontSize: 12,
                                               fontWeight: FontWeight.w600,
                                               color: Color(0xFF111827)),
                                           maxLines: 1,
-                                          overflow:
-                                              TextOverflow.ellipsis),
+                                          overflow: TextOverflow.ellipsis),
                                       if ((item['marketer'] as String?)
                                               ?.isNotEmpty ==
                                           true)
                                         Text(item['marketer'] as String,
                                             style: const TextStyle(
                                                 fontSize: 11,
-                                                color:
-                                                    Color(0xFF6B7280)),
+                                                color: Color(0xFF6B7280)),
                                             maxLines: 1,
-                                            overflow:
-                                                TextOverflow.ellipsis),
+                                            overflow: TextOverflow.ellipsis),
                                     ],
                                   ),
                                 ),
@@ -2349,7 +2763,7 @@ class _AdminAddItemDialogState extends State<_AdminAddItemDialog> {
   }
 }
 
-// ── Removed-by-admin badge (admin sub-table) ──────────────────────────────────
+// ── Removed-by-admin badge ────────────────────────────────────────────────────
 
 class _RemovedByBadge extends StatelessWidget {
   const _RemovedByBadge();
@@ -2400,13 +2814,225 @@ class _StepperButton extends StatelessWidget {
                 : const Color(0xFFE5E7EB),
           ),
         ),
-        child: Icon(
-          icon,
-          size: 18,
-          color: enabled
-              ? const Color(0xFF1B5E20)
-              : const Color(0xFFD1D5DB),
+        child: Icon(icon,
+            size: 18,
+            color: enabled
+                ? const Color(0xFF1B5E20)
+                : const Color(0xFFD1D5DB)),
+      ),
+    );
+  }
+}
+
+// ── Customer Edit Dialog  (Task 4) ────────────────────────────────────────────
+
+// All editable fields in pharmacy_profiles (non-system columns).
+const _kEditFields = [
+  ('pharmacy_name',     'Pharmacy / Clinic Name', true),
+  ('customer_name',     'Customer Name',          false),
+  ('owner_name',        'Owner Name',             false),
+  ('whatsapp_no',       'WhatsApp No.',           false),
+  ('phone',             'Phone',                  false),
+  ('email',             'Email',                  false),
+  ('other_contact_no',  'Other Contact',          false),
+  ('store_type',        'Store Type',             false),
+  ('range_zone',        'Range / Zone',           false),
+  ('address_local',     'Local Address',          false),
+  ('address',           'Address',                false),
+  ('city',              'City',                   false),
+  ('state',             'State',                  false),
+  ('pincode',           'Pincode',                false),
+  ('store_location_link','Store Location Link',   false),
+  ('dl_20b',            'Drug Licence 20B',       false),
+  ('dl_21b',            'Drug Licence 21B',       false),
+  ('gst_no',            'GST No.',                false),
+  ('gstin',             'GSTIN',                  false),
+  ('drug_license',      'Drug License',           false),
+  ('payment_term',      'Payment Term',           false),
+  ('customer_code',     'Customer Code',          false),
+];
+
+class _CustomerEditDialog extends StatefulWidget {
+  final _ApprovedRow row;
+  const _CustomerEditDialog({required this.row});
+
+  @override
+  State<_CustomerEditDialog> createState() => _CustomerEditDialogState();
+}
+
+class _CustomerEditDialogState extends State<_CustomerEditDialog> {
+  late final Map<String, TextEditingController> _ctrl;
+  final _formKey = GlobalKey<FormState>();
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = {
+      for (final (key, _, _) in _kEditFields)
+        key: TextEditingController(
+          text: widget.row.rawData[key]?.toString() ?? '',
         ),
+    };
+  }
+
+  @override
+  void dispose() {
+    for (final c in _ctrl.values) c.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    if (!(_formKey.currentState?.validate() ?? false)) return;
+    setState(() => _saving = true);
+    try {
+      final client = Supabase.instance.client;
+      final updates = <String, dynamic>{
+        for (final (key, _, _) in _kEditFields)
+          key: _ctrl[key]!.text.trim().isEmpty ? null : _ctrl[key]!.text.trim(),
+      };
+
+      // Uniqueness check for customer_code
+      final newCode  = updates['customer_code'] as String?;
+      final oldCode  = widget.row.customerCode;
+      if (newCode != null && newCode.isNotEmpty && newCode != oldCode) {
+        final existing = await client
+            .from('pharmacy_profiles')
+            .select('id')
+            .eq('customer_code', newCode)
+            .neq('id', widget.row.id)
+            .maybeSingle();
+        if (existing != null) {
+          throw Exception('Customer Code "$newCode" is already in use by another customer');
+        }
+      }
+
+      await client.from('pharmacy_profiles').update(updates).eq('id', widget.row.id);
+      if (mounted) Navigator.pop(context, true);
+    } catch (e) {
+      if (mounted) {
+        setState(() => _saving = false);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Save failed: $e'),
+          backgroundColor: const Color(0xFFDC2626),
+        ));
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 580, maxHeight: 680),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          // Header
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 18, 12, 0),
+            child: Row(children: [
+              const Expanded(
+                child: Text('Edit Customer',
+                    style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFF111827))),
+              ),
+              IconButton(
+                icon: const Icon(Icons.close, size: 18),
+                onPressed: _saving ? null : () => Navigator.pop(context),
+                visualDensity: VisualDensity.compact,
+              ),
+            ]),
+          ),
+          const Divider(height: 16, indent: 20, endIndent: 20),
+          // Scrollable form
+          Expanded(
+            child: Form(
+              key: _formKey,
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+                child: LayoutBuilder(builder: (ctx, constraints) {
+                  final wide = constraints.maxWidth > 460;
+                  return Wrap(
+                    spacing: 12,
+                    runSpacing: 14,
+                    children: _kEditFields.map((rec) {
+                      final (key, label, required) = rec;
+                      return SizedBox(
+                        width: wide
+                            ? (constraints.maxWidth - 12) / 2
+                            : constraints.maxWidth,
+                        child: TextFormField(
+                          controller: _ctrl[key],
+                          decoration: InputDecoration(
+                            labelText: label,
+                            labelStyle: const TextStyle(
+                                fontSize: 12, color: Color(0xFF6B7280)),
+                            border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(8)),
+                            contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 10),
+                            isDense: true,
+                          ),
+                          style: const TextStyle(fontSize: 13),
+                          validator: required
+                              ? (v) => (v == null || v.trim().isEmpty)
+                                  ? '$label is required'
+                                  : null
+                              : null,
+                        ),
+                      );
+                    }).toList(),
+                  );
+                }),
+              ),
+            ),
+          ),
+          const Divider(height: 1, indent: 20, endIndent: 20),
+          // Footer buttons
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 10, 20, 16),
+            child: Row(children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: _saving ? null : () => Navigator.pop(context),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: const Color(0xFF374151),
+                    side: const BorderSide(color: Color(0xFFD1D5DB)),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8)),
+                    padding: const EdgeInsets.symmetric(vertical: 11),
+                  ),
+                  child: const Text('Cancel',
+                      style: TextStyle(
+                          fontSize: 13, fontWeight: FontWeight.w600)),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: FilledButton(
+                  onPressed: _saving ? null : _save,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFF1B5E20),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8)),
+                    padding: const EdgeInsets.symmetric(vertical: 11),
+                  ),
+                  child: _saving
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: Colors.white))
+                      : const Text('Save Changes',
+                          style: TextStyle(
+                              fontSize: 13, fontWeight: FontWeight.w600)),
+                ),
+              ),
+            ]),
+          ),
+        ]),
       ),
     );
   }

@@ -32178,12 +32178,14 @@ A.N(q)
 if(q!=null&&B.c.a0(q).length!==0)return B.c.a0(q)
 q=A.N(c==null?s:c.i(0,r))
 return q==null?"":q},
-bIo(a){var s,r
+bIo(a){var s,r,q
 if(a==null)return"Guest"
 s=A.N(a.i(0,"full_name"))
 if(s!=null&&B.c.a0(s).length!==0)return B.c.a0(s)
 r=A.N(a.i(0,"email"))
 if(r!=null&&B.c.a0(r).length!==0)return B.c.a0(r)
+q=A.N(a.i(0,"phone"))
+if(q!=null&&B.c.a0(q).length!==0)return B.c.a0(q)
 return"Guest"},
 bIp(a){var s,r
 if(a==null)return A.b([],t.sJ)
@@ -117966,7 +117968,7 @@ if(n==null){s=1
 break}m=$.be().b
 m===$&&A.a()
 s=7
-return A.k(m.bI("cart_items").GN(A.R(["user_id",n,"product_id",a.a,"product_name",a.b,"price",a.z,"mrp",a.y,"quantity",b,"image_url",a.r,"manufacturer",a.d,"pack_size",a.x,"category",a.e,"gst_percent",B.d.aG(a.Q),"updated_at",new A.cH(Date.now(),0,!1).lg()],t.N,t.K),"user_id,product_id"),$async$DV)
+return A.k(m.bI("cart_items").GN(A.R(["user_id",n,"product_id",a.a,"product_name",a.b,"price",a.z,"mrp",a.y,"quantity",b,"image_url",a.r,"manufacturer",a.d,"pack_size",a.x,"category",a.e,"gst_percent",B.d.aG(a.Q),"updated_at",new A.cH(Date.now(),0,!1).lg(),"removed_by_admin",!1],t.N,t.K),"user_id,product_id"),$async$DV)
 case 7:p=2
 s=6
 break

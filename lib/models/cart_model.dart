@@ -307,6 +307,7 @@ class CartModel extends ChangeNotifier {
           'category': product.category,
           'gst_percent': product.gstPercent.toInt(),
           'updated_at': DateTime.now().toIso8601String(),
+          'removed_by_admin': false,
         },
         onConflict: 'user_id,product_id',
       );

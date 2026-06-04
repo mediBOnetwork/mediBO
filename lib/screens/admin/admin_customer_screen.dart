@@ -608,6 +608,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     if (name != null && name.trim().isNotEmpty) return name.trim();
     final email = auth['email'] as String?;
     if (email != null && email.trim().isNotEmpty) return email.trim();
+    final phone = auth['phone'] as String?;
+    if (phone != null && phone.trim().isNotEmpty) return phone.trim();
     return 'Guest';
   }
 

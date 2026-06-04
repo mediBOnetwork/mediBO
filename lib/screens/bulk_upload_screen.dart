@@ -4556,6 +4556,11 @@ Future<List<Product>> _manualSearchProducts(String query, {int limit = 3}) async
 //   After a pick  : line-1 = new pick, line-2 = demoted old match, lines 3–5 = 3 fuzzy.
 //   Line 6 (last) : search row — prefilled with raw OCR text, fires on icon-tap / Enter.
 //   Below search  : top-3 search results (panel expands); candidate rows stay visible.
+
+// Row height shared by every panel row (shimmer, fuzzy, result, empty filler).
+// Constant ensures rows 2–5 always occupy exactly 4 × _kMatchRowH regardless of state.
+const double _kMatchRowH = 36.0;
+
 class _MatchPanel extends StatefulWidget {
   final _MatchRow row;
   final VoidCallback onRowChanged; // called after pick — parent handles close + refresh
@@ -4698,12 +4703,21 @@ class _MatchPanelState extends State<_MatchPanel> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // Lines 2–5: skeletons during loading, candidates/results otherwise
-        if (_searching)
-          ...List.generate(4, (_) => const _WebPanelSkeletonRow())
-        else
-          for (final p in rows)
-            _SearchResultRow(product: p, onTap: () => _pick(p), isMobile: false),
+        // Lines 2–5: always exactly 4 × _kMatchRowH — pixel-stable height in all states.
+        // _searching → 4 shimmer skeletons; loaded → up to 4 rows + empty fillers; idle → fuzzy candidates.
+        ...List.generate(4, (i) {
+          if (_searching) {
+            return const SizedBox(height: _kMatchRowH, child: _WebPanelSkeletonRow());
+          }
+          if (i < rows.length) {
+            final p = rows[i];
+            return SizedBox(
+              height: _kMatchRowH,
+              child: _SearchResultRow(product: p, onTap: () => _pick(p), isMobile: false),
+            );
+          }
+          return const _WebPanelEmptyRow();
+        }),
 
         // Line 6: search box pinned at bottom with merged icon
         Container(
@@ -5065,6 +5079,20 @@ class _WebPanelSkeletonRow extends StatelessWidget {
       ),
     );
   }
+}
+
+// ─── Web panel empty filler row (maintains 4-row height when fewer results) ───
+
+class _WebPanelEmptyRow extends StatelessWidget {
+  const _WebPanelEmptyRow();
+
+  @override
+  Widget build(BuildContext context) => Container(
+        height: _kMatchRowH,
+        decoration: const BoxDecoration(
+          border: Border(top: BorderSide(color: Color(0xFFE5E7EB))),
+        ),
+      );
 }
 
 class _AlternativeRow extends StatelessWidget {

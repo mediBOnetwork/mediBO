@@ -4031,69 +4031,46 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         // ── Header row ──────────────────────────────────────
-                        // Right-side columns mirror candidate rows (_kMobPanel* constants)
-                        // so Qty (header) and Pack (candidates) share the same vertical x.
                         Padding(
-                          padding: const EdgeInsets.fromLTRB(12, 14, _kMobPanelRightPad, 10),
+                          padding: const EdgeInsets.fromLTRB(12, 14, 12, 10),
                           child: Row(
                             children: [
-                              // Expanded: crop image + status badge
                               Expanded(
-                                child: Row(
-                                  children: [
-                                    Expanded(
-                                      child: SizedBox(
-                                        height: 24,
-                                        child: _lineItemCrop(
-                                            row,
-                                            widget.uploadedImageSize,
-                                            fallbackStyle: const TextStyle(
-                                                fontSize: 13,
-                                                fontWeight: FontWeight.w700,
-                                                color: Color(0xFF111827))),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 6),
-                                    // Status badge — natural width, no clipping
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                child: SizedBox(
+                                  height: 24,
+                                  child: _lineItemCrop(
+                                      row,
+                                      widget.uploadedImageSize,
+                                      fallbackStyle: const TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w700,
+                                          color: Color(0xFF111827))),
+                                ),
+                              ),
+                              // Controls cluster — min-sized Row pinned to the right
+                              Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const SizedBox(width: 8),
+                                  SizedBox(
+                                    width: 36,
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
                                       decoration: BoxDecoration(
-                                          color: badgeColor,
-                                          borderRadius: BorderRadius.circular(8)),
-                                      child: Text(label,
-                                          style: TextStyle(
+                                        color: const Color(0xFFF3F4F6),
+                                        borderRadius: BorderRadius.circular(8),
+                                        border: Border.all(color: const Color(0xFFD1D5DB)),
+                                      ),
+                                      child: Text('${row.qty}',
+                                          textAlign: TextAlign.center,
+                                          style: const TextStyle(
                                               fontSize: 11,
-                                              fontWeight: FontWeight.w600,
-                                              color: badgeText)),
+                                              fontWeight: FontWeight.w500,
+                                              color: Color(0xFF374151))),
                                     ),
-                                  ],
-                                ),
-                              ),
-                              // Qty column — aligns with Pack in candidate rows
-                              const SizedBox(width: _kMobPanelGap),
-                              SizedBox(
-                                width: _kMobPanelPackW,
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFFF3F4F6),
-                                    borderRadius: BorderRadius.circular(8),
-                                    border: Border.all(color: const Color(0xFFD1D5DB)),
                                   ),
-                                  child: Text('${row.qty}',
-                                      textAlign: TextAlign.center,
-                                      style: const TextStyle(
-                                          fontSize: 11,
-                                          fontWeight: FontWeight.w500,
-                                          color: Color(0xFF374151))),
-                                ),
-                              ),
-                              // Eye column — aligns with Company in candidate rows
-                              const SizedBox(width: _kMobPanelGap),
-                              SizedBox(
-                                width: _kMobPanelCompW,
-                                child: Center(
-                                  child: GestureDetector(
+                                  const SizedBox(width: 8),
+                                  GestureDetector(
                                     onTap: widget.onHideToggle,
                                     behavior: HitTestBehavior.opaque,
                                     child: Padding(
@@ -4107,14 +4084,28 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                                       ),
                                     ),
                                   ),
-                                ),
-                              ),
-                              // Approve/retry column — aligns with MRP in candidate rows
-                              const SizedBox(width: _kMobPanelGap),
-                              SizedBox(
-                                width: _kMobPanelMrpW,
-                                child: Center(
-                                  child: (row.status == _MatchStatus.unrecognized && !row.isHidden)
+                                  const SizedBox(width: 8),
+                                  SizedBox(
+                                    width: 112,
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                      decoration: BoxDecoration(
+                                          color: badgeColor,
+                                          borderRadius: BorderRadius.circular(8)),
+                                      child: Text(label,
+                                          textAlign: TextAlign.center,
+                                          overflow: TextOverflow.ellipsis,
+                                          maxLines: 1,
+                                          style: TextStyle(
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.w600,
+                                              color: badgeText)),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  // Approve cell: per-row retry for unrecognized rows,
+                                  // normal checkbox for all other statuses.
+                                  (row.status == _MatchStatus.unrecognized && !row.isHidden)
                                       ? _isRowRetrying
                                           ? SizedBox(
                                               width: 20, height: 20,
@@ -4164,7 +4155,7 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                                                   ),
                                           ),
                                         ),
-                                ),
+                                ],
                               ),
                             ],
                           ),

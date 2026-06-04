@@ -4577,6 +4577,7 @@ class _MatchPanelState extends State<_MatchPanel> {
   List<Product> _searchResults = [];
   bool _searching = false;
   bool _hasSearched = false;
+  Timer? _debounce;
 
   @override
   void initState() {
@@ -4586,13 +4587,27 @@ class _MatchPanelState extends State<_MatchPanel> {
   }
 
   @override
+  void didUpdateWidget(_MatchPanel old) {
+    super.didUpdateWidget(old);
+    if (!identical(old.row, widget.row)) {
+      _debounce?.cancel();
+      _ctrl.text = widget.row.lineItem;
+      _searchResults = [];
+      _hasSearched = false;
+      _searching = false;
+    }
+  }
+
+  @override
   void dispose() {
+    _debounce?.cancel();
     _ctrl.dispose();
     _focusNode.dispose();
     super.dispose();
   }
 
   Future<void> _fireSearch() async {
+    _debounce?.cancel();
     final q = _ctrl.text.trim();
     if (q.isEmpty) { setState(() { _searchResults = []; }); return; }
     setState(() { _searching = true; _hasSearched = true; });
@@ -4601,23 +4616,33 @@ class _MatchPanelState extends State<_MatchPanel> {
   }
 
   void _clearSearch() {
+    _debounce?.cancel();
     _ctrl.clear();
-    setState(() { _searchResults = []; _hasSearched = false; });
+    setState(() { _searchResults = []; _hasSearched = false; _searching = false; });
   }
 
-  Future<void> _liveSearch(String q) async {
+  void _liveSearch(String q) {
     if (!_hasSearched) return;
-    if (q.trim().isEmpty) { setState(() => _searchResults = []); return; }
-    final all = await _manualSearchProducts(q.trim(), limit: 4);
-    if (mounted) setState(() => _searchResults = all);
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 200), () async {
+      final trimmed = q.trim();
+      if (trimmed.isEmpty) {
+        if (mounted) setState(() => _searchResults = []);
+        return;
+      }
+      if (mounted) setState(() => _searching = true);
+      final all = await _manualSearchProducts(trimmed, limit: 4);
+      if (mounted) setState(() { _searchResults = all; _searching = false; });
+    });
   }
 
   void _pick(Product p) {
+    _debounce?.cancel();
     final row = widget.row;
     row._previousLine1 = row.selectedProduct;
     row._manualProduct = p;
     row.status = _MatchStatus.manuallyMatched;
-    setState(() { _searchResults = []; _hasSearched = false; });
+    setState(() { _searchResults = []; _hasSearched = false; _searching = false; });
     widget.onRowChanged();
   }
 
@@ -4673,13 +4698,12 @@ class _MatchPanelState extends State<_MatchPanel> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // Lines 2–5: fuzzy candidates or search results (above the search box)
-        for (int i = 0; i < rows.length; i++)
-          _SearchResultRow(
-            product: rows[i],
-            onTap: () => _pick(rows[i]),
-            isMobile: false,
-          ),
+        // Lines 2–5: skeletons during loading, candidates/results otherwise
+        if (_searching)
+          ...List.generate(4, (_) => const _WebPanelSkeletonRow())
+        else
+          for (final p in rows)
+            _SearchResultRow(product: p, onTap: () => _pick(p), isMobile: false),
 
         // Line 6: search box pinned at bottom with merged icon
         Container(
@@ -4907,54 +4931,137 @@ class _SearchResultRow extends StatelessWidget {
     );
   }
 
-  // Web: unchanged — flex-based layout for wider screens
+  // Web: flex layout aligned to the main table columns — same x per column as _AlternativeRow._buildWeb()
   Widget _buildWeb() {
     return InkWell(
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.fromLTRB(17, 7, 12, 7),
+        padding: const EdgeInsets.fromLTRB(17, 8, 12, 8),
         decoration: const BoxDecoration(
           color: Colors.white,
           border: Border(top: BorderSide(color: Color(0xFFE5E7EB))),
         ),
         child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
+            // LINE ITEM column — blank spacer (aligns with main table)
+            const Expanded(flex: 18, child: SizedBox()),
+            // MATCHED SKU column — product name
             Expanded(
-              flex: 5,
+              flex: 20,
               child: Text(product.name,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
-                      fontSize: 12, fontWeight: FontWeight.w500, color: Color(0xFF111827))),
+                      fontSize: 12, fontWeight: FontWeight.w500,
+                      color: Color(0xFF374151))),
             ),
-            const SizedBox(width: 6),
-            SizedBox(
-              width: 46,
+            // PACK column
+            Expanded(
+              flex: 8,
               child: Text(_packShort(product),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 11, color: Color(0xFF374151))),
+                  style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
             ),
-            const SizedBox(width: 6),
+            // COMPANY column
             Expanded(
-              flex: 2,
+              flex: 12,
               child: Text(product.manufacturer,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
             ),
-            const SizedBox(width: 6),
-            SizedBox(
-              width: 52,
+            // QTY column — blank spacer
+            const Expanded(flex: 5, child: SizedBox()),
+            // MRP column — black to match row text, no green
+            Expanded(
+              flex: 9,
               child: Text(rupees(product.mrp),
-                  textAlign: TextAlign.right,
                   style: const TextStyle(
-                      fontSize: 11, fontWeight: FontWeight.w500, color: Color(0xFF16A34A))),
+                      fontSize: 12, fontWeight: FontWeight.w500,
+                      color: Color(0xFF374151))),
             ),
-            const SizedBox(width: 6),
-            const Icon(Icons.add_circle_outline_rounded, size: 14, color: Color(0xFF16A34A)),
+            // STATUS / HIDE / APPROVE columns — blank spacers
+            const Expanded(flex: 10, child: SizedBox()),
+            const SizedBox(width: 12),
+            const Expanded(flex: 3, child: SizedBox()),
+            const SizedBox(width: 12),
+            const Expanded(flex: 5, child: SizedBox()),
           ],
         ),
+      ),
+    );
+  }
+}
+
+// ─── Web panel skeleton row (shown during search loading, maintains panel height) ──
+
+class _WebPanelSkeletonRow extends StatelessWidget {
+  const _WebPanelSkeletonRow();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(17, 8, 12, 8),
+      decoration: const BoxDecoration(
+        color: Color(0xFFF0FDF4),
+        border: Border(top: BorderSide(color: Color(0xFFE5E7EB))),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          const Expanded(flex: 18, child: SizedBox()),
+          Expanded(
+            flex: 20,
+            child: Container(
+              height: 10,
+              margin: const EdgeInsets.only(right: 8),
+              decoration: BoxDecoration(
+                color: const Color(0xFFBBF7D0),
+                borderRadius: BorderRadius.circular(4),
+              ),
+            ),
+          ),
+          Expanded(
+            flex: 8,
+            child: Container(
+              height: 10,
+              margin: const EdgeInsets.only(right: 6),
+              decoration: BoxDecoration(
+                color: const Color(0xFFBBF7D0),
+                borderRadius: BorderRadius.circular(4),
+              ),
+            ),
+          ),
+          Expanded(
+            flex: 12,
+            child: Container(
+              height: 10,
+              margin: const EdgeInsets.only(right: 6),
+              decoration: BoxDecoration(
+                color: const Color(0xFFBBF7D0),
+                borderRadius: BorderRadius.circular(4),
+              ),
+            ),
+          ),
+          const Expanded(flex: 5, child: SizedBox()),
+          Expanded(
+            flex: 9,
+            child: Container(
+              height: 10,
+              decoration: BoxDecoration(
+                color: const Color(0xFFBBF7D0),
+                borderRadius: BorderRadius.circular(4),
+              ),
+            ),
+          ),
+          const Expanded(flex: 10, child: SizedBox()),
+          const SizedBox(width: 12),
+          const Expanded(flex: 3, child: SizedBox()),
+          const SizedBox(width: 12),
+          const Expanded(flex: 5, child: SizedBox()),
+        ],
       ),
     );
   }

@@ -18,8 +18,9 @@ class CartLine {
   // Row index from the bulk-upload preview; null for manually browsed items.
   // Used to sort bulk items in upload order and restore position on re-sync.
   final int? bulkOrder;
+  final bool addedByAdmin;
 
-  CartLine(this.product, this.quantity, {this.isSample = false, this.bulkOrder});
+  CartLine(this.product, this.quantity, {this.isSample = false, this.bulkOrder, this.addedByAdmin = false});
 
   double get lineTotal => product.b2bPrice * quantity;
   double get lineGst => lineTotal * product.gstPercent / 100;
@@ -50,6 +51,7 @@ class Order {
 /// localStorage for guests. Merges guest cart into Supabase on login.
 class CartModel extends ChangeNotifier {
   final Map<String, CartLine> _lines = {};
+  final List<CartLine> _adminRemovedLines = [];
   final List<Order> _orders = [];
   int _orderSeq = 1042;
 
@@ -61,6 +63,7 @@ class CartModel extends ChangeNotifier {
 
   static const _guestKey = 'medibo_guest_cart';
   StreamSubscription<AuthState>? _authSub;
+  RealtimeChannel? _cartChannel;
   bool _isLoggedIn = false;
 
   CartModel() {
@@ -73,6 +76,8 @@ class CartModel extends ChangeNotifier {
     _authSub = client.auth.onAuthStateChange.listen(_onAuthState);
     if (_isLoggedIn) {
       _loadFromSupabase();
+      final uid = client.auth.currentUser?.id;
+      if (uid != null) _subscribeToCartRealtime(uid);
     } else {
       _loadFromLocalStorage();
     }
@@ -84,13 +89,37 @@ class CartModel extends ChangeNotifier {
       _isLoggedIn = true;
       await _mergeGuestCartToSupabase();
       await _loadFromSupabase();
+      final uid = Supabase.instance.client.auth.currentUser?.id;
+      if (uid != null) _subscribeToCartRealtime(uid);
     } else if (event == AuthChangeEvent.signedOut) {
       _isLoggedIn = false;
+      _cartChannel?.unsubscribe();
+      _cartChannel = null;
       _clearLocalStorage();
       _lines.clear();
+      _adminRemovedLines.clear();
       _recomputeTotals();
       notifyListeners();
     }
+  }
+
+  void _subscribeToCartRealtime(String uid) {
+    _cartChannel?.unsubscribe();
+    final ts = DateTime.now().millisecondsSinceEpoch;
+    _cartChannel = Supabase.instance.client
+        .channel('customer_cart_${uid}_$ts')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'cart_items',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'user_id',
+            value: uid,
+          ),
+          callback: (_) => _loadFromSupabase(),
+        )
+        .subscribe();
   }
 
   // ── Supabase ──────────────────────────────────────────────────────────────
@@ -104,6 +133,7 @@ class CartModel extends ChangeNotifier {
           .select()
           .eq('user_id', uid);
       _lines.clear();
+      _adminRemovedLines.clear();
       for (final row in rows) {
         final product = Product.fromCartData(
           id: row['product_id'] as String,
@@ -116,7 +146,13 @@ class CartModel extends ChangeNotifier {
           category: (row['category'] as String?) ?? 'Other',
           gstPercent: (row['gst_percent'] as num?)?.toDouble() ?? 12.0,
         );
-        _lines[product.id] = CartLine(product, row['quantity'] as int);
+        final removedByAdmin = (row['removed_by_admin'] as bool?) ?? false;
+        final addedByAdmin = (row['added_by'] as String?) == 'admin';
+        if (removedByAdmin) {
+          _adminRemovedLines.add(CartLine(product, row['quantity'] as int, addedByAdmin: addedByAdmin));
+        } else {
+          _lines[product.id] = CartLine(product, row['quantity'] as int, addedByAdmin: addedByAdmin);
+        }
       }
       _recomputeTotals();
       notifyListeners();
@@ -282,6 +318,7 @@ class CartModel extends ChangeNotifier {
     bulk.sort((a, b) => a.bulkOrder!.compareTo(b.bulkOrder!));
     return [...bulk, ...others];
   }
+  List<CartLine> get adminRemovedLines => List.unmodifiable(_adminRemovedLines);
   List<Order> get orders => List.unmodifiable(_orders.reversed);
 
   int get distinctItems => _lines.length;
@@ -472,6 +509,7 @@ class CartModel extends ChangeNotifier {
   @override
   void dispose() {
     _authSub?.cancel();
+    _cartChannel?.unsubscribe();
     _sampleTimer?.cancel();
     super.dispose();
   }

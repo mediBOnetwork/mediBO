@@ -8,10 +8,22 @@ import '../bulk_upload_screen.dart';
 // ── Order-row models ───────────────────────────────────────────────────────────
 
 class _ItemLine {
+  final int? id;
+  final String? productId;
   final String name;
   final int qty;
   final double? price;
-  const _ItemLine({required this.name, required this.qty, this.price});
+  final String addedBy;
+  final bool removedByAdmin;
+  const _ItemLine({
+    this.id,
+    this.productId,
+    required this.name,
+    required this.qty,
+    this.price,
+    this.addedBy = 'customer',
+    this.removedByAdmin = false,
+  });
 }
 
 class _CustRow {
@@ -23,6 +35,7 @@ class _CustRow {
   final String? orderId;
   final String orderStatus;
   final List<_ItemLine> items;
+  final List<_ItemLine> removedItems;
   final double? total;
 
   const _CustRow({
@@ -34,6 +47,7 @@ class _CustRow {
     this.orderId,
     required this.orderStatus,
     required this.items,
+    this.removedItems = const [],
     this.total,
   });
 
@@ -187,7 +201,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         client.from('user_profiles').select(),
         client.from('pharmacy_profiles').select(),
         client.from('orders').select().order('created_at', ascending: false),
-        client.from('cart_items').select('user_id, product_name, quantity, price'),
+        client.from('cart_items').select(),
       ]);
 
       final upRows    = results[0] as List;
@@ -244,23 +258,29 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         final uid = entry.key;
         final up  = upMap[uid];
         final pp  = ppMap[uid];
+        final allItems = entry.value
+            .map((ci) => _ItemLine(
+                  id:             ci['id'] as int?,
+                  productId:      ci['product_id'] as String?,
+                  name:           ci['product_name'] as String? ?? '',
+                  qty:            (ci['quantity'] as num?)?.toInt() ?? 1,
+                  price:          (ci['price'] as num?)?.toDouble(),
+                  addedBy:        ci['added_by'] as String? ?? 'customer',
+                  removedByAdmin: (ci['removed_by_admin'] as bool?) ?? false,
+                ))
+            .where((i) => i.name.isNotEmpty)
+            .toList();
         carts.add(_CustRow(
-          userId:      uid,
-          name:        _name(up, pp, null),
-          pharmacy:    _pharmacy(up, pp, null),
-          phone:       _phone(up, pp, null),
-          source:      'cart_only',
-          orderId:     null,
-          orderStatus: 'cart_only',
-          items: entry.value
-              .map((ci) => _ItemLine(
-                    name:  ci['product_name'] as String? ?? '',
-                    qty:   (ci['quantity'] as num?)?.toInt() ?? 1,
-                    price: (ci['price'] as num?)?.toDouble(),
-                  ))
-              .where((i) => i.name.isNotEmpty)
-              .toList(),
-          total: null,
+          userId:       uid,
+          name:         _name(up, pp, null),
+          pharmacy:     _pharmacy(up, pp, null),
+          phone:        _phone(up, pp, null),
+          source:       'cart_only',
+          orderId:      null,
+          orderStatus:  'cart_only',
+          items:        allItems.where((i) => !i.removedByAdmin).toList(),
+          removedItems: allItems.where((i) => i.removedByAdmin).toList(),
+          total:        null,
         ));
       }
 
@@ -385,6 +405,31 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         ));
       }
     }
+  }
+
+  Future<void> _adminSoftRemoveItem(int itemId) async {
+    try {
+      await Supabase.instance.client
+          .from('cart_items')
+          .update({'removed_by_admin': true})
+          .eq('id', itemId);
+      _load(showSpinner: false);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Remove failed: $e'),
+          backgroundColor: const Color(0xFFDC2626),
+        ));
+      }
+    }
+  }
+
+  Future<void> _adminAddCartItem(String userId) async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (_) => _AdminAddItemDialog(userId: userId),
+    );
+    if (result == true) _load(showSpinner: false);
   }
 
   void _openImport(_CustRow row) {
@@ -799,6 +844,11 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         ),
       );
     }
+
+    if (row.isCartOnly) {
+      return _buildCartExpandedItems(row, lpad: lpad, rpad: rpad);
+    }
+
     if (row.items.isEmpty) {
       return Container(
         color: const Color(0xFFF9FAFB),
@@ -807,10 +857,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
             style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF))),
       );
     }
-    final label = row.isCartOnly
-        ? 'Cart Items (${row.items.length})'
-        : 'Order Items (${row.items.length})'
-            '${row.total != null ? ' · ₹${row.total!.toStringAsFixed(2)}' : ''}';
+    final label = 'Order Items (${row.items.length})'
+        '${row.total != null ? ' · ₹${row.total!.toStringAsFixed(2)}' : ''}';
 
     return Container(
       color: const Color(0xFFF9FAFB),
@@ -869,6 +917,173 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                             fontSize: 12, color: Color(0xFF374151)))),
               ]),
             )),
+      ]),
+    );
+  }
+
+  Widget _buildCartExpandedItems(_CustRow row, {required double lpad, required double rpad}) {
+    return Container(
+      color: const Color(0xFFF9FAFB),
+      padding: EdgeInsets.fromLTRB(lpad, 10, rpad, 14),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // Header + Add button
+        Row(children: [
+          Text(
+            'Cart Items (${row.items.length})',
+            style: const TextStyle(
+                fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFF374151)),
+          ),
+          const Spacer(),
+          TextButton.icon(
+            onPressed: () => _adminAddCartItem(row.userId),
+            icon: const Icon(Icons.add, size: 14),
+            label: const Text('Add Item', style: TextStyle(fontSize: 12)),
+            style: TextButton.styleFrom(
+              foregroundColor: const Color(0xFF1B5E20),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+          ),
+        ]),
+        const SizedBox(height: 6),
+
+        // Active items
+        if (row.items.isEmpty)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 6),
+            child: Text('No active items.',
+                style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF))),
+          )
+        else ...[
+          Row(children: const [
+            Expanded(
+                flex: 5,
+                child: Text('Product',
+                    style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF9CA3AF)))),
+            SizedBox(
+                width: 44,
+                child: Text('Qty',
+                    style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF9CA3AF)))),
+            SizedBox(
+                width: 80,
+                child: Text('Price',
+                    style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF9CA3AF)))),
+            SizedBox(width: 68),
+          ]),
+          const SizedBox(height: 4),
+          ...row.items.map((item) => Padding(
+                padding: const EdgeInsets.only(top: 5),
+                child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+                  Expanded(
+                      flex: 5,
+                      child: Row(children: [
+                        Flexible(
+                          child: Text(item.name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                  fontSize: 12, color: Color(0xFF374151))),
+                        ),
+                        if (item.addedBy == 'admin') ...[
+                          const SizedBox(width: 4),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 4, vertical: 1),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFFEF08A),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: const Text('mediBO',
+                                style: TextStyle(
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.w600,
+                                    color: Color(0xFF92400E))),
+                          ),
+                        ],
+                      ])),
+                  SizedBox(
+                      width: 44,
+                      child: Text('×${item.qty}',
+                          style: const TextStyle(
+                              fontSize: 12, color: Color(0xFF6B7280)))),
+                  SizedBox(
+                      width: 80,
+                      child: Text(
+                          item.price != null
+                              ? '₹${item.price!.toStringAsFixed(2)}'
+                              : '—',
+                          style: const TextStyle(
+                              fontSize: 12, color: Color(0xFF374151)))),
+                  SizedBox(
+                    width: 68,
+                    child: item.id != null
+                        ? TextButton(
+                            onPressed: () => _adminSoftRemoveItem(item.id!),
+                            style: TextButton.styleFrom(
+                              foregroundColor: const Color(0xFFDC2626),
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              minimumSize: Size.zero,
+                            ),
+                            child: const Text('Remove',
+                                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
+                          )
+                        : const SizedBox(),
+                  ),
+                ]),
+              )),
+        ],
+
+        // Removed by admin section
+        if (row.removedItems.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          const Divider(height: 1, color: Color(0xFFE5E7EB)),
+          const SizedBox(height: 8),
+          Text(
+            'Removed by admin (${row.removedItems.length})',
+            style: const TextStyle(
+                fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF9CA3AF)),
+          ),
+          const SizedBox(height: 4),
+          ...row.removedItems.map((item) => Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Row(children: [
+                  Expanded(
+                      flex: 5,
+                      child: Text(item.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              fontSize: 12,
+                              color: Color(0xFFD1D5DB),
+                              decoration: TextDecoration.lineThrough,
+                              decorationColor: Color(0xFFD1D5DB)))),
+                  SizedBox(
+                      width: 44,
+                      child: Text('×${item.qty}',
+                          style: const TextStyle(
+                              fontSize: 12, color: Color(0xFFD1D5DB)))),
+                  SizedBox(
+                      width: 80,
+                      child: Text(
+                          item.price != null
+                              ? '₹${item.price!.toStringAsFixed(2)}'
+                              : '—',
+                          style: const TextStyle(
+                              fontSize: 12, color: Color(0xFFD1D5DB)))),
+                  const SizedBox(width: 68),
+                ]),
+              )),
+        ],
       ]),
     );
   }
@@ -1509,6 +1724,303 @@ class _ActionCell extends StatelessWidget {
                   fontWeight: FontWeight.w600,
                   color: Color(0xFF1B5E20))),
         ]),
+      ),
+    );
+  }
+}
+
+// ── Admin add-to-cart dialog ───────────────────────────────────────────────────
+
+class _AdminAddItemDialog extends StatefulWidget {
+  final String userId;
+  const _AdminAddItemDialog({required this.userId});
+  @override
+  State<_AdminAddItemDialog> createState() => _AdminAddItemDialogState();
+}
+
+class _AdminAddItemDialogState extends State<_AdminAddItemDialog> {
+  final _searchCtrl = TextEditingController();
+  List<Map<String, dynamic>> _results = [];
+  bool _searching = false;
+  Map<String, dynamic>? _selected;
+  int _qty = 1;
+  bool _adding = false;
+
+  static double _parseMrp(Object? v) {
+    if (v == null) return 0;
+    final s = v.toString().replaceAll(RegExp(r'[₹,\s]'), '');
+    return double.tryParse(s) ?? 0;
+  }
+
+  Future<void> _search(String query) async {
+    if (query.trim().isEmpty) {
+      setState(() { _results = []; _searching = false; });
+      return;
+    }
+    setState(() => _searching = true);
+    try {
+      final rows = await Supabase.instance.client
+          .from('MEDICINE')
+          .select('id, product_name, mrp, marketer, therapeutic_class, image_url_1, pack_qty, pack_size, gst_percent')
+          .ilike('product_name', '%${query.trim()}%')
+          .limit(30);
+      if (mounted) {
+        setState(() {
+          _results = List<Map<String, dynamic>>.from(rows as List);
+          _searching = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _searching = false);
+    }
+  }
+
+  Future<void> _addItem() async {
+    final item = _selected;
+    if (item == null || _adding) return;
+    setState(() => _adding = true);
+    try {
+      final productId = item['id'].toString();
+      final mrp = _parseMrp(item['mrp']);
+
+      // Check for existing row (active or removed)
+      final existingList = await Supabase.instance.client
+          .from('cart_items')
+          .select('id, quantity, removed_by_admin')
+          .eq('user_id', widget.userId)
+          .eq('product_id', productId);
+
+      if (existingList.isNotEmpty) {
+        final existing = Map<String, dynamic>.from(existingList.first as Map);
+        final wasRemoved = (existing['removed_by_admin'] as bool?) ?? false;
+        final newQty = wasRemoved ? _qty : (existing['quantity'] as int) + _qty;
+        await Supabase.instance.client
+            .from('cart_items')
+            .update({
+              'quantity': newQty,
+              'removed_by_admin': false,
+              'updated_at': DateTime.now().toIso8601String(),
+            })
+            .eq('id', existing['id'] as int);
+      } else {
+        await Supabase.instance.client.from('cart_items').insert({
+          'user_id':      widget.userId,
+          'product_id':   productId,
+          'product_name': item['product_name'] as String? ?? '',
+          'price':        mrp,
+          'mrp':          mrp,
+          'quantity':     _qty,
+          'image_url':    (item['image_url_1'] as String?) ?? '',
+          'manufacturer': (item['marketer'] as String?) ?? '',
+          'pack_size':    (item['pack_qty'] as String?) ?? (item['pack_size'] as String?) ?? '',
+          'category':     (item['therapeutic_class'] as String?) ?? 'Other',
+          'gst_percent':  (item['gst_percent'] as num?)?.toInt() ?? 12,
+          'added_by':     'admin',
+          'removed_by_admin': false,
+          'updated_at':   DateTime.now().toIso8601String(),
+        });
+      }
+      if (mounted) Navigator.pop(context, true);
+    } catch (e) {
+      if (mounted) {
+        setState(() => _adding = false);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(e.toString().contains('column')
+              ? 'DB migration required — run the migration SQL in Supabase Studio first'
+              : 'Failed to add item: $e'),
+          backgroundColor: const Color(0xFFDC2626),
+        ));
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 480, maxHeight: 580),
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(children: [
+                const Expanded(
+                  child: Text('Add Item to Cart',
+                      style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFF111827))),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close, size: 18),
+                  onPressed: () => Navigator.pop(context),
+                  visualDensity: VisualDensity.compact,
+                ),
+              ]),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _searchCtrl,
+                autofocus: true,
+                decoration: InputDecoration(
+                  hintText: 'Search medicine name…',
+                  prefixIcon: const Icon(Icons.search, size: 18),
+                  suffixIcon: _searching
+                      ? const SizedBox(
+                          width: 18, height: 18,
+                          child: Padding(
+                            padding: EdgeInsets.all(10),
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ))
+                      : null,
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  isDense: true,
+                ),
+                onChanged: _search,
+              ),
+              const SizedBox(height: 8),
+              if (_selected != null) ...[
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF0FDF4),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: const Color(0xFF86EFAC)),
+                  ),
+                  child: Row(children: [
+                    Expanded(
+                      child: Text(_selected!['product_name'] as String? ?? '',
+                          style: const TextStyle(
+                              fontSize: 13, fontWeight: FontWeight.w600),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis),
+                    ),
+                    const SizedBox(width: 8),
+                    const Text('Qty:',
+                        style: TextStyle(fontSize: 12, color: Color(0xFF374151))),
+                    const SizedBox(width: 6),
+                    SizedBox(
+                      width: 52,
+                      child: TextFormField(
+                        initialValue: '1',
+                        keyboardType: TextInputType.number,
+                        textAlign: TextAlign.center,
+                        decoration: const InputDecoration(
+                          isDense: true,
+                          contentPadding: EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                          border: OutlineInputBorder(),
+                        ),
+                        onChanged: (v) {
+                          final n = int.tryParse(v);
+                          if (n != null && n > 0) setState(() => _qty = n);
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    IconButton(
+                      onPressed: () => setState(() => _selected = null),
+                      icon: const Icon(Icons.close, size: 14, color: Color(0xFF6B7280)),
+                      visualDensity: VisualDensity.compact,
+                      padding: EdgeInsets.zero,
+                    ),
+                  ]),
+                ),
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton(
+                    onPressed: _adding ? null : _addItem,
+                    style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFF1B5E20),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                    ),
+                    child: _adding
+                        ? const SizedBox(
+                            width: 16, height: 16,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: Colors.white))
+                        : const Text('Add to Cart',
+                            style: TextStyle(fontWeight: FontWeight.w600)),
+                  ),
+                ),
+                const SizedBox(height: 6),
+              ],
+              Expanded(
+                child: _results.isEmpty && !_searching
+                    ? Center(
+                        child: Text(
+                          _searchCtrl.text.isEmpty
+                              ? 'Search for a medicine above'
+                              : 'No results found',
+                          style: const TextStyle(
+                              color: Color(0xFF9CA3AF), fontSize: 13),
+                        ),
+                      )
+                    : ListView.builder(
+                        itemCount: _results.length,
+                        itemBuilder: (_, i) {
+                          final item = _results[i];
+                          return InkWell(
+                            onTap: () => setState(() {
+                              _selected = item;
+                              _results = [];
+                              _qty = 1;
+                            }),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 8),
+                              decoration: const BoxDecoration(
+                                border: Border(
+                                    bottom: BorderSide(color: Color(0xFFE5E7EB))),
+                              ),
+                              child: Row(children: [
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(item['product_name'] as String? ?? '',
+                                          style: const TextStyle(
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.w600,
+                                              color: Color(0xFF111827)),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis),
+                                      if ((item['marketer'] as String?)?.isNotEmpty == true)
+                                        Text(item['marketer'] as String,
+                                            style: const TextStyle(
+                                                fontSize: 11,
+                                                color: Color(0xFF6B7280)),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  '₹${_parseMrp(item['mrp']).toStringAsFixed(0)}',
+                                  style: const TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600,
+                                      color: Color(0xFF374151)),
+                                ),
+                              ]),
+                            ),
+                          );
+                        },
+                      ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

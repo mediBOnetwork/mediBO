@@ -352,6 +352,8 @@ class _ItemListState extends State<_ItemList> {
   String get _effectiveQuery =>
       widget.externalSearchQuery ?? '';
 
+  bool _showRemoved = false;
+
   List<CartLine> get _filteredLines {
     final q = _effectiveQuery.trim();
     if (q.isEmpty) return widget.cart.lines;
@@ -398,14 +400,22 @@ class _ItemListState extends State<_ItemList> {
       );
     }
 
+    final removed = widget.cart.adminRemovedLines;
+    final hasRemoved = removed.isNotEmpty && !searchActive;
     final showBreakdown = widget.showBreakdown && !searchActive;
-    final itemCount = filtered.length + (showBreakdown ? 2 : 0);
+
+    int afterCount = 0;
+    if (showBreakdown) afterCount += 2;
+    if (hasRemoved) {
+      afterCount += 1;
+      if (_showRemoved) afterCount += removed.length;
+    }
 
     return ListView.builder(
       physics: platformScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
       cacheExtent: 400,
-      itemCount: itemCount,
+      itemCount: filtered.length + afterCount,
       itemBuilder: (context, i) {
         if (i < filtered.length) {
           final line = filtered[i];
@@ -414,8 +424,30 @@ class _ItemListState extends State<_ItemList> {
             child: _CartItemCard(line: line, cart: widget.cart),
           );
         }
-        if (i == filtered.length) return const SizedBox(height: 4);
-        return _BillingBreakdownSection(cart: widget.cart);
+
+        int extra = i - filtered.length;
+
+        if (showBreakdown) {
+          if (extra == 0) return const SizedBox(height: 4);
+          if (extra == 1) return _BillingBreakdownSection(cart: widget.cart);
+          extra -= 2;
+        }
+
+        if (hasRemoved) {
+          if (extra == 0) {
+            return _RemovedByAdminHeader(
+              count: removed.length,
+              expanded: _showRemoved,
+              onToggle: () => setState(() => _showRemoved = !_showRemoved),
+            );
+          }
+          extra -= 1;
+          if (_showRemoved && extra < removed.length) {
+            return _RemovedItemCard(line: removed[extra]);
+          }
+        }
+
+        return const SizedBox();
       },
     );
   }
@@ -558,6 +590,23 @@ class _CartItemCard extends StatelessWidget {
                           child: const Text('sample',
                               style: TextStyle(
                                   fontSize: 9, color: Color(0xFFEA580C))),
+                        ),
+                      ],
+                      if (line.addedByAdmin) ...[
+                        const SizedBox(height: 3),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 5, vertical: 1),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFFEF08A),
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(color: const Color(0xFFFBBF24)),
+                          ),
+                          child: const Text('Added by mediBO',
+                              style: TextStyle(
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.w600,
+                                  color: Color(0xFF92400E))),
                         ),
                       ],
                     ],
@@ -899,6 +948,99 @@ class _CartStepperState extends State<_CartStepper> {
           ),
         ],
       ),
+    );
+  }
+}
+
+// ─── Removed-by-admin section ─────────────────────────────────────────────────
+
+class _RemovedByAdminHeader extends StatelessWidget {
+  final int count;
+  final bool expanded;
+  final VoidCallback onToggle;
+  const _RemovedByAdminHeader({required this.count, required this.expanded, required this.onToggle});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onToggle,
+      child: Container(
+        margin: const EdgeInsets.only(top: 8, bottom: 2),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFFF1F2),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: const Color(0xFFFECACA)),
+        ),
+        child: Row(children: [
+          const Icon(Icons.remove_circle_outline, size: 14, color: Color(0xFFDC2626)),
+          const SizedBox(width: 6),
+          Text(
+            'Removed by admin ($count)',
+            style: const TextStyle(
+                fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFFDC2626)),
+          ),
+          const Spacer(),
+          Icon(expanded ? Icons.expand_less : Icons.expand_more,
+              size: 16, color: const Color(0xFFDC2626)),
+        ]),
+      ),
+    );
+  }
+}
+
+class _RemovedItemCard extends StatelessWidget {
+  final CartLine line;
+  const _RemovedItemCard({required this.line});
+
+  @override
+  Widget build(BuildContext context) {
+    final p = line.product;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 4),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF9FAFB),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+      ),
+      child: Row(children: [
+        Opacity(opacity: 0.4, child: _ProductImage(product: p, size: 40)),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(p.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF9CA3AF),
+                      decoration: TextDecoration.lineThrough,
+                      decorationColor: Color(0xFF9CA3AF))),
+              const SizedBox(height: 2),
+              Text(
+                '×${line.quantity}  ·  ₹${(p.b2bPrice * line.quantity).toStringAsFixed(0)}',
+                style: const TextStyle(fontSize: 11, color: Color(0xFFD1D5DB)),
+              ),
+            ],
+          ),
+        ),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFEF2F2),
+            borderRadius: BorderRadius.circular(4),
+          ),
+          child: const Text('Removed',
+              style: TextStyle(
+                  fontSize: 10,
+                  color: Color(0xFFDC2626),
+                  fontWeight: FontWeight.w600)),
+        ),
+      ]),
     );
   }
 }

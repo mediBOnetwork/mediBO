@@ -18,8 +18,8 @@
 
   <!-- Early connection to back-end services so the first Supabase query
        doesn't pay a full DNS + TLS round-trip after Flutter boots. -->
-  <link rel="preconnect" href="https://qkcuoaqrpnmdnejzahdv.supabase.co">
-  <link rel="dns-prefetch" href="https://qkcuoaqrpnmdnejzahdv.supabase.co">
+  <link rel="preconnect" href="https://svojhmarmaijkshsbeih.supabase.co">
+  <link rel="dns-prefetch" href="https://svojhmarmaijkshsbeih.supabase.co">
   <link rel="preconnect" href="https://generativelanguage.googleapis.com">
   <link rel="dns-prefetch" href="https://generativelanguage.googleapis.com">
 
@@ -138,29 +138,6 @@
         recaptchaResolve = null;
       }
     }
-  </script>
-  <script>
-    // Intercept wheel events on the Flutter canvas and replay them at 40% speed
-    // so one mouse-wheel tick scrolls a natural distance without overshoot.
-    // We wait 3 s for Flutter to mount its element before attaching.
-    window.addEventListener('load', function () {
-      setTimeout(function () {
-        var target = document.querySelector('flt-glass-pane') ||
-                     document.querySelector('canvas');
-        if (!target) return;
-        target.addEventListener('wheel', function (e) {
-          e.preventDefault();
-          e.stopPropagation();
-          target.dispatchEvent(new WheelEvent('wheel', {
-            deltaY:    e.deltaY    * 0.4,
-            deltaX:    e.deltaX    * 0.4,
-            deltaMode: e.deltaMode,
-            bubbles:   true,
-            cancelable: true,
-          }));
-        }, { passive: false });
-      }, 3000);
-    });
   </script>
   <script>
     function openRazorpay(amount, name, email, phone, callback) {

@@ -4779,103 +4779,83 @@ class _MatchPanelState extends State<_MatchPanel> {
     );
   }
 
-  // ── MOBILE panel: UNCHANGED from original ────────────────────────────────────
+  // ── MOBILE panel: parity with web — fixed 4-row area + pinned search box ──────
   Widget _buildMobilePanel() {
-    final candidates = _mobileCandidates();
-    const hPad = 12.0;
+    final rows = _hasSearched ? _searchResults : _webCandidates();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        for (int i = 0; i < candidates.length; i++)
-          _AlternativeRow(
-            product: candidates[i].product,
-            isSelected: candidates[i].isSelected,
-            isLast: i == candidates.length - 1,
-            isMobile: true,
-            onTap: candidates[i].isSelected
-                ? () {}
-                : () => _pick(candidates[i].product),
-          ),
+        // Lines 2–5: always exactly 4 × _kMatchRowH — pixel-stable height in all states
+        ...List.generate(4, (i) {
+          if (_searching) {
+            return const SizedBox(height: _kMatchRowH, child: _MobilePanelSkeletonRow());
+          }
+          if (i < rows.length) {
+            final p = rows[i];
+            return SizedBox(
+              height: _kMatchRowH,
+              child: _SearchResultRow(product: p, onTap: () => _pick(p), isMobile: true),
+            );
+          }
+          return const _MobilePanelEmptyRow();
+        }),
 
-        // Search row with separate green button (mobile unchanged)
+        // Line 6: search box with merged magnifier→X icon
         Container(
           color: const Color(0xFFF3F4F6),
-          padding: const EdgeInsets.fromLTRB(hPad, 7, 12, 7),
+          padding: const EdgeInsets.fromLTRB(12, 7, 12, 7),
           decoration: const BoxDecoration(
             border: Border(top: BorderSide(color: Color(0xFFE5E7EB))),
           ),
-          child: Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _ctrl,
-                  focusNode: _focusNode,
-                  onSubmitted: (_) => _fireSearch(),
-                  decoration: InputDecoration(
-                    hintText: 'Search / change match…',
-                    hintStyle:
-                        const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
-                    isDense: true,
-                    contentPadding:
-                        const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-                    filled: true,
-                    fillColor: Colors.white,
-                    suffixIcon: _ctrl.text.isNotEmpty
-                        ? GestureDetector(
-                            onTap: _clearSearch,
-                            child: const Icon(Icons.close_rounded,
-                                size: 14, color: Color(0xFF9CA3AF)),
-                          )
-                        : null,
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(6),
-                      borderSide: const BorderSide(color: Color(0xFFD1D5DB)),
+          child: TextField(
+            controller: _ctrl,
+            focusNode: _focusNode,
+            onSubmitted: (_) => _fireSearch(),
+            onChanged: _hasSearched ? _liveSearch : null,
+            decoration: InputDecoration(
+              hintText: 'Search / change match…',
+              hintStyle: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+              isDense: true,
+              contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+              filled: true,
+              fillColor: Colors.white,
+              suffixIcon: _hasSearched
+                  ? GestureDetector(
+                      onTap: _clearSearch,
+                      child: const Icon(Icons.close_rounded,
+                          size: 16, color: Color(0xFF9CA3AF)),
+                    )
+                  : GestureDetector(
+                      onTap: _searching ? null : _fireSearch,
+                      child: _searching
+                          ? const Padding(
+                              padding: EdgeInsets.all(10),
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                valueColor: AlwaysStoppedAnimation<Color>(
+                                    Color(0xFF16A34A)),
+                              ),
+                            )
+                          : const Icon(Icons.search_rounded,
+                              size: 18, color: Color(0xFF6B7280)),
                     ),
-                    enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(6),
-                      borderSide: const BorderSide(color: Color(0xFFD1D5DB)),
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(6),
-                      borderSide: const BorderSide(
-                          color: Color(0xFF16A34A), width: 1.5),
-                    ),
-                  ),
-                  style: const TextStyle(fontSize: 12),
-                ),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(6),
+                borderSide: const BorderSide(color: Color(0xFFD1D5DB)),
               ),
-              const SizedBox(width: 6),
-              GestureDetector(
-                onTap: _searching ? null : _fireSearch,
-                child: Container(
-                  width: 30,
-                  height: 30,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF16A34A),
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: _searching
-                      ? const Padding(
-                          padding: EdgeInsets.all(7),
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            valueColor:
-                                AlwaysStoppedAnimation<Color>(Colors.white),
-                          ),
-                        )
-                      : const Icon(Icons.search_rounded,
-                          size: 16, color: Colors.white),
-                ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(6),
+                borderSide: const BorderSide(color: Color(0xFFD1D5DB)),
               ),
-            ],
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(6),
+                borderSide: const BorderSide(color: Color(0xFF16A34A), width: 1.5),
+              ),
+            ),
+            style: const TextStyle(fontSize: 12),
           ),
         ),
-
-        // Search results below search row on mobile (unchanged)
-        for (final p in _searchResults)
-          _SearchResultRow(
-              product: p, onTap: () => _pick(p), isMobile: true),
       ],
     );
   }
@@ -4894,51 +4874,55 @@ class _SearchResultRow extends StatelessWidget {
   Widget build(BuildContext context) =>
       isMobile ? _buildMobile() : _buildWeb();
 
-  // Mobile: 12px left pad + 18px blank placeholder + 4px gap → name at same x
-  // as _AlternativeRow._buildMobile() (whether selected or unselected).
+  // Mobile: [name | pack(38) | company(65) | MRP(48)] — identical grid on every row.
+  // No + icon, all text black, _kMatchRowH height matches skeleton and empty filler.
   Widget _buildMobile() {
     return InkWell(
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+        height: _kMatchRowH,
+        padding: const EdgeInsets.fromLTRB(12, 0, 8, 0),
+        alignment: Alignment.centerLeft,
         decoration: const BoxDecoration(
           color: Colors.white,
           border: Border(top: BorderSide(color: Color(0xFFE5E7EB))),
         ),
         child: Row(
           children: [
-            // 18px blank aligns with the check-icon slot in _AlternativeRow
-            const SizedBox(width: 18),
-            const SizedBox(width: 4),
             Expanded(
               child: Text(product.name,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
-                      color: Color(0xFF111827))),
+                      fontSize: 12, fontWeight: FontWeight.w500,
+                      color: Color(0xFF374151))),
             ),
             const SizedBox(width: 6),
             SizedBox(
-              width: 40,
+              width: 38,
               child: Text(_packShort(product),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 11, color: Color(0xFF374151))),
+                  style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
             ),
             const SizedBox(width: 6),
             SizedBox(
-              width: 52,
-              child: Text(rupees(product.mrp),
-                  textAlign: TextAlign.right,
-                  style: const TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w500,
-                      color: Color(0xFF16A34A))),
+              width: 65,
+              child: Text(product.manufacturer,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
             ),
             const SizedBox(width: 6),
-            const Icon(Icons.add_circle_outline_rounded, size: 14, color: Color(0xFF16A34A)),
+            SizedBox(
+              width: 48,
+              child: Text(rupees(product.mrp),
+                  textAlign: TextAlign.right,
+                  maxLines: 1,
+                  style: const TextStyle(
+                      fontSize: 11, fontWeight: FontWeight.w500,
+                      color: Color(0xFF374151))),
+            ),
           ],
         ),
       ),
@@ -5085,6 +5069,86 @@ class _WebPanelSkeletonRow extends StatelessWidget {
 
 class _WebPanelEmptyRow extends StatelessWidget {
   const _WebPanelEmptyRow();
+
+  @override
+  Widget build(BuildContext context) => Container(
+        height: _kMatchRowH,
+        decoration: const BoxDecoration(
+          border: Border(top: BorderSide(color: Color(0xFFE5E7EB))),
+        ),
+      );
+}
+
+// ─── Mobile panel skeleton row (green shimmer during search loading) ──────────
+
+class _MobilePanelSkeletonRow extends StatelessWidget {
+  const _MobilePanelSkeletonRow();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: _kMatchRowH,
+      padding: const EdgeInsets.fromLTRB(12, 0, 8, 0),
+      alignment: Alignment.centerLeft,
+      decoration: const BoxDecoration(
+        color: Color(0xFFF0FDF4),
+        border: Border(top: BorderSide(color: Color(0xFFE5E7EB))),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Container(
+              height: 10,
+              margin: const EdgeInsets.only(right: 6),
+              decoration: BoxDecoration(
+                color: const Color(0xFFBBF7D0),
+                borderRadius: BorderRadius.circular(4),
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          SizedBox(
+            width: 38,
+            child: Container(
+              height: 10,
+              decoration: BoxDecoration(
+                color: const Color(0xFFBBF7D0),
+                borderRadius: BorderRadius.circular(4),
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          SizedBox(
+            width: 65,
+            child: Container(
+              height: 10,
+              decoration: BoxDecoration(
+                color: const Color(0xFFBBF7D0),
+                borderRadius: BorderRadius.circular(4),
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          SizedBox(
+            width: 48,
+            child: Container(
+              height: 10,
+              decoration: BoxDecoration(
+                color: const Color(0xFFBBF7D0),
+                borderRadius: BorderRadius.circular(4),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─── Mobile panel empty filler row (constant height when fewer than 4 results) ─
+
+class _MobilePanelEmptyRow extends StatelessWidget {
+  const _MobilePanelEmptyRow();
 
   @override
   Widget build(BuildContext context) => Container(

@@ -4052,24 +4052,6 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
                                   const SizedBox(width: 8),
-                                  SizedBox(
-                                    width: 36,
-                                    child: Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-                                      decoration: BoxDecoration(
-                                        color: const Color(0xFFF3F4F6),
-                                        borderRadius: BorderRadius.circular(8),
-                                        border: Border.all(color: const Color(0xFFD1D5DB)),
-                                      ),
-                                      child: Text('${row.qty}',
-                                          textAlign: TextAlign.center,
-                                          style: const TextStyle(
-                                              fontSize: 11,
-                                              fontWeight: FontWeight.w500,
-                                              color: Color(0xFF374151))),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
                                   GestureDetector(
                                     onTap: widget.onHideToggle,
                                     behavior: HitTestBehavior.opaque,
@@ -4162,8 +4144,8 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                         ),
                         const Divider(height: 1, thickness: 1, color: Color(0xFFE5E7EB)),
                         // ── Selected matched product ─────────────────────────
-                        // Uses the same column constants as the panel rows below so
-                        // Product/Pack/Company/MRP sit on one shared vertical grid.
+                        // Qty and Pack share one vertical column (Qty on top, Pack below)
+                        // so the card shows them on the same x; Company and MRP unchanged.
                         Padding(
                           padding: const EdgeInsets.fromLTRB(
                               _kMobPanelLeftPad, 17, _kMobPanelRightPad, 17),
@@ -4181,11 +4163,24 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                                   const SizedBox(width: _kMobPanelGap),
                                   SizedBox(
                                     width: _kMobPanelPackW,
-                                    child: Text(pack,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(
-                                            fontSize: 11, color: Color(0xFF374151))),
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text('${row.qty}',
+                                            style: const TextStyle(
+                                                fontSize: 11,
+                                                fontWeight: FontWeight.w500,
+                                                color: Color(0xFF374151))),
+                                        if (pack.isNotEmpty)
+                                          Text(pack,
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: const TextStyle(
+                                                  fontSize: 11,
+                                                  color: Color(0xFF374151))),
+                                      ],
+                                    ),
                                   ),
                                   const SizedBox(width: _kMobPanelGap),
                                   SizedBox(

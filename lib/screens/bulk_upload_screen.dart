@@ -3677,31 +3677,26 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
                           fontWeight: FontWeight.w500,
                           color: Color(0xFF374151))),
                 ),
-                // STATUS column — badge + search hint icon
+                // STATUS column — fixed-width badge (sized to widest "Manually Matched")
                 Expanded(
                   flex: 10,
-                  child: Row(
-                    children: [
-                      Flexible(
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
-                          decoration: BoxDecoration(
-                            color: badgeColor,
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: Text(label,
-                              textAlign: TextAlign.center,
-                              overflow: TextOverflow.ellipsis,
-                              maxLines: 1,
-                              style: TextStyle(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w600,
-                                  color: badgeText)),
-                        ),
+                  child: SizedBox(
+                    width: 124,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: badgeColor,
+                        borderRadius: BorderRadius.circular(20),
                       ),
-                      const SizedBox(width: 3),
-                      const Icon(Icons.search_rounded, size: 11, color: Color(0xFFD1D5DB)),
-                    ],
+                      child: Text(label,
+                          textAlign: TextAlign.center,
+                          overflow: TextOverflow.ellipsis,
+                          maxLines: 1,
+                          style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                              color: badgeText)),
+                    ),
                   ),
                 ),
                 // HIDE column — eye icon centered under its header
@@ -4581,13 +4576,12 @@ class _MatchPanelState extends State<_MatchPanel> {
   final FocusNode _focusNode = FocusNode();
   List<Product> _searchResults = [];
   bool _searching = false;
+  bool _hasSearched = false;
 
   @override
   void initState() {
     super.initState();
-    // Pre-fill with raw OCR/parsed line-item text (Task 4d).
     _ctrl = TextEditingController(text: widget.row.lineItem);
-    // Rebuild when text changes so X-button visibility updates.
     _ctrl.addListener(() => setState(() {}));
   }
 
@@ -4598,46 +4592,64 @@ class _MatchPanelState extends State<_MatchPanel> {
     super.dispose();
   }
 
-  // ── Search fires ONLY on icon-tap or Enter — no live keystroke search ────────
   Future<void> _fireSearch() async {
     final q = _ctrl.text.trim();
-    if (q.isEmpty) { setState(() => _searchResults = []); return; }
-    setState(() => _searching = true);
-    final all = await _manualSearchProducts(q, limit: 3);
+    if (q.isEmpty) { setState(() { _searchResults = []; }); return; }
+    setState(() { _searching = true; _hasSearched = true; });
+    final all = await _manualSearchProducts(q, limit: 4);
     if (mounted) setState(() { _searchResults = all; _searching = false; });
   }
 
-  // ── X clears input AND hides results ─────────────────────────────────────────
   void _clearSearch() {
     _ctrl.clear();
-    setState(() => _searchResults = []);
+    setState(() { _searchResults = []; _hasSearched = false; });
   }
 
-  // ── Pick: save old line-1, set new manual override, reorder ──────────────────
+  Future<void> _liveSearch(String q) async {
+    if (!_hasSearched) return;
+    if (q.trim().isEmpty) { setState(() => _searchResults = []); return; }
+    final all = await _manualSearchProducts(q.trim(), limit: 4);
+    if (mounted) setState(() => _searchResults = all);
+  }
+
   void _pick(Product p) {
     final row = widget.row;
-    row._previousLine1 = row.selectedProduct; // demote current line-1
+    row._previousLine1 = row.selectedProduct;
     row._manualProduct = p;
     row.status = _MatchStatus.manuallyMatched;
-    setState(() => _searchResults = []);
-    widget.onRowChanged(); // parent collapses panel + refreshes status counts
+    setState(() { _searchResults = []; _hasSearched = false; });
+    widget.onRowChanged();
   }
 
-  // ── Build ordered candidate rows (max 5, no duplicates) ─────────────────────
-  // Default : [active(selected), fuzzy×4]
-  // After pick: [active(selected), demoted-prev, fuzzy×3]
-  List<({Product product, bool isSelected})> _candidateRows() {
+  // Web: candidates excluding the active selected SKU, max 4 rows
+  List<Product> _webCandidates() {
     final row = widget.row;
-    final active   = row.selectedProduct;
-    final prev     = row._previousLine1;
+    final active = row.selectedProduct;
+    final prev = row._previousLine1;
     final activeId = active?.id;
-    // Only treat prev as a real demoted row when it differs from active.
-    final prevId   = (prev != null && prev.id != activeId) ? prev.id : null;
+    final prevId = (prev != null && prev.id != activeId) ? prev.id : null;
+
+    final out = <Product>[];
+    if (prevId != null) out.add(prev!);
+    for (final c in row.candidates) {
+      if (out.length >= 4) break;
+      if (c.id == activeId || c.id == prevId) continue;
+      out.add(c);
+    }
+    return out;
+  }
+
+  // Mobile: original candidates with isSelected, unchanged
+  List<({Product product, bool isSelected})> _mobileCandidates() {
+    final row = widget.row;
+    final active = row.selectedProduct;
+    final prev = row._previousLine1;
+    final activeId = active?.id;
+    final prevId = (prev != null && prev.id != activeId) ? prev.id : null;
 
     final out = <({Product product, bool isSelected})>[];
-
-    if (active != null) out.add((product: active,  isSelected: true));
-    if (prevId  != null) out.add((product: prev!,   isSelected: false));
+    if (active != null) out.add((product: active, isSelected: true));
+    if (prevId != null) out.add((product: prev!, isSelected: false));
 
     final maxFuzzy = prevId != null ? 3 : 4;
     int n = 0;
@@ -4651,29 +4663,107 @@ class _MatchPanelState extends State<_MatchPanel> {
   }
 
   @override
-  Widget build(BuildContext context) {
-    final candidates = _candidateRows();
-    final hPad = widget.isMobile ? 12.0 : 17.0;
+  Widget build(BuildContext context) =>
+      widget.isMobile ? _buildMobilePanel() : _buildWebPanel();
+
+  // ── WEB panel: no selected row, results above search box, merged icon ────────
+  Widget _buildWebPanel() {
+    final rows = _hasSearched ? _searchResults : _webCandidates();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // ── Lines 1–N: candidate rows (max 5) ────────────────────────────────
-        for (int i = 0; i < candidates.length; i++)
-          _AlternativeRow(
-            product:    candidates[i].product,
-            isSelected: candidates[i].isSelected,
-            // No bottom border on the last candidate row — search row follows immediately
-            isLast: i == candidates.length - 1,
-            isMobile: widget.isMobile,
-            // Selected row (line-1) is not tappable; others trigger a pick
-            onTap: candidates[i].isSelected ? () {} : () => _pick(candidates[i].product),
+        // Lines 2–5: fuzzy candidates or search results (above the search box)
+        for (int i = 0; i < rows.length; i++)
+          _SearchResultRow(
+            product: rows[i],
+            onTap: () => _pick(rows[i]),
+            isMobile: false,
           ),
 
-        // ── Line 6: search row ────────────────────────────────────────────────
+        // Line 6: search box pinned at bottom with merged icon
         Container(
           color: const Color(0xFFF3F4F6),
-          padding: EdgeInsets.fromLTRB(hPad, 7, 12, 7),
+          padding: const EdgeInsets.fromLTRB(17, 7, 12, 7),
+          decoration: const BoxDecoration(
+            border: Border(top: BorderSide(color: Color(0xFFE5E7EB))),
+          ),
+          child: TextField(
+            controller: _ctrl,
+            focusNode: _focusNode,
+            onSubmitted: (_) => _fireSearch(),
+            onChanged: _hasSearched ? _liveSearch : null,
+            decoration: InputDecoration(
+              hintText: 'Search / change match…',
+              hintStyle: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+              isDense: true,
+              contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+              filled: true,
+              fillColor: Colors.white,
+              suffixIcon: _hasSearched
+                  ? GestureDetector(
+                      onTap: _clearSearch,
+                      child: const Icon(Icons.close_rounded,
+                          size: 16, color: Color(0xFF9CA3AF)),
+                    )
+                  : GestureDetector(
+                      onTap: _searching ? null : _fireSearch,
+                      child: _searching
+                          ? const Padding(
+                              padding: EdgeInsets.all(10),
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                valueColor: AlwaysStoppedAnimation<Color>(
+                                    Color(0xFF16A34A)),
+                              ),
+                            )
+                          : const Icon(Icons.search_rounded,
+                              size: 18, color: Color(0xFF6B7280)),
+                    ),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(6),
+                borderSide: const BorderSide(color: Color(0xFFD1D5DB)),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(6),
+                borderSide: const BorderSide(color: Color(0xFFD1D5DB)),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(6),
+                borderSide:
+                    const BorderSide(color: Color(0xFF16A34A), width: 1.5),
+              ),
+            ),
+            style: const TextStyle(fontSize: 12),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ── MOBILE panel: UNCHANGED from original ────────────────────────────────────
+  Widget _buildMobilePanel() {
+    final candidates = _mobileCandidates();
+    const hPad = 12.0;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (int i = 0; i < candidates.length; i++)
+          _AlternativeRow(
+            product: candidates[i].product,
+            isSelected: candidates[i].isSelected,
+            isLast: i == candidates.length - 1,
+            isMobile: true,
+            onTap: candidates[i].isSelected
+                ? () {}
+                : () => _pick(candidates[i].product),
+          ),
+
+        // Search row with separate green button (mobile unchanged)
+        Container(
+          color: const Color(0xFFF3F4F6),
+          padding: const EdgeInsets.fromLTRB(hPad, 7, 12, 7),
           decoration: const BoxDecoration(
             border: Border(top: BorderSide(color: Color(0xFFE5E7EB))),
           ),
@@ -4683,20 +4773,21 @@ class _MatchPanelState extends State<_MatchPanel> {
                 child: TextField(
                   controller: _ctrl,
                   focusNode: _focusNode,
-                  onSubmitted: (_) => _fireSearch(), // Enter fires search
-                  // No onChanged — search is explicit only (Task 3)
+                  onSubmitted: (_) => _fireSearch(),
                   decoration: InputDecoration(
                     hintText: 'Search / change match…',
-                    hintStyle: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+                    hintStyle:
+                        const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
                     isDense: true,
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                    contentPadding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
                     filled: true,
                     fillColor: Colors.white,
                     suffixIcon: _ctrl.text.isNotEmpty
                         ? GestureDetector(
                             onTap: _clearSearch,
-                            child: const Icon(Icons.close_rounded, size: 14,
-                                color: Color(0xFF9CA3AF)),
+                            child: const Icon(Icons.close_rounded,
+                                size: 14, color: Color(0xFF9CA3AF)),
                           )
                         : null,
                     border: OutlineInputBorder(
@@ -4709,14 +4800,14 @@ class _MatchPanelState extends State<_MatchPanel> {
                     ),
                     focusedBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(6),
-                      borderSide: const BorderSide(color: Color(0xFF16A34A), width: 1.5),
+                      borderSide: const BorderSide(
+                          color: Color(0xFF16A34A), width: 1.5),
                     ),
                   ),
                   style: const TextStyle(fontSize: 12),
                 ),
               ),
               const SizedBox(width: 6),
-              // Green search-icon button — explicit search trigger (Task 3a)
               GestureDetector(
                 onTap: _searching ? null : _fireSearch,
                 child: Container(
@@ -4731,19 +4822,22 @@ class _MatchPanelState extends State<_MatchPanel> {
                           padding: EdgeInsets.all(7),
                           child: CircularProgressIndicator(
                             strokeWidth: 2,
-                            valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                            valueColor:
+                                AlwaysStoppedAnimation<Color>(Colors.white),
                           ),
                         )
-                      : const Icon(Icons.search_rounded, size: 16, color: Colors.white),
+                      : const Icon(Icons.search_rounded,
+                          size: 16, color: Colors.white),
                 ),
               ),
             ],
           ),
         ),
 
-        // ── Top-3 search results expand below search row ──────────────────────
+        // Search results below search row on mobile (unchanged)
         for (final p in _searchResults)
-          _SearchResultRow(product: p, onTap: () => _pick(p), isMobile: widget.isMobile),
+          _SearchResultRow(
+              product: p, onTap: () => _pick(p), isMobile: true),
       ],
     );
   }

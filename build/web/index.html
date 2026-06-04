@@ -79,6 +79,173 @@
   <title>mediBO</title>
   <script src="https://www.google.com/recaptcha/api.js" async defer></script>
   <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+
+  <!-- Firebase SDK (compat — same version as SW) -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-messaging-compat.js"></script>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       ADMIN ALERT AUDIO  (Web Audio API — no file required)
+       Called from Flutter via dart:js:
+         adminAlertStart()  — start looping beep
+         adminAlertStop()   — stop beep
+         adminAlertMute(bool) — mute/unmute
+       Also tries HTML Audio with the bundled WAV asset first.
+       ═══════════════════════════════════════════════════════════════════════ -->
+  <script>
+    (function () {
+      var _ctx = null;
+      var _toneInterval = null;
+      var _muted = false;
+      var _htmlAudio = null;
+
+      function _getCtx() {
+        if (!_ctx) _ctx = new (window.AudioContext || window.webkitAudioContext)();
+        return _ctx;
+      }
+
+      function _tone() {
+        if (_muted) return;
+        try {
+          var ctx = _getCtx();
+          if (ctx.state === 'suspended') ctx.resume();
+          // Double pulse: 880 Hz then 1046 Hz
+          [880, 1046].forEach(function (freq, idx) {
+            var osc  = ctx.createOscillator();
+            var gain = ctx.createGain();
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.frequency.value = freq;
+            osc.type = 'sine';
+            var t0 = ctx.currentTime + idx * 0.22;
+            gain.gain.setValueAtTime(0, t0);
+            gain.gain.linearRampToValueAtTime(0.35, t0 + 0.02);
+            gain.gain.exponentialRampToValueAtTime(0.001, t0 + 0.20);
+            osc.start(t0);
+            osc.stop(t0 + 0.22);
+          });
+        } catch (e) { /* ignore — browser may block */ }
+      }
+
+      function _tryHtmlAudio() {
+        try {
+          _htmlAudio = new Audio('assets/sounds/new_alert.mp3');
+          _htmlAudio.loop   = true;
+          _htmlAudio.volume = 0.65;
+          var p = _htmlAudio.play();
+          if (p instanceof Promise) {
+            p.catch(function () {
+              _htmlAudio = null;
+              _tone(); // fallback: tone now, then schedule
+              _toneInterval = setInterval(_tone, 2500);
+            });
+          }
+          return true;
+        } catch (e) { return false; }
+      }
+
+      window.adminAlertStart = function () {
+        window.adminAlertStop(); // clear any existing
+        _muted = false;
+        if (!_tryHtmlAudio()) {
+          _tone();
+          _toneInterval = setInterval(_tone, 2500);
+        }
+      };
+
+      window.adminAlertStop = function () {
+        clearInterval(_toneInterval);
+        _toneInterval = null;
+        if (_htmlAudio) {
+          try { _htmlAudio.pause(); _htmlAudio.currentTime = 0; } catch (_) {}
+          _htmlAudio = null;
+        }
+      };
+
+      window.adminAlertMute = function (m) {
+        _muted = !!m;
+        if (_htmlAudio) _htmlAudio.muted = _muted;
+      };
+
+      // Called from FcmService.dart to receive SW → window messages
+      var _msgHandler = null;
+      window.adminAlertRegisterMessageHandler = function (cb) {
+        _msgHandler = cb;
+      };
+      window.addEventListener('message', function (event) {
+        if (event.data && event.data.type === 'new_registration' && _msgHandler) {
+          try { _msgHandler(event.data); } catch (_) {}
+        }
+        if (event.data && event.data.type === 'navigate_to_pending') {
+          // SW notif click: ensure admin is showing Pending Registrations tab
+          try { window.location.hash = '#/customers/pending'; } catch (_) {}
+        }
+      });
+    })();
+  </script>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       FIREBASE CLOUD MESSAGING  (web push)
+       SETUP REQUIRED — fill in your Firebase project credentials:
+         1. Create a Firebase project at https://console.firebase.google.com
+         2. Add a Web app, copy the config below
+         3. Cloud Messaging → Web configuration → Generate VAPID key pair
+         4. Paste both config + VAPID key here and in firebase-messaging-sw.js
+       ═══════════════════════════════════════════════════════════════════════ -->
+  <script>
+    // ── PLACEHOLDER — replace with your real Firebase config ────────────────
+    var FIREBASE_CONFIG = {
+      apiKey:            "REPLACE_WITH_FIREBASE_API_KEY",
+      authDomain:        "REPLACE_WITH_PROJECT_ID.firebaseapp.com",
+      projectId:         "REPLACE_WITH_PROJECT_ID",
+      storageBucket:     "REPLACE_WITH_PROJECT_ID.appspot.com",
+      messagingSenderId: "REPLACE_WITH_SENDER_ID",
+      appId:             "REPLACE_WITH_APP_ID",
+    };
+    var VAPID_KEY = "REPLACE_WITH_VAPID_PUBLIC_KEY";
+    // ── END PLACEHOLDER ─────────────────────────────────────────────────────
+
+    var _fcmMessaging = null;
+    var _fcmConfigured = FIREBASE_CONFIG.apiKey !== "REPLACE_WITH_FIREBASE_API_KEY";
+
+    if (_fcmConfigured) {
+      try {
+        var _fbApp = firebase.initializeApp(FIREBASE_CONFIG);
+        _fcmMessaging = firebase.messaging(_fbApp);
+      } catch (e) {
+        console.warn('[FCM] Firebase init error:', e);
+      }
+    } else {
+      console.info('[FCM] Firebase credentials not configured — web push disabled.');
+    }
+
+    // fcmGetToken(callback) — called from Dart FcmService
+    window.fcmGetToken = function (callback) {
+      if (!_fcmMessaging || !_fcmConfigured) { callback(null); return; }
+      Notification.requestPermission().then(function (permission) {
+        if (permission !== 'granted') { callback(null); return; }
+        _fcmMessaging.getToken({ vapidKey: VAPID_KEY })
+          .then(function (token) { callback(token || null); })
+          .catch(function (e) { console.warn('[FCM] getToken error:', e); callback(null); });
+      }).catch(function () { callback(null); });
+    };
+  </script>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       SERVICE WORKER REGISTRATION
+       Registers firebase-messaging-sw.js for background push.
+       ═══════════════════════════════════════════════════════════════════════ -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/firebase-messaging-sw.js', { scope: '/' })
+        .then(function (reg) {
+          console.info('[SW] FCM service worker registered:', reg.scope);
+        })
+        .catch(function (e) {
+          console.warn('[SW] FCM service worker registration failed:', e);
+        });
+    }
+  </script>
 </head>
 <body>
   <!--

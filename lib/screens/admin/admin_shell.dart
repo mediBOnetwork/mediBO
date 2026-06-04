@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../screens/home_shell.dart';
+import '../../services/fcm_service.dart';
 import '../../user_state.dart';
 import 'admin_add_medicine_screen.dart';
+import 'admin_alert_overlay.dart';
 import 'admin_customer_screen.dart';
 import 'admin_dashboard_screen.dart';
 import 'admin_manage_admins_screen.dart';
@@ -61,6 +63,14 @@ class _AdminShellState extends State<AdminShell> {
   void initState() {
     super.initState();
     _loadPendingCount();
+    _initFcm();
+  }
+
+  void _initFcm() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final userId = Supabase.instance.client.auth.currentUser?.id;
+      if (userId != null) FcmService.init(userId);
+    });
   }
 
   Future<void> _loadPendingCount() async {
@@ -171,20 +181,22 @@ class _AdminShellState extends State<AdminShell> {
   // ── Desktop layout ────────────────────────────────────────────────────────
 
   Widget _buildDesktop(BuildContext ctx, bool isSuperAdmin) {
-    return Scaffold(
-      backgroundColor: const Color(0xFFF9FAFB),
-      body: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          _DesktopHeader(
-            onLogoTap: () => setState(() => _showDashboard = true),
-            isSuperAdmin: isSuperAdmin,
-            onQuickLink: (route) => _navigateQuickLink(ctx, route, isSuperAdmin),
-            onLogout: () => UserState.read(ctx).signOut(),
-            pendingBillsCount: _pendingBillsCount,
-          ),
-          Expanded(child: _buildBody(isSuperAdmin)),
-        ],
+    return AdminAlertOverlay(
+      child: Scaffold(
+        backgroundColor: const Color(0xFFF9FAFB),
+        body: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _DesktopHeader(
+              onLogoTap: () => setState(() => _showDashboard = true),
+              isSuperAdmin: isSuperAdmin,
+              onQuickLink: (route) => _navigateQuickLink(ctx, route, isSuperAdmin),
+              onLogout: () => UserState.read(ctx).signOut(),
+              pendingBillsCount: _pendingBillsCount,
+            ),
+            Expanded(child: _buildBody(isSuperAdmin)),
+          ],
+        ),
       ),
     );
   }
@@ -199,7 +211,8 @@ class _AdminShellState extends State<AdminShell> {
         if (mounted) setState(() => _index = safeIndex);
       });
     }
-    return Scaffold(
+    return AdminAlertOverlay(
+      child: Scaffold(
       backgroundColor: const Color(0xFFF9FAFB),
       appBar: AppBar(
         backgroundColor: Colors.white,
@@ -304,7 +317,7 @@ class _AdminShellState extends State<AdminShell> {
           );
         }).toList(),
       ),
-    );
+    ));
   }
 }
 

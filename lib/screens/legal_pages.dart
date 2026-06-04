@@ -161,7 +161,7 @@ class PrivacyScreen extends StatelessWidget {
         _numbered([
           'We collect business KYC details (name, address, GSTIN, drug licence), contact information, and order/transaction data necessary to provide our services.',
           'We use this data to process orders, verify eligibility, comply with legal obligations, and communicate with you.',
-          'We share data with payment partners (including Razorpay) to process payments, and with authorities where required by law.',
+          'We share data with payment partners to process payments, and with authorities where required by law.',
           'We retain transaction records as required under applicable law and apply reasonable security measures to protect your data.',
           'We do not store full card credentials. Payments are processed by our PCI-DSS compliant payment partner.',
           'For privacy queries or data requests, contact $_kEmail.',

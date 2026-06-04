@@ -4,7 +4,6 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../app_state.dart';
 import '../models/cart_model.dart';
 import '../models/product.dart';
-import '../services/payment_service.dart';
 import '../theme.dart';
 import '../user_state.dart';
 import '../util.dart';
@@ -21,10 +20,10 @@ class CartScreen extends StatefulWidget {
 }
 
 class _CartScreenState extends State<CartScreen> {
-  bool _paymentInProgress = false;
+  bool _orderInProgress = false;
 
-  Future<void> _openPayment() async {
-    if (_paymentInProgress) return;
+  Future<void> _placeOrder() async {
+    if (_orderInProgress) return;
 
     final auth = UserState.read(context);
     if (!auth.isAuthenticated) {
@@ -52,101 +51,82 @@ class _CartScreenState extends State<CartScreen> {
       return;
     }
 
-    setState(() => _paymentInProgress = true);
+    setState(() => _orderInProgress = true);
     final cart = AppState.of(context);
-    final amount = cart.netPayable;
-    final profile = UserState.read(context).profile;
+    final profile = auth.profile;
+    final userId = Supabase.instance.client.auth.currentUser?.id;
+    if (userId == null) {
+      setState(() => _orderInProgress = false);
+      return;
+    }
+
+    // Capture totals before checkout clears the cart
+    final netPayable = cart.netPayable;
+    final orderNumber = _generateOrderNumber();
+    final address = [
+      profile?.address ?? '',
+      profile?.city ?? '',
+      profile?.pincode ?? '',
+    ].where((s) => s.isNotEmpty).join(', ');
 
     try {
-      final result = await PaymentService.initiatePayment(
-        amount: amount,
-        name: profile?.ownerName ?? '',
-        email: '',
-        phone: profile?.phone ?? '',
-      );
+      await Supabase.instance.client.from('orders').insert({
+        'user_id':       userId,
+        'pharmacy_name': profile?.pharmacyName ?? '',
+        if ((profile?.phone ?? '').isNotEmpty) 'phone': profile!.phone,
+        if (address.isNotEmpty) 'address': address,
+        'items': cart.lines.map((l) => {
+          'product_name': l.product.name,
+          'quantity':     l.quantity,
+          'price':        l.product.b2bPrice,
+          'mrp':          l.product.mrp,
+          'gst_percent':  l.product.gstPercent,
+          'line_total':   l.lineTotal,
+        }).toList(),
+        'total_amount':  netPayable,
+        'status':        'pending',
+        // payment_id repurposed as order reference until DB migration is applied
+        'payment_id':    orderNumber,
+      });
+
       if (!mounted) return;
 
-      final status = result['status'] ?? 'dismissed';
+      // Clear cart + add to local order history
+      cart.checkout();
 
-      if (status == 'success') {
-        final order = cart.checkout();
-        // Persist order to Supabase (fire-and-forget)
-        _saveOrder(
-          order: order,
-          paymentId: result['payment_id'] ?? '',
-          pharmacyName: profile?.pharmacyName ?? '',
-          phone: profile?.phone ?? '',
-          address: '${profile?.address ?? ''}, ${profile?.city ?? ''} ${profile?.pincode ?? ''}'.trim(),
-        );
-        showDialog(
-          context: context,
-          barrierDismissible: false,
-          builder: (_) => _PaymentSuccessDialog(
-            paymentId: result['payment_id'] ?? '',
-            orderNumber: order.number,
-            amount: rupees(order.netPayable),
-            onDone: () {
-              Navigator.of(context).pop();
-              widget.onOrderPlaced?.call();
-            },
-          ),
-        );
-      } else if (status == 'failed') {
-        showDialog(
-          context: context,
-          builder: (_) => _PaymentErrorDialog(
-            message: result['description']?.isNotEmpty == true
-                ? result['description']!
-                : 'Payment could not be completed.',
-            onRetry: () {
-              Navigator.of(context).pop();
-              _openPayment();
-            },
-            onCancel: () => Navigator.of(context).pop(),
-          ),
-        );
-      }
-      // 'dismissed' → user closed modal, no action needed
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => _OrderPlacedDialog(
+          orderNumber: orderNumber,
+          amount: rupees(netPayable),
+          onDone: () {
+            Navigator.of(context).pop();
+            widget.onOrderPlaced?.call();
+          },
+        ),
+      );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Payment error: $e'),
+          content: const Text('Could not place order. Please try again.'),
           behavior: SnackBarBehavior.floating,
+          backgroundColor: const Color(0xFFDC2626),
         ),
       );
     } finally {
-      if (mounted) setState(() => _paymentInProgress = false);
+      if (mounted) setState(() => _orderInProgress = false);
     }
   }
 
-  void _saveOrder({
-    required Order order,
-    required String paymentId,
-    required String pharmacyName,
-    required String phone,
-    required String address,
-  }) {
-    final userId =
-        Supabase.instance.client.auth.currentUser?.id;
-    if (userId == null) return;
-    Supabase.instance.client.from('orders').insert({
-      'user_id': userId,
-      'pharmacy_name': pharmacyName,
-      if (phone.isNotEmpty) 'phone': phone,
-      if (address.isNotEmpty) 'address': address,
-      'items': order.lines
-          .map((l) => {
-                'product_name': l.product.name,
-                'quantity': l.quantity,
-                'price': l.product.b2bPrice,
-                'line_total': l.lineTotal,
-              })
-          .toList(),
-      'total_amount': order.netPayable,
-      'payment_id': paymentId,
-      'status': 'paid',
-    }).then((_) {}).catchError((_) {});
+  static String _generateOrderNumber() {
+    final now = DateTime.now();
+    final d = '${(now.year % 100).toString().padLeft(2, '0')}'
+              '${now.month.toString().padLeft(2, '0')}'
+              '${now.day.toString().padLeft(2, '0')}';
+    final s = (now.millisecondsSinceEpoch % 10000).toString().padLeft(4, '0');
+    return 'PO-$d-$s';
   }
 
   void _showOrderGate({
@@ -224,7 +204,7 @@ class _CartScreenState extends State<CartScreen> {
                             flex: 2,
                             child: _OrderSummaryPanel(
                               cart: cart,
-                              onMakePayment: _openPayment,
+                              onPlaceOrder: _placeOrder,
                             ),
                           ),
                         ],
@@ -248,7 +228,7 @@ class _CartScreenState extends State<CartScreen> {
                 showBreakdown: true,
               ),
             ),
-            _CheckoutBar(cart: cart, onMakePayment: _openPayment),
+            _CheckoutBar(cart: cart, onPlaceOrder: _placeOrder),
           ],
         );
       },
@@ -1164,8 +1144,8 @@ String? _orderGateMessage(AuthNotifier auth) {
 
 class _CheckoutBar extends StatelessWidget {
   final CartModel cart;
-  final VoidCallback onMakePayment;
-  const _CheckoutBar({required this.cart, required this.onMakePayment});
+  final VoidCallback onPlaceOrder;
+  const _CheckoutBar({required this.cart, required this.onPlaceOrder});
 
   @override
   Widget build(BuildContext context) {
@@ -1245,7 +1225,7 @@ class _CheckoutBar extends StatelessWidget {
                           const SizedBox(width: 14),
                           Expanded(
                             child: GestureDetector(
-                              onTap: onMakePayment,
+                              onTap: onPlaceOrder,
                               child: Container(
                                 padding:
                                     const EdgeInsets.symmetric(vertical: 15),
@@ -1259,12 +1239,12 @@ class _CheckoutBar extends StatelessWidget {
                                   mainAxisAlignment:
                                       MainAxisAlignment.center,
                                   children: [
-                                    const Icon(Icons.payment_rounded,
+                                    const Icon(Icons.shopping_bag_outlined,
                                         color: Colors.white, size: 18),
                                     const SizedBox(width: 8),
                                     Text(
                                       auth.isAuthenticated
-                                          ? 'Make Payment'
+                                          ? 'Place Order'
                                           : 'Login to Order',
                                       style: const TextStyle(
                                         color: Colors.white,
@@ -1946,8 +1926,8 @@ class _GstGroup extends StatelessWidget {
 
 class _OrderSummaryPanel extends StatelessWidget {
   final CartModel cart;
-  final VoidCallback onMakePayment;
-  const _OrderSummaryPanel({required this.cart, required this.onMakePayment});
+  final VoidCallback onPlaceOrder;
+  const _OrderSummaryPanel({required this.cart, required this.onPlaceOrder});
 
   @override
   Widget build(BuildContext context) {
@@ -2019,7 +1999,7 @@ class _OrderSummaryPanel extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 GestureDetector(
-                  onTap: onMakePayment,
+                  onTap: onPlaceOrder,
                   child: Container(
                     padding: const EdgeInsets.symmetric(vertical: 15),
                     decoration: BoxDecoration(
@@ -2031,12 +2011,12 @@ class _OrderSummaryPanel extends StatelessWidget {
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        const Icon(Icons.payment_rounded,
+                        const Icon(Icons.shopping_bag_outlined,
                             color: Colors.white, size: 18),
                         const SizedBox(width: 8),
                         Text(
                           auth.isAuthenticated
-                              ? 'Make Payment'
+                              ? 'Place Order'
                               : 'Login to Order',
                           style: const TextStyle(
                             color: Colors.white,
@@ -2158,16 +2138,14 @@ class _OrderSummaryPanel extends StatelessWidget {
   }
 }
 
-// ─── Payment dialogs ─────────────────────────────────────────────────────────
+// ─── Order placed confirmation dialog ─────────────────────────────────────────
 
-class _PaymentSuccessDialog extends StatelessWidget {
-  final String paymentId;
+class _OrderPlacedDialog extends StatelessWidget {
   final String orderNumber;
   final String amount;
   final VoidCallback onDone;
 
-  const _PaymentSuccessDialog({
-    required this.paymentId,
+  const _OrderPlacedDialog({
     required this.orderNumber,
     required this.amount,
     required this.onDone,
@@ -2195,7 +2173,7 @@ class _PaymentSuccessDialog extends StatelessWidget {
             ),
             const SizedBox(height: 20),
             const Text(
-              'Payment Successful!',
+              'Order Placed!',
               style: TextStyle(
                   fontSize: 20,
                   fontWeight: FontWeight.w800,
@@ -2203,18 +2181,17 @@ class _PaymentSuccessDialog extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text(
-              'Order #$orderNumber • $amount',
+              'Order $orderNumber • $amount',
               style: const TextStyle(fontSize: 14, color: Color(0xFF374151)),
+              textAlign: TextAlign.center,
             ),
-            if (paymentId.isNotEmpty) ...[
-              const SizedBox(height: 4),
-              Text(
-                'Payment ID: $paymentId',
-                style:
-                    const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF)),
-                textAlign: TextAlign.center,
-              ),
-            ],
+            const SizedBox(height: 6),
+            const Text(
+              'Your order has been placed and is pending confirmation.\nOur team will contact you shortly.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                  fontSize: 12, color: Color(0xFF6B7280), height: 1.5),
+            ),
             const SizedBox(height: 24),
             SizedBox(
               width: double.infinity,
@@ -2230,89 +2207,6 @@ class _PaymentSuccessDialog extends StatelessWidget {
                     style: TextStyle(
                         fontSize: 15, fontWeight: FontWeight.w700)),
               ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _PaymentErrorDialog extends StatelessWidget {
-  final String message;
-  final VoidCallback onRetry;
-  final VoidCallback onCancel;
-
-  const _PaymentErrorDialog({
-    required this.message,
-    required this.onRetry,
-    required this.onCancel,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Dialog(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      backgroundColor: Colors.white,
-      child: Padding(
-        padding: const EdgeInsets.all(28),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 72,
-              height: 72,
-              decoration: const BoxDecoration(
-                color: Color(0xFFFEE2E2),
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(Icons.error_rounded,
-                  color: Color(0xFFDC2626), size: 44),
-            ),
-            const SizedBox(height: 20),
-            const Text(
-              'Payment Failed',
-              style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w800,
-                  color: Color(0xFF111827)),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              message,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                  fontSize: 13, color: Color(0xFF6B7280), height: 1.4),
-            ),
-            const SizedBox(height: 24),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: onCancel,
-                    style: OutlinedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 13),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10)),
-                    ),
-                    child: const Text('Cancel'),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: FilledButton(
-                    onPressed: onRetry,
-                    style: FilledButton.styleFrom(
-                      backgroundColor: const Color(0xFFDC2626),
-                      padding: const EdgeInsets.symmetric(vertical: 13),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10)),
-                    ),
-                    child: const Text('Retry',
-                        style: TextStyle(fontWeight: FontWeight.w700)),
-                  ),
-                ),
-              ],
             ),
           ],
         ),

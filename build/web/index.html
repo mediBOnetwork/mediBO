@@ -78,8 +78,6 @@
 
   <title>mediBO</title>
   <script src="https://www.google.com/recaptcha/api.js" async defer></script>
-  <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
-
   <!-- Firebase SDK (compat — same version as SW) -->
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-messaging-compat.js"></script>
@@ -304,37 +302,6 @@
         recaptchaResolve(null);
         recaptchaResolve = null;
       }
-    }
-  </script>
-  <script>
-    function openRazorpay(amount, name, email, phone, callback) {
-      var options = {
-        key: 'rzp_test_Sui4xL8jGTDxav',
-        amount: amount,
-        currency: 'INR',
-        name: 'mediBO',
-        description: 'Medicine Order',
-        prefill: {
-          name: name || '',
-          email: email || '',
-          contact: phone || ''
-        },
-        theme: { color: '#1B5E20' },
-        handler: function(response) {
-          callback('success', response.razorpay_payment_id || '', '', '');
-        },
-        modal: {
-          ondismiss: function() {
-            callback('dismissed', '', '', '');
-          }
-        }
-      };
-      var rzp = new Razorpay(options);
-      rzp.on('payment.failed', function(response) {
-        var desc = (response.error && response.error.description) ? response.error.description : 'Payment failed';
-        callback('failed', '', desc, '');
-      });
-      rzp.open();
     }
   </script>
 </body>

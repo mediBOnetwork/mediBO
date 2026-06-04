@@ -453,7 +453,10 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     try {
       await Supabase.instance.client
           .from('cart_items')
-          .update({'removed_by_admin': true})
+          .update({
+            'removed_by_admin': true,
+            'removed_at': DateTime.now().toUtc().toIso8601String(),
+          })
           .eq('id', itemId);
       _load(showSpinner: false);
     } catch (e) {
@@ -671,7 +674,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 10),
       color: const Color(0xFFF3F4F6),
       child: Row(children: [
-        _th('Customer', flex: 3),
+        _th('Customer', flex: 4),
         _th('Pharmacy', flex: 3),
         _th('Phone', flex: 2),
         _th('Source', flex: 2),
@@ -708,7 +711,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
           ),
           child: Row(children: [
             Expanded(
-                flex: 3,
+                flex: 4,
                 child: Text(row.name,
                     style: const TextStyle(
                         fontSize: 13,
@@ -985,207 +988,314 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     );
   }
 
-  // Task 5: Expanded cart items — Product | Qty | Pack size | MRP | Remove
+  // Tasks 1+2+3: Expanded cart items with responsive layout + Added/Removed by column
   Widget _buildCartExpandedItems(_CustRow row,
       {required double lpad, required double rpad}) {
     return Container(
       color: const Color(0xFFF9FAFB),
       padding: EdgeInsets.fromLTRB(lpad, 10, rpad, 14),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        // Header + Add button
-        Row(children: [
-          Text(
-            'Cart Items (${row.items.length})',
-            style: const TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-                color: Color(0xFF374151)),
-          ),
-          const Spacer(),
-          TextButton.icon(
-            onPressed: () => _adminAddCartItem(row.userId),
-            icon: const Icon(Icons.add, size: 14),
-            label: const Text('Add Item', style: TextStyle(fontSize: 12)),
-            style: TextButton.styleFrom(
-              foregroundColor: const Color(0xFF1B5E20),
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      child: LayoutBuilder(builder: (ctx, constraints) {
+        final isWide = constraints.maxWidth > 560;
+        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          // Header + Add button
+          Row(children: [
+            Text(
+              'Cart Items (${row.items.length})',
+              style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFF374151)),
             ),
-          ),
-        ]),
-        const SizedBox(height: 6),
-
-        // Active items
-        if (row.items.isEmpty)
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 6),
-            child: Text('No active items.',
-                style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF))),
-          )
-        else ...[
-          // Task 5: Column headers — Product | Qty | Pack size | MRP | [Remove]
-          const Row(children: [
-            Expanded(
-                flex: 4,
-                child: Text('Product',
-                    style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                        color: Color(0xFF9CA3AF)))),
-            SizedBox(
-                width: 44,
-                child: Text('Qty',
-                    style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                        color: Color(0xFF9CA3AF)))),
-            SizedBox(
-                width: 80,
-                child: Text('Pack size',
-                    style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                        color: Color(0xFF9CA3AF)))),
-            SizedBox(
-                width: 74,
-                child: Text('MRP',
-                    style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                        color: Color(0xFF9CA3AF)))),
-            SizedBox(width: 68),
+            const Spacer(),
+            TextButton.icon(
+              onPressed: () => _adminAddCartItem(row.userId),
+              icon: const Icon(Icons.add, size: 14),
+              label: const Text('Add Item', style: TextStyle(fontSize: 12)),
+              style: TextButton.styleFrom(
+                foregroundColor: const Color(0xFF1B5E20),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+            ),
           ]),
-          const SizedBox(height: 4),
-          ...row.items.map((item) => Padding(
-                padding: const EdgeInsets.only(top: 5),
-                child: Row(crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                  Expanded(
-                      flex: 4,
-                      child: Row(children: [
-                        Flexible(
+          const SizedBox(height: 6),
+
+          // ── Active items ──────────────────────────────────────────────
+          if (row.items.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 6),
+              child: Text('No active items.',
+                  style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF))),
+            )
+          else ...[
+            if (isWide) ...[
+              // Wide column headers
+              Row(children: [
+                const Expanded(
+                    child: Text('Product',
+                        style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF9CA3AF)))),
+                const SizedBox(
+                    width: 44,
+                    child: Text('Qty',
+                        style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF9CA3AF)))),
+                const SizedBox(
+                    width: 130,
+                    child: Text('Pack size',
+                        style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF9CA3AF)))),
+                const SizedBox(
+                    width: 80,
+                    child: Text('MRP',
+                        style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF9CA3AF)))),
+                const SizedBox(
+                    width: 120,
+                    child: Text('Added/Removed by',
+                        maxLines: 2,
+                        style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF9CA3AF)))),
+                const SizedBox(width: 72),
+              ]),
+              const SizedBox(height: 4),
+              ...row.items.map((item) => Padding(
+                    padding: const EdgeInsets.only(top: 5),
+                    child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                      Expanded(
                           child: Text(item.name,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: const TextStyle(
-                                  fontSize: 12, color: Color(0xFF374151))),
-                        ),
-                        if (item.addedBy == 'admin') ...[
-                          const SizedBox(width: 4),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 4, vertical: 1),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFFFEF08A),
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                            child: const Text('mediBO',
-                                style: TextStyle(
-                                    fontSize: 9,
+                                  fontSize: 12, color: Color(0xFF374151)))),
+                      SizedBox(
+                          width: 44,
+                          child: Text('×${item.qty}',
+                              style: const TextStyle(
+                                  fontSize: 12, color: Color(0xFF6B7280)))),
+                      SizedBox(
+                          width: 130,
+                          child: Text(
+                              (item.packSize?.isNotEmpty == true)
+                                  ? item.packSize!
+                                  : '—',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                  fontSize: 12, color: Color(0xFF6B7280)))),
+                      SizedBox(
+                          width: 80,
+                          child: Text(
+                              item.mrp != null
+                                  ? '₹${item.mrp!.toStringAsFixed(0)}'
+                                  : '—',
+                              style: const TextStyle(
+                                  fontSize: 12, color: Color(0xFF374151)))),
+                      SizedBox(
+                          width: 120,
+                          child: _addedByBadge(item.addedBy)),
+                      SizedBox(
+                        width: 72,
+                        child: item.id != null
+                            ? TextButton(
+                                onPressed: () =>
+                                    _adminSoftRemoveItem(item.id!),
+                                style: TextButton.styleFrom(
+                                  foregroundColor: const Color(0xFFDC2626),
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 6, vertical: 2),
+                                  tapTargetSize:
+                                      MaterialTapTargetSize.shrinkWrap,
+                                  minimumSize: Size.zero,
+                                ),
+                                child: const Text('Remove',
+                                    style: TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w600)),
+                              )
+                            : const SizedBox(),
+                      ),
+                    ]),
+                  )),
+            ] else ...[
+              // Narrow 2-row layout per item
+              ...row.items.map((item) => Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                      Row(children: [
+                        Expanded(
+                            child: Text(item.name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                    fontSize: 12,
                                     fontWeight: FontWeight.w600,
-                                    color: Color(0xFF92400E))),
-                          ),
-                        ],
-                      ])),
-                  SizedBox(
-                      width: 44,
-                      child: Text('×${item.qty}',
-                          style: const TextStyle(
-                              fontSize: 12, color: Color(0xFF6B7280)))),
-                  // Task 5: Pack size
-                  SizedBox(
-                      width: 80,
-                      child: Text(
-                          (item.packSize != null && item.packSize!.isNotEmpty)
-                              ? item.packSize!
-                              : '—',
-                          style: const TextStyle(
-                              fontSize: 12, color: Color(0xFF6B7280)),
-                          overflow: TextOverflow.ellipsis)),
-                  // Task 5: MRP
-                  SizedBox(
-                      width: 74,
-                      child: Text(
-                          item.mrp != null
-                              ? '₹${item.mrp!.toStringAsFixed(0)}'
-                              : '—',
-                          style: const TextStyle(
-                              fontSize: 12, color: Color(0xFF374151)))),
-                  SizedBox(
-                    width: 68,
-                    child: item.id != null
-                        ? TextButton(
-                            onPressed: () => _adminSoftRemoveItem(item.id!),
-                            style: TextButton.styleFrom(
-                              foregroundColor: const Color(0xFFDC2626),
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 6, vertical: 2),
-                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                              minimumSize: Size.zero,
+                                    color: Color(0xFF374151)))),
+                        if (item.id != null)
+                          GestureDetector(
+                            onTap: () => _adminSoftRemoveItem(item.id!),
+                            child: const Padding(
+                              padding: EdgeInsets.only(left: 6),
+                              child: Text('Remove',
+                                  style: TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600,
+                                      color: Color(0xFFDC2626))),
                             ),
-                            child: const Text('Remove',
-                                style: TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w600)),
-                          )
-                        : const SizedBox(),
-                  ),
-                ]),
-              )),
-        ],
+                          ),
+                      ]),
+                      const SizedBox(height: 2),
+                      Row(children: [
+                        Text('×${item.qty}',
+                            style: const TextStyle(
+                                fontSize: 11, color: Color(0xFF6B7280))),
+                        const Text('  ·  ',
+                            style: TextStyle(
+                                fontSize: 11, color: Color(0xFFD1D5DB))),
+                        Text(
+                            (item.packSize?.isNotEmpty == true)
+                                ? item.packSize!
+                                : '—',
+                            style: const TextStyle(
+                                fontSize: 11, color: Color(0xFF6B7280))),
+                        const Text('  ·  ',
+                            style: TextStyle(
+                                fontSize: 11, color: Color(0xFFD1D5DB))),
+                        Text(
+                            item.mrp != null
+                                ? '₹${item.mrp!.toStringAsFixed(0)}'
+                                : '—',
+                            style: const TextStyle(
+                                fontSize: 11, color: Color(0xFF374151))),
+                        const SizedBox(width: 8),
+                        _addedByBadge(item.addedBy),
+                      ]),
+                    ]),
+                  )),
+            ],
+          ],
 
-        // Removed by admin
-        if (row.removedItems.isNotEmpty) ...[
-          const SizedBox(height: 12),
-          const Divider(height: 1, color: Color(0xFFE5E7EB)),
-          const SizedBox(height: 8),
-          Text(
-            'Removed by admin (${row.removedItems.length})',
-            style: const TextStyle(
-                fontSize: 11,
+          // ── Removed by admin ──────────────────────────────────────────
+          if (row.removedItems.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            const Divider(height: 1, color: Color(0xFFE5E7EB)),
+            const SizedBox(height: 8),
+            Text(
+              'Removed by admin (${row.removedItems.length})',
+              style: const TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF9CA3AF)),
+            ),
+            const SizedBox(height: 4),
+            if (isWide)
+              ...row.removedItems.map((item) => Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Row(children: [
+                      Expanded(
+                          child: Text(item.name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                  fontSize: 12,
+                                  color: Color(0xFFD1D5DB),
+                                  decoration: TextDecoration.lineThrough,
+                                  decorationColor: Color(0xFFD1D5DB)))),
+                      SizedBox(
+                          width: 44,
+                          child: Text('×${item.qty}',
+                              style: const TextStyle(
+                                  fontSize: 12, color: Color(0xFFD1D5DB)))),
+                      SizedBox(
+                          width: 130,
+                          child: Text(
+                              (item.packSize?.isNotEmpty == true)
+                                  ? item.packSize!
+                                  : '—',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                  fontSize: 12, color: Color(0xFFD1D5DB)))),
+                      SizedBox(
+                          width: 80,
+                          child: Text(
+                              item.mrp != null
+                                  ? '₹${item.mrp!.toStringAsFixed(0)}'
+                                  : '—',
+                              style: const TextStyle(
+                                  fontSize: 12, color: Color(0xFFD1D5DB)))),
+                      const SizedBox(
+                          width: 120,
+                          child: _RemovedByBadge()),
+                      const SizedBox(width: 72),
+                    ]),
+                  ))
+            else
+              ...row.removedItems.map((item) => Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Row(children: [
+                      Expanded(
+                          child: Text(item.name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                  fontSize: 12,
+                                  color: Color(0xFFD1D5DB),
+                                  decoration: TextDecoration.lineThrough,
+                                  decorationColor: Color(0xFFD1D5DB)))),
+                      const SizedBox(width: 8),
+                      const _RemovedByBadge(),
+                    ]),
+                  )),
+          ],
+        ]);
+      }),
+    );
+  }
+
+  static Widget _addedByBadge(String addedBy) {
+    if (addedBy == 'admin') {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFEF08A),
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(color: const Color(0xFFFBBF24)),
+        ),
+        child: const Text('mediBO',
+            style: TextStyle(
+                fontSize: 9,
                 fontWeight: FontWeight.w600,
-                color: Color(0xFF9CA3AF)),
-          ),
-          const SizedBox(height: 4),
-          ...row.removedItems.map((item) => Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: Row(children: [
-                  Expanded(
-                      flex: 4,
-                      child: Text(item.name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                              fontSize: 12,
-                              color: Color(0xFFD1D5DB),
-                              decoration: TextDecoration.lineThrough,
-                              decorationColor: Color(0xFFD1D5DB)))),
-                  SizedBox(
-                      width: 44,
-                      child: Text('×${item.qty}',
-                          style: const TextStyle(
-                              fontSize: 12, color: Color(0xFFD1D5DB)))),
-                  SizedBox(
-                      width: 80,
-                      child: Text(
-                          (item.packSize != null && item.packSize!.isNotEmpty)
-                              ? item.packSize!
-                              : '—',
-                          style: const TextStyle(
-                              fontSize: 12, color: Color(0xFFD1D5DB)))),
-                  SizedBox(
-                      width: 74,
-                      child: Text(
-                          item.mrp != null
-                              ? '₹${item.mrp!.toStringAsFixed(0)}'
-                              : '—',
-                          style: const TextStyle(
-                              fontSize: 12, color: Color(0xFFD1D5DB)))),
-                  const SizedBox(width: 68),
-                ]),
-              )),
-        ],
-      ]),
+                color: Color(0xFF92400E))),
+      );
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF3F4F6),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: const Color(0xFFD1D5DB)),
+      ),
+      child: const Text('Self',
+          style: TextStyle(
+              fontSize: 9,
+              fontWeight: FontWeight.w600,
+              color: Color(0xFF6B7280))),
     );
   }
 
@@ -1205,7 +1315,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         ),
         child: Row(children: [
           Expanded(
-              flex: 3,
+              flex: 4,
               child: Text('Total (${_cartRows.length} cart${_cartRows.length == 1 ? '' : 's'})',
                   style: const TextStyle(
                       fontSize: 12,
@@ -2217,6 +2327,30 @@ class _AdminAddItemDialogState extends State<_AdminAddItemDialog> {
           ),
         ),
       ),
+    );
+  }
+}
+
+// ── Removed-by-admin badge (admin sub-table) ──────────────────────────────────
+
+class _RemovedByBadge extends StatelessWidget {
+  const _RemovedByBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFEF2F2),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: const Color(0xFFFECACA)),
+      ),
+      child: const Text('Removed by\nmediBO',
+          style: TextStyle(
+              fontSize: 9,
+              fontWeight: FontWeight.w600,
+              color: Color(0xFFDC2626),
+              height: 1.3)),
     );
   }
 }

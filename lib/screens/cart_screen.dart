@@ -443,7 +443,7 @@ class _ItemListState extends State<_ItemList> {
           }
           extra -= 1;
           if (_showRemoved && extra < removed.length) {
-            return _RemovedItemCard(line: removed[extra]);
+            return _RemovedItemCard(line: removed[extra], cart: widget.cart);
           }
         }
 
@@ -991,7 +991,8 @@ class _RemovedByAdminHeader extends StatelessWidget {
 
 class _RemovedItemCard extends StatelessWidget {
   final CartLine line;
-  const _RemovedItemCard({required this.line});
+  final CartModel cart;
+  const _RemovedItemCard({required this.line, required this.cart});
 
   @override
   Widget build(BuildContext context) {
@@ -1040,6 +1041,25 @@ class _RemovedItemCard extends StatelessWidget {
                   color: Color(0xFFDC2626),
                   fontWeight: FontWeight.w600)),
         ),
+        // Manual X: customer clears the removed item immediately
+        if (line.cartItemId != null) ...[
+          const SizedBox(width: 8),
+          GestureDetector(
+            onTap: () => cart.hardDeleteRemovedItem(line.cartItemId!),
+            child: Container(
+              width: 22,
+              height: 22,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(color: const Color(0xFFD1D5DB)),
+                color: const Color(0xFFF9FAFB),
+              ),
+              child: const Center(
+                child: Icon(Icons.close, size: 11, color: Color(0xFF9CA3AF)),
+              ),
+            ),
+          ),
+        ],
       ]),
     );
   }

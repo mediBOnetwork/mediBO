@@ -20,8 +20,9 @@ class CartLine {
   // Used to sort bulk items in upload order and restore position on re-sync.
   final int? bulkOrder;
   final bool addedByAdmin;
+  final int? cartItemId;
 
-  CartLine(this.product, this.quantity, {this.isSample = false, this.bulkOrder, this.addedByAdmin = false});
+  CartLine(this.product, this.quantity, {this.isSample = false, this.bulkOrder, this.addedByAdmin = false, this.cartItemId});
 
   double get lineTotal => product.b2bPrice * quantity;
   double get lineGst => lineTotal * product.gstPercent / 100;
@@ -174,6 +175,22 @@ class CartModel extends ChangeNotifier {
     try {
       final uid = overrideUid ?? Supabase.instance.client.auth.currentUser?.id;
       if (uid == null) return;
+
+      // Hard-delete expired removed-by-admin rows: date boundary in IST
+      try {
+        final nowUtc = DateTime.now().toUtc();
+        final nowIst = nowUtc.add(const Duration(hours: 5, minutes: 30));
+        final midnightIst = DateTime(nowIst.year, nowIst.month, nowIst.day);
+        final cutoffUtc = midnightIst.subtract(const Duration(hours: 5, minutes: 30));
+        await Supabase.instance.client
+            .from('cart_items')
+            .delete()
+            .eq('user_id', uid)
+            .eq('removed_by_admin', true)
+            .not('removed_at', 'is', null)
+            .lt('removed_at', cutoffUtc.toIso8601String());
+      } catch (_) {}
+
       final rows = await Supabase.instance.client
           .from('cart_items')
           .select()
@@ -194,13 +211,27 @@ class CartModel extends ChangeNotifier {
         );
         final removedByAdmin = (row['removed_by_admin'] as bool?) ?? false;
         final addedByAdmin = (row['added_by'] as String?) == 'admin';
+        final cartItemId = (row['id'] as num?)?.toInt();
         if (removedByAdmin) {
-          _adminRemovedLines.add(CartLine(product, row['quantity'] as int, addedByAdmin: addedByAdmin));
+          _adminRemovedLines.add(CartLine(product, row['quantity'] as int,
+              addedByAdmin: addedByAdmin, cartItemId: cartItemId));
         } else {
-          _lines[product.id] = CartLine(product, row['quantity'] as int, addedByAdmin: addedByAdmin);
+          _lines[product.id] = CartLine(product, row['quantity'] as int,
+              addedByAdmin: addedByAdmin, cartItemId: cartItemId);
         }
       }
       _recomputeTotals();
+      notifyListeners();
+    } catch (_) {}
+  }
+
+  Future<void> hardDeleteRemovedItem(int itemId) async {
+    try {
+      await Supabase.instance.client
+          .from('cart_items')
+          .delete()
+          .eq('id', itemId);
+      _adminRemovedLines.removeWhere((l) => l.cartItemId == itemId);
       notifyListeners();
     } catch (_) {}
   }

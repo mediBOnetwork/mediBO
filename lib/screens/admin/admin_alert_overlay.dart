@@ -20,6 +20,15 @@ external void _jsMute(bool muted);
 @JS('adminAlertRegisterMessageHandler')
 external void _jsRegisterHandler(JSFunction callback);
 
+@JS('adminOrderAlertStart')
+external void _jsOrderStart();
+
+@JS('adminOrderAlertStop')
+external void _jsOrderStop();
+
+@JS('adminOrderAlertMute')
+external void _jsOrderMuteJs(bool muted);
+
 void _jsAudioStart() {
   if (!kIsWeb) return;
   try { _jsStart(); } catch (_) {}
@@ -35,9 +44,24 @@ void _jsAudioMute(bool muted) {
   try { _jsMute(muted); } catch (_) {}
 }
 
+void _jsOrderAudioStart() {
+  if (!kIsWeb) return;
+  try { _jsOrderStart(); } catch (_) {}
+}
+
+void _jsOrderAudioStop() {
+  if (!kIsWeb) return;
+  try { _jsOrderStop(); } catch (_) {}
+}
+
+void _jsOrderAudioMute(bool muted) {
+  if (!kIsWeb) return;
+  try { _jsOrderMuteJs(muted); } catch (_) {}
+}
+
 // ── Column skip / label helpers (matches admin_customer_screen) ──────────────
 
-const _kSkip = {'id', 'user_id'};
+const _kSkip = {'id', 'user_id', '_alertType'};
 
 String _fmtLabel(String col) {
   const ov = {
@@ -74,7 +98,8 @@ String _fmtVal(String col, dynamic v) {
 
 class AdminAlertOverlay extends StatefulWidget {
   final Widget child;
-  const AdminAlertOverlay({super.key, required this.child});
+  final VoidCallback? onOrderTap;
+  const AdminAlertOverlay({super.key, required this.child, this.onOrderTap});
 
   @override
   State<AdminAlertOverlay> createState() => _AdminAlertOverlayState();
@@ -88,13 +113,14 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
   bool _busy = false;
 
   RealtimeChannel? _channel;
+  RealtimeChannel? _orderChannel;
   late final AnimationController _flashCtrl;
   late final Animation<double> _flashAnim;
   late final AnimationController _slideCtrl;
   late final Animation<Offset> _slideAnim;
 
-  // Track IDs we've already queued (dedup with SW messages)
   final Set<String> _seenIds = {};
+  final Set<String> _orderSeenIds = {};
 
   @override
   void initState() {
@@ -111,6 +137,7 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
     ).animate(CurvedAnimation(parent: _slideCtrl, curve: Curves.easeOutCubic));
 
     _subscribeRealtime();
+    _subscribeOrders();
 
     // Listen for messages from the FCM service worker (dedup: SW posts when
     // app is focused so we don't also get the OS notification)
@@ -155,6 +182,27 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
         .subscribe();
   }
 
+  void _subscribeOrders() {
+    final ts = DateTime.now().millisecondsSinceEpoch;
+    _orderChannel = Supabase.instance.client
+        .channel('admin_new_order_$ts')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.insert,
+          schema: 'public',
+          table: 'orders',
+          callback: (payload) {
+            final rec = Map<String, dynamic>.from(payload.newRecord);
+            if (rec.isEmpty) return;
+            final status = rec['status'] as String? ?? '';
+            final id     = rec['id']     as String? ?? '';
+            if (status == 'pending' || status.isEmpty) {
+              _enqueueOrder(rec, id);
+            }
+          },
+        )
+        .subscribe();
+  }
+
   // Called when SW message arrives with a registration ID (app was open/focused)
   Future<void> _maybeFetchAndEnqueue(String id) async {
     if (_seenIds.contains(id)) return;
@@ -171,9 +219,23 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
   void _enqueue(Map<String, dynamic> rec, String id) {
     if (id.isNotEmpty && _seenIds.contains(id)) return;
     if (id.isNotEmpty) _seenIds.add(id);
+    final tagged = {...rec, '_alertType': 'registration'};
     if (mounted) {
       setState(() {
-        _queue.add(rec);
+        _queue.add(tagged);
+        _detailsOpen = false;
+      });
+      if (_queue.length == 1) _onFirstAlert();
+    }
+  }
+
+  void _enqueueOrder(Map<String, dynamic> rec, String id) {
+    if (id.isNotEmpty && _orderSeenIds.contains(id)) return;
+    if (id.isNotEmpty) _orderSeenIds.add(id);
+    final tagged = {...rec, '_alertType': 'order'};
+    if (mounted) {
+      setState(() {
+        _queue.add(tagged);
         _detailsOpen = false;
       });
       if (_queue.length == 1) _onFirstAlert();
@@ -181,19 +243,36 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
   }
 
   void _onFirstAlert() {
-    _jsAudioStart();
+    final type = _queue.first['_alertType'] as String? ?? 'registration';
+    if (type == 'order') {
+      _jsOrderAudioStart();
+    } else {
+      _jsAudioStart();
+    }
     _slideCtrl.forward(from: 0);
   }
 
   void _advance() {
-    _jsAudioStop();
+    final currentType = _queue.isNotEmpty
+        ? (_queue.first['_alertType'] as String? ?? 'registration')
+        : 'registration';
+    if (currentType == 'order') {
+      _jsOrderAudioStop();
+    } else {
+      _jsAudioStop();
+    }
     setState(() {
       _queue.removeAt(0);
       _detailsOpen = false;
       _busy = false;
     });
     if (_queue.isNotEmpty) {
-      _jsAudioStart();
+      final nextType = _queue.first['_alertType'] as String? ?? 'registration';
+      if (nextType == 'order') {
+        _jsOrderAudioStart();
+      } else {
+        _jsAudioStart();
+      }
       _slideCtrl.forward(from: 0);
     }
   }
@@ -258,12 +337,15 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
   void _toggleMute() {
     setState(() => _muted = !_muted);
     _jsAudioMute(_muted);
+    _jsOrderAudioMute(_muted);
   }
 
   @override
   void dispose() {
     _channel?.unsubscribe();
+    _orderChannel?.unsubscribe();
     _jsAudioStop();
+    _jsOrderAudioStop();
     _flashCtrl.dispose();
     _slideCtrl.dispose();
     super.dispose();
@@ -297,6 +379,12 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
   }
 
   Widget _buildCard(Map<String, dynamic> rec) {
+    final type = rec['_alertType'] as String? ?? 'registration';
+    if (type == 'order') return _buildOrderCard(rec);
+    return _buildRegistrationCard(rec);
+  }
+
+  Widget _buildRegistrationCard(Map<String, dynamic> rec) {
     final pharmacyName = rec['pharmacy_name'] as String? ?? '';
     final ownerName    = rec['customer_name'] as String? ?? rec['owner_name'] as String? ?? '';
     final phone        = rec['whatsapp_no']   as String? ?? rec['phone'] as String? ?? '';
@@ -373,9 +461,9 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
             ],
             const SizedBox(height: 12),
             Wrap(spacing: 16, runSpacing: 8, children: [
-              if (phone.isNotEmpty)    _chip(Icons.phone_outlined,         phone),
-              if (storeType.isNotEmpty) _chip(Icons.storefront_outlined,  storeType),
-              if (location.isNotEmpty)  _chip(Icons.location_on_outlined, location),
+              if (phone.isNotEmpty)     _chip(Icons.phone_outlined,         phone),
+              if (storeType.isNotEmpty) _chip(Icons.storefront_outlined,    storeType),
+              if (location.isNotEmpty)  _chip(Icons.location_on_outlined,   location),
             ]),
           ]),
         ),
@@ -457,6 +545,180 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
                     ),
                   ),
                 ]),
+        ),
+      ]),
+    );
+  }
+
+  Widget _buildOrderCard(Map<String, dynamic> rec) {
+    final orderId      = rec['order_id']     as String?
+                      ?? rec['order_number'] as String?
+                      ?? '';
+    final rawTotal     = rec['total_amount'] ?? rec['grand_total'] ?? rec['total'];
+    final customerName = rec['customer_name'] as String?
+                      ?? rec['pharmacy_name'] as String?
+                      ?? '';
+    final city         = rec['city']         as String? ?? '';
+    final createdAt    = rec['created_at']   as String? ?? '';
+
+    final queueLen  = _queue.length;
+    final totalStr  = rawTotal != null ? '₹$rawTotal' : '';
+    final dateStr   = createdAt.length >= 10
+        ? () {
+            try {
+              final dt = DateTime.parse(createdAt).toLocal();
+              return '${dt.day.toString().padLeft(2,'0')}/${dt.month.toString().padLeft(2,'0')}/${dt.year}';
+            } catch (_) { return ''; }
+          }()
+        : '';
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [BoxShadow(
+          color: Colors.black.withValues(alpha: 0.25), blurRadius: 24, offset: const Offset(0, 8))],
+      ),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        // ── Flashing banner ──────────────────────────────────────────────
+        FadeTransition(
+          opacity: _flashAnim,
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            decoration: const BoxDecoration(
+              color: Color(0xFF15803D),
+              borderRadius: BorderRadius.only(
+                topLeft: Radius.circular(16), topRight: Radius.circular(16)),
+            ),
+            child: Row(children: [
+              const Icon(Icons.shopping_bag_outlined, color: Colors.white, size: 18),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  queueLen > 1
+                      ? 'NEW ORDER  ·  $queueLen pending'
+                      : 'NEW ORDER',
+                  style: const TextStyle(
+                      fontSize: 13, fontWeight: FontWeight.w800,
+                      color: Colors.white, letterSpacing: 0.5),
+                ),
+              ),
+              InkWell(
+                onTap: _toggleMute,
+                borderRadius: BorderRadius.circular(20),
+                child: Padding(
+                  padding: const EdgeInsets.all(4),
+                  child: Icon(
+                    _muted ? Icons.volume_off : Icons.volume_up,
+                    color: Colors.white.withValues(alpha: _muted ? 0.5 : 1.0),
+                    size: 18,
+                  ),
+                ),
+              ),
+            ]),
+          ),
+        ),
+
+        // ── Key fields ───────────────────────────────────────────────────
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            if (customerName.isNotEmpty)
+              Text(customerName,
+                  style: const TextStyle(
+                      fontSize: 18, fontWeight: FontWeight.w800,
+                      color: Color(0xFF111827))),
+            if (orderId.isNotEmpty) ...[
+              const SizedBox(height: 3),
+              Text(orderId,
+                  style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+            ],
+            const SizedBox(height: 12),
+            Wrap(spacing: 16, runSpacing: 8, children: [
+              if (totalStr.isNotEmpty)  _chip(Icons.currency_rupee,          totalStr),
+              if (city.isNotEmpty)      _chip(Icons.location_on_outlined,    city),
+              if (dateStr.isNotEmpty)   _chip(Icons.calendar_today_outlined, dateStr),
+            ]),
+          ]),
+        ),
+
+        // ── Details expander ─────────────────────────────────────────────
+        const SizedBox(height: 8),
+        InkWell(
+          onTap: () => setState(() => _detailsOpen = !_detailsOpen),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+            child: Row(children: [
+              const Text('View full details',
+                  style: TextStyle(fontSize: 12, color: Color(0xFF15803D),
+                      fontWeight: FontWeight.w600)),
+              const SizedBox(width: 4),
+              AnimatedRotation(
+                turns: _detailsOpen ? 0.5 : 0.0,
+                duration: const Duration(milliseconds: 180),
+                child: const Icon(Icons.expand_more,
+                    size: 16, color: Color(0xFF15803D)),
+              ),
+            ]),
+          ),
+        ),
+        if (_detailsOpen) _buildDetails(rec),
+
+        const Divider(height: 1, color: Color(0xFFE5E7EB)),
+
+        // ── Action buttons ───────────────────────────────────────────────
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+          child: Row(children: [
+            if (queueLen > 1) ...[
+              OutlinedButton(
+                onPressed: _dismiss,
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFF6B7280),
+                  side: const BorderSide(color: Color(0xFFD1D5DB)),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8)),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 12, vertical: 10),
+                ),
+                child: const Text('Skip', style: TextStyle(fontSize: 12)),
+              ),
+              const SizedBox(width: 8),
+            ],
+            Expanded(
+              child: OutlinedButton(
+                onPressed: _dismiss,
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFF6B7280),
+                  side: const BorderSide(color: Color(0xFFD1D5DB)),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8)),
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                ),
+                child: const Text('Dismiss',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: FilledButton(
+                onPressed: () {
+                  _dismiss();
+                  widget.onOrderTap?.call();
+                },
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFF15803D),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8)),
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                ),
+                child: const Text('View Orders',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+              ),
+            ),
+          ]),
         ),
       ]),
     );

@@ -165,6 +165,80 @@
         if (_htmlAudio) _htmlAudio.muted = _muted;
       };
 
+      // ── ORDER ALERT AUDIO (distinct ascending arpeggio — triangle wave) ──
+      var _orderHtmlAudio = null;
+      var _orderToneInterval = null;
+
+      function _orderTone() {
+        if (_muted) return;
+        try {
+          var ctx = _getCtx();
+          if (ctx.state === 'suspended') ctx.resume();
+          // C5(523) → E5(659) → G5(784) ascending major arpeggio
+          [523, 659, 784].forEach(function (freq, idx) {
+            var osc  = ctx.createOscillator();
+            var gain = ctx.createGain();
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.frequency.value = freq;
+            osc.type = 'triangle';
+            var t0 = ctx.currentTime + idx * 0.14;
+            gain.gain.setValueAtTime(0, t0);
+            gain.gain.linearRampToValueAtTime(0.4, t0 + 0.03);
+            gain.gain.exponentialRampToValueAtTime(0.001, t0 + 0.22);
+            osc.start(t0);
+            osc.stop(t0 + 0.25);
+          });
+        } catch (e) {}
+      }
+
+      function _tryOrderHtmlAudio() {
+        try {
+          _orderHtmlAudio = new Audio('assets/sounds/order_alert.wav');
+          _orderHtmlAudio.loop   = false;
+          _orderHtmlAudio.volume = 0.7;
+          var _replayOrder = function () {
+            if (_orderHtmlAudio && !_muted) {
+              _orderHtmlAudio.currentTime = 0;
+              _orderHtmlAudio.play().catch(function () {});
+            }
+          };
+          var p = _orderHtmlAudio.play();
+          if (p instanceof Promise) {
+            p.catch(function () {
+              _orderHtmlAudio = null;
+              _orderTone();
+              _orderToneInterval = setInterval(_orderTone, 3500);
+            });
+          }
+          _orderToneInterval = setInterval(_replayOrder, 3500);
+          return true;
+        } catch (e) { return false; }
+      }
+
+      window.adminOrderAlertStart = function () {
+        window.adminOrderAlertStop();
+        _muted = false;
+        if (!_tryOrderHtmlAudio()) {
+          _orderTone();
+          _orderToneInterval = setInterval(_orderTone, 3500);
+        }
+      };
+
+      window.adminOrderAlertStop = function () {
+        clearInterval(_orderToneInterval);
+        _orderToneInterval = null;
+        if (_orderHtmlAudio) {
+          try { _orderHtmlAudio.pause(); _orderHtmlAudio.currentTime = 0; } catch (_) {}
+          _orderHtmlAudio = null;
+        }
+      };
+
+      window.adminOrderAlertMute = function (m) {
+        _muted = !!m;
+        if (_orderHtmlAudio) _orderHtmlAudio.muted = _muted;
+      };
+
       // Called from FcmService.dart to receive SW → window messages
       var _msgHandler = null;
       window.adminAlertRegisterMessageHandler = function (cb) {

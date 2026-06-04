@@ -69,6 +69,11 @@ class _AdminShellState extends State<AdminShell> {
     });
   }
 
+  void _navigateToCustomerOrders() {
+    if (!mounted) return;
+    setState(() { _showDashboard = false; _index = 2; });
+  }
+
   Future<void> _loadPendingCount() async {
     try {
       final res = await Supabase.instance.client
@@ -172,6 +177,7 @@ class _AdminShellState extends State<AdminShell> {
 
   Widget _buildDesktop(BuildContext ctx, bool isSuperAdmin) {
     return AdminAlertOverlay(
+      onOrderTap: _navigateToCustomerOrders,
       child: Scaffold(
         backgroundColor: const Color(0xFFF9FAFB),
         body: Column(
@@ -203,6 +209,7 @@ class _AdminShellState extends State<AdminShell> {
       });
     }
     return AdminAlertOverlay(
+      onOrderTap: _navigateToCustomerOrders,
       child: Scaffold(
       backgroundColor: const Color(0xFFF9FAFB),
       appBar: AppBar(

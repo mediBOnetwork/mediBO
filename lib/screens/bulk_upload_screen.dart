@@ -3999,7 +3999,7 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
     final isApproved = row.status == _MatchStatus.matched ||
         row.status == _MatchStatus.manuallyMatched;
 
-    return LayoutBuilder(builder: (context, constraints) {
+    return LayoutBuilder(builder: (context, _) {
       return Opacity(
         opacity: row.isHidden ? 0.45 : 1.0,
         child: GestureDetector(
@@ -4162,14 +4162,15 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                         ),
                         const Divider(height: 1, thickness: 1, color: Color(0xFFE5E7EB)),
                         // ── Selected matched product ─────────────────────────
-                        // Uses _buildMobPackRow (same as candidate/shimmer rows) so
-                        // Pack, Company, and MRP share one vertical grid.
-                        Padding(
+                        // Local LayoutBuilder captures post-border-inset width (same as fuzzy rows'
+                        // LayoutBuilders) so _buildMobPackRow receives identical cardWidth for all row types.
+                        LayoutBuilder(builder: (_, lc) {
+                          return Padding(
                           padding: const EdgeInsets.fromLTRB(
                               _kMobPanelLeftPad, 17, _kMobPanelRightPad, 17),
                           child: p != null
                               ? _buildMobPackRow(
-                                  cardWidth: constraints.maxWidth,
+                                  cardWidth: lc.maxWidth,
                                   name: Text(p.name,
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
@@ -4202,7 +4203,8 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                                       : 'No match found',
                                   style: const TextStyle(
                                       fontSize: 12, color: Color(0xFF9CA3AF))),
-                        ),
+                        );
+                        }),
                         // ── Expandable section: fixed 6-line match panel ────
                         SizeTransition(
                           sizeFactor: _anim,

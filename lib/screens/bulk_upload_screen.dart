@@ -4162,59 +4162,40 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                         ),
                         const Divider(height: 1, thickness: 1, color: Color(0xFFE5E7EB)),
                         // ── Selected matched product ─────────────────────────
-                        // Product-name width is fixed so Pack starts at the same x as
-                        // Line 1's Qty: left_pad + name_w + gap = maxWidth - _kMobLineItemQtyFromRight
-                        // → name_w = maxWidth - (_kMobLineItemQtyFromRight + left_pad + gap) = maxWidth - 250
-                        // Expanded spacer before MRP keeps MRP right-anchored at its original position.
+                        // Uses _buildMobPackRow (same as candidate/shimmer rows) so
+                        // Pack, Company, and MRP share one vertical grid.
                         Padding(
                           padding: const EdgeInsets.fromLTRB(
                               _kMobPanelLeftPad, 17, _kMobPanelRightPad, 17),
                           child: p != null
-                              ? Row(children: [
-                                  SizedBox(
-                                    width: (constraints.maxWidth -
-                                            (_kMobLineItemQtyFromRight +
-                                             _kMobPanelLeftPad +
-                                             _kMobPanelGap))
-                                        .clamp(0.0, double.infinity),
-                                    child: Text(p.name,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(
-                                            fontSize: 13,
-                                            fontWeight: FontWeight.w600,
-                                            color: Color(0xFF111827))),
-                                  ),
-                                  const SizedBox(width: _kMobPanelGap),
-                                  SizedBox(
-                                    width: _kMobPanelPackW,
-                                    child: Text(pack,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(
-                                            fontSize: 11, color: Color(0xFF374151))),
-                                  ),
-                                  const SizedBox(width: _kMobPanelGap),
-                                  Expanded(
-                                    child: Text(p.manufacturer,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(
-                                            fontSize: 11, color: Color(0xFF6B7280))),
-                                  ),
-                                  const SizedBox(width: _kMobPanelGap),
-                                  SizedBox(
-                                    width: _kMobPanelMrpW,
-                                    child: Text(row.price,
-                                        textAlign: TextAlign.right,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(
-                                            fontSize: 12,
-                                            fontWeight: FontWeight.w600,
-                                            color: Color(0xFF111827))),
-                                  ),
-                                ])
+                              ? _buildMobPackRow(
+                                  cardWidth: constraints.maxWidth,
+                                  name: Text(p.name,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w600,
+                                          color: Color(0xFF111827))),
+                                  pack: Text(pack,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                          fontSize: 11, color: Color(0xFF374151))),
+                                  company: Text(p.manufacturer,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                          fontSize: 11, color: Color(0xFF6B7280))),
+                                  mrp: Text(row.price,
+                                      textAlign: TextAlign.right,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w600,
+                                          color: Color(0xFF111827))),
+                                )
                               : Text(
                                   row.status != _MatchStatus.unrecognized
                                       ? row.matchedSku
@@ -4588,6 +4569,33 @@ const double _kMobLineItemQtyFromRight = 232.0;
 // This places Pack's left edge at maxWidth - 232 (= Qty's left edge on Line 1).
 const double _kMobNameColOffset = _kMobLineItemQtyFromRight + _kMobPanelLeftPad + _kMobPanelGap;
 
+/// Shared mobile Row layout: [name SizedBox(maxWidth-_kMobNameColOffset)] | [gap] |
+/// [Pack _kMobPanelPackW] | [gap] | [Company Expanded+ellipsis] | [gap] | [MRP _kMobPanelMrpW]
+///
+/// All mobile row types (selected product, fuzzy/search candidates, shimmer skeleton) call this
+/// so Pack, Company, and MRP form three straight vertical lines regardless of row type.
+/// [cardWidth] must be constraints.maxWidth BEFORE the row's horizontal padding is applied.
+Widget _buildMobPackRow({
+  required double cardWidth,
+  required Widget name,
+  required Widget pack,
+  required Widget company,
+  required Widget mrp,
+}) {
+  return Row(children: [
+    SizedBox(
+      width: (cardWidth - _kMobNameColOffset).clamp(0.0, double.infinity),
+      child: name,
+    ),
+    const SizedBox(width: _kMobPanelGap),
+    SizedBox(width: _kMobPanelPackW, child: pack),
+    const SizedBox(width: _kMobPanelGap),
+    Expanded(child: company),
+    const SizedBox(width: _kMobPanelGap),
+    SizedBox(width: _kMobPanelMrpW, child: mrp),
+  ]);
+}
+
 class _MatchPanel extends StatefulWidget {
   final _MatchRow row;
   final VoidCallback onRowChanged; // called after pick — parent handles close + refresh
@@ -4901,9 +4909,8 @@ class _SearchResultRow extends StatelessWidget {
   Widget build(BuildContext context) =>
       isMobile ? _buildMobile() : _buildWeb();
 
-  // Mobile: name column width fixed via _kMobNameColOffset so Pack aligns with
-  // the selected-product row (Line 2) and Line 1's Qty on the same vertical x.
-  // Expanded spacer between Company and MRP keeps MRP right-anchored.
+  // Mobile: delegates to _buildMobPackRow so column x-positions are identical
+  // to the selected-product row (Line 2) and shimmer skeleton.
   Widget _buildMobile() {
     return LayoutBuilder(builder: (_, constraints) {
       return InkWell(
@@ -4917,44 +4924,28 @@ class _SearchResultRow extends StatelessWidget {
             color: Colors.white,
             border: Border(top: BorderSide(color: Color(0xFFE5E7EB))),
           ),
-          child: Row(
-            children: [
-              SizedBox(
-                width: (constraints.maxWidth - _kMobNameColOffset)
-                    .clamp(0.0, double.infinity),
-                child: Text(product.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                        fontSize: 12, fontWeight: FontWeight.w500,
-                        color: Color(0xFF374151))),
-              ),
-              const SizedBox(width: _kMobPanelGap),
-              SizedBox(
-                width: _kMobPanelPackW,
-                child: Text(_packShort(product),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
-              ),
-              const SizedBox(width: _kMobPanelGap),
-              Expanded(
-                child: Text(product.manufacturer,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
-              ),
-              const SizedBox(width: _kMobPanelGap),
-              SizedBox(
-                width: _kMobPanelMrpW,
-                child: Text(rupees(product.mrp),
-                    textAlign: TextAlign.right,
-                    maxLines: 1,
-                    style: const TextStyle(
-                        fontSize: 11, fontWeight: FontWeight.w500,
-                        color: Color(0xFF374151))),
-              ),
-            ],
+          child: _buildMobPackRow(
+            cardWidth: constraints.maxWidth,
+            name: Text(product.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                    fontSize: 12, fontWeight: FontWeight.w500,
+                    color: Color(0xFF374151))),
+            pack: Text(_packShort(product),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
+            company: Text(product.manufacturer,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
+            mrp: Text(rupees(product.mrp),
+                textAlign: TextAlign.right,
+                maxLines: 1,
+                style: const TextStyle(
+                    fontSize: 11, fontWeight: FontWeight.w500,
+                    color: Color(0xFF374151))),
           ),
         ),
       );
@@ -5120,6 +5111,10 @@ class _MobilePanelSkeletonRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    const shimmer = BoxDecoration(
+      color: Color(0xFFBBF7D0),
+      borderRadius: BorderRadius.all(Radius.circular(4)),
+    );
     return LayoutBuilder(builder: (_, constraints) {
       return Container(
         height: _kMatchRowH,
@@ -5130,52 +5125,12 @@ class _MobilePanelSkeletonRow extends StatelessWidget {
           color: Color(0xFFF0FDF4),
           border: Border(top: BorderSide(color: Color(0xFFE5E7EB))),
         ),
-        child: Row(
-          children: [
-            SizedBox(
-              width: (constraints.maxWidth - _kMobNameColOffset)
-                  .clamp(0.0, double.infinity),
-              child: Container(
-                height: 10,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFBBF7D0),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-              ),
-            ),
-            const SizedBox(width: _kMobPanelGap),
-            SizedBox(
-              width: _kMobPanelPackW,
-              child: Container(
-                height: 10,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFBBF7D0),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-              ),
-            ),
-            const SizedBox(width: _kMobPanelGap),
-            Expanded(
-              child: Container(
-                height: 10,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFBBF7D0),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-              ),
-            ),
-            const SizedBox(width: _kMobPanelGap),
-            SizedBox(
-              width: _kMobPanelMrpW,
-              child: Container(
-                height: 10,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFBBF7D0),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-              ),
-            ),
-          ],
+        child: _buildMobPackRow(
+          cardWidth: constraints.maxWidth,
+          name: Container(height: 10, decoration: shimmer),
+          pack: Container(height: 10, decoration: shimmer),
+          company: Container(height: 10, decoration: shimmer),
+          mrp: Container(height: 10, decoration: shimmer),
         ),
       );
     });

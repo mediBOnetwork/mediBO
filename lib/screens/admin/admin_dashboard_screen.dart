@@ -41,7 +41,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
             .eq('status', 'pending'),
         Supabase.instance.client.from('contact_inquiries').count(),
         Supabase.instance.client
-            .from('user_profiles')
+            .from('pharmacy_profiles')
             .count()
             .or('approved.is.null,approved.eq.false'),
       ]);

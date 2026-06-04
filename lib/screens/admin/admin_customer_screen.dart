@@ -88,6 +88,7 @@ class _RegRow {
   final String? dl2;
   final String? gstin;
   final String? googleMapLink;
+  final String? email;
   final DateTime? createdAt;
 
   const _RegRow({
@@ -109,28 +110,30 @@ class _RegRow {
     this.dl2,
     this.gstin,
     this.googleMapLink,
+    this.email,
     this.createdAt,
   });
 
   factory _RegRow.fromMap(Map<String, dynamic> m) => _RegRow(
         id:             m['id'] as String,
-        fullName:       m['full_name'] as String? ?? '',
-        businessName:   m['business_name'] as String? ?? '',
-        phone:          m['phone'] as String? ?? '',
-        customerId:     m['customer_id'] as String?,
+        fullName:       m['customer_name'] as String? ?? m['owner_name'] as String? ?? '',
+        businessName:   m['pharmacy_name'] as String? ?? '',
+        phone:          m['whatsapp_no'] as String? ?? m['phone'] as String? ?? '',
+        customerId:     m['customer_code'] as String?,
         paymentTerm:    m['payment_term'] as String?,
         storeType:      m['store_type'] as String?,
-        range:          m['range'] as String?,
-        addressLine:    m['address_line'] as String?,
+        range:          m['range_zone'] as String?,
+        addressLine:    m['address_local'] as String? ?? m['address'] as String?,
         city:           m['city'] as String?,
         state:          m['state'] as String?,
         pincode:        m['pincode'] as String?,
-        whatsappNumber: m['whatsapp_number'] as String?,
-        otherContact:   m['other_contact'] as String?,
-        dl1:            m['dl1'] as String?,
-        dl2:            m['dl2'] as String?,
-        gstin:          m['gstin'] as String?,
-        googleMapLink:  m['google_map_link'] as String?,
+        whatsappNumber: m['whatsapp_no'] as String? ?? m['phone'] as String?,
+        otherContact:   m['other_contact_no'] as String?,
+        dl1:            m['dl_20b'] as String? ?? m['drug_license'] as String?,
+        dl2:            m['dl_21b'] as String?,
+        gstin:          m['gst_no'] as String? ?? m['gstin'] as String?,
+        googleMapLink:  m['store_location_link'] as String?,
+        email:          m['email'] as String?,
         createdAt:      m['created_at'] != null
             ? DateTime.tryParse(m['created_at'] as String)
             : null,
@@ -183,7 +186,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   void _subscribeRealtime() {
     final client = Supabase.instance.client;
     final ts = DateTime.now().millisecondsSinceEpoch;
-    for (final table in ['cart_items', 'orders', 'user_profiles']) {
+    for (final table in ['cart_items', 'orders', 'pharmacy_profiles']) {
       final ch = client
           .channel('admin_${table}_$ts')
           .onPostgresChanges(
@@ -307,11 +310,11 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         ));
       }
 
-      // Pending registrations — user_profiles WHERE approved IS NULL
+      // Pending registrations — pharmacy_profiles WHERE approved IS NOT TRUE
       final regs = <_RegRow>[];
-      for (final p in upRows) {
+      for (final p in ppRows) {
         final m = Map<String, dynamic>.from(p as Map);
-        if (m['approved'] == null) {
+        if (m['approved'] != true) {
           regs.add(_RegRow.fromMap(m));
         }
       }
@@ -363,7 +366,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   // ── Profile/name helpers ──────────────────────────────────────────────────────
 
   static String _name(Map? up, Map? pp, Map? order) {
-    final n = (up?['full_name'] ?? pp?['owner_name']) as String?;
+    final n = (up?['full_name'] ?? pp?['customer_name'] ?? pp?['owner_name']) as String?;
     if (n != null && n.trim().isNotEmpty) return n.trim();
     return order?['pharmacy_name'] as String? ?? 'Unknown';
   }
@@ -375,7 +378,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   }
 
   static String _phone(Map? up, Map? pp, Map? order) {
-    final ph = (up?['phone'] ?? pp?['phone']) as String?;
+    final ph = (up?['phone'] ?? pp?['whatsapp_no'] ?? pp?['phone']) as String?;
     if (ph != null && ph.trim().isNotEmpty) return ph.trim();
     return order?['phone'] as String? ?? '';
   }
@@ -413,21 +416,36 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
 
   // ── Approve / Reject registrations ───────────────────────────────────────────
 
-  Future<void> _approveReg(String id) async {
-    await Supabase.instance.client.from('user_profiles').update({
+  Future<void> _approveReg(_RegRow row) async {
+    await Supabase.instance.client.from('pharmacy_profiles').update({
       'approved': true,
+      'status': 'approved',
       'approved_at': DateTime.now().toUtc().toIso8601String(),
       'approved_by': 'admin',
-    }).eq('id', id);
+    }).eq('id', row.id);
+    _notifyRegistration(row, isApproved: true);
     _load();
   }
 
-  Future<void> _rejectReg(String id) async {
+  Future<void> _rejectReg(_RegRow row) async {
     await Supabase.instance.client
-        .from('user_profiles')
-        .update({'approved': false})
-        .eq('id', id);
+        .from('pharmacy_profiles')
+        .update({'approved': false, 'status': 'rejected'})
+        .eq('id', row.id);
+    _notifyRegistration(row, isApproved: false);
     _load();
+  }
+
+  void _notifyRegistration(_RegRow row, {required bool isApproved}) {
+    Supabase.instance.client.functions.invoke(
+      'notify-registration',
+      body: {
+        'action': isApproved ? 'approve' : 'reject',
+        'pharmacyName': row.businessName,
+        'email': row.email,
+        'whatsappNo': row.whatsappNumber,
+      },
+    ).catchError((_) {});
   }
 
   // ── Order status ──────────────────────────────────────────────────────────────
@@ -1460,8 +1478,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
               flex: 3,
               child: _RegApproveActions(
                   id: row.id,
-                  onApprove: () => _approveReg(row.id),
-                  onReject: () => _rejectReg(row.id))),
+                  onApprove: () => _approveReg(row),
+                  onReject: () => _rejectReg(row))),
           Expanded(
             flex: 1,
             child: InkWell(
@@ -1542,8 +1560,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
             const SizedBox(height: 12),
             _RegApproveActions(
                 id: row.id,
-                onApprove: () => _approveReg(row.id),
-                onReject: () => _rejectReg(row.id)),
+                onApprove: () => _approveReg(row),
+                onReject: () => _rejectReg(row)),
             const SizedBox(height: 10),
             GestureDetector(
               onTap: () => _toggleExpand(row.id),

@@ -1,5 +1,6 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
 import 'dart:async';
+import 'dart:convert';
 import 'dart:js_interop';
 
 import 'package:flutter/foundation.dart';
@@ -74,6 +75,7 @@ String _fmtLabel(String col) {
     'pharmacy_name': 'Pharmacy Name',     'customer_name': 'Customer Name',
     'owner_name': 'Owner Name',           'created_at': 'Registered',
     'approved_at': 'Approved At',         'approved_by': 'Approved By',
+    'payment_id': 'Order No.',            'total_amount': 'Total Amount',
   };
   if (ov.containsKey(col)) return ov[col]!;
   return col.split('_').map((w) => w.isEmpty ? '' : '${w[0].toUpperCase()}${w.substring(1)}').join(' ');
@@ -92,6 +94,24 @@ String _fmtVal(String col, dynamic v) {
     } catch (_) {}
   }
   return s;
+}
+
+// Rounds to nearest rupee with Indian-style thousands separators.
+String _fmtRupee(dynamic v) {
+  if (v == null) return '₹0';
+  double amount;
+  try {
+    amount = (v is num) ? v.toDouble() : double.parse(v.toString().trim());
+  } catch (_) { return '₹0'; }
+  final rounded = amount.round();
+  if (rounded == 0) return '₹0';
+  final abs = rounded.abs().toString();
+  final buf = StringBuffer();
+  for (int i = 0; i < abs.length; i++) {
+    if (i > 0 && (abs.length - i) % 3 == 0) buf.write(',');
+    buf.write(abs[i]);
+  }
+  return rounded < 0 ? '₹-$buf' : '₹$buf';
 }
 
 // ── Overlay widget ────────────────────────────────────────────────────────────
@@ -203,7 +223,6 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
         .subscribe();
   }
 
-  // Called when SW message arrives with a registration ID (app was open/focused)
   Future<void> _maybeFetchAndEnqueue(String id) async {
     if (_seenIds.contains(id)) return;
     try {
@@ -551,18 +570,20 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
   }
 
   Widget _buildOrderCard(Map<String, dynamic> rec) {
-    final orderId      = rec['order_id']     as String?
-                      ?? rec['order_number'] as String?
+    // payment_id is the human-readable order number (e.g. PO-260605-0861)
+    final orderId      = rec['payment_id']    as String?
+                      ?? rec['order_id']      as String?
+                      ?? rec['order_number']  as String?
                       ?? '';
     final rawTotal     = rec['total_amount'] ?? rec['grand_total'] ?? rec['total'];
-    final customerName = rec['customer_name'] as String?
-                      ?? rec['pharmacy_name'] as String?
+    final customerName = rec['pharmacy_name'] as String?
+                      ?? rec['customer_name'] as String?
                       ?? '';
-    final city         = rec['city']         as String? ?? '';
     final createdAt    = rec['created_at']   as String? ?? '';
 
     final queueLen  = _queue.length;
-    final totalStr  = rawTotal != null ? '₹$rawTotal' : '';
+    // Round to nearest rupee with ₹ symbol
+    final totalStr  = rawTotal != null ? _fmtRupee(rawTotal) : '';
     final dateStr   = createdAt.length >= 10
         ? () {
             try {
@@ -638,7 +659,6 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
             const SizedBox(height: 12),
             Wrap(spacing: 16, runSpacing: 8, children: [
               if (totalStr.isNotEmpty)  _chip(Icons.currency_rupee,          totalStr),
-              if (city.isNotEmpty)      _chip(Icons.location_on_outlined,    city),
               if (dateStr.isNotEmpty)   _chip(Icons.calendar_today_outlined, dateStr),
             ]),
           ]),
@@ -664,7 +684,8 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
             ]),
           ),
         ),
-        if (_detailsOpen) _buildDetails(rec),
+        // Order-specific details: items table + meta fields (not generic _buildDetails)
+        if (_detailsOpen) _buildOrderDetails(rec),
 
         const Divider(height: 1, color: Color(0xFFE5E7EB)),
 
@@ -723,6 +744,132 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
       ]),
     );
   }
+
+  // ── Order-specific details panel ──────────────────────────────────────────
+
+  Widget _buildOrderDetails(Map<String, dynamic> rec) {
+    const skip = {'id', 'user_id', '_alertType', 'items'};
+
+    // Parse items — Supabase returns JSONB as List already; handle string fallback.
+    List<Map<String, dynamic>> items = [];
+    final rawItems = rec['items'];
+    if (rawItems is List) {
+      for (final e in rawItems) {
+        if (e is Map) items.add(Map<String, dynamic>.from(e));
+      }
+    } else if (rawItems is String && rawItems.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(rawItems);
+        if (decoded is List) {
+          for (final e in decoded) {
+            if (e is Map) items.add(Map<String, dynamic>.from(e));
+          }
+        }
+      } catch (_) {}
+    }
+
+    final entries = rec.entries.where((e) => !skip.contains(e.key)).toList();
+
+    const labelStyle = TextStyle(fontSize: 10, fontWeight: FontWeight.w600,
+        color: Color(0xFF9CA3AF), letterSpacing: 0.4);
+    const valueStyle = TextStyle(fontSize: 12, color: Color(0xFF374151));
+    const dimStyle   = TextStyle(fontSize: 12, color: Color(0xFFD1D5DB));
+
+    const colHeader = TextStyle(fontSize: 10, fontWeight: FontWeight.w700,
+        color: Color(0xFF6B7280), letterSpacing: 0.3);
+    const cellStyle = TextStyle(fontSize: 11, color: Color(0xFF374151));
+
+    return Container(
+      constraints: const BoxConstraints(maxHeight: 320),
+      color: const Color(0xFFF9FAFB),
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 14),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          // ── Meta fields (payment_id, status, address, phone, total_amount…) ──
+          if (entries.isNotEmpty)
+            LayoutBuilder(builder: (_, constraints) {
+              final cols = constraints.maxWidth > 400 ? 2 : 1;
+              final itemW = (constraints.maxWidth - (cols - 1) * 16.0) / cols;
+              return Wrap(spacing: 16, runSpacing: 8,
+                children: entries.map((e) {
+                  final display = e.key == 'total_amount'
+                      ? _fmtRupee(e.value)
+                      : _fmtVal(e.key, e.value);
+                  return SizedBox(
+                    width: itemW,
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text(_fmtLabel(e.key), style: labelStyle),
+                      const SizedBox(height: 2),
+                      Text(display,
+                          style: display == '—' ? dimStyle : valueStyle),
+                    ]),
+                  );
+                }).toList(),
+              );
+            }),
+
+          // ── Items table ──────────────────────────────────────────────────
+          if (items.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            const Divider(height: 1, color: Color(0xFFE5E7EB)),
+            const SizedBox(height: 8),
+            // Header
+            Row(children: const [
+              Expanded(flex: 5, child: Text('Product', style: colHeader)),
+              SizedBox(width: 30, child: Text('Qty',   style: colHeader, textAlign: TextAlign.center)),
+              SizedBox(width: 54, child: Text('MRP',   style: colHeader, textAlign: TextAlign.right)),
+              SizedBox(width: 58, child: Text('Total', style: colHeader, textAlign: TextAlign.right)),
+            ]),
+            const SizedBox(height: 4),
+            // Item rows
+            ...items.map((item) {
+              final name  = item['product_name'] as String? ?? '—';
+              final qty   = item['quantity'];
+              final mrp   = item['mrp'];
+              final rawLt = item['line_total'];
+              // Fallback: price × qty if line_total absent/zero and price present
+              final lineTotal = (rawLt != null &&
+                      (rawLt is num) && rawLt.toDouble() != 0.0)
+                  ? rawLt
+                  : (item['price'] is num && qty is num
+                      ? (item['price'] as num).toDouble() *
+                        (qty as num).toDouble()
+                      : rawLt);
+              return Padding(
+                padding: const EdgeInsets.symmetric(vertical: 2.5),
+                child: Row(children: [
+                  Expanded(
+                    flex: 5,
+                    child: Text(name,
+                        overflow: TextOverflow.ellipsis,
+                        maxLines: 1,
+                        style: cellStyle),
+                  ),
+                  SizedBox(
+                    width: 30,
+                    child: Text('${qty ?? '—'}',
+                        textAlign: TextAlign.center, style: cellStyle),
+                  ),
+                  SizedBox(
+                    width: 54,
+                    child: Text(_fmtRupee(mrp),
+                        textAlign: TextAlign.right, style: cellStyle),
+                  ),
+                  SizedBox(
+                    width: 58,
+                    child: Text(_fmtRupee(lineTotal),
+                        textAlign: TextAlign.right, style: cellStyle),
+                  ),
+                ]),
+              );
+            }),
+          ],
+        ]),
+      ),
+    );
+  }
+
+  // ── Registration generic details panel ───────────────────────────────────
 
   Widget _buildDetails(Map<String, dynamic> rec) {
     final entries = rec.entries.where((e) => !_kSkip.contains(e.key)).toList();

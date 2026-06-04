@@ -4195,8 +4195,7 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                                             fontSize: 11, color: Color(0xFF374151))),
                                   ),
                                   const SizedBox(width: _kMobPanelGap),
-                                  SizedBox(
-                                    width: _kMobPanelCompW,
+                                  Expanded(
                                     child: Text(p.manufacturer,
                                         maxLines: 1,
                                         overflow: TextOverflow.ellipsis,
@@ -4204,7 +4203,6 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                                             fontSize: 11, color: Color(0xFF6B7280))),
                                   ),
                                   const SizedBox(width: _kMobPanelGap),
-                                  const Expanded(child: SizedBox()),
                                   SizedBox(
                                     width: _kMobPanelMrpW,
                                     child: Text(row.price,
@@ -4578,7 +4576,6 @@ const double _kMobPanelLeftPad  = 12.0;
 const double _kMobPanelRightPad =  8.0;
 const double _kMobPanelGap      =  6.0;
 const double _kMobPanelPackW    = 38.0;
-const double _kMobPanelCompW    = 65.0;
 const double _kMobPanelMrpW     = 52.0;
 
 // Distance from Qty's LEFT edge to the card's RIGHT edge in the Line 1 header row.
@@ -4941,15 +4938,13 @@ class _SearchResultRow extends StatelessWidget {
                     style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
               ),
               const SizedBox(width: _kMobPanelGap),
-              SizedBox(
-                width: _kMobPanelCompW,
+              Expanded(
                 child: Text(product.manufacturer,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
               ),
               const SizedBox(width: _kMobPanelGap),
-              const Expanded(child: SizedBox()),
               SizedBox(
                 width: _kMobPanelMrpW,
                 child: Text(rupees(product.mrp),
@@ -5160,8 +5155,7 @@ class _MobilePanelSkeletonRow extends StatelessWidget {
               ),
             ),
             const SizedBox(width: _kMobPanelGap),
-            SizedBox(
-              width: _kMobPanelCompW,
+            Expanded(
               child: Container(
                 height: 10,
                 decoration: BoxDecoration(
@@ -5171,7 +5165,6 @@ class _MobilePanelSkeletonRow extends StatelessWidget {
               ),
             ),
             const SizedBox(width: _kMobPanelGap),
-            const Expanded(child: SizedBox()),
             SizedBox(
               width: _kMobPanelMrpW,
               child: Container(

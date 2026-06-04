@@ -364,13 +364,11 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         ));
       }
 
-      // Cart-only rows
-      final orderedUids = {
-        for (final o in orderRows) (o as Map)['user_id'] as String? ?? ''
-      };
+      // Cart-only rows — any user with active cart items, regardless of order history.
+      // Previously excluded users in orderedUids, which silently dropped authenticated
+      // users who had placed any past order but still have unpurchased cart items.
       final carts = <_CustRow>[];
       for (final entry in cartByUser.entries) {
-        if (orderedUids.contains(entry.key)) continue;
         final uid = entry.key;
         final up  = upMap[uid];
         final pp  = ppMap[uid];

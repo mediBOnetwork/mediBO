@@ -111,9 +111,15 @@ class CartModel extends ChangeNotifier {
     _isLoggedIn = client.auth.currentUser != null;
     _authSub = client.auth.onAuthStateChange.listen(_onAuthState);
     if (_isLoggedIn) {
-      _loadFromSupabase();
       final uid = client.auth.currentUser?.id;
       if (uid != null) _subscribeToCartRealtime(uid);
+      // If a guest UID is still in localStorage (e.g. a previous merge failed),
+      // run merge now before loading so the cart lands under the real auth UID.
+      if (_getGuestUid() != null) {
+        _mergeGuestCartToSupabase().then((_) => _loadFromSupabase());
+      } else {
+        _loadFromSupabase();
+      }
     } else {
       // Guest: check for a pre-existing stable guest UUID and load from Supabase
       final guestUid = _getGuestUid();
@@ -397,12 +403,14 @@ class CartModel extends ChangeNotifier {
       // 1. Load guest rows from Supabase by guestUid.
       //    This handles OAuth/Google redirect logins where the page reloads before
       //    _mergeGuestCartToSupabase fires, clearing _lines before we can read them.
+      //    Skip rows that were removed by admin — they should not pollute the real cart.
       final Map<String, Map<String, dynamic>> toUpsert = {};
       if (guestUid != null) {
         final rows = await Supabase.instance.client
             .from('cart_items')
             .select()
-            .eq('user_id', guestUid);
+            .eq('user_id', guestUid)
+            .eq('removed_by_admin', false);
         for (final r in rows as List) {
           final pid = r['product_id'] as String;
           toUpsert[pid] = Map<String, dynamic>.from(r as Map);
@@ -450,16 +458,32 @@ class CartModel extends ChangeNotifier {
       };
 
       // 4. Upsert each guest item under the real auth uid.
+      //    Explicitly enumerate fields — NEVER spread the full guest row because
+      //    it includes 'id' (bigint PK) which causes a silent PK violation when
+      //    there is no (user_id, product_id) conflict to trigger onConflict.
       for (final item in toUpsert.values) {
         final pid = item['product_id'] as String;
         final mergedQty = (existing[pid] ?? 0) + (item['quantity'] as int);
+        final payload = <String, dynamic>{
+          'user_id':      uid,
+          'product_id':   pid,
+          'product_name': item['product_name'],
+          'price':        item['price'],
+          'mrp':          item['mrp'] ?? 0,
+          'quantity':     mergedQty,
+          'image_url':    item['image_url'],
+          'manufacturer': item['manufacturer'],
+          'pack_size':    item['pack_size'],
+          'category':     item['category'],
+          'gst_percent':  item['gst_percent'],
+          'added_by':     item['added_by'] ?? 'customer',
+          'updated_at':   DateTime.now().toIso8601String(),
+        };
+        // Remove null values so the DB default applies (avoids NOT NULL errors
+        // on optional columns).
+        payload.removeWhere((_, v) => v == null);
         await Supabase.instance.client.from('cart_items').upsert(
-          {
-            ...item,
-            'user_id': uid,
-            'quantity': mergedQty,
-            'updated_at': DateTime.now().toIso8601String(),
-          },
+          payload,
           onConflict: 'user_id,product_id',
         );
       }

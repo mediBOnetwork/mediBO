@@ -947,7 +947,7 @@ class _PendingBillsScreenState extends State<PendingBillsScreen> {
       case 'jpeg':
       case 'png':
       case 'webp':
-        return const Color(0xFF7C3AED);
+        return const Color(0xFF1E40AF);
       default:
         return const Color(0xFF374151);
     }

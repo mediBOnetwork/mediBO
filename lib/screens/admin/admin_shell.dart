@@ -211,7 +211,7 @@ class _AdminShellState extends State<AdminShell> {
     return AdminAlertOverlay(
       onOrderTap: _navigateToCustomerOrders,
       child: Scaffold(
-      backgroundColor: const Color(0xFFF9FAFB),
+      backgroundColor: const Color(0xFFF5F6F8),
       appBar: AppBar(
         backgroundColor: Colors.white,
         elevation: 0,
@@ -662,7 +662,7 @@ class _QuickLinkPlaceholder extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF9FAFB),
+      backgroundColor: const Color(0xFFF5F6F8),
       appBar: AppBar(
         backgroundColor: Colors.white,
         elevation: 0,

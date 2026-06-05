@@ -112,7 +112,7 @@ class _AdminAddAdminScreenState extends State<AdminAddAdminScreen> {
 
     if (!auth.isSuperAdmin) {
       return Scaffold(
-        backgroundColor: const Color(0xFFF9FAFB),
+        backgroundColor: const Color(0xFFF5F6F8),
         appBar: AppBar(
           backgroundColor: Colors.white,
           elevation: 0,
@@ -149,7 +149,7 @@ class _AdminAddAdminScreenState extends State<AdminAddAdminScreen> {
     }
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF9FAFB),
+      backgroundColor: const Color(0xFFF5F6F8),
       appBar: AppBar(
         backgroundColor: Colors.white,
         elevation: 0,

@@ -392,7 +392,7 @@ class _DesktopBillRow extends StatelessWidget {
         child: _ActionBtn(
           label: 'Retry Scan',
           icon: Icons.refresh_rounded,
-          color: const Color(0xFF7C3AED),
+          color: const Color(0xFF374151),
           loading: false,
           onTap: onRetryScan,
         ),
@@ -566,7 +566,7 @@ class _MobileBillCard extends StatelessWidget {
       return _ActionBtn(
         label: 'Retry Scan',
         icon: Icons.refresh_rounded,
-        color: const Color(0xFF7C3AED),
+        color: const Color(0xFF374151),
         loading: false,
         onTap: onRetryScan,
         expanded: true,
@@ -1306,8 +1306,13 @@ class _PendingBillsScreenState extends State<PendingBillsScreen> {
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         // Header — padding and widths must mirror the rows exactly.
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
+        Container(
+          decoration: const BoxDecoration(
+            color: Color(0xFFF9FAFB),
+            borderRadius: BorderRadius.only(
+              topLeft: Radius.circular(12), topRight: Radius.circular(12)),
+          ),
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
           child: Row(children: const [
             Expanded(flex: 5, child: Text('SUPPLIER NAME', style: _kTh)),
             SizedBox(width: 12),
@@ -1317,7 +1322,6 @@ class _PendingBillsScreenState extends State<PendingBillsScreen> {
             SizedBox(width: 12),
             Expanded(flex: 4, child: Text('FROM', style: _kTh)),
             SizedBox(width: 12),
-            // VIEW header aligned to match button width
             SizedBox(width: 68, child: Text('VIEW', style: _kTh)),
             SizedBox(width: 12),
             SizedBox(width: 190, child: Text('ACTION', style: _kTh)),

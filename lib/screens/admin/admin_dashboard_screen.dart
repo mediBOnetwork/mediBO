@@ -95,7 +95,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               label: 'Pending Sign-ups',
               count: _pendingRegistrations,
               icon: Icons.person_add_outlined,
-              activeColor: const Color(0xFF7C3AED),
+              activeColor: const Color(0xFF1B7A43),
               route: 'customers',
             ),
           ],
@@ -132,10 +132,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         child: Text(
           text.toUpperCase(),
           style: const TextStyle(
-            fontSize: 11,
+            fontSize: 10,
             fontWeight: FontWeight.w700,
             color: Color(0xFF9CA3AF),
-            letterSpacing: 0.8,
+            letterSpacing: 1.0,
           ),
         ),
       );
@@ -144,49 +144,22 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   Widget build(BuildContext context) {
     return LayoutBuilder(builder: (ctx, box) {
       final isNarrow = box.maxWidth < 600;
-      final pad = isNarrow ? 16.0 : 28.0;
+      final hpad = isNarrow ? 16.0 : 28.0;
 
       return SingleChildScrollView(
-        padding: EdgeInsets.all(pad),
+        padding: EdgeInsets.fromLTRB(hpad, 24, hpad, 32),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Dashboard header
-            Row(children: [
-              Container(
-                width: 48,
-                height: 48,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFECFDF5),
-                  borderRadius: BorderRadius.circular(14),
-                  boxShadow: [
-                    BoxShadow(
-                      color: const Color(0xFF1B7A43).withValues(alpha: 0.15),
-                      blurRadius: 8,
-                      offset: const Offset(0, 2),
-                    ),
-                  ],
-                ),
-                child: const Icon(Icons.dashboard_outlined,
-                    size: 24, color: Color(0xFF1B7A43)),
-              ),
-              const SizedBox(width: 16),
-              const Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('Admin Dashboard',
-                        style: TextStyle(
-                            fontSize: 22,
-                            fontWeight: FontWeight.w800,
-                            color: Color(0xFF111827))),
-                    SizedBox(height: 2),
-                    Text('mediBO operations panel',
-                        style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
-                  ],
-                ),
-              ),
-            ]),
+            // Dashboard header — clean, no big icon
+            const Text('Admin Dashboard',
+                style: TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.w800,
+                    color: Color(0xFF111827))),
+            const SizedBox(height: 4),
+            const Text('mediBO operations overview',
+                style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
             const SizedBox(height: 28),
 
             if (_loading)
@@ -204,12 +177,12 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 children: [
                   _sectionLabel('Action Required'),
                   _buildActionRequired(),
-                  const SizedBox(height: 32),
+                  const SizedBox(height: 28),
                   _sectionLabel('Overview'),
                   _buildOverview(),
-                  const SizedBox(height: 32),
+                  const SizedBox(height: 28),
                   _sectionLabel('Quick Navigation'),
-                  Wrap(spacing: 12, runSpacing: 12, children: const [
+                  Wrap(spacing: 10, runSpacing: 10, children: const [
                     _QuickTile(
                         label: 'Add Medicine',
                         icon: Icons.medication_outlined,
@@ -269,10 +242,10 @@ class _ActionCard extends StatelessWidget {
       onTap: () => QuickLinkNavigator.of(context)?.navigate(route),
       borderRadius: BorderRadius.circular(12),
       child: Container(
-        width: 168,
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+        width: 172,
+        padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: isActive ? activeColor.withValues(alpha: 0.04) : Colors.white,
+          color: Colors.white,
           borderRadius: BorderRadius.circular(12),
           boxShadow: [
             BoxShadow(
@@ -282,43 +255,40 @@ class _ActionCard extends StatelessWidget {
             ),
           ],
           border: isActive
-              ? Border.all(color: activeColor.withValues(alpha: 0.2))
-              : null,
+              ? Border.all(color: activeColor.withValues(alpha: 0.18), width: 1)
+              : Border.all(color: const Color(0xFFF3F4F6)),
         ),
-        child: Row(children: [
-          Container(
-            width: 36,
-            height: 36,
-            decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(9),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.10),
+                borderRadius: BorderRadius.circular(9),
+              ),
+              child: Icon(icon, size: 18, color: color),
             ),
-            child: Icon(icon, size: 18, color: color),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  '$count',
-                  style: TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.w800,
-                    color: isActive ? activeColor : const Color(0xFF374151),
-                  ),
-                ),
-                Text(
-                  label,
-                  style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280)),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ],
+            const SizedBox(height: 12),
+            Text(
+              '$count',
+              style: TextStyle(
+                fontSize: 26,
+                fontWeight: FontWeight.w800,
+                color: isActive ? activeColor : const Color(0xFF374151),
+              ),
             ),
-          ),
-        ]),
+            const SizedBox(height: 2),
+            Text(
+              label,
+              style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -346,32 +316,35 @@ class _StatCard extends StatelessWidget {
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFF3F4F6)),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.06),
-            blurRadius: 10,
-            offset: const Offset(0, 3),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
           ),
         ],
       ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      child: Row(children: [
         Container(
-          width: 42,
-          height: 42,
+          width: 44,
+          height: 44,
           decoration: BoxDecoration(
-            color: color.withValues(alpha: 0.1),
+            color: color.withValues(alpha: 0.10),
             borderRadius: BorderRadius.circular(10),
           ),
           child: Icon(icon, size: 22, color: color),
         ),
-        const SizedBox(height: 16),
-        Text(value,
-            style: const TextStyle(
-                fontSize: 30, fontWeight: FontWeight.w800, color: Color(0xFF111827))),
-        const SizedBox(height: 4),
-        Text(label,
-            style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+        const SizedBox(width: 14),
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(value,
+              style: const TextStyle(
+                  fontSize: 26, fontWeight: FontWeight.w800, color: Color(0xFF111827))),
+          const SizedBox(height: 2),
+          Text(label,
+              style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+        ])),
       ]),
     );
   }
@@ -394,36 +367,35 @@ class _QuickTile extends StatelessWidget {
   Widget build(BuildContext context) {
     return InkWell(
       onTap: () => QuickLinkNavigator.of(context)?.navigate(route),
-      borderRadius: BorderRadius.circular(12),
+      borderRadius: BorderRadius.circular(10),
       child: Container(
-        width: 140,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         decoration: BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: const Color(0xFFE5E7EB)),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withValues(alpha: 0.05),
-              blurRadius: 8,
-              offset: const Offset(0, 2),
+              color: Colors.black.withValues(alpha: 0.04),
+              blurRadius: 6,
+              offset: const Offset(0, 1),
             ),
           ],
         ),
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
           Container(
-            width: 40,
-            height: 40,
+            width: 32,
+            height: 32,
             decoration: BoxDecoration(
               color: const Color(0xFFECFDF5),
-              borderRadius: BorderRadius.circular(10),
+              borderRadius: BorderRadius.circular(8),
             ),
-            child: Icon(icon, size: 22, color: const Color(0xFF1B7A43)),
+            child: Icon(icon, size: 17, color: const Color(0xFF1B7A43)),
           ),
-          const SizedBox(height: 10),
+          const SizedBox(width: 10),
           Text(label,
-              textAlign: TextAlign.center,
               style: const TextStyle(
-                  fontSize: 12,
+                  fontSize: 13,
                   fontWeight: FontWeight.w600,
                   color: Color(0xFF374151))),
         ]),

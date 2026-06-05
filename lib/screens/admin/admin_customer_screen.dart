@@ -907,16 +907,30 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   Widget _ssvEmptyState(String message) {
     return Padding(
       padding: const EdgeInsets.only(top: 80),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          const Icon(Icons.people_outline, size: 56, color: Color(0xFFD1D5DB)),
-          const SizedBox(height: 14),
-          Text(message,
-              textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 14, color: Color(0xFF9CA3AF))),
-        ],
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Container(
+              width: 64,
+              height: 64,
+              decoration: BoxDecoration(
+                color: const Color(0xFFF9FAFB),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: const Color(0xFFE5E7EB)),
+              ),
+              child: const Icon(Icons.inbox_outlined, size: 28, color: Color(0xFFD1D5DB)),
+            ),
+            const SizedBox(height: 16),
+            Text(message,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                    color: Color(0xFF9CA3AF))),
+          ],
+        ),
       ),
     );
   }
@@ -1013,20 +1027,23 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     final isCart = _filter == _CustFilter.cartNotOrdered;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 10),
-      color: const Color(0xFFF3F4F6),
+      decoration: const BoxDecoration(
+        color: Color(0xFFF9FAFB),
+        border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
+      ),
       child: Row(children: [
-        _th('Customer', flex: 4),
-        _th('Pharmacy', flex: 3),
-        _th('Phone', flex: 2),
-        _th('Source', flex: 2),
+        _th('CUSTOMER', flex: 4),
+        _th('PHARMACY', flex: 3),
+        _th('PHONE', flex: 2),
+        _th('SOURCE', flex: 2),
         if (isCart) ...[
-          _th('Items', flex: 1),
-          _th('Value', flex: 2),
+          _th('ITEMS', flex: 1),
+          _th('VALUE', flex: 2),
           const SizedBox(width: 32),
         ] else ...[
-          _th('Order ID', flex: 2),
-          _th('Confirmation', flex: 3),
-          _th('Action', flex: 2),
+          _th('ORDER ID', flex: 2),
+          _th('CONFIRMATION', flex: 3),
+          _th('ACTION', flex: 2),
           const SizedBox(width: 32),
         ],
       ]),
@@ -1699,15 +1716,18 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   Widget _buildRegTableHeader() {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 10),
-      color: const Color(0xFFF3F4F6),
+      decoration: const BoxDecoration(
+        color: Color(0xFFF9FAFB),
+        border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
+      ),
       child: Row(children: [
-        _th('Customer Name', flex: 3),
-        _th('Pharmacy', flex: 3),
-        _th('Phone', flex: 2),
-        _th('Code', flex: 2),
-        _th('Payment', flex: 2),
-        _th('City / State', flex: 2),
-        _th('Approval', flex: 3),
+        _th('CUSTOMER NAME', flex: 3),
+        _th('PHARMACY', flex: 3),
+        _th('PHONE', flex: 2),
+        _th('CODE', flex: 2),
+        _th('PAYMENT', flex: 2),
+        _th('CITY / STATE', flex: 2),
+        _th('APPROVAL', flex: 3),
         const SizedBox(width: 32),
       ]),
     );
@@ -1892,14 +1912,17 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   Widget _buildApprovedTableHeader() {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 10),
-      color: const Color(0xFFF3F4F6),
+      decoration: const BoxDecoration(
+        color: Color(0xFFF9FAFB),
+        border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
+      ),
       child: Row(children: [
-        _th('Pharmacy', flex: 4),
-        _th('Contact', flex: 3),
-        _th('Phone', flex: 2),
-        _th('Code', flex: 2),
-        _th('City', flex: 2),
-        _th('Status', flex: 2),
+        _th('PHARMACY', flex: 4),
+        _th('CONTACT', flex: 3),
+        _th('PHONE', flex: 2),
+        _th('CODE', flex: 2),
+        _th('CITY', flex: 2),
+        _th('STATUS', flex: 2),
         const SizedBox(width: 160), // actions column
         const SizedBox(width: 32),  // chevron
       ]),
@@ -2228,9 +2251,10 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         flex: flex,
         child: Text(label,
             style: const TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w600,
-                color: Color(0xFF6B7280))),
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+                color: Color(0xFF9CA3AF),
+                letterSpacing: 0.5)),
       );
 
   static Widget _pendingBadge() => Container(
@@ -2711,7 +2735,7 @@ class _PaymentBadge extends StatelessWidget {
     final isAdvance =
         term.toLowerCase().contains('advance') || term.toLowerCase() == 'adv';
     final color =
-        isAdvance ? const Color(0xFF7C3AED) : const Color(0xFF0891B2);
+        isAdvance ? const Color(0xFF1E40AF) : const Color(0xFF0891B2);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
       decoration: BoxDecoration(

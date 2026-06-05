@@ -243,7 +243,7 @@ class _AdminManageAdminsScreenState extends State<AdminManageAdminsScreen> {
 
   Widget _buildMobile(BuildContext ctx) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF9FAFB),
+      backgroundColor: const Color(0xFFF5F6F8),
       appBar: AppBar(
         backgroundColor: Colors.white,
         elevation: 0,

@@ -430,12 +430,12 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
             width: double.infinity,
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
             decoration: const BoxDecoration(
-              color: Color(0xFF7C3AED),
+              color: Color(0xFF1B7A43),
               borderRadius: BorderRadius.only(
                 topLeft: Radius.circular(16), topRight: Radius.circular(16)),
             ),
             child: Row(children: [
-              const Icon(Icons.notifications_active, color: Colors.white, size: 18),
+              const Icon(Icons.person_add_outlined, color: Colors.white, size: 18),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
@@ -495,14 +495,14 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
             child: Row(children: [
               const Text('View full details',
-                  style: TextStyle(fontSize: 12, color: Color(0xFF7C3AED),
+                  style: TextStyle(fontSize: 12, color: Color(0xFF1B7A43),
                       fontWeight: FontWeight.w600)),
               const SizedBox(width: 4),
               AnimatedRotation(
                 turns: _detailsOpen ? 0.5 : 0.0,
                 duration: const Duration(milliseconds: 180),
                 child: const Icon(Icons.expand_more,
-                    size: 16, color: Color(0xFF7C3AED)),
+                    size: 16, color: Color(0xFF1B7A43)),
               ),
             ]),
           ),

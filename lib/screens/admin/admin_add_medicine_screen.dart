@@ -961,7 +961,7 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
     final items = <DropdownMenuItem<String>>[
       ..._kMedCols.map((c) => DropdownMenuItem(value: c, child: Text(_colLabel(c), style: const TextStyle(fontSize: 13)))),
       const DropdownMenuItem(value: 'ignore', child: Text('— Ignore —', style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)))),
-      const DropdownMenuItem(value: 'create_new', child: Text('Create new column…', style: TextStyle(fontSize: 13, color: Color(0xFF7C3AED)))),
+      const DropdownMenuItem(value: 'create_new', child: Text('Create new column…', style: TextStyle(fontSize: 13, color: Color(0xFF1B7A43)))),
     ];
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
@@ -1001,9 +1001,9 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
               decoration: InputDecoration(isDense: true, hintText: 'new_column_name',
                 hintStyle: const TextStyle(color: Color(0xFFD1D5DB)),
                 contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF7C3AED))),
-                enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF7C3AED))),
-                filled: true, fillColor: const Color(0xFFF5F3FF),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF1B7A43))),
+                enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF1B7A43))),
+                filled: true, fillColor: const Color(0xFFECFDF5),
               ),
               style: const TextStyle(fontSize: 13),
             )),
@@ -1014,9 +1014,9 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
               value: col.newColType,
               decoration: InputDecoration(isDense: true,
                 contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF7C3AED))),
-                enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF7C3AED))),
-                filled: true, fillColor: const Color(0xFFF5F3FF),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF1B7A43))),
+                enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF1B7A43))),
+                filled: true, fillColor: const Color(0xFFECFDF5),
               ),
               items: const [
                 DropdownMenuItem(value: 'text', child: Text('text', style: TextStyle(fontSize: 13))),

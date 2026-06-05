@@ -1,19 +1,44 @@
-/*
-  Cache-Control: no-cache, no-store, must-revalidate
-  Pragma: no-cache
-  Expires: 0
-
+# ── Entry points — always fresh ────────────────────────────────────────────
 /index.html
   Cache-Control: no-cache, no-store, must-revalidate
-
-/main.dart.js
-  Cache-Control: no-cache, no-store, must-revalidate
-
-/flutter.js
-  Cache-Control: no-cache, no-store, must-revalidate
+  Pragma: no-cache
 
 /flutter_bootstrap.js
   Cache-Control: no-cache, no-store, must-revalidate
+  Pragma: no-cache
 
+/flutter_service_worker.js
+  Cache-Control: no-cache, no-store, must-revalidate
+  Pragma: no-cache
+
+/firebase-messaging-sw.js
+  Cache-Control: no-cache, no-store, must-revalidate
+  Pragma: no-cache
+
+/manifest.json
+  Cache-Control: no-cache, no-store, must-revalidate
+
+# ── Flutter engine — long-lived (flutter.js changes only on Flutter upgrades) ─
+/flutter.js
+  Cache-Control: public, max-age=604800, stale-while-revalidate=2592000
+
+# ── App bundle — 1-day cache + background revalidation ─────────────────────
+# main.dart.js has no content hash in its filename, so we can't go fully
+# immutable. 1-day max-age + stale-while-revalidate gives instant repeat
+# loads while ensuring stale code is refreshed within a week.
+/main.dart.js
+  Cache-Control: public, max-age=86400, stale-while-revalidate=604800
+
+# ── Hashed static assets — fully immutable ─────────────────────────────────
 /assets/**
   Cache-Control: public, max-age=31536000, immutable
+
+/canvaskit/**
+  Cache-Control: public, max-age=31536000, immutable
+
+/icons/**
+  Cache-Control: public, max-age=31536000, immutable
+
+# ── Everything else — short cache ──────────────────────────────────────────
+/*
+  Cache-Control: public, max-age=3600

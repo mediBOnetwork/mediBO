@@ -83,11 +83,10 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
     final stripped = widget.phone.replaceAll('+91', '').trim();
     if (stripped.length == 10) _whatsappCtrl.text = stripped;
     if (widget.email.isNotEmpty) _emailCtrl.text = widget.email;
-    _customerCodeCtrl.addListener(_onCodeChanged);
   }
 
-  void _onCodeChanged() {
-    final raw = _customerCodeCtrl.text.trim().toUpperCase();
+  void _onCodeChanged(String value) {
+    final raw = value.trim().toUpperCase();
     if (raw.isEmpty) {
       _codeDebounce?.cancel();
       setState(() => _codeStatus = _CodeStatus.idle);
@@ -105,14 +104,11 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
 
   Future<void> _checkCode(String code) async {
     try {
-      final res = await Supabase.instance.client
-          .from('pharmacy_profiles')
-          .select('customer_code')
-          .eq('customer_code', code)
-          .maybeSingle();
+      final taken = await Supabase.instance.client
+          .rpc('is_customer_code_taken', params: {'p_code': code}) as bool;
       if (!mounted) return;
       if (_customerCodeCtrl.text.trim().toUpperCase() != code) return;
-      setState(() => _codeStatus = res != null ? _CodeStatus.taken : _CodeStatus.available);
+      setState(() => _codeStatus = taken ? _CodeStatus.taken : _CodeStatus.available);
     } catch (_) {
       if (mounted) setState(() => _codeStatus = _CodeStatus.idle);
     }
@@ -566,6 +562,7 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
                       hint: 'ABC123',
                       maxLength: 6,
                       capitalization: TextCapitalization.characters,
+                      onChanged: _onCodeChanged,
                       inputFormatters: [
                         LengthLimitingTextInputFormatter(6),
                       ],
@@ -680,6 +677,7 @@ class _Field extends StatelessWidget {
   final TextCapitalization capitalization;
   final List<TextInputFormatter>? inputFormatters;
   final bool readOnly;
+  final void Function(String)? onChanged;
 
   const _Field({
     required this.label,
@@ -693,6 +691,7 @@ class _Field extends StatelessWidget {
     this.capitalization = TextCapitalization.words,
     this.inputFormatters,
     this.readOnly = false,
+    this.onChanged,
   });
 
   @override
@@ -733,6 +732,7 @@ class _Field extends StatelessWidget {
           inputFormatters: inputFormatters,
           validator: validator,
           readOnly: readOnly,
+          onChanged: onChanged,
           style: TextStyle(
             fontSize: 14,
             color: readOnly

@@ -201,12 +201,9 @@ class _AdminShellState extends State<AdminShell> {
         body: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            _DesktopHeader(
+            _AdminNewDesktopHeader(
               onLogoTap: _onLogoTap,
-              logoTooltip: 'Go to Homepage',
-              isSuperAdmin: isSuperAdmin,
-              onQuickLink: (route) => _navigateQuickLink(ctx, route, isSuperAdmin),
-              onLogout: () => UserState.read(ctx).signOut(),
+              onNav: (route) => _navigateQuickLink(ctx, route, isSuperAdmin),
               pendingBillsCount: _pendingBillsCount,
             ),
             Expanded(child: _buildBody(isSuperAdmin)),
@@ -327,130 +324,82 @@ class _AdminShellState extends State<AdminShell> {
   }
 }
 
-// ── Desktop header ────────────────────────────────────────────────────────────
-// Logo (context-aware) | Add Medicine | Suppliers | Customers | Bills🔴 |
-// Quick Links | Logout
+// ── Desktop header (new style — matches homepage _AdminDesktopHeader) ─────────
+// logo | Spacer | Dashboard | Add Medicine | Suppliers | Customers | Bills | Hello Account
 
-class _DesktopHeader extends StatelessWidget {
+class _AdminNewDesktopHeader extends StatelessWidget {
   final VoidCallback onLogoTap;
-  final VoidCallback onLogout;
-  final String logoTooltip;
-  final bool isSuperAdmin;
-  final ValueChanged<String> onQuickLink;
+  final ValueChanged<String> onNav;
   final int pendingBillsCount;
 
-  const _DesktopHeader({
+  const _AdminNewDesktopHeader({
     required this.onLogoTap,
-    required this.onQuickLink,
-    required this.onLogout,
-    required this.isSuperAdmin,
-    required this.logoTooltip,
+    required this.onNav,
     this.pendingBillsCount = 0,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 220),
+      height: 76,
       decoration: const BoxDecoration(
         color: Colors.white,
-        border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
         boxShadow: [
-          BoxShadow(color: Color(0x08000000), blurRadius: 6, offset: Offset(0, 2)),
+          BoxShadow(color: Color(0x0A000000), blurRadius: 4, offset: Offset(0, 1)),
         ],
       ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 0),
-        child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-          // Logo — context-aware navigation
-          Tooltip(
-            message: logoTooltip,
-            child: GestureDetector(
-              onTap: onLogoTap,
-              child: MouseRegion(
-                cursor: SystemMouseCursors.click,
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  child: RichText(
-                    text: const TextSpan(children: [
-                      TextSpan(
-                        text: 'mediBO',
-                        style: TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.w800,
-                            color: Color(0xFF1B7A43)),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          // Logo
+          Padding(
+            padding: const EdgeInsets.only(left: 24),
+            child: MouseRegion(
+              cursor: SystemMouseCursors.click,
+              child: GestureDetector(
+                onTap: onLogoTap,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF1B5E20),
+                        borderRadius: BorderRadius.circular(8),
                       ),
-                    ]),
-                  ),
+                      child: const Icon(Icons.add, color: Colors.white, size: 24),
+                    ),
+                    const SizedBox(width: 10),
+                    RichText(
+                      text: const TextSpan(
+                        children: [
+                          TextSpan(text: 'medi', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700, color: Color(0xFF1B5E20), letterSpacing: -0.3)),
+                          TextSpan(text: 'BO', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: Color(0xFF4CAF50), letterSpacing: -0.3)),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
           ),
-          const SizedBox(width: 20),
-          Container(width: 1, height: 24, color: const Color(0xFFE5E7EB)),
+          const Spacer(),
+          // Nav tabs
+          _DesktopNavLink(label: 'Dashboard', icon: Icons.dashboard_outlined, selected: false, onTap: () => onNav('dashboard')),
+          const SizedBox(width: 2),
+          _DesktopNavLink(label: 'Add Medicine', icon: Icons.medication_outlined, selected: false, onTap: () => onNav('add_medicine')),
+          const SizedBox(width: 2),
+          _DesktopNavLink(label: 'Suppliers', icon: Icons.inventory_2_outlined, selected: false, onTap: () => onNav('suppliers')),
+          const SizedBox(width: 2),
+          _DesktopNavLink(label: 'Customers', icon: Icons.people_outline, selected: false, onTap: () => onNav('customers')),
+          const SizedBox(width: 2),
+          _BillsNavLink(count: pendingBillsCount, onTap: () => onNav('bills')),
           const SizedBox(width: 8),
-
-          // ── Primary nav row
-          Expanded(
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(mainAxisSize: MainAxisSize.min, children: [
-                _HdrBtn(
-                  label: 'Dashboard',
-                  icon: Icons.dashboard_outlined,
-                  onTap: () => onQuickLink('dashboard'),
-                ),
-                _HdrBtn(
-                  label: 'Add Medicine',
-                  icon: Icons.medication_outlined,
-                  onTap: () => onQuickLink('add_medicine'),
-                ),
-                _HdrBtn(
-                  label: 'Suppliers',
-                  icon: Icons.inventory_2_outlined,
-                  onTap: () => onQuickLink('suppliers'),
-                ),
-                _HdrBtn(
-                  label: 'Customers',
-                  icon: Icons.people_outline,
-                  onTap: () => onQuickLink('customers'),
-                ),
-                _BillsHdrBtn(
-                  count: pendingBillsCount,
-                  onTap: () => onQuickLink('bills'),
-                ),
-              ]),
-            ),
-          ),
-
-          const SizedBox(width: 8),
-
-          _QuickLinksButton(
-            isSuperAdmin: isSuperAdmin,
-            onSelected: onQuickLink,
-          ),
-          const SizedBox(width: 8),
-
-          InkWell(
-            onTap: onLogout,
-            borderRadius: BorderRadius.circular(8),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-              decoration: BoxDecoration(
-                border: Border.all(color: const Color(0xFFFECACA)),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Row(mainAxisSize: MainAxisSize.min, children: const [
-                Icon(Icons.logout, size: 14, color: Color(0xFFDC2626)),
-                SizedBox(width: 5),
-                Text('Logout',
-                    style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                        color: Color(0xFFDC2626))),
-              ]),
-            ),
-          ),
-        ]),
+          _AdminProfileChip(),
+          const SizedBox(width: 24),
+        ],
       ),
     );
   }
@@ -703,6 +652,101 @@ class _QuickLinkPlaceholder extends StatelessWidget {
             style: TextStyle(fontSize: 14, color: Color(0xFF6B7280)),
           ),
         ]),
+      ),
+    );
+  }
+}
+
+// ── New header helper widgets ─────────────────────────────────────────────────
+
+class _DesktopNavLink extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final bool selected;
+  final VoidCallback onTap;
+  const _DesktopNavLink({required this.label, required this.icon, required this.selected, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: selected ? const Color(0xFFECFDF5) : Colors.transparent,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(icon, size: 16, color: selected ? const Color(0xFF1B7A43) : const Color(0xFF374151)),
+            const SizedBox(width: 6),
+            Text(label, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: selected ? const Color(0xFF1B7A43) : const Color(0xFF374151))),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+class _BillsNavLink extends StatelessWidget {
+  final int count;
+  final VoidCallback onTap;
+  const _BillsNavLink({required this.count, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            if (count > 0)
+              Badge(label: Text('$count'), child: const Icon(Icons.inbox_outlined, size: 16, color: Color(0xFF374151)))
+            else
+              const Icon(Icons.inbox_outlined, size: 16, color: Color(0xFF374151)),
+            const SizedBox(width: 6),
+            const Text('Bills', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: Color(0xFF374151))),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+class _AdminProfileChip extends StatelessWidget {
+  const _AdminProfileChip();
+
+  @override
+  Widget build(BuildContext context) {
+    final auth = UserState.of(context);
+    final rawName = auth.profile?.pharmacyName ?? Supabase.instance.client.auth.currentUser?.email ?? 'Account';
+    final name = rawName.isNotEmpty ? rawName : 'Account';
+    final initial = name[0].toUpperCase();
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: () => UserState.read(context).signOut(),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: const Color(0xFFECFDF5),
+            borderRadius: BorderRadius.circular(24),
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            CircleAvatar(
+              radius: 14,
+              backgroundColor: const Color(0xFF1B7A43),
+              child: Text(initial, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700)),
+            ),
+            const SizedBox(width: 8),
+            Text('Hello $name', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: Color(0xFF111827))),
+            const SizedBox(width: 4),
+            const Icon(Icons.keyboard_arrow_down, size: 16, color: Color(0xFF6B7280)),
+          ]),
+        ),
       ),
     );
   }

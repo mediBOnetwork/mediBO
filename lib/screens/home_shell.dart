@@ -348,8 +348,8 @@ class _HomeShellState extends State<HomeShell> {
                   }),
                   onScrollToResults: () => setState(() => _scrollTrigger++),
                 ),
-              // ── Horizontal category chips (non-admin, storefront only) ──────
-              if (!isAdmin && _index == 0)
+              // ── Horizontal category chips (storefront tab, admin + customer) ─
+              if (_index == 0)
                 _MobileCategoryChips(
                   meta: _desktopMeta,
                   selected: _category,

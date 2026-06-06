@@ -500,10 +500,6 @@ class _LocationHeader extends StatelessWidget {
                 ),
               ),
             ),
-            if (isAdmin) ...[
-              const SizedBox(width: 4),
-              _AdminBackBtn(onTap: () => Navigator.pop(context)),
-            ],
             // RIGHT: cart icon (hidden for admins — admins don't shop)
             if (!isAdmin)
               _MobileCartIcon(cartItems: cartItems, onCart: onCart),
@@ -513,44 +509,6 @@ class _LocationHeader extends StatelessWidget {
     );
   }
 }
-
-// ── Admin return button — storefront → admin shell ────────────────────────────
-
-class _AdminBackBtn extends StatelessWidget {
-  final VoidCallback onTap;
-  const _AdminBackBtn({required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(8),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        decoration: BoxDecoration(
-          color: const Color(0xFFECFDF5),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(
-              color: const Color(0xFF1B5E20).withValues(alpha: 0.35)),
-        ),
-        child: const Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.admin_panel_settings_outlined,
-                size: 14, color: Color(0xFF1B5E20)),
-            SizedBox(width: 4),
-            Text('Admin Panel',
-                style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
-                    color: Color(0xFF1B5E20))),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 
 // ─────────────────────── Mobile profile avatar (left) ───────────────────────
 
@@ -2854,11 +2812,6 @@ class _DesktopHeaderState extends State<_DesktopHeader> {
               ),
             ),
           ),
-          if (UserState.of(context).isAdmin) ...[
-            const SizedBox(width: 4),
-            _AdminBackBtn(onTap: () => Navigator.pop(context)),
-            const SizedBox(width: 8),
-          ],
           // 2. Search bar — fills all remaining space, 24px margin each side
           Expanded(
             child: Padding(

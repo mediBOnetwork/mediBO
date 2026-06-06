@@ -842,15 +842,6 @@ class _MobileSearchBarState extends State<_MobileSearchBar> {
                 padding: EdgeInsets.zero,
                 constraints:
                     const BoxConstraints(minWidth: 40, minHeight: 40),
-              )
-            else
-              GestureDetector(
-                onTap: _submitNow,
-                child: const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 14),
-                  child: Icon(Icons.search,
-                      color: Color(0xFF9CA3AF), size: 20),
-                ),
               ),
           ],
         ),

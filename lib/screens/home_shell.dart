@@ -356,7 +356,6 @@ class _HomeShellState extends State<HomeShell> {
                   onOrders: () => _setIndex(1),
                   onCart: () => setState(() => _cartOpen = true),
                   onLogin: () => setState(() => _loginOpen = true),
-                  onDashboard: () {},
                   index: _index,
                   cartOpen: _cartOpen,
                 ),
@@ -2681,7 +2680,6 @@ class _DesktopHeader extends StatefulWidget {
   final VoidCallback onOrders;
   final VoidCallback onCart;
   final VoidCallback onLogin;
-  final VoidCallback onDashboard;
   final int index;
   final bool cartOpen;
 
@@ -2696,7 +2694,6 @@ class _DesktopHeader extends StatefulWidget {
     required this.onOrders,
     required this.onCart,
     required this.onLogin,
-    required this.onDashboard,
     required this.index,
     required this.cartOpen,
     this.scrolled = false,
@@ -2966,11 +2963,6 @@ class _DesktopHeaderState extends State<_DesktopHeader> {
             ),
           ),
           const SizedBox(width: 16),
-          // Dashboard button — admins only
-          if (UserState.of(context).isAdmin) ...[
-            _DashboardButton(onTap: widget.onDashboard),
-            const SizedBox(width: 12),
-          ],
           // 6. Auth button (Login or profile dropdown) — far right
           _DesktopProfileButton(onLogin: widget.onLogin),
           const SizedBox(width: 24),

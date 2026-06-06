@@ -1,14 +1,9 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-import '../../data/medicine_repository.dart';
 import '../../services/fcm_service.dart';
 import '../../theme.dart';
 import '../../user_state.dart';
-import '../../util.dart';
-import '../storefront_screen.dart';
 import 'admin_add_medicine_screen.dart';
 import 'admin_alert_overlay.dart';
 import 'admin_customer_screen.dart';
@@ -18,7 +13,7 @@ import 'admin_pending_bills_screen.dart';
 
 // ── View state ────────────────────────────────────────────────────────────────
 
-enum _AdminView { homepage, dashboard, section }
+enum _AdminView { dashboard, section }
 
 // ── Nav entry ────────────────────────────────────────────────────────────────
 
@@ -65,16 +60,6 @@ class _AdminShellState extends State<AdminShell> {
   _AdminView _view = _AdminView.dashboard;
   int _pendingBillsCount = 0;
 
-  // Homepage catalogue state
-  final MedicineRepository _repo = MedicineRepository();
-  final TextEditingController _searchCtrl = TextEditingController();
-  String _query = '';
-  String _category = 'All';
-  int _scrollTrigger = 0;
-  int _scrollToTopTrigger = 0;
-  bool _searchLoading = false;
-  CatalogMeta? _desktopMeta;
-
   @override
   void initState() {
     super.initState();
@@ -84,12 +69,6 @@ class _AdminShellState extends State<AdminShell> {
     }
     _loadPendingCount();
     _initFcm();
-  }
-
-  @override
-  void dispose() {
-    _searchCtrl.dispose();
-    super.dispose();
   }
 
   void _initFcm() {
@@ -114,34 +93,10 @@ class _AdminShellState extends State<AdminShell> {
     } catch (_) {}
   }
 
-  // ── Logo tap (context-aware navigation) ──────────────────────────────────
+  // ── Logo tap → always go to medibo.in homepage ───────────────────────────
 
   void _onLogoTap() {
-    if (!mounted) return;
-    setState(() {
-      switch (_view) {
-        case _AdminView.dashboard:
-          // Dashboard → show medibo.in homepage with admin header
-          _view = _AdminView.homepage;
-        case _AdminView.homepage:
-          // Homepage → back to admin dashboard
-          _view = _AdminView.dashboard;
-        case _AdminView.section:
-          // Any admin section → go to admin dashboard
-          _view = _AdminView.dashboard;
-      }
-    });
-  }
-
-  String get _logoTooltip {
-    switch (_view) {
-      case _AdminView.dashboard:
-        return 'Go to Homepage';
-      case _AdminView.homepage:
-        return 'Go to Admin Dashboard';
-      case _AdminView.section:
-        return 'Go to Admin Dashboard';
-    }
+    Navigator.of(context).maybePop();
   }
 
   // ── Routing ───────────────────────────────────────────────────────────────
@@ -153,7 +108,7 @@ class _AdminShellState extends State<AdminShell> {
         UserState.read(ctx).signOut();
         return;
       case 'home':
-        setState(() => _view = _AdminView.dashboard);
+        Navigator.of(ctx).maybePop();
         return;
       case 'add_medicine':
         setState(() { _view = _AdminView.section; _index = 0; });
@@ -195,9 +150,6 @@ class _AdminShellState extends State<AdminShell> {
   // ── Body ─────────────────────────────────────────────────────────────────
 
   Widget _buildBody(bool isSuperAdmin) {
-    if (_view == _AdminView.homepage) {
-      return _buildHomepageBody();
-    }
     if (_view == _AdminView.dashboard) {
       return QuickLinkNavigator(
         navigate: (route) => _navigateQuickLink(context, route, isSuperAdmin),
@@ -216,67 +168,6 @@ class _AdminShellState extends State<AdminShell> {
     return QuickLinkNavigator(
       navigate: (route) => _navigateQuickLink(context, route, isSuperAdmin),
       child: const AdminDashboardScreen(),
-    );
-  }
-
-  Widget _buildHomepageBody() {
-    return Column(
-      children: [
-        _AdminSearchBar(
-          controller: _searchCtrl,
-          isLoading: _searchLoading,
-          onSearch: (v) {
-            if (!mounted) return;
-            setState(() {
-              final q = v.trim();
-              _category = 'All';
-              if (q.length >= 2) {
-                _query = v;
-              } else {
-                _query = '';
-                _scrollToTopTrigger++;
-              }
-            });
-          },
-          onScrollToResults: () {
-            if (mounted) setState(() => _scrollTrigger++);
-          },
-        ),
-        _AdminCategoryChips(
-          meta: _desktopMeta,
-          selected: _category,
-          onCategoryTap: (key) {
-            if (!mounted) return;
-            setState(() { _category = key; _query = ''; _searchCtrl.clear(); });
-          },
-        ),
-        Expanded(
-          child: StorefrontScreen(
-            query: _query,
-            category: _category,
-            onCategorySelected: (c) {
-              if (!mounted) return;
-              setState(() { _category = c; _query = ''; _searchCtrl.clear(); });
-            },
-            onSuggestionTap: (s) {
-              if (!mounted) return;
-              setState(() { _query = s; _searchCtrl.text = s; _category = 'All'; });
-            },
-            repo: _repo,
-            scrollTrigger: _scrollTrigger,
-            scrollToTopTrigger: _scrollToTopTrigger,
-            onLoadingChanged: (loading) {
-              if (mounted) {
-                setState(() => _searchLoading = loading && _query.trim().isNotEmpty);
-              }
-            },
-            showCategoryTiles: false,
-            onMetaLoaded: (meta) {
-              if (mounted) setState(() => _desktopMeta = meta);
-            },
-          ),
-        ),
-      ],
     );
   }
 
@@ -303,7 +194,7 @@ class _AdminShellState extends State<AdminShell> {
           children: [
             _DesktopHeader(
               onLogoTap: _onLogoTap,
-              logoTooltip: _logoTooltip,
+              logoTooltip: 'Go to Homepage',
               isSuperAdmin: isSuperAdmin,
               onQuickLink: (route) => _navigateQuickLink(ctx, route, isSuperAdmin),
               onLogout: () => UserState.read(ctx).signOut(),
@@ -335,7 +226,7 @@ class _AdminShellState extends State<AdminShell> {
         elevation: 0,
         centerTitle: false,
         title: Tooltip(
-          message: _logoTooltip,
+          message: 'Go to Homepage',
           child: GestureDetector(
             onTap: _onLogoTap,
             child: MouseRegion(
@@ -543,219 +434,6 @@ class _DesktopHeader extends StatelessWidget {
             ),
           ),
         ]),
-      ),
-    );
-  }
-}
-
-// ── Admin search bar (homepage catalogue view) ────────────────────────────────
-
-class _AdminSearchBar extends StatefulWidget {
-  final TextEditingController controller;
-  final bool isLoading;
-  final ValueChanged<String> onSearch;
-  final VoidCallback onScrollToResults;
-
-  const _AdminSearchBar({
-    required this.controller,
-    required this.isLoading,
-    required this.onSearch,
-    required this.onScrollToResults,
-  });
-
-  @override
-  State<_AdminSearchBar> createState() => _AdminSearchBarState();
-}
-
-class _AdminSearchBarState extends State<_AdminSearchBar> {
-  Timer? _debounce;
-  bool _hasText = false;
-
-  @override
-  void initState() {
-    super.initState();
-    widget.controller.addListener(_onControllerChange);
-    _hasText = widget.controller.text.isNotEmpty;
-  }
-
-  @override
-  void dispose() {
-    widget.controller.removeListener(_onControllerChange);
-    _debounce?.cancel();
-    super.dispose();
-  }
-
-  void _onControllerChange() {
-    final hasText = widget.controller.text.isNotEmpty;
-    if (hasText != _hasText) setState(() => _hasText = hasText);
-  }
-
-  void _onChanged(String v) {
-    _debounce?.cancel();
-    _debounce = Timer(const Duration(milliseconds: 300), () => widget.onSearch(v));
-  }
-
-  void _submitNow() {
-    _debounce?.cancel();
-    final text = widget.controller.text;
-    widget.onSearch(text);
-    if (text.trim().length >= 2) widget.onScrollToResults();
-    FocusManager.instance.primaryFocus?.unfocus();
-  }
-
-  void _clearSearch() {
-    _debounce?.cancel();
-    widget.controller.clear();
-    widget.onSearch('');
-    FocusManager.instance.primaryFocus?.unfocus();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      color: Colors.white,
-      padding: const EdgeInsets.fromLTRB(14, 8, 14, 8),
-      child: Container(
-        decoration: BoxDecoration(
-          color: const Color(0xFFF3F4F6),
-          borderRadius: BorderRadius.circular(28),
-        ),
-        child: Row(
-          children: [
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 14),
-              child: Icon(Icons.search, color: Color(0xFF9CA3AF), size: 20),
-            ),
-            Expanded(
-              child: TextField(
-                controller: widget.controller,
-                onChanged: _onChanged,
-                onSubmitted: (_) => _submitNow(),
-                textInputAction: TextInputAction.search,
-                autocorrect: false,
-                enableSuggestions: false,
-                style: const TextStyle(fontSize: 14, color: Brand.ink),
-                decoration: const InputDecoration(
-                  border: InputBorder.none,
-                  enabledBorder: InputBorder.none,
-                  focusedBorder: InputBorder.none,
-                  hintText: 'Search for medicines',
-                  hintStyle: TextStyle(color: Brand.inkMuted, fontSize: 14),
-                  isDense: true,
-                  contentPadding: EdgeInsets.symmetric(vertical: 13),
-                  filled: false,
-                ),
-              ),
-            ),
-            if (widget.isLoading)
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 14),
-                child: SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2, color: Brand.green),
-                ),
-              )
-            else if (_hasText)
-              IconButton(
-                onPressed: _clearSearch,
-                icon: const Icon(Icons.close, size: 18, color: Color(0xFF6B7280)),
-                visualDensity: VisualDensity.compact,
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
-              )
-            else
-              GestureDetector(
-                onTap: _submitNow,
-                child: const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 14),
-                  child: Icon(Icons.search, color: Color(0xFF9CA3AF), size: 20),
-                ),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// ── Admin category chips (homepage catalogue view) ────────────────────────────
-
-class _AdminCategoryChips extends StatelessWidget {
-  final CatalogMeta? meta;
-  final String selected;
-  final ValueChanged<String> onCategoryTap;
-
-  const _AdminCategoryChips({
-    required this.meta,
-    required this.selected,
-    required this.onCategoryTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final m = meta;
-    if (m == null) {
-      return Container(
-        color: Colors.white,
-        height: 48,
-        child: const Center(
-          child: SizedBox(
-            width: 16,
-            height: 16,
-            child: CircularProgressIndicator(strokeWidth: 2, color: Brand.green),
-          ),
-        ),
-      );
-    }
-
-    final cats = List<CategoryCount>.from(m.categories)
-      ..sort((a, b) => b.count.compareTo(a.count));
-
-    return Container(
-      color: Colors.white,
-      height: 50,
-      child: ListView.builder(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.fromLTRB(12, 7, 12, 7),
-        itemCount: cats.length + 1,
-        itemBuilder: (ctx, i) {
-          final isAll = i == 0;
-          final key = isAll ? 'All' : cats[i - 1].name;
-          final label = isAll ? 'All' : prettyCategory(cats[i - 1].name);
-          final style = isAll
-              ? const CategoryStyle(Brand.mint, Brand.green, Icons.grid_view_rounded)
-              : categoryStyle(key);
-          final isSelected = selected == key;
-
-          return Padding(
-            padding: EdgeInsets.only(right: i < cats.length ? 8 : 0),
-            child: GestureDetector(
-              onTap: () => onCategoryTap(key),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 5),
-                decoration: BoxDecoration(
-                  color: isSelected ? style.fg : style.bg,
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(style.icon, size: 13,
-                        color: isSelected ? Colors.white : style.fg),
-                    const SizedBox(width: 5),
-                    Text(label,
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: isSelected ? Colors.white : style.fg,
-                        )),
-                  ],
-                ),
-              ),
-            ),
-          );
-        },
       ),
     );
   }

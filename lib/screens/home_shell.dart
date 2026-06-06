@@ -10,6 +10,7 @@ import '../url_sync.dart';
 import '../user_state.dart';
 import '../util.dart';
 import '../widgets/animations.dart';
+import 'admin/admin_shell.dart';
 import 'auth/login_screen.dart';
 import 'bulk_upload_screen.dart';
 import 'cart_screen.dart';
@@ -162,11 +163,7 @@ class _HomeShellState extends State<HomeShell> {
       builder: (context, constraints) {
         final isDesktop = constraints.maxWidth >= 900;
 
-        void onLogoTap() {
-          if (_index != 0) _goHome();
-        }
-
-        final logoTooltip = _index == 0 ? '' : 'Go to Home';
+        void onLogoTap() => _goHome();
 
         // IndexedStack keeps all screen States alive — no re-fetch on tab switch.
         final pages = [
@@ -199,45 +196,50 @@ class _HomeShellState extends State<HomeShell> {
           BulkUploadScreen(key: _bulkUploadKey),
         ];
 
-        if (isDesktop) return _buildDesktop(pages, onLogoTap, logoTooltip);
-        return _buildMobile(pages, onLogoTap, logoTooltip);
+        final isAdmin = UserState.of(context).isAdmin;
+
+        if (isDesktop) return _buildDesktop(pages, onLogoTap, isAdmin);
+        return _buildMobile(pages, onLogoTap, isAdmin);
       },
     );
   }
 
   // ─── Mobile / tablet layout (< 900px) ────────────────────────────────────
 
-  Widget _buildMobile(List<Widget> pages, VoidCallback onLogoTap, String logoTooltip) {
+  Widget _buildMobile(List<Widget> pages, VoidCallback onLogoTap, bool isAdmin) {
     return Scaffold(
       backgroundColor: Colors.white,
-      bottomNavigationBar: _cartOpen
-          ? null
-          : _MobileBottomBar(
-              index: _index,
-              cartOpen: _cartOpen,
-              onCartTap: () => setState(() => _cartOpen = true),
-              onNavTap: (i) {
-                switch (i) {
-                  case 0:
-                  case 1:
-                    _setIndex(0);
-                  case 2:
-                    _setIndex(1);
-                  case 3:
-                    _setIndex(2);
-                }
-              },
-            ),
+      bottomNavigationBar: isAdmin
+          ? const _AdminMobileBottomBar()
+          : (_cartOpen
+              ? null
+              : _MobileBottomBar(
+                  index: _index,
+                  cartOpen: _cartOpen,
+                  onCartTap: () => setState(() => _cartOpen = true),
+                  onNavTap: (i) {
+                    switch (i) {
+                      case 0:
+                      case 1:
+                        _setIndex(0);
+                      case 2:
+                        _setIndex(1);
+                      case 3:
+                        _setIndex(2);
+                    }
+                  },
+                )),
       body: Stack(
         children: [
           SizedBox.expand(
             child: Column(
               children: [
                 _LocationHeader(
+                  isAdmin: isAdmin,
                   onCart: () => setState(() => _cartOpen = true),
                   onHome: _goHome,
                   onLogoTap: onLogoTap,
-                  logoTooltip: logoTooltip,
+                  logoTooltip: '',
                 ),
                 _MobileSearchBar(
                   controller: _searchCtrl,
@@ -269,7 +271,7 @@ class _HomeShellState extends State<HomeShell> {
               ],
             ),
           ),
-          if (_index == 0 && AppState.of(context).distinctItems > 0)
+          if (!isAdmin && _index == 0 && AppState.of(context).distinctItems > 0)
             Positioned(
               bottom: 16,
               left: 0,
@@ -290,13 +292,14 @@ class _HomeShellState extends State<HomeShell> {
                 },
               ),
             ),
-          RepaintBoundary(
-            child: CartPanel(
-              open: _cartOpen,
-              onClose: () => setState(() => _cartOpen = false),
-              onOrderPlaced: () => _setIndex(1),
+          if (!isAdmin)
+            RepaintBoundary(
+              child: CartPanel(
+                open: _cartOpen,
+                onClose: () => setState(() => _cartOpen = false),
+                onOrderPlaced: () => _setIndex(1),
+              ),
             ),
-          ),
         ],
       ),
     );
@@ -304,38 +307,59 @@ class _HomeShellState extends State<HomeShell> {
 
   // ─── Desktop layout (≥ 900px) ────────────────────────────────────────────
 
-  Widget _buildDesktop(List<Widget> pages, VoidCallback onLogoTap, String logoTooltip) {
+  Widget _buildDesktop(List<Widget> pages, VoidCallback onLogoTap, bool isAdmin) {
     return Scaffold(
       backgroundColor: Colors.white,
       body: Stack(
         children: [
           Column(
             children: [
-              _DesktopHeader(
-                searchCtrl: _searchCtrl,
-                isLoading: _searchLoading,
-                scrolled: _desktopScrolled,
-                onSearch: (v) => setState(() {
-                  final q = v.trim();
-                  _category = 'All';
-                  _index = 0;
-                  if (q.length >= 2) {
-                    _query = v;
-                  } else {
-                    _query = '';
-                    _scrollToTopTrigger++;
-                  }
-                }),
-                onScrollToResults: () => setState(() => _scrollTrigger++),
-                onHome: onLogoTap,
-                logoTooltip: logoTooltip,
-                onBulk: () => _setIndex(2),
-                onOrders: () => _setIndex(1),
-                onCart: () => setState(() => _cartOpen = true),
-                onLogin: () => setState(() => _loginOpen = true),
-                index: _index,
-                cartOpen: _cartOpen,
-              ),
+              if (isAdmin)
+                _AdminDesktopHeader(
+                  searchCtrl: _searchCtrl,
+                  isLoading: _searchLoading,
+                  scrolled: _desktopScrolled,
+                  onSearch: (v) => setState(() {
+                    final q = v.trim();
+                    _category = 'All';
+                    _index = 0;
+                    if (q.length >= 2) {
+                      _query = v;
+                    } else {
+                      _query = '';
+                      _scrollToTopTrigger++;
+                    }
+                  }),
+                  onScrollToResults: () => setState(() => _scrollTrigger++),
+                  onHome: onLogoTap,
+                )
+              else
+                _DesktopHeader(
+                  searchCtrl: _searchCtrl,
+                  isLoading: _searchLoading,
+                  scrolled: _desktopScrolled,
+                  onSearch: (v) => setState(() {
+                    final q = v.trim();
+                    _category = 'All';
+                    _index = 0;
+                    if (q.length >= 2) {
+                      _query = v;
+                    } else {
+                      _query = '';
+                      _scrollToTopTrigger++;
+                    }
+                  }),
+                  onScrollToResults: () => setState(() => _scrollTrigger++),
+                  onHome: onLogoTap,
+                  logoTooltip: '',
+                  onBulk: () => _setIndex(2),
+                  onOrders: () => _setIndex(1),
+                  onCart: () => setState(() => _cartOpen = true),
+                  onLogin: () => setState(() => _loginOpen = true),
+                  onDashboard: () {},
+                  index: _index,
+                  cartOpen: _cartOpen,
+                ),
               Expanded(
                 // NotificationListener only fires setState when crossing the
                 // 400px threshold — at most twice per session, never per-frame.
@@ -369,7 +393,7 @@ class _HomeShellState extends State<HomeShell> {
               ),
             ],
           ),
-          if (_index == 0 && AppState.of(context).distinctItems > 0)
+          if (!isAdmin && _index == 0 && AppState.of(context).distinctItems > 0)
             Positioned(
               left: 0,
               right: 0,
@@ -388,17 +412,19 @@ class _HomeShellState extends State<HomeShell> {
                 ),
               ),
             ),
-          LoginPanel(
-            open: _loginOpen,
-            onClose: () => setState(() => _loginOpen = false),
-          ),
-          RepaintBoundary(
-            child: CartPanel(
-              open: _cartOpen,
-              onClose: () => setState(() => _cartOpen = false),
-              onOrderPlaced: () => _setIndex(1),
+          if (!isAdmin) ...[
+            LoginPanel(
+              open: _loginOpen,
+              onClose: () => setState(() => _loginOpen = false),
             ),
-          ),
+            RepaintBoundary(
+              child: CartPanel(
+                open: _cartOpen,
+                onClose: () => setState(() => _cartOpen = false),
+                onOrderPlaced: () => _setIndex(1),
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -408,11 +434,13 @@ class _HomeShellState extends State<HomeShell> {
 // ─────────────────────── Location header ───────────────────────
 
 class _LocationHeader extends StatelessWidget {
+  final bool isAdmin;
   final VoidCallback onCart;
   final VoidCallback onHome;
   final VoidCallback onLogoTap;
   final String logoTooltip;
   const _LocationHeader({
+    required this.isAdmin,
     required this.onCart,
     required this.onHome,
     required this.onLogoTap,
@@ -489,8 +517,8 @@ class _LocationHeader extends StatelessWidget {
                 ),
               ),
             ),
-            // RIGHT: cart icon
-            _MobileCartIcon(cartItems: cartItems, onCart: onCart),
+            // RIGHT: cart icon (customers only)
+            if (!isAdmin) _MobileCartIcon(cartItems: cartItems, onCart: onCart),
           ],
         ),
       ),
@@ -2653,6 +2681,7 @@ class _DesktopHeader extends StatefulWidget {
   final VoidCallback onOrders;
   final VoidCallback onCart;
   final VoidCallback onLogin;
+  final VoidCallback onDashboard;
   final int index;
   final bool cartOpen;
 
@@ -2667,6 +2696,7 @@ class _DesktopHeader extends StatefulWidget {
     required this.onOrders,
     required this.onCart,
     required this.onLogin,
+    required this.onDashboard,
     required this.index,
     required this.cartOpen,
     this.scrolled = false,
@@ -2936,6 +2966,11 @@ class _DesktopHeaderState extends State<_DesktopHeader> {
             ),
           ),
           const SizedBox(width: 16),
+          // Dashboard button — admins only
+          if (UserState.of(context).isAdmin) ...[
+            _DashboardButton(onTap: widget.onDashboard),
+            const SizedBox(width: 12),
+          ],
           // 6. Auth button (Login or profile dropdown) — far right
           _DesktopProfileButton(onLogin: widget.onLogin),
           const SizedBox(width: 24),
@@ -3063,6 +3098,45 @@ class _DesktopProfileButton extends StatelessWidget {
             const SizedBox(width: 4),
             const Icon(Icons.expand_more, size: 16, color: Color(0xFF6B7280)),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── Dashboard button (admins only) ───────────────────────────────────────────
+
+class _DashboardButton extends StatelessWidget {
+  final VoidCallback onTap;
+  const _DashboardButton({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return PressEffect(
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+          decoration: BoxDecoration(
+            border: Border.all(color: Brand.green, width: 1.5),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: const [
+              Icon(Icons.dashboard_outlined, size: 15, color: Brand.green),
+              SizedBox(width: 6),
+              Text(
+                'Dashboard',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: Brand.green,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -3226,6 +3300,276 @@ class _MobileProfileButton extends StatelessWidget {
                 ),
               ),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────── Admin desktop header ────────────────────────────────
+
+class _AdminDesktopHeader extends StatefulWidget {
+  final TextEditingController searchCtrl;
+  final bool isLoading;
+  final bool scrolled;
+  final ValueChanged<String> onSearch;
+  final VoidCallback onScrollToResults;
+  final VoidCallback onHome;
+
+  const _AdminDesktopHeader({
+    required this.searchCtrl,
+    required this.isLoading,
+    required this.onSearch,
+    required this.onScrollToResults,
+    required this.onHome,
+    this.scrolled = false,
+  });
+
+  @override
+  State<_AdminDesktopHeader> createState() => _AdminDesktopHeaderState();
+}
+
+class _AdminDesktopHeaderState extends State<_AdminDesktopHeader> {
+  Timer? _debounce;
+  bool _hasText = false;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.searchCtrl.addListener(_onControllerChange);
+    _hasText = widget.searchCtrl.text.isNotEmpty;
+  }
+
+  @override
+  void dispose() {
+    widget.searchCtrl.removeListener(_onControllerChange);
+    _debounce?.cancel();
+    super.dispose();
+  }
+
+  void _onControllerChange() {
+    final hasText = widget.searchCtrl.text.isNotEmpty;
+    if (hasText != _hasText) setState(() => _hasText = hasText);
+  }
+
+  void _onChanged(String v) {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 300), () => widget.onSearch(v));
+  }
+
+  void _submitNow() {
+    _debounce?.cancel();
+    final text = widget.searchCtrl.text;
+    widget.onSearch(text);
+    if (text.trim().length >= 2) widget.onScrollToResults();
+    FocusManager.instance.primaryFocus?.unfocus();
+  }
+
+  void _clearSearch() {
+    _debounce?.cancel();
+    widget.searchCtrl.clear();
+    widget.onSearch('');
+    FocusManager.instance.primaryFocus?.unfocus();
+  }
+
+  void _openAdmin([int? section]) {
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => AdminShell(initialSection: section),
+    ));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final shadow = BoxShadow(
+      color: Colors.black.withValues(alpha: widget.scrolled ? 0.11 : 0.04),
+      blurRadius: widget.scrolled ? 14.0 : 4.0,
+      offset: widget.scrolled ? const Offset(0, 4) : const Offset(0, 1),
+    );
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 220),
+      height: 76,
+      decoration: BoxDecoration(color: Colors.white, boxShadow: [shadow]),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          SizedBox(
+            width: 200,
+            child: Padding(
+              padding: const EdgeInsets.only(left: 24),
+              child: MouseRegion(
+                cursor: SystemMouseCursors.click,
+                child: GestureDetector(
+                  onTap: widget.onHome,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 40,
+                        height: 40,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF1B5E20),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: const Icon(Icons.add, color: Colors.white, size: 24),
+                      ),
+                      const SizedBox(width: 10),
+                      RichText(
+                        text: const TextSpan(
+                          children: [
+                            TextSpan(text: 'medi', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700, color: Color(0xFF1B5E20), letterSpacing: -0.3)),
+                            TextSpan(text: 'BO', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: Color(0xFF4CAF50), letterSpacing: -0.3)),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: Container(
+                height: 46,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF9FAFB),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: const Color(0xFFD1D5DB)),
+                ),
+                child: Row(
+                  children: [
+                    const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 14),
+                      child: Icon(Icons.search, color: Color(0xFF9CA3AF), size: 20),
+                    ),
+                    Expanded(
+                      child: TextField(
+                        controller: widget.searchCtrl,
+                        onChanged: _onChanged,
+                        onSubmitted: (_) => _submitNow(),
+                        textInputAction: TextInputAction.search,
+                        autocorrect: false,
+                        enableSuggestions: false,
+                        keyboardType: TextInputType.text,
+                        style: const TextStyle(fontSize: 14, color: Brand.ink),
+                        decoration: const InputDecoration(
+                          border: InputBorder.none,
+                          enabledBorder: InputBorder.none,
+                          focusedBorder: InputBorder.none,
+                          hintText: 'Search for medicines',
+                          hintStyle: TextStyle(color: Brand.inkMuted, fontSize: 14),
+                          isDense: true,
+                          contentPadding: EdgeInsets.symmetric(vertical: 14),
+                          filled: false,
+                        ),
+                      ),
+                    ),
+                    if (widget.isLoading)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 10),
+                        child: SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Brand.green)),
+                      )
+                    else if (_hasText)
+                      IconButton(
+                        onPressed: _clearSearch,
+                        icon: const Icon(Icons.close, size: 18, color: Color(0xFF6B7280)),
+                        visualDensity: VisualDensity.compact,
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                      ),
+                    GestureDetector(
+                      onTap: _submitNow,
+                      child: Container(
+                        height: double.infinity,
+                        padding: const EdgeInsets.symmetric(horizontal: 22),
+                        decoration: const BoxDecoration(
+                          color: Brand.green,
+                          borderRadius: BorderRadius.only(
+                            topRight: Radius.circular(9),
+                            bottomRight: Radius.circular(9),
+                          ),
+                        ),
+                        child: const Center(child: Text('Search', style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600))),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          _DesktopNavLink(label: 'Dashboard', icon: Icons.dashboard_outlined, selected: false, onTap: () => _openAdmin()),
+          const SizedBox(width: 2),
+          _DesktopNavLink(label: 'Add Medicine', icon: Icons.medication_outlined, selected: false, onTap: () => _openAdmin(0)),
+          const SizedBox(width: 2),
+          _DesktopNavLink(label: 'Suppliers', icon: Icons.inventory_2_outlined, selected: false, onTap: () => _openAdmin(1)),
+          const SizedBox(width: 2),
+          _DesktopNavLink(label: 'Customers', icon: Icons.people_outline, selected: false, onTap: () => _openAdmin(2)),
+          const SizedBox(width: 2),
+          _DesktopNavLink(label: 'Bills', icon: Icons.inbox_outlined, selected: false, onTap: () => _openAdmin(3)),
+          const SizedBox(width: 8),
+          _DesktopProfileButton(onLogin: () {}),
+          const SizedBox(width: 24),
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────── Admin mobile bottom bar ──────────────────────────────
+
+class _AdminMobileBottomBar extends StatelessWidget {
+  const _AdminMobileBottomBar();
+
+  void _openAdmin(BuildContext context, [int? section]) {
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => AdminShell(initialSection: section),
+    ));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        border: Border(top: BorderSide(color: Color(0xFFE5E7EB))),
+      ),
+      child: SafeArea(
+        top: false,
+        child: SizedBox(
+          height: 60,
+          child: Row(
+            children: [
+              _AdminNavItem(icon: Icons.dashboard_outlined, label: 'Dashboard', onTap: () => _openAdmin(context)),
+              _AdminNavItem(icon: Icons.medication_outlined, label: 'Add Medicine', onTap: () => _openAdmin(context, 0)),
+              _AdminNavItem(icon: Icons.people_outline, label: 'Customers', onTap: () => _openAdmin(context, 2)),
+              _AdminNavItem(icon: Icons.inbox_outlined, label: 'Bills', onTap: () => _openAdmin(context, 3)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AdminNavItem extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+  const _AdminNavItem({required this.icon, required this.label, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+      child: InkWell(
+        onTap: onTap,
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, size: 22, color: Brand.inkMuted),
+            const SizedBox(height: 3),
+            Text(label, style: const TextStyle(fontSize: 10, color: Brand.inkMuted, fontWeight: FontWeight.w500)),
           ],
         ),
       ),

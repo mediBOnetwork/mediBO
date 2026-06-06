@@ -53,7 +53,8 @@ List<_NavEntry> _effectiveNav(bool isSuperAdmin) =>
 // ── Admin shell ──────────────────────────────────────────────────────────────
 
 class AdminShell extends StatefulWidget {
-  const AdminShell({super.key});
+  final int? initialSection;
+  const AdminShell({super.key, this.initialSection});
 
   @override
   State<AdminShell> createState() => _AdminShellState();
@@ -77,6 +78,10 @@ class _AdminShellState extends State<AdminShell> {
   @override
   void initState() {
     super.initState();
+    if (widget.initialSection != null) {
+      _view = _AdminView.section;
+      _index = widget.initialSection!;
+    }
     _loadPendingCount();
     _initFcm();
   }

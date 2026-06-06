@@ -5,7 +5,6 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'app_state.dart';
 import 'models/cart_model.dart';
 import 'screens/auth/login_screen.dart';
-import 'screens/admin/admin_shell.dart';
 import 'screens/home_shell.dart';
 import 'screens/about_screen.dart';
 import 'screens/contact_screen.dart';
@@ -92,7 +91,6 @@ class _AppRoot extends StatelessWidget {
           return const _SplashScreen();
         }
 
-        if (auth.isAdmin) return const AdminShell();
         return const HomeShell();
       },
     );

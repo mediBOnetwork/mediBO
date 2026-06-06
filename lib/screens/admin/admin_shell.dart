@@ -184,7 +184,16 @@ class _AdminShellState extends State<AdminShell> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             _DesktopHeader(
-              onLogoTap: () => setState(() => _showDashboard = true),
+              onLogoTap: () {
+                if (_showDashboard) {
+                  Navigator.of(ctx).push(
+                    MaterialPageRoute(builder: (_) => const HomeShell()),
+                  );
+                } else {
+                  setState(() => _showDashboard = true);
+                }
+              },
+              showDashboard: _showDashboard,
               isSuperAdmin: isSuperAdmin,
               onQuickLink: (route) => _navigateQuickLink(ctx, route, isSuperAdmin),
               onLogout: () => UserState.read(ctx).signOut(),
@@ -216,27 +225,38 @@ class _AdminShellState extends State<AdminShell> {
         backgroundColor: Colors.white,
         elevation: 0,
         centerTitle: false,
-        title: GestureDetector(
-          onTap: () => setState(() => _showDashboard = true),
-          child: MouseRegion(
-            cursor: SystemMouseCursors.click,
-            child: RichText(
-              text: const TextSpan(children: [
-                TextSpan(
-                  text: 'mediBO',
-                  style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w800,
-                      color: Color(0xFF1B7A43)),
-                ),
-                TextSpan(
-                  text: ' Admin',
-                  style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w500,
-                      color: Color(0xFF6B7280)),
-                ),
-              ]),
+        title: Tooltip(
+          message: _showDashboard ? 'Go to mediBO Home' : 'Go to Admin Dashboard',
+          child: GestureDetector(
+            onTap: () {
+              if (_showDashboard) {
+                Navigator.of(ctx).push(
+                  MaterialPageRoute(builder: (_) => const HomeShell()),
+                );
+              } else {
+                setState(() => _showDashboard = true);
+              }
+            },
+            child: MouseRegion(
+              cursor: SystemMouseCursors.click,
+              child: RichText(
+                text: const TextSpan(children: [
+                  TextSpan(
+                    text: 'mediBO',
+                    style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800,
+                        color: Color(0xFF1B7A43)),
+                  ),
+                  TextSpan(
+                    text: ' Admin',
+                    style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
+                        color: Color(0xFF6B7280)),
+                  ),
+                ]),
+              ),
             ),
           ),
         ),
@@ -250,15 +270,6 @@ class _AdminShellState extends State<AdminShell> {
             tooltip: 'More options',
             onSelected: (route) => _navigateQuickLink(ctx, route, isSuperAdmin),
             itemBuilder: (_) => [
-              // Home = customer storefront (sections are in bottom nav)
-              const PopupMenuItem(
-                value: 'storefront',
-                child: _PopupRow(
-                  icon: Icons.storefront_outlined,
-                  label: 'Home (Storefront)',
-                ),
-              ),
-              const PopupMenuDivider(),
               if (isSuperAdmin)
                 const PopupMenuItem(
                   value: 'manage_admins',
@@ -320,13 +331,14 @@ class _AdminShellState extends State<AdminShell> {
 }
 
 // ── Desktop header ────────────────────────────────────────────────────────────
-// Logo (→ dashboard) | Home | Add Medicine | Suppliers | Customers | Bills🔴 |
+// Logo (context-aware) | Add Medicine | Suppliers | Customers | Bills🔴 |
 // Quick Links (Manage Admins, Add Supplier, Add Customer) | Logout
 
 class _DesktopHeader extends StatelessWidget {
   final VoidCallback onLogoTap;
   final VoidCallback onLogout;
   final bool isSuperAdmin;
+  final bool showDashboard;
   final ValueChanged<String> onQuickLink;
   final int pendingBillsCount;
 
@@ -335,6 +347,7 @@ class _DesktopHeader extends StatelessWidget {
     required this.onQuickLink,
     required this.onLogout,
     required this.isSuperAdmin,
+    required this.showDashboard,
     this.pendingBillsCount = 0,
   });
 
@@ -351,31 +364,34 @@ class _DesktopHeader extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 0),
         child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-          // Logo → admin Dashboard
-          GestureDetector(
-            onTap: onLogoTap,
-            child: MouseRegion(
-              cursor: SystemMouseCursors.click,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                child: RichText(
-                  text: const TextSpan(children: [
-                    TextSpan(
-                      text: 'mediBO',
-                      style: TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.w800,
-                          color: Color(0xFF1B7A43)),
-                    ),
-                    TextSpan(
-                      text: ' Admin',
-                      style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                          color: Color(0xFF9CA3AF),
-                          letterSpacing: 0.3),
-                    ),
-                  ]),
+          // Logo — context-aware navigation
+          Tooltip(
+            message: showDashboard ? 'Go to mediBO Home' : 'Go to Admin Dashboard',
+            child: GestureDetector(
+              onTap: onLogoTap,
+              child: MouseRegion(
+                cursor: SystemMouseCursors.click,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  child: RichText(
+                    text: const TextSpan(children: [
+                      TextSpan(
+                        text: 'mediBO',
+                        style: TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.w800,
+                            color: Color(0xFF1B7A43)),
+                      ),
+                      TextSpan(
+                        text: ' Admin',
+                        style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                            color: Color(0xFF9CA3AF),
+                            letterSpacing: 0.3),
+                      ),
+                    ]),
+                  ),
                 ),
               ),
             ),
@@ -389,13 +405,6 @@ class _DesktopHeader extends StatelessWidget {
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               child: Row(mainAxisSize: MainAxisSize.min, children: [
-                // Home → customer storefront
-                _HdrBtn(
-                  label: 'Home',
-                  icon: Icons.storefront_outlined,
-                  onTap: () => onQuickLink('storefront'),
-                  color: const Color(0xFF1B7A43),
-                ),
                 _HdrBtn(
                   label: 'Add Medicine',
                   icon: Icons.medication_outlined,

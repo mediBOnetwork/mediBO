@@ -161,6 +161,22 @@ class _HomeShellState extends State<HomeShell> {
     return LayoutBuilder(
       builder: (context, constraints) {
         final isDesktop = constraints.maxWidth >= 900;
+        final isAdmin = UserState.of(context).isAdmin;
+
+        void onLogoTap() {
+          if (_index == 0) {
+            // On customer home: admin goes back to admin shell, non-admin stays
+            if (isAdmin && Navigator.of(context).canPop()) {
+              Navigator.of(context).pop();
+            }
+          } else {
+            _goHome();
+          }
+        }
+
+        final logoTooltip = _index == 0
+            ? (isAdmin ? 'Go to Admin Dashboard' : '')
+            : 'Go to Home';
 
         // IndexedStack keeps all screen States alive — no re-fetch on tab switch.
         final pages = [
@@ -193,15 +209,15 @@ class _HomeShellState extends State<HomeShell> {
           BulkUploadScreen(key: _bulkUploadKey),
         ];
 
-        if (isDesktop) return _buildDesktop(pages);
-        return _buildMobile(pages);
+        if (isDesktop) return _buildDesktop(pages, onLogoTap, logoTooltip);
+        return _buildMobile(pages, onLogoTap, logoTooltip);
       },
     );
   }
 
   // ─── Mobile / tablet layout (< 900px) ────────────────────────────────────
 
-  Widget _buildMobile(List<Widget> pages) {
+  Widget _buildMobile(List<Widget> pages, VoidCallback onLogoTap, String logoTooltip) {
     return Scaffold(
       backgroundColor: Colors.white,
       bottomNavigationBar: _cartOpen
@@ -230,6 +246,8 @@ class _HomeShellState extends State<HomeShell> {
                 _LocationHeader(
                   onCart: () => setState(() => _cartOpen = true),
                   onHome: _goHome,
+                  onLogoTap: onLogoTap,
+                  logoTooltip: logoTooltip,
                 ),
                 _MobileSearchBar(
                   controller: _searchCtrl,
@@ -296,7 +314,7 @@ class _HomeShellState extends State<HomeShell> {
 
   // ─── Desktop layout (≥ 900px) ────────────────────────────────────────────
 
-  Widget _buildDesktop(List<Widget> pages) {
+  Widget _buildDesktop(List<Widget> pages, VoidCallback onLogoTap, String logoTooltip) {
     return Scaffold(
       backgroundColor: Colors.white,
       body: Stack(
@@ -319,7 +337,8 @@ class _HomeShellState extends State<HomeShell> {
                   }
                 }),
                 onScrollToResults: () => setState(() => _scrollTrigger++),
-                onHome: _goHome,
+                onHome: onLogoTap,
+                logoTooltip: logoTooltip,
                 onBulk: () => _setIndex(2),
                 onOrders: () => _setIndex(1),
                 onCart: () => setState(() => _cartOpen = true),
@@ -401,7 +420,14 @@ class _HomeShellState extends State<HomeShell> {
 class _LocationHeader extends StatelessWidget {
   final VoidCallback onCart;
   final VoidCallback onHome;
-  const _LocationHeader({required this.onCart, required this.onHome});
+  final VoidCallback onLogoTap;
+  final String logoTooltip;
+  const _LocationHeader({
+    required this.onCart,
+    required this.onHome,
+    required this.onLogoTap,
+    required this.logoTooltip,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -421,51 +447,54 @@ class _LocationHeader extends StatelessWidget {
           children: [
             // LEFT: profile avatar
             _MobileProfileAvatar(),
-            // CENTER: logo — tapping navigates home
+            // CENTER: logo — context-aware navigation
             Expanded(
               child: Center(
-                child: MouseRegion(
-                  cursor: SystemMouseCursors.click,
-                  child: GestureDetector(
-                    onTap: onHome,
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          width: 28,
-                          height: 28,
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF1B5E20),
-                            borderRadius: BorderRadius.circular(6),
+                child: Tooltip(
+                  message: logoTooltip,
+                  child: MouseRegion(
+                    cursor: SystemMouseCursors.click,
+                    child: GestureDetector(
+                      onTap: onLogoTap,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            width: 28,
+                            height: 28,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF1B5E20),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: const Icon(Icons.add, color: Colors.white, size: 17),
                           ),
-                          child: const Icon(Icons.add, color: Colors.white, size: 17),
-                        ),
-                        const SizedBox(width: 7),
-                        RichText(
-                          text: const TextSpan(
-                            children: [
-                              TextSpan(
-                                text: 'medi',
-                                style: TextStyle(
-                                  fontSize: 20,
-                                  fontWeight: FontWeight.w700,
-                                  color: Color(0xFF1B5E20),
-                                  letterSpacing: -0.3,
+                          const SizedBox(width: 7),
+                          RichText(
+                            text: const TextSpan(
+                              children: [
+                                TextSpan(
+                                  text: 'medi',
+                                  style: TextStyle(
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.w700,
+                                    color: Color(0xFF1B5E20),
+                                    letterSpacing: -0.3,
+                                  ),
                                 ),
-                              ),
-                              TextSpan(
-                                text: 'BO',
-                                style: TextStyle(
-                                  fontSize: 20,
-                                  fontWeight: FontWeight.w800,
-                                  color: Color(0xFF4CAF50),
-                                  letterSpacing: -0.3,
+                                TextSpan(
+                                  text: 'BO',
+                                  style: TextStyle(
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.w800,
+                                    color: Color(0xFF4CAF50),
+                                    letterSpacing: -0.3,
+                                  ),
                                 ),
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
                 ),
@@ -2672,6 +2701,7 @@ class _DesktopHeader extends StatefulWidget {
   final ValueChanged<String> onSearch;
   final VoidCallback onScrollToResults;
   final VoidCallback onHome;
+  final String logoTooltip;
   final VoidCallback onBulk;
   final VoidCallback onOrders;
   final VoidCallback onCart;
@@ -2685,6 +2715,7 @@ class _DesktopHeader extends StatefulWidget {
     required this.onSearch,
     required this.onScrollToResults,
     required this.onHome,
+    required this.logoTooltip,
     required this.onBulk,
     required this.onOrders,
     required this.onCart,
@@ -2770,48 +2801,51 @@ class _DesktopHeaderState extends State<_DesktopHeader> {
             width: 250,
             child: Padding(
               padding: const EdgeInsets.only(left: 24),
-              child: MouseRegion(
-                cursor: SystemMouseCursors.click,
-                child: GestureDetector(
-                  onTap: widget.onHome,
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Container(
-                        width: 40,
-                        height: 40,
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF1B5E20),
-                          borderRadius: BorderRadius.circular(8),
+              child: Tooltip(
+                message: widget.logoTooltip,
+                child: MouseRegion(
+                  cursor: SystemMouseCursors.click,
+                  child: GestureDetector(
+                    onTap: widget.onHome,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: 40,
+                          height: 40,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF1B5E20),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: const Icon(Icons.add, color: Colors.white, size: 24),
                         ),
-                        child: const Icon(Icons.add, color: Colors.white, size: 24),
-                      ),
-                      const SizedBox(width: 10),
-                      RichText(
-                        text: const TextSpan(
-                          children: [
-                            TextSpan(
-                              text: 'medi',
-                              style: TextStyle(
-                                fontSize: 22,
-                                fontWeight: FontWeight.w700,
-                                color: Color(0xFF1B5E20),
-                                letterSpacing: -0.3,
+                        const SizedBox(width: 10),
+                        RichText(
+                          text: const TextSpan(
+                            children: [
+                              TextSpan(
+                                text: 'medi',
+                                style: TextStyle(
+                                  fontSize: 22,
+                                  fontWeight: FontWeight.w700,
+                                  color: Color(0xFF1B5E20),
+                                  letterSpacing: -0.3,
+                                ),
                               ),
-                            ),
-                            TextSpan(
-                              text: 'BO',
-                              style: TextStyle(
-                                fontSize: 22,
-                                fontWeight: FontWeight.w800,
-                                color: Color(0xFF4CAF50),
-                                letterSpacing: -0.3,
+                              TextSpan(
+                                text: 'BO',
+                                style: TextStyle(
+                                  fontSize: 22,
+                                  fontWeight: FontWeight.w800,
+                                  color: Color(0xFF4CAF50),
+                                  letterSpacing: -0.3,
+                                ),
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
               ),

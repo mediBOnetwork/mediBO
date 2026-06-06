@@ -129,10 +129,12 @@ class AdminSupplierScreen extends StatefulWidget {
 }
 
 class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
-  List<_SupRow>     _suppliers  = [];
-  List<_PendingRow> _pending    = [];
-  List<_OrderRow>   _orders     = [];
-  List<_LeadItem>   _leads      = [];
+  List<_SupRow>              _suppliers    = [];
+  List<_PendingRow>          _pending      = [];
+  List<_OrderRow>            _orders       = [];
+  List<_LeadItem>            _leads        = [];
+  List<Map<String, dynamic>> _deletedRows  = [];
+  bool _deletedExpanded = false;
   bool _loading = true;
   _SupFilter _filter = _SupFilter.suppliers;
   final Set<String> _expanded = {};
@@ -188,11 +190,14 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         client.from('supplier_profiles').select().or('is_deleted.is.null,is_deleted.eq.false'),
         client.from('supplier_orders').select().order('created_at', ascending: false),
         client.from('supplier_leads').select().order('created_at', ascending: false),
+        client.from('supplier_profiles').select().eq('is_deleted', true)
+            .order('deleted_at', ascending: false).catchError((_) => <dynamic>[]),
       ]);
 
       final profRows  = results[0] as List;
       final orderRows = results[1] as List;
       final leadRows  = results[2] as List;
+      final deletedR  = results[3] as List;
 
       final approved = <_SupRow>[];
       final pending  = <_PendingRow>[];
@@ -228,11 +233,12 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
 
       if (mounted) {
         setState(() {
-          _suppliers = approved;
-          _pending   = pending;
-          _orders    = orders;
-          _leads     = leads;
-          _loading   = false;
+          _suppliers   = approved;
+          _pending     = pending;
+          _orders      = orders;
+          _leads       = leads;
+          _deletedRows = deletedR.map((r) => Map<String, dynamic>.from(r as Map)).toList();
+          _loading     = false;
         });
       }
     } catch (e) {
@@ -336,6 +342,57 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Supplier deleted.'), backgroundColor: Color(0xFF1B7A43)));
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Delete failed: $e'), backgroundColor: const Color(0xFFDC2626)));
+    }
+  }
+
+  // ── Restore soft-deleted supplier ───────────────────────────────────────────
+
+  Future<void> _restoreSupplier(Map<String, dynamic> deletedRow) async {
+    final snap        = deletedRow['deleted_snapshot'] as Map<String, dynamic>? ?? deletedRow;
+    final name        = (snap['supplier_name'] as String? ?? deletedRow['supplier_name'] as String? ?? 'this supplier').trim();
+    final displayName = name.isNotEmpty ? name : 'this supplier';
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        title: Text('Restore $displayName?',
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+        content: const Text('This will restore the supplier to the active Suppliers list.',
+            style: TextStyle(fontSize: 13, color: Color(0xFF374151))),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43)),
+            child: const Text('Restore'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    try {
+      await Supabase.instance.client.from('supplier_profiles').update({
+        'is_deleted':       false,
+        'deleted_at':       null,
+        'deleted_by':       null,
+        'deleted_snapshot': null,
+      }).eq('id', deletedRow['id'] as String);
+      _load(showSpinner: false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Supplier restored.'),
+          backgroundColor: Color(0xFF1B7A43),
+          duration: Duration(seconds: 3),
+        ));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Restore failed: $e'),
+          backgroundColor: const Color(0xFFDC2626),
+        ));
+      }
     }
   }
 
@@ -480,13 +537,129 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   // ═══════════════════════════════════════════════════════════════════════════
 
   Widget _buildSuppliersView(bool isDesktop) {
-    if (_suppliers.isEmpty) return _emptyState('0 approved suppliers');
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      if (isDesktop) _suppliersTableHeader(),
-      ..._suppliers.map((r) => isDesktop ? _desktopSupRow(r) : _mobileSupCard(r)),
+      if (_suppliers.isEmpty)
+        _emptyState('0 approved suppliers')
+      else ...[
+        if (isDesktop) _suppliersTableHeader(),
+        ..._suppliers.map((r) => isDesktop ? _desktopSupRow(r) : _mobileSupCard(r)),
+      ],
+      const SizedBox(height: 32),
+      _buildDeletedSection(isDesktop),
       const SizedBox(height: 32),
     ]);
   }
+
+  Widget _buildDeletedSection(bool isDesktop) {
+    final pad = isDesktop ? 28.0 : 16.0;
+    return Padding(
+      padding: EdgeInsets.symmetric(horizontal: pad),
+      child: Column(children: [
+        MouseRegion(
+          cursor: SystemMouseCursors.click,
+          child: GestureDetector(
+            onTap: () => setState(() => _deletedExpanded = !_deletedExpanded),
+            child: Container(
+              width: double.infinity,
+              padding: EdgeInsets.symmetric(horizontal: pad, vertical: 11),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF3F4F6),
+                border: Border.all(color: const Color(0xFFE5E7EB)),
+                borderRadius: _deletedExpanded
+                    ? const BorderRadius.vertical(top: Radius.circular(8))
+                    : BorderRadius.circular(8),
+              ),
+              child: Row(children: [
+                AnimatedRotation(
+                  turns: _deletedExpanded ? 0.0 : -0.25,
+                  duration: const Duration(milliseconds: 200),
+                  child: const Icon(Icons.expand_more, size: 18, color: Color(0xFF1B7A43)),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  'Recently Deleted (${_deletedRows.length})',
+                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF374151)),
+                ),
+              ]),
+            ),
+          ),
+        ),
+        if (_deletedExpanded) ...[
+          Container(
+            decoration: BoxDecoration(
+              border: Border.all(color: const Color(0xFFE5E7EB)),
+              borderRadius: const BorderRadius.vertical(bottom: Radius.circular(8)),
+            ),
+            child: _deletedRows.isEmpty
+                ? Padding(
+                    padding: EdgeInsets.symmetric(horizontal: pad, vertical: 20),
+                    child: const Text('No deleted suppliers.',
+                        style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
+                  )
+                : Column(
+                    children: _deletedRows.map((r) => _buildDeletedRow(r, isDesktop)).toList(),
+                  ),
+          ),
+        ],
+      ]),
+    );
+  }
+
+  Widget _buildDeletedRow(Map<String, dynamic> row, bool isDesktop) {
+    final snap      = row['deleted_snapshot'] as Map<String, dynamic>? ?? row;
+    final name      = (snap['supplier_name']  as String? ?? row['supplier_name']  as String? ?? '').trim();
+    final email     = (snap['email']          as String? ?? row['email']          as String? ?? '').trim();
+    final deletedAt = _fmtTs(row['deleted_at'] as String?);
+    final deletedBy = row['deleted_by'] as String? ?? '';
+    final isLast    = _deletedRows.last == row;
+    final pad       = isDesktop ? 28.0 : 16.0;
+
+    return Opacity(
+      opacity: 0.85,
+      child: Container(
+        padding: EdgeInsets.symmetric(horizontal: pad, vertical: 12),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFAFAFA),
+          border: isLast ? null : const Border(bottom: BorderSide(color: Color(0xFFEEEEEE))),
+        ),
+        child: Row(children: [
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(
+              name.isNotEmpty ? name : (email.isNotEmpty ? email : 'Deleted Supplier'),
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF374151)),
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 3),
+            Text(
+              [
+                if (email.isNotEmpty)     email,
+                if (deletedAt.isNotEmpty) 'Deleted: $deletedAt',
+                if (deletedBy.isNotEmpty) 'By: $deletedBy',
+              ].join('  ·  '),
+              style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF)),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ])),
+          const SizedBox(width: 12),
+          InkWell(
+            onTap: () => _restoreSupplier(row),
+            borderRadius: BorderRadius.circular(6),
+            mouseCursor: SystemMouseCursors.click,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: const Color(0xFF1B7A43)),
+              ),
+              child: const Text('Restore',
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF1B7A43))),
+            ),
+          ),
+        ]),
+      ),
+    );
+  }
+
 
   Widget _suppliersTableHeader() {
     return Container(

@@ -26,6 +26,8 @@ class _NavEntry {
 }
 
 const _kNavBase = [
+  _NavEntry(Icons.dashboard_outlined, Icons.dashboard,
+      'Dashboard', 'Dashboard'),
   _NavEntry(Icons.medication_outlined, Icons.medication,
       'Add Medicine', 'Add Medicine Details'),
   _NavEntry(Icons.inventory_2_outlined, Icons.inventory_2,
@@ -80,7 +82,7 @@ class _AdminShellState extends State<AdminShell> {
 
   void _navigateToCustomerOrders() {
     if (!mounted) return;
-    setState(() { _view = _AdminView.section; _index = 2; });
+    setState(() { _view = _AdminView.section; _index = 3; });
   }
 
   Future<void> _loadPendingCount() async {
@@ -110,17 +112,20 @@ class _AdminShellState extends State<AdminShell> {
       case 'home':
         Navigator.of(ctx).maybePop();
         return;
-      case 'add_medicine':
-        setState(() { _view = _AdminView.section; _index = 0; });
+      case 'dashboard':
+        setState(() { _view = _AdminView.dashboard; _index = 0; });
         return;
-      case 'suppliers':
+      case 'add_medicine':
         setState(() { _view = _AdminView.section; _index = 1; });
         return;
-      case 'customers':
+      case 'suppliers':
         setState(() { _view = _AdminView.section; _index = 2; });
         return;
-      case 'bills':
+      case 'customers':
         setState(() { _view = _AdminView.section; _index = 3; });
+        return;
+      case 'bills':
+        setState(() { _view = _AdminView.section; _index = 4; });
         return;
       case 'manage_admins':
         if (!isSuperAdmin) {
@@ -130,7 +135,7 @@ class _AdminShellState extends State<AdminShell> {
           ));
           return;
         }
-        setState(() { _view = _AdminView.section; _index = 4; });
+        setState(() { _view = _AdminView.section; _index = 5; });
         return;
       case 'add_supplier':
         Navigator.of(ctx).push(MaterialPageRoute(
@@ -158,10 +163,14 @@ class _AdminShellState extends State<AdminShell> {
     }
     // section
     final nav = _effectiveNav(isSuperAdmin);
-    if (_index == 0) return const AdminAddMedicineScreen();
-    if (_index == 2) return const AdminCustomerScreen();
-    if (_index == 3) return PendingBillsScreen(onCountChanged: _loadPendingCount);
-    if (isSuperAdmin && _index == 4) return const AdminManageAdminsScreen();
+    if (_index == 0) return QuickLinkNavigator(
+      navigate: (route) => _navigateQuickLink(context, route, isSuperAdmin),
+      child: const AdminDashboardScreen(),
+    );
+    if (_index == 1) return const AdminAddMedicineScreen();
+    if (_index == 3) return const AdminCustomerScreen();
+    if (_index == 4) return PendingBillsScreen(onCountChanged: _loadPendingCount);
+    if (isSuperAdmin && _index == 5) return const AdminManageAdminsScreen();
     if (_index < nav.length) {
       return _PageBody(title: nav[_index].pageTitle, icon: nav[_index].icon);
     }
@@ -295,11 +304,14 @@ class _AdminShellState extends State<AdminShell> {
         selectedFontSize: 10,
         unselectedFontSize: 10,
         elevation: 8,
-        onTap: (i) => setState(() { _view = _AdminView.section; _index = i; }),
+        onTap: (i) => setState(() {
+          _index = i;
+          _view = i == 0 ? _AdminView.dashboard : _AdminView.section;
+        }),
         items: nav.asMap().entries.map((e) {
           final i = e.key;
           final n = e.value;
-          final hasBadge = i == 3 && _pendingBillsCount > 0;
+          final hasBadge = i == 4 && _pendingBillsCount > 0;
           return BottomNavigationBarItem(
             icon: hasBadge
                 ? Badge(label: Text('$_pendingBillsCount'), child: Icon(n.icon))
@@ -382,6 +394,11 @@ class _DesktopHeader extends StatelessWidget {
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               child: Row(mainAxisSize: MainAxisSize.min, children: [
+                _HdrBtn(
+                  label: 'Dashboard',
+                  icon: Icons.dashboard_outlined,
+                  onTap: () => onQuickLink('dashboard'),
+                ),
                 _HdrBtn(
                   label: 'Add Medicine',
                   icon: Icons.medication_outlined,

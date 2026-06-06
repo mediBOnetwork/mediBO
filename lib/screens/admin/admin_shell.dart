@@ -722,30 +722,40 @@ class _AdminProfileChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final auth = UserState.of(context);
-    final rawName = auth.profile?.pharmacyName ?? Supabase.instance.client.auth.currentUser?.email ?? 'Account';
-    final name = rawName.isNotEmpty ? rawName : 'Account';
-    final initial = name[0].toUpperCase();
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: () => UserState.read(context).signOut(),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          decoration: BoxDecoration(
-            color: const Color(0xFFECFDF5),
-            borderRadius: BorderRadius.circular(24),
-          ),
-          child: Row(mainAxisSize: MainAxisSize.min, children: [
-            CircleAvatar(
-              radius: 14,
-              backgroundColor: const Color(0xFF1B7A43),
-              child: Text(initial, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700)),
+    final displayName = auth.profile?.displayName ?? 'Account';
+    final shortName = displayName.length > 16 ? '${displayName.substring(0, 14)}…' : displayName;
+    final initial = shortName[0].toUpperCase();
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 200),
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          onTap: () => UserState.read(context).signOut(),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+              color: const Color(0xFFECFDF5),
+              borderRadius: BorderRadius.circular(24),
             ),
-            const SizedBox(width: 8),
-            Text('Hello $name', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: Color(0xFF111827))),
-            const SizedBox(width: 4),
-            const Icon(Icons.keyboard_arrow_down, size: 16, color: Color(0xFF6B7280)),
-          ]),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              CircleAvatar(
+                radius: 14,
+                backgroundColor: const Color(0xFF1B7A43),
+                child: Text(initial, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700)),
+              ),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  'Hello $shortName',
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: Color(0xFF111827)),
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1,
+                ),
+              ),
+              const SizedBox(width: 4),
+              const Icon(Icons.keyboard_arrow_down, size: 16, color: Color(0xFF6B7280)),
+            ]),
+          ),
         ),
       ),
     );

@@ -2998,7 +2998,9 @@ class _DesktopProfileButton extends StatelessWidget {
     final shortName =
         displayName.length > 16 ? '${displayName.substring(0, 14)}…' : displayName;
 
-    return PopupMenuButton<String>(
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 200),
+      child: PopupMenuButton<String>(
       offset: const Offset(0, 52),
       tooltip: '',
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -3063,12 +3065,16 @@ class _DesktopProfileButton extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 9),
-            Text(
-              'Hello $shortName',
-              style: const TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                color: Color(0xFF111827),
+            Flexible(
+              child: Text(
+                'Hello $shortName',
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF111827),
+                ),
+                overflow: TextOverflow.ellipsis,
+                maxLines: 1,
               ),
             ),
             const SizedBox(width: 4),
@@ -3076,7 +3082,7 @@ class _DesktopProfileButton extends StatelessWidget {
           ],
         ),
       ),
-    );
+    ));
   }
 }
 

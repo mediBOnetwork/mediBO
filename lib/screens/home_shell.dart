@@ -335,9 +335,21 @@ class _HomeShellState extends State<HomeShell> {
                 )
               else
                 _DesktopHeader(
-                  searchCtrl: _searchCtrl,
-                  isLoading: _searchLoading,
                   scrolled: _desktopScrolled,
+                  onHome: onLogoTap,
+                  logoTooltip: '',
+                  onBulk: () => _setIndex(2),
+                  onOrders: () => _setIndex(1),
+                  onCart: () => setState(() => _cartOpen = true),
+                  onLogin: () => setState(() => _loginOpen = true),
+                  index: _index,
+                  cartOpen: _cartOpen,
+                ),
+              // ── Full-width search row (non-admin desktop only) ──────────────
+              if (!isAdmin)
+                _DesktopSearchRow(
+                  controller: _searchCtrl,
+                  isLoading: _searchLoading,
                   onSearch: (v) => setState(() {
                     final q = v.trim();
                     _category = 'All';
@@ -350,14 +362,13 @@ class _HomeShellState extends State<HomeShell> {
                     }
                   }),
                   onScrollToResults: () => setState(() => _scrollTrigger++),
-                  onHome: onLogoTap,
-                  logoTooltip: '',
-                  onBulk: () => _setIndex(2),
-                  onOrders: () => _setIndex(1),
-                  onCart: () => setState(() => _cartOpen = true),
-                  onLogin: () => setState(() => _loginOpen = true),
-                  index: _index,
-                  cartOpen: _cartOpen,
+                ),
+              // ── Horizontal category chips (non-admin, storefront only) ──────
+              if (!isAdmin && _index == 0)
+                _MobileCategoryChips(
+                  meta: _desktopMeta,
+                  selected: _category,
+                  onCategoryTap: (key) => _selectCategory(key),
                 ),
               Expanded(
                 // NotificationListener only fires setState when crossing the
@@ -371,22 +382,9 @@ class _HomeShellState extends State<HomeShell> {
                     }
                     return false;
                   },
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      if (_index == 0)
-                        _DesktopCategorySidebar(
-                          meta: _desktopMeta,
-                          selected: _category,
-                          onCategorySelected: _selectCategory,
-                        ),
-                      Expanded(
-                        child: _FadingIndexedStack(
-                          index: _index,
-                          children: pages,
-                        ),
-                      ),
-                    ],
+                  child: _FadingIndexedStack(
+                    index: _index,
+                    children: pages,
                   ),
                 ),
               ),
@@ -2668,12 +2666,8 @@ class _WebDiscountBarState extends State<_WebDiscountBar>
 
 // ─────────────────────── Desktop single-row header ───────────────────────
 
-class _DesktopHeader extends StatefulWidget {
-  final TextEditingController searchCtrl;
-  final bool isLoading;
+class _DesktopHeader extends StatelessWidget {
   final bool scrolled;
-  final ValueChanged<String> onSearch;
-  final VoidCallback onScrollToResults;
   final VoidCallback onHome;
   final String logoTooltip;
   final VoidCallback onBulk;
@@ -2684,10 +2678,6 @@ class _DesktopHeader extends StatefulWidget {
   final bool cartOpen;
 
   const _DesktopHeader({
-    required this.searchCtrl,
-    required this.isLoading,
-    required this.onSearch,
-    required this.onScrollToResults,
     required this.onHome,
     required this.logoTooltip,
     required this.onBulk,
@@ -2700,65 +2690,15 @@ class _DesktopHeader extends StatefulWidget {
   });
 
   @override
-  State<_DesktopHeader> createState() => _DesktopHeaderState();
-}
-
-class _DesktopHeaderState extends State<_DesktopHeader> {
-  Timer? _debounce;
-  bool _hasText = false;
-
-  @override
-  void initState() {
-    super.initState();
-    widget.searchCtrl.addListener(_onControllerChange);
-    _hasText = widget.searchCtrl.text.isNotEmpty;
-  }
-
-  @override
-  void dispose() {
-    widget.searchCtrl.removeListener(_onControllerChange);
-    _debounce?.cancel();
-    super.dispose();
-  }
-
-  void _onControllerChange() {
-    final hasText = widget.searchCtrl.text.isNotEmpty;
-    if (hasText != _hasText) setState(() => _hasText = hasText);
-  }
-
-  void _onChanged(String v) {
-    _debounce?.cancel();
-    _debounce = Timer(const Duration(milliseconds: 300), () {
-      widget.onSearch(v);
-    });
-  }
-
-  void _submitNow() {
-    _debounce?.cancel();
-    final text = widget.searchCtrl.text;
-    widget.onSearch(text);
-    if (text.trim().length >= 2) widget.onScrollToResults();
-    FocusManager.instance.primaryFocus?.unfocus();
-  }
-
-  void _clearSearch() {
-    _debounce?.cancel();
-    widget.searchCtrl.clear();
-    widget.onSearch('');
-    FocusManager.instance.primaryFocus?.unfocus();
-  }
-
-  @override
   Widget build(BuildContext context) {
     final cartItems = AppState.of(context).distinctItems;
-    final isBulk = widget.index == 2 && !widget.cartOpen;
-    final isOrders = widget.index == 1 && !widget.cartOpen;
+    final isBulk = index == 2 && !cartOpen;
+    final isOrders = index == 1 && !cartOpen;
 
     final shadow = BoxShadow(
-      color: Colors.black.withValues(
-          alpha: widget.scrolled ? 0.11 : 0.04),
-      blurRadius: widget.scrolled ? 14.0 : 4.0,
-      offset: widget.scrolled ? const Offset(0, 4) : const Offset(0, 1),
+      color: Colors.black.withValues(alpha: scrolled ? 0.11 : 0.04),
+      blurRadius: scrolled ? 14.0 : 4.0,
+      offset: scrolled ? const Offset(0, 4) : const Offset(0, 1),
     );
     return AnimatedContainer(
       duration: const Duration(milliseconds: 220),
@@ -2770,171 +2710,78 @@ class _DesktopHeaderState extends State<_DesktopHeader> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          // 1. Logo — 250px, padded 24px left, aligns with category sidebar
-          SizedBox(
-            width: 250,
-            child: Padding(
-              padding: const EdgeInsets.only(left: 24),
-              child: Tooltip(
-                message: widget.logoTooltip,
-                child: MouseRegion(
-                  cursor: SystemMouseCursors.click,
-                  child: GestureDetector(
-                    onTap: widget.onHome,
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          width: 40,
-                          height: 40,
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF1B5E20),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: const Icon(Icons.add, color: Colors.white, size: 24),
+          // 1. Logo — padded 24px left
+          Padding(
+            padding: const EdgeInsets.only(left: 24),
+            child: Tooltip(
+              message: logoTooltip,
+              child: MouseRegion(
+                cursor: SystemMouseCursors.click,
+                child: GestureDetector(
+                  onTap: onHome,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 40,
+                        height: 40,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF1B5E20),
+                          borderRadius: BorderRadius.circular(8),
                         ),
-                        const SizedBox(width: 10),
-                        RichText(
-                          text: const TextSpan(
-                            children: [
-                              TextSpan(
-                                text: 'medi',
-                                style: TextStyle(
-                                  fontSize: 22,
-                                  fontWeight: FontWeight.w700,
-                                  color: Color(0xFF1B5E20),
-                                  letterSpacing: -0.3,
-                                ),
+                        child: const Icon(Icons.add, color: Colors.white, size: 24),
+                      ),
+                      const SizedBox(width: 10),
+                      RichText(
+                        text: const TextSpan(
+                          children: [
+                            TextSpan(
+                              text: 'medi',
+                              style: TextStyle(
+                                fontSize: 22,
+                                fontWeight: FontWeight.w700,
+                                color: Color(0xFF1B5E20),
+                                letterSpacing: -0.3,
                               ),
-                              TextSpan(
-                                text: 'BO',
-                                style: TextStyle(
-                                  fontSize: 22,
-                                  fontWeight: FontWeight.w800,
-                                  color: Color(0xFF4CAF50),
-                                  letterSpacing: -0.3,
-                                ),
+                            ),
+                            TextSpan(
+                              text: 'BO',
+                              style: TextStyle(
+                                fontSize: 22,
+                                fontWeight: FontWeight.w800,
+                                color: Color(0xFF4CAF50),
+                                letterSpacing: -0.3,
                               ),
-                            ],
-                          ),
+                            ),
+                          ],
                         ),
-                      ],
-                    ),
+                      ),
+                    ],
                   ),
                 ),
               ),
             ),
           ),
-          // 2. Search bar — fills all remaining space, 24px margin each side
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24),
-              child: Container(
-                height: 46,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF9FAFB),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: const Color(0xFFD1D5DB)),
-                ),
-                child: Row(
-                  children: [
-                    const Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 14),
-                      child: Icon(Icons.search,
-                          color: Color(0xFF9CA3AF), size: 20),
-                    ),
-                    Expanded(
-                      child: TextField(
-                        controller: widget.searchCtrl,
-                        onChanged: _onChanged,
-                        onSubmitted: (_) => _submitNow(),
-                        textInputAction: TextInputAction.search,
-                        autocorrect: false,
-                        enableSuggestions: false,
-                        keyboardType: TextInputType.text,
-                        style: const TextStyle(fontSize: 14, color: Brand.ink),
-                        decoration: const InputDecoration(
-                          border: InputBorder.none,
-                          enabledBorder: InputBorder.none,
-                          focusedBorder: InputBorder.none,
-                          hintText: 'Search for medicines',
-                          hintStyle:
-                              TextStyle(color: Brand.inkMuted, fontSize: 14),
-                          isDense: true,
-                          contentPadding: EdgeInsets.symmetric(vertical: 14),
-                          filled: false,
-                        ),
-                      ),
-                    ),
-                    if (widget.isLoading)
-                      const Padding(
-                        padding: EdgeInsets.symmetric(horizontal: 10),
-                        child: SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(
-                              strokeWidth: 2, color: Brand.green),
-                        ),
-                      )
-                    else if (_hasText)
-                      IconButton(
-                        onPressed: _clearSearch,
-                        icon: const Icon(Icons.close,
-                            size: 18, color: Color(0xFF6B7280)),
-                        visualDensity: VisualDensity.compact,
-                        padding: EdgeInsets.zero,
-                        constraints:
-                            const BoxConstraints(minWidth: 32, minHeight: 32),
-                      ),
-                    // Green Search button attached to right edge
-                    GestureDetector(
-                      onTap: _submitNow,
-                      child: Container(
-                        height: double.infinity,
-                        padding: const EdgeInsets.symmetric(horizontal: 22),
-                        decoration: const BoxDecoration(
-                          color: Brand.green,
-                          borderRadius: BorderRadius.only(
-                            topRight: Radius.circular(9),
-                            bottomRight: Radius.circular(9),
-                          ),
-                        ),
-                        child: const Center(
-                          child: Text(
-                            'Search',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 14,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
+          const Spacer(),
           // Customer nav: Bulk Upload, Orders, Cart
           _DesktopNavLink(
             label: 'Bulk Upload',
             icon: Icons.upload_file_outlined,
             selected: isBulk,
-            onTap: widget.onBulk,
+            onTap: onBulk,
           ),
           const SizedBox(width: 4),
           _DesktopNavLink(
             label: 'Orders',
             icon: Icons.receipt_long_outlined,
             selected: isOrders,
-            onTap: widget.onOrders,
+            onTap: onOrders,
           ),
           const SizedBox(width: 8),
           // Cart
           PressEffect(
             child: InkWell(
-              onTap: widget.onCart,
+              onTap: onCart,
               borderRadius: BorderRadius.circular(8),
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
@@ -2964,9 +2811,161 @@ class _DesktopHeaderState extends State<_DesktopHeader> {
           ),
           const SizedBox(width: 16),
           // 6. Auth button (Login or profile dropdown) — far right
-          _DesktopProfileButton(onLogin: widget.onLogin),
+          _DesktopProfileButton(onLogin: onLogin),
           const SizedBox(width: 24),
         ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────── Desktop search row ─────────────────────────────
+
+class _DesktopSearchRow extends StatefulWidget {
+  final TextEditingController controller;
+  final bool isLoading;
+  final ValueChanged<String> onSearch;
+  final VoidCallback onScrollToResults;
+
+  const _DesktopSearchRow({
+    required this.controller,
+    required this.isLoading,
+    required this.onSearch,
+    required this.onScrollToResults,
+  });
+
+  @override
+  State<_DesktopSearchRow> createState() => _DesktopSearchRowState();
+}
+
+class _DesktopSearchRowState extends State<_DesktopSearchRow> {
+  Timer? _debounce;
+  bool _hasText = false;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.controller.addListener(_onControllerChange);
+    _hasText = widget.controller.text.isNotEmpty;
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeListener(_onControllerChange);
+    _debounce?.cancel();
+    super.dispose();
+  }
+
+  void _onControllerChange() {
+    final hasText = widget.controller.text.isNotEmpty;
+    if (hasText != _hasText) setState(() => _hasText = hasText);
+  }
+
+  void _onChanged(String v) {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 300), () {
+      widget.onSearch(v);
+    });
+  }
+
+  void _submitNow() {
+    _debounce?.cancel();
+    final text = widget.controller.text;
+    widget.onSearch(text);
+    if (text.trim().length >= 2) widget.onScrollToResults();
+    FocusManager.instance.primaryFocus?.unfocus();
+  }
+
+  void _clearSearch() {
+    _debounce?.cancel();
+    widget.controller.clear();
+    widget.onSearch('');
+    FocusManager.instance.primaryFocus?.unfocus();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: Colors.white,
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+      child: Container(
+        height: 46,
+        decoration: BoxDecoration(
+          color: const Color(0xFFF9FAFB),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: const Color(0xFFD1D5DB)),
+        ),
+        child: Row(
+          children: [
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 14),
+              child: Icon(Icons.search, color: Color(0xFF9CA3AF), size: 20),
+            ),
+            Expanded(
+              child: TextField(
+                controller: widget.controller,
+                onChanged: _onChanged,
+                onSubmitted: (_) => _submitNow(),
+                textInputAction: TextInputAction.search,
+                autocorrect: false,
+                enableSuggestions: false,
+                keyboardType: TextInputType.text,
+                style: const TextStyle(fontSize: 14, color: Brand.ink),
+                decoration: const InputDecoration(
+                  border: InputBorder.none,
+                  enabledBorder: InputBorder.none,
+                  focusedBorder: InputBorder.none,
+                  hintText: 'Search for medicines',
+                  hintStyle: TextStyle(color: Brand.inkMuted, fontSize: 14),
+                  isDense: true,
+                  contentPadding: EdgeInsets.symmetric(vertical: 14),
+                  filled: false,
+                ),
+              ),
+            ),
+            if (widget.isLoading)
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 10),
+                child: SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: Brand.green),
+                ),
+              )
+            else if (_hasText)
+              IconButton(
+                onPressed: _clearSearch,
+                icon: const Icon(Icons.close, size: 18, color: Color(0xFF6B7280)),
+                visualDensity: VisualDensity.compact,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+              ),
+            GestureDetector(
+              onTap: _submitNow,
+              child: Container(
+                height: double.infinity,
+                padding: const EdgeInsets.symmetric(horizontal: 22),
+                decoration: const BoxDecoration(
+                  color: Brand.green,
+                  borderRadius: BorderRadius.only(
+                    topRight: Radius.circular(9),
+                    bottomRight: Radius.circular(9),
+                  ),
+                ),
+                child: const Center(
+                  child: Text(
+                    'Search',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

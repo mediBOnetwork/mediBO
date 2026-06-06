@@ -4,7 +4,6 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'app_state.dart';
 import 'models/cart_model.dart';
-import 'screens/admin/admin_shell.dart';
 import 'screens/auth/login_screen.dart';
 import 'screens/home_shell.dart';
 import 'screens/about_screen.dart';
@@ -92,14 +91,6 @@ class _AppRoot extends StatelessWidget {
           return const _SplashScreen();
         }
 
-        // Admin users: text selection + admin scroll behavior (visible scrollbar
-        // thumbs + all device kinds for wheel/trackpad/mouse drag).
-        if (auth.isAdmin) return const SelectionArea(
-          child: ScrollConfiguration(
-            behavior: AdminScrollBehavior(),
-            child: AdminShell(),
-          ),
-        );
         return const HomeShell();
       },
     );

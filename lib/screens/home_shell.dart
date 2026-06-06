@@ -10,6 +10,9 @@ import '../url_sync.dart';
 import '../user_state.dart';
 import '../util.dart';
 import '../widgets/animations.dart';
+import 'admin/admin_add_medicine_screen.dart';
+import 'admin/admin_customer_screen.dart';
+import 'admin/admin_pending_bills_screen.dart';
 import 'auth/login_screen.dart';
 import 'bulk_upload_screen.dart';
 import 'cart_screen.dart';
@@ -164,19 +167,10 @@ class _HomeShellState extends State<HomeShell> {
         final isAdmin = UserState.of(context).isAdmin;
 
         void onLogoTap() {
-          if (_index == 0) {
-            // On customer home: admin goes back to admin shell, non-admin stays
-            if (isAdmin && Navigator.of(context).canPop()) {
-              Navigator.of(context).pop();
-            }
-          } else {
-            _goHome();
-          }
+          if (_index != 0) _goHome();
         }
 
-        final logoTooltip = _index == 0
-            ? (isAdmin ? 'Go to Admin Dashboard' : '')
-            : 'Go to Home';
+        final logoTooltip = _index == 0 ? '' : 'Go to Home';
 
         // IndexedStack keeps all screen States alive — no re-fetch on tab switch.
         final pages = [
@@ -218,6 +212,7 @@ class _HomeShellState extends State<HomeShell> {
   // ─── Mobile / tablet layout (< 900px) ────────────────────────────────────
 
   Widget _buildMobile(List<Widget> pages, VoidCallback onLogoTap, String logoTooltip) {
+    final isAdmin = UserState.of(context).isAdmin;
     return Scaffold(
       backgroundColor: Colors.white,
       bottomNavigationBar: _cartOpen
@@ -227,14 +222,30 @@ class _HomeShellState extends State<HomeShell> {
               cartOpen: _cartOpen,
               onCartTap: () => setState(() => _cartOpen = true),
               onNavTap: (i) {
-                switch (i) {
-                  case 0:
-                  case 1:
-                    _setIndex(0);
-                  case 2:
-                    _setIndex(1);
-                  case 3:
-                    _setIndex(2);
+                if (isAdmin) {
+                  switch (i) {
+                    case 0:
+                      _setIndex(0);
+                    case 1:
+                      Navigator.push(context, MaterialPageRoute(
+                        builder: (_) => const AdminAddMedicineScreen()));
+                    case 2:
+                      Navigator.push(context, MaterialPageRoute(
+                        builder: (_) => const AdminCustomerScreen()));
+                    case 3:
+                      Navigator.push(context, MaterialPageRoute(
+                        builder: (_) => const PendingBillsScreen()));
+                  }
+                } else {
+                  switch (i) {
+                    case 0:
+                    case 1:
+                      _setIndex(0);
+                    case 2:
+                      _setIndex(1);
+                    case 3:
+                      _setIndex(2);
+                  }
                 }
               },
             ),
@@ -2103,7 +2114,7 @@ class _MobileBottomBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final cart = AppState.of(context);
     final isAdmin = UserState.of(context).isAdmin;
-    final bottomNavIndex = index == 1 ? 2 : index == 2 ? 3 : 0;
+    final bottomNavIndex = isAdmin ? 0 : (index == 1 ? 2 : index == 2 ? 3 : 0);
     return BottomNavigationBar(
           currentIndex: bottomNavIndex,
           type: BottomNavigationBarType.fixed,
@@ -2113,7 +2124,28 @@ class _MobileBottomBar extends StatelessWidget {
           unselectedFontSize: 10,
           elevation: 8,
           onTap: onNavTap,
-          items: [
+          items: isAdmin ? const [
+            BottomNavigationBarItem(
+              icon: Icon(Icons.home_outlined),
+              activeIcon: Icon(Icons.home),
+              label: 'Home',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.medication_outlined),
+              activeIcon: Icon(Icons.medication),
+              label: 'Add Med',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.people_outline),
+              activeIcon: Icon(Icons.people),
+              label: 'Customers',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.inbox_outlined),
+              activeIcon: Icon(Icons.inbox),
+              label: 'Bills',
+            ),
+          ] : [
             const BottomNavigationBarItem(
               icon: Icon(Icons.home_outlined),
               activeIcon: Icon(Icons.home),
@@ -2126,12 +2158,12 @@ class _MobileBottomBar extends StatelessWidget {
             ),
             BottomNavigationBarItem(
               icon: Badge(
-                isLabelVisible: !isAdmin && cart.orders.isNotEmpty,
+                isLabelVisible: cart.orders.isNotEmpty,
                 label: Text('${cart.orders.length}'),
                 child: const Icon(Icons.receipt_long_outlined),
               ),
               activeIcon: Badge(
-                isLabelVisible: !isAdmin && cart.orders.isNotEmpty,
+                isLabelVisible: cart.orders.isNotEmpty,
                 label: Text('${cart.orders.length}'),
                 child: const Icon(Icons.receipt_long),
               ),
@@ -2903,24 +2935,56 @@ class _DesktopHeaderState extends State<_DesktopHeader> {
               ),
             ),
           ),
-          // 3. Bulk Upload
-          _DesktopNavLink(
-            label: 'Bulk Upload',
-            icon: Icons.upload_file_outlined,
-            selected: isBulk,
-            onTap: widget.onBulk,
-          ),
-          const SizedBox(width: 4),
-          // 4. Orders
-          _DesktopNavLink(
-            label: 'Orders',
-            icon: Icons.receipt_long_outlined,
-            selected: isOrders,
-            onTap: widget.onOrders,
-          ),
-          if (!isAdmin) ...[
+          if (isAdmin) ...[
+            // Admin nav: Add Medicine, Suppliers, Customers, Bills
+            _DesktopNavLink(
+              label: 'Add Medicine',
+              icon: Icons.medication_outlined,
+              selected: false,
+              onTap: () => Navigator.push(context, MaterialPageRoute(
+                builder: (_) => const AdminAddMedicineScreen())),
+            ),
+            const SizedBox(width: 4),
+            _DesktopNavLink(
+              label: 'Suppliers',
+              icon: Icons.inventory_2_outlined,
+              selected: false,
+              onTap: () => Navigator.push(context, MaterialPageRoute(
+                builder: (_) => const _AdminSuppliersScreen())),
+            ),
+            const SizedBox(width: 4),
+            _DesktopNavLink(
+              label: 'Customers',
+              icon: Icons.people_outline,
+              selected: false,
+              onTap: () => Navigator.push(context, MaterialPageRoute(
+                builder: (_) => const AdminCustomerScreen())),
+            ),
+            const SizedBox(width: 4),
+            _DesktopNavLink(
+              label: 'Bills',
+              icon: Icons.inbox_outlined,
+              selected: false,
+              onTap: () => Navigator.push(context, MaterialPageRoute(
+                builder: (_) => const PendingBillsScreen())),
+            ),
+          ] else ...[
+            // Customer nav: Bulk Upload, Orders, Cart
+            _DesktopNavLink(
+              label: 'Bulk Upload',
+              icon: Icons.upload_file_outlined,
+              selected: isBulk,
+              onTap: widget.onBulk,
+            ),
+            const SizedBox(width: 4),
+            _DesktopNavLink(
+              label: 'Orders',
+              icon: Icons.receipt_long_outlined,
+              selected: isOrders,
+              onTap: widget.onOrders,
+            ),
             const SizedBox(width: 8),
-            // 5. Cart (hidden for admins — admins don't shop)
+            // Cart
             PressEffect(
               child: InkWell(
                 onTap: widget.onCart,
@@ -3518,6 +3582,51 @@ class _FadingIndexedStackState extends State<_FadingIndexedStack>
     return FadeTransition(
       opacity: _fade,
       child: IndexedStack(index: _index, children: widget.children),
+    );
+  }
+}
+
+// ─────────────────────── Admin suppliers placeholder ──────────────────────
+
+class _AdminSuppliersScreen extends StatelessWidget {
+  const _AdminSuppliersScreen();
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFF5F6F8),
+      appBar: AppBar(
+        backgroundColor: Colors.white,
+        elevation: 0,
+        title: const Text(
+          'Supplier Dashboard',
+          style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: Color(0xFF111827)),
+        ),
+        iconTheme: const IconThemeData(color: Color(0xFF374151)),
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(1),
+          child: Container(height: 1, color: const Color(0xFFE5E7EB)),
+        ),
+      ),
+      body: const Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.inventory_2_outlined, size: 48, color: Color(0xFF1B7A43)),
+            SizedBox(height: 16),
+            Text(
+              'Supplier Dashboard',
+              style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: Color(0xFF111827)),
+            ),
+            SizedBox(height: 10),
+            Text(
+              'Coming soon — this section will be built out.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 14, color: Color(0xFF6B7280)),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

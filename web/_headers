@@ -26,9 +26,10 @@
   Cache-Control: no-cache, no-store, must-revalidate
   Pragma: no-cache
 
-# ── App bundle — always revalidate (no content hash in filename) ────────────
+# ── App bundle — no cache (Cloudflare overrides revalidate-only for .js) ────
 /main.dart.js
-  Cache-Control: no-cache, must-revalidate
+  Cache-Control: no-cache, no-store, must-revalidate
+  Pragma: no-cache
 
 # ── Hashed static assets — fully immutable ─────────────────────────────────
 /assets/**

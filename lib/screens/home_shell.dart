@@ -14,6 +14,7 @@ import 'admin/admin_add_medicine_screen.dart';
 import 'admin/admin_customer_screen.dart';
 import 'admin/admin_dashboard_screen.dart';
 import 'admin/admin_pending_bills_screen.dart';
+import 'admin/admin_alert_overlay.dart';
 import 'admin/admin_shell.dart';
 import 'auth/login_screen.dart';
 import 'bulk_upload_screen.dart';
@@ -226,8 +227,16 @@ class _HomeShellState extends State<HomeShell> {
 
         final isAdmin = UserState.of(context).isAdmin;
 
-        if (isDesktop) return _buildDesktop(pages, onLogoTap, isAdmin);
-        return _buildMobile(pages, onLogoTap, isAdmin);
+        // Wrap admin layouts in AdminAlertOverlay so realtime channels +
+        // FCM handler are alive as long as the admin shell is on screen.
+        final shell = isDesktop
+            ? _buildDesktop(pages, onLogoTap, isAdmin)
+            : _buildMobile(pages, onLogoTap, isAdmin);
+        if (!isAdmin) return shell;
+        return AdminAlertOverlay(
+          onOrderTap: () => _handleAdminNav('customers'),
+          child: shell,
+        );
       },
     );
   }

@@ -1,9 +1,13 @@
+// ignore_for_file: avoid_web_libraries_in_flutter
 import 'dart:async';
+import 'dart:convert';
 import 'dart:html' as html;
 
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../config/api_keys.dart';
 import '../../util.dart';
 import '../bulk_upload_screen.dart';
 
@@ -2792,70 +2796,19 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   }
 
   Future<void> _pickAndImportCsv() async {
-    try {
-      // Create file input element and trigger click
-      final input = html.FileUploadInputElement()..accept = '.csv,text/csv';
-      input.click();
-      await input.onChange.first;
-      final file = input.files?.first;
-      if (file == null) return;
-
-      final reader = html.FileReader();
-      reader.readAsText(file);
-      await reader.onLoad.first;
-      final csvText = reader.result as String;
-
-      final lines = csvText.split(RegExp(r'\r?\n'));
-      if (lines.isEmpty) return;
-
-      // Parse header
-      final header = lines.first.split(',').map((h) => h.trim().toLowerCase()).toList();
-      final nameIdx  = _csvCol(header, ['name', 'full_name', 'fullname']);
-      final emailIdx = _csvCol(header, ['email', 'email_address', 'emailaddress']);
-      final mobIdx   = _csvCol(header, ['mobile', 'phone', 'mobile_number', 'phonenumber', 'contact']);
-
-      int imported = 0, skipped = 0;
-      final toInsert = <Map<String, dynamic>>[];
-
-      for (final raw in lines.skip(1)) {
-        final row = raw.split(',').map((c) => c.trim()).toList();
-        if (row.every((c) => c.isEmpty)) { skipped++; continue; }
-        final name  = nameIdx  != null && nameIdx  < row.length ? row[nameIdx]  : '';
-        final email = emailIdx != null && emailIdx < row.length ? row[emailIdx] : '';
-        final mob   = mobIdx   != null && mobIdx   < row.length ? row[mobIdx]   : '';
-        if (name.isEmpty && email.isEmpty && mob.isEmpty) { skipped++; continue; }
-        toInsert.add({'name': name, 'email': email, 'mobile': mob, 'source': 'csv'});
-        imported++;
-      }
-
-      if (toInsert.isNotEmpty) {
-        await Supabase.instance.client.from('leads').insert(toInsert);
-      }
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Imported $imported leads'
-              '${skipped > 0 ? ' ($skipped skipped)' : ''}'),
-          backgroundColor: const Color(0xFF1B7A43),
-        ));
-        _loadLeads();
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('CSV import failed: $e'),
-          backgroundColor: const Color(0xFFDC2626),
-        ));
-      }
-    }
-  }
-
-  int? _csvCol(List<String> header, List<String> names) {
-    for (final n in names) {
-      final i = header.indexOf(n);
-      if (i != -1) return i;
-    }
-    return null;
+    final input = html.FileUploadInputElement()..accept = '.csv,text/csv';
+    input.click();
+    await input.onChange.first;
+    final file = input.files?.first;
+    if (file == null || !mounted) return;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => _CsvImportDialog(
+        file: file,
+        onImported: () { if (mounted) _loadLeads(); },
+      ),
+    );
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -3969,5 +3922,320 @@ class _CustomerEditDialogState extends State<_CustomerEditDialog> {
         ]),
       ),
     );
+  }
+}
+
+// ─── CSV Import Dialog ────────────────────────────────────────────────────────
+
+class _CsvColMap {
+  final int index;
+  final String header;
+  final List<String> samples;
+  String mappedTo; // 'name' | 'email' | 'mobile' | 'ignore'
+  _CsvColMap({required this.index, required this.header, required this.samples, required this.mappedTo});
+}
+
+enum _CsvStep { reading, mapping, importing }
+
+class _CsvImportDialog extends StatefulWidget {
+  final html.File file;
+  final VoidCallback onImported;
+  const _CsvImportDialog({required this.file, required this.onImported});
+
+  @override
+  State<_CsvImportDialog> createState() => _CsvImportDialogState();
+}
+
+class _CsvImportDialogState extends State<_CsvImportDialog> {
+  _CsvStep _step = _CsvStep.reading;
+  String _statusMsg = 'Reading file…';
+  List<_CsvColMap> _cols = [];
+  List<List<String>> _dataRows = [];
+  String? _error;
+
+  static const _leadFields = ['name', 'email', 'mobile', 'ignore'];
+
+  @override
+  void initState() {
+    super.initState();
+    _readAndMap();
+  }
+
+  Future<void> _readAndMap() async {
+    try {
+      final reader = html.FileReader();
+      reader.readAsText(widget.file);
+      await reader.onLoad.first;
+      final csvText = reader.result as String;
+
+      final lines = csvText.split(RegExp(r'\r?\n'));
+      if (lines.isEmpty || lines.first.trim().isEmpty) {
+        setState(() { _error = 'The CSV file is empty.'; });
+        return;
+      }
+
+      final headers = lines.first.split(',').map((h) => h.trim()).toList();
+      final dataRows = <List<String>>[];
+      for (final line in lines.skip(1)) {
+        if (line.trim().isEmpty) continue;
+        dataRows.add(line.split(',').map((c) => c.trim()).toList());
+      }
+
+      if (dataRows.isEmpty) {
+        setState(() { _error = 'No data rows found (only a header row).'; });
+        return;
+      }
+
+      setState(() { _statusMsg = 'Mapping columns with Gemini…'; });
+
+      // Build Gemini prompt
+      final entries = <Map<String, dynamic>>[];
+      for (int i = 0; i < headers.length; i++) {
+        final samples = dataRows
+            .map((r) => i < r.length ? r[i] : '')
+            .where((v) => v.isNotEmpty)
+            .take(5)
+            .toList();
+        entries.add({'index': i, 'header': headers[i], 'samples': samples});
+      }
+      final prompt =
+          'Map each CSV column to the correct lead field.\n\n'
+          'Lead fields:\n'
+          '- name: full name of the lead\n'
+          '- email: email address\n'
+          '- mobile: phone/mobile number\n'
+          '- ignore: skip this column\n\n'
+          'Columns:\n${jsonEncode(entries)}\n\n'
+          'Return ONLY a JSON array (no markdown): '
+          '[{"index":0,"mapped_to":"name"},...]';
+
+      final idxMap = <int, String>{};
+      try {
+        final resp = await http.post(
+          Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$geminiApiKey'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({'contents': [{'parts': [{'text': prompt}]}], 'generationConfig': {'temperature': 0.1, 'maxOutputTokens': 512}}),
+        ).timeout(const Duration(seconds: 20));
+        if (resp.statusCode == 200) {
+          final body = jsonDecode(resp.body) as Map<String, dynamic>;
+          final txt = ((body['candidates'] as List?)?.firstOrNull?['content']?['parts'] as List?)
+              ?.firstOrNull?['text'] as String? ?? '';
+          final jm = RegExp(r'\[[\s\S]*\]').firstMatch(txt);
+          if (jm != null) {
+            final mappings = jsonDecode(jm.group(0)!) as List<dynamic>;
+            for (final m in mappings) {
+              final mm = m as Map<String, dynamic>;
+              final idx = mm['index'] as int?;
+              final mapped = mm['mapped_to'] as String? ?? 'ignore';
+              if (idx != null) idxMap[idx] = _leadFields.contains(mapped) ? mapped : 'ignore';
+            }
+          }
+        }
+      } catch (_) {} // Gemini failure: fall back to heuristic
+
+      // Heuristic fallback for any unmapped column
+      for (int i = 0; i < headers.length; i++) {
+        if (idxMap.containsKey(i)) continue;
+        final h = headers[i].toLowerCase().replaceAll(RegExp(r'[\s_\-]+'), '');
+        if (['name', 'fullname', 'customername', 'leadname'].contains(h)) {
+          idxMap[i] = 'name';
+        } else if (['email', 'emailaddress', 'mail'].contains(h)) {
+          idxMap[i] = 'email';
+        } else if (['mobile', 'phone', 'mobilenumber', 'phonenumber', 'contact', 'cell'].contains(h)) {
+          idxMap[i] = 'mobile';
+        } else {
+          idxMap[i] = 'ignore';
+        }
+      }
+
+      final cols = List.generate(headers.length, (i) {
+        final samples = dataRows
+            .map((r) => i < r.length ? r[i] : '')
+            .where((v) => v.isNotEmpty)
+            .take(3)
+            .toList();
+        return _CsvColMap(index: i, header: headers[i], samples: samples, mappedTo: idxMap[i] ?? 'ignore');
+      });
+
+      setState(() {
+        _cols = cols;
+        _dataRows = dataRows;
+        _step = _CsvStep.mapping;
+      });
+    } catch (e) {
+      setState(() { _error = 'Failed to read CSV: $e'; });
+    }
+  }
+
+  Future<void> _doImport() async {
+    setState(() { _step = _CsvStep.importing; });
+    try {
+      final nameCol   = _cols.firstWhereOrNull((c) => c.mappedTo == 'name');
+      final emailCol  = _cols.firstWhereOrNull((c) => c.mappedTo == 'email');
+      final mobileCol = _cols.firstWhereOrNull((c) => c.mappedTo == 'mobile');
+
+      final toInsert = <Map<String, dynamic>>[];
+      for (final row in _dataRows) {
+        final name   = nameCol   != null && nameCol.index   < row.length ? row[nameCol.index]   : '';
+        final email  = emailCol  != null && emailCol.index  < row.length ? row[emailCol.index]  : '';
+        final mobile = mobileCol != null && mobileCol.index < row.length ? row[mobileCol.index] : '';
+        if (name.isEmpty && email.isEmpty && mobile.isEmpty) continue;
+        toInsert.add({'name': name, 'email': email, 'mobile': mobile, 'source': 'csv_import', 'status': 'new'});
+      }
+
+      if (toInsert.isNotEmpty) {
+        await Supabase.instance.client.from('leads').insert(toInsert);
+      }
+
+      if (mounted) {
+        Navigator.of(context).pop();
+        widget.onImported();
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Imported ${toInsert.length} lead${toInsert.length == 1 ? '' : 's'}'),
+          backgroundColor: const Color(0xFF1B7A43),
+        ));
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() { _step = _CsvStep.mapping; });
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Import failed: $e'),
+          backgroundColor: const Color(0xFFDC2626),
+        ));
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 480),
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: _error != null ? _buildError() : _buildContent(),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildError() {
+    return Column(mainAxisSize: MainAxisSize.min, children: [
+      const Icon(Icons.error_outline, color: Color(0xFFDC2626), size: 32),
+      const SizedBox(height: 12),
+      Text(_error!, textAlign: TextAlign.center,
+          style: const TextStyle(fontSize: 14, color: Color(0xFF111827))),
+      const SizedBox(height: 16),
+      TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Close')),
+    ]);
+  }
+
+  Widget _buildContent() {
+    if (_step == _CsvStep.reading || _step == _CsvStep.importing) {
+      return Column(mainAxisSize: MainAxisSize.min, children: [
+        const CircularProgressIndicator(color: Color(0xFF1B7A43), strokeWidth: 2),
+        const SizedBox(height: 16),
+        Text(_step == _CsvStep.reading ? _statusMsg : 'Importing…',
+            style: const TextStyle(fontSize: 14, color: Color(0xFF6B7280))),
+      ]);
+    }
+
+    // Mapping step
+    return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+      // Header
+      Row(children: [
+        const Expanded(
+          child: Text('Map CSV Columns',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+        ),
+        IconButton(
+          icon: const Icon(Icons.close, size: 20),
+          onPressed: () => Navigator.of(context).pop(),
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(),
+        ),
+      ]),
+      const SizedBox(height: 4),
+      const Text('Gemini has auto-mapped your columns. Correct any mismatches before importing.',
+          style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+      const SizedBox(height: 16),
+
+      // Column rows
+      ...List.generate(_cols.length, (i) {
+        final col = _cols[i];
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: Row(children: [
+            Expanded(
+              flex: 3,
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(col.header.isNotEmpty ? col.header : 'Column ${i + 1}',
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
+                if (col.samples.isNotEmpty)
+                  Text(col.samples.join(', '),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
+              ]),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              flex: 2,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF5F6F8),
+                  border: Border.all(color: const Color(0xFFE5E7EB)),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<String>(
+                    value: col.mappedTo,
+                    isExpanded: true,
+                    style: const TextStyle(fontSize: 13, color: Color(0xFF111827)),
+                    items: const [
+                      DropdownMenuItem(value: 'name',   child: Text('name')),
+                      DropdownMenuItem(value: 'email',  child: Text('email')),
+                      DropdownMenuItem(value: 'mobile', child: Text('mobile')),
+                      DropdownMenuItem(value: 'ignore', child: Text('ignore')),
+                    ],
+                    onChanged: (v) => setState(() => col.mappedTo = v ?? 'ignore'),
+                  ),
+                ),
+              ),
+            ),
+          ]),
+        );
+      }),
+
+      const SizedBox(height: 8),
+      Text('${_dataRows.length} row${_dataRows.length == 1 ? '' : 's'} will be imported',
+          style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+      const SizedBox(height: 16),
+
+      Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel', style: TextStyle(color: Color(0xFF6B7280))),
+        ),
+        const SizedBox(width: 8),
+        FilledButton(
+          onPressed: _doImport,
+          style: FilledButton.styleFrom(
+            backgroundColor: const Color(0xFF1B7A43),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          ),
+          child: const Text('Import', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+        ),
+      ]),
+    ]);
+  }
+}
+
+extension _ListExt<T> on List<T> {
+  T? firstWhereOrNull(bool Function(T) test) {
+    for (final e in this) { if (test(e)) return e; }
+    return null;
   }
 }

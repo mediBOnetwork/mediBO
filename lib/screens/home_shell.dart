@@ -3535,6 +3535,7 @@ class _AdminMobileBottomBar extends StatelessWidget {
             children: [
               _AdminNavItem(icon: Icons.dashboard_outlined, label: 'Dashboard', onTap: () => _openAdmin(context)),
               _AdminNavItem(icon: Icons.medication_outlined, label: 'Add Medicine', onTap: () => _openAdmin(context, 1)),
+              _AdminNavItem(icon: Icons.inventory_2_outlined, label: 'Suppliers', onTap: () => _openAdmin(context, 2)),
               _AdminNavItem(icon: Icons.people_outline, label: 'Customers', onTap: () => _openAdmin(context, 3)),
               _AdminNavItem(icon: Icons.inbox_outlined, label: 'Bills', onTap: () => _openAdmin(context, 4)),
             ],

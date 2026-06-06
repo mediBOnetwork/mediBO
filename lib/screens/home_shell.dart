@@ -16,6 +16,7 @@ import 'admin/admin_dashboard_screen.dart';
 import 'admin/admin_pending_bills_screen.dart';
 import 'admin/admin_alert_overlay.dart';
 import 'admin/admin_shell.dart';
+import 'admin/admin_supplier_screen.dart';
 import 'auth/login_screen.dart';
 import 'bulk_upload_screen.dart';
 import 'cart_screen.dart';
@@ -220,7 +221,7 @@ class _HomeShellState extends State<HomeShell> {
             child: const AdminDashboardScreen(),
           ),
           const AdminAddMedicineScreen(),
-          const _AdminSuppliersPage(),
+          const AdminSupplierScreen(),
           const AdminCustomerScreen(),
           const PendingBillsScreen(),
         ];

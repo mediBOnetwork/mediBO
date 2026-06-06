@@ -2,10 +2,14 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:html' as html;
+import 'dart:typed_data';
 
+import 'package:archive/archive.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:syncfusion_flutter_pdf/pdf.dart';
+import 'package:xml/xml.dart' as xmlp;
 
 import '../../config/api_keys.dart';
 
@@ -463,9 +467,9 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
             ]),
           ),
           TextButton.icon(
-            onPressed: _pickAndImportSupplierProfileCsv,
+            onPressed: _pickAndImportSupplierProfile,
             icon: const Icon(Icons.upload_file_outlined, size: 16),
-            label: const Text('Import CSV'),
+            label: const Text('Import Supplier'),
             style: TextButton.styleFrom(
               foregroundColor: const Color(0xFF1B7A43),
               textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
@@ -1173,8 +1177,9 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     ]);
   }
 
-  Future<void> _pickAndImportSupplierProfileCsv() async {
-    final input = html.FileUploadInputElement()..accept = '.csv,text/csv';
+  Future<void> _pickAndImportSupplierProfile() async {
+    final input = html.FileUploadInputElement()
+      ..accept = '.csv,.tsv,.txt,.xlsx,.xls,.ods,.docx,.pdf,.jpg,.jpeg,.png,.webp,.heic,.heif,.gif';
     input.click();
     await input.onChange.first;
     final file = input.files?.first;
@@ -1862,7 +1867,7 @@ class _SupCsvImportDialogState extends State<_SupCsvImportDialog> {
   }
 }
 
-// ─── Supplier Profile CSV Import ──────────────────────────────────────────────
+// ─── Supplier Profile Import (CSV / Excel / ODS / PDF / DOCX / Images) ────────
 
 class _SupProfColMap {
   final int index;
@@ -1872,7 +1877,7 @@ class _SupProfColMap {
   _SupProfColMap({required this.index, required this.header, required this.samples, required this.mappedTo});
 }
 
-enum _SupProfStep { reading, mapping, importing, done }
+enum _SupProfStep { reading, mapping, importing }
 
 class _SupProfileImportDialog extends StatefulWidget {
   final html.File file;
@@ -1884,7 +1889,7 @@ class _SupProfileImportDialog extends StatefulWidget {
 
 class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
   _SupProfStep _step = _SupProfStep.reading;
-  String _statusMsg = 'Reading CSV…';
+  String _statusMsg = 'Reading file…';
   List<_SupProfColMap> _cols = [];
   List<List<String>> _dataRows = [];
   String? _error;
@@ -1896,7 +1901,7 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
     'other_contact', 'notes', 'ignore',
   ];
 
-  static String _label(String f) => switch (f) {
+  static String _fieldLabel(String f) => switch (f) {
     'supplier_name'  => 'Supplier Name *',
     'contact_name'   => 'Contact Person',
     'phone'          => 'Phone',
@@ -1918,103 +1923,286 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
   };
 
   @override
-  void initState() { super.initState(); _readAndMap(); }
+  void initState() { super.initState(); _parseAndMap(); }
 
-  Future<void> _readAndMap() async {
+  // ── File parsing (reused from Add-Medicine pipeline) ─────────────────────────
+
+  Future<String> _readAsText(html.File f) async {
+    final r = html.FileReader(); r.readAsText(f); await r.onLoad.first;
+    return (r.result as String).replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+  }
+
+  Future<Uint8List> _readBytes(html.File f) async {
+    final r = html.FileReader(); r.readAsDataUrl(f); await r.onLoad.first;
+    return base64Decode((r.result as String).split(',').last);
+  }
+
+  Future<String> _pdfText(Uint8List bytes) async {
     try {
-      final reader = html.FileReader();
-      reader.readAsText(widget.file);
-      await reader.onLoad.first;
-      final csvText = reader.result as String;
-      final lines = csvText.split(RegExp(r'\r?\n'));
-      if (lines.isEmpty || lines.first.trim().isEmpty) {
-        setState(() { _error = 'The CSV file is empty.'; }); return;
-      }
-      final headers  = lines.first.split(',').map((h) => h.trim()).toList();
-      final dataRows = <List<String>>[];
-      for (final line in lines.skip(1)) {
-        if (line.trim().isEmpty) continue;
-        dataRows.add(line.split(',').map((c) => c.trim()).toList());
-      }
-      if (dataRows.isEmpty) {
-        setState(() { _error = 'No data rows found.'; }); return;
-      }
-      setState(() { _statusMsg = 'Auto-mapping columns with Gemini…'; });
+      final doc = PdfDocument(inputBytes: bytes);
+      final t = PdfTextExtractor(doc).extractText();
+      doc.dispose(); return t;
+    } catch (_) { return ''; }
+  }
 
-      final entries = List.generate(headers.length, (i) {
-        final samples = dataRows.map((r) => i < r.length ? r[i] : '').where((v) => v.isNotEmpty).take(5).toList();
-        return {'index': i, 'header': headers[i], 'samples': samples};
-      });
-
-      final prompt =
-          'Map each CSV column to the correct supplier_profiles field.\n\n'
-          'Fields: ${_fields.where((f) => f != 'ignore').join(', ')}, ignore\n\n'
-          'Columns:\n${jsonEncode(entries)}\n\n'
-          'Rules:\n'
-          '- "Firm Name", "Company Name", "Supplier" → supplier_name\n'
-          '- "Contact", "Contact Person", "Name" → contact_name (NOT supplier_name if there is already a firm name column)\n'
-          '- Columns not matching any field → ignore\n\n'
-          'Return ONLY a JSON array: [{"index":0,"mapped_to":"supplier_name"},...]';
-
-      final idxMap = <int, String>{};
+  String _xlsxBytesText(Uint8List bytes) {
+    Archive archive;
+    try { archive = ZipDecoder().decodeBytes(bytes); }
+    catch (_) { throw Exception('Could not open Excel file.'); }
+    ArchiveFile? find(String p) {
+      final lo = p.toLowerCase();
+      for (final x in archive) { if (x.name.toLowerCase() == lo) return x; }
+      return null;
+    }
+    final ss = <String>[];
+    final ssf = find('xl/sharedStrings.xml');
+    if (ssf != null) {
       try {
-        final apiKey = geminiApiKey;
-        final resp = await http.post(
-          Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$apiKey'),
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({'contents': [{'parts': [{'text': prompt}]}], 'generationConfig': {'temperature': 0.1, 'maxOutputTokens': 512}}),
-        ).timeout(const Duration(seconds: 20));
-        if (resp.statusCode == 200) {
-          final body = jsonDecode(resp.body) as Map<String, dynamic>;
-          final txt = ((body['candidates'] as List?)?.firstOrNull?['content']?['parts'] as List?)?.firstOrNull?['text'] as String? ?? '';
-          final jm = RegExp(r'\[[\s\S]*\]').firstMatch(txt);
-          if (jm != null) {
-            final mappings = jsonDecode(jm.group(0)!) as List<dynamic>;
-            for (final m in mappings) {
-              final mm = m as Map<String, dynamic>;
-              final idx = mm['index'] as int?;
-              final mapped = mm['mapped_to'] as String? ?? 'ignore';
-              if (idx != null) idxMap[idx] = _fields.contains(mapped) ? mapped : 'ignore';
-            }
-          }
+        final doc = xmlp.XmlDocument.parse(utf8.decode(ssf.content as List<int>));
+        for (final si in doc.findAllElements('si')) {
+          ss.add(si.findAllElements('t').map((t) => t.innerText).join());
         }
       } catch (_) {}
-
-      // Heuristic fallback
-      final used = <String>{};
-      for (int i = 0; i < headers.length; i++) {
-        if (idxMap.containsKey(i)) { used.add(idxMap[i]!); continue; }
-        final h = headers[i].toLowerCase().replaceAll(RegExp(r'[\s_\-]+'), '');
-        String mapped = 'ignore';
-        if (['suppliername','firmname','companyname','supplier'].contains(h) && !used.contains('supplier_name')) mapped = 'supplier_name';
-        else if (['contactname','contactperson','contactpersonname','contact'].contains(h) && !used.contains('contact_name')) mapped = 'contact_name';
-        else if (['phone','mobile','mobilenumber','phonenumber','cell'].contains(h) && !used.contains('phone')) mapped = 'phone';
-        else if (['email','emailaddress','mail'].contains(h) && !used.contains('email')) mapped = 'email';
-        else if (['whatsapp','whatsappno','whatsappnumber'].contains(h) && !used.contains('whatsapp_no')) mapped = 'whatsapp_no';
-        else if (['city','town'].contains(h) && !used.contains('city')) mapped = 'city';
-        else if (['state','province'].contains(h) && !used.contains('state')) mapped = 'state';
-        else if (['address','addr'].contains(h) && !used.contains('address')) mapped = 'address';
-        else if (['pincode','pin','zipcode','zip'].contains(h) && !used.contains('pincode')) mapped = 'pincode';
-        else if (['gstin','gst','gstnumber'].contains(h) && !used.contains('gstin')) mapped = 'gstin';
-        else if (['druglicense','druglicenseno','dl','dlno'].contains(h) && !used.contains('drug_license')) mapped = 'drug_license';
-        else if (['suppliercode','code','vendorcode'].contains(h) && !used.contains('supplier_code')) mapped = 'supplier_code';
-        else if (['paymentterm','paymentterms','creditdays','terms'].contains(h) && !used.contains('payment_term')) mapped = 'payment_term';
-        else if (['storetype','type','category'].contains(h) && !used.contains('store_type')) mapped = 'store_type';
-        else if (['rangezone','zone','range'].contains(h) && !used.contains('range_zone')) mapped = 'range_zone';
-        else if (['othercontact','otherphone','altcontact'].contains(h) && !used.contains('other_contact')) mapped = 'other_contact';
-        else if (['notes','remarks','comment','comments'].contains(h) && !used.contains('notes')) mapped = 'notes';
-        idxMap[i] = mapped;
-        if (mapped != 'ignore') used.add(mapped);
+    }
+    ArchiveFile? shf;
+    for (int n = 1; n <= 10; n++) { shf = find('xl/worksheets/sheet$n.xml'); if (shf != null) break; }
+    if (shf == null) throw Exception('No worksheet found in Excel file.');
+    final wsDoc = xmlp.XmlDocument.parse(utf8.decode(shf.content as List<int>));
+    String? rc(xmlp.XmlElement cell) {
+      final t = cell.getAttribute('t');
+      if (t == 'inlineStr') return cell.findAllElements('t').map((e) => e.innerText).join();
+      if (t == 's') {
+        final v = cell.findElements('v').firstOrNull?.innerText;
+        if (v == null) return null;
+        final idx = int.tryParse(v);
+        if (idx == null || idx >= ss.length) return null;
+        return ss[idx];
       }
+      return cell.findElements('v').firstOrNull?.innerText;
+    }
+    final sb = StringBuffer();
+    for (final row in wsDoc.findAllElements('row')) {
+      final cells = <String, String>{};
+      for (final cell in row.findElements('c')) {
+        final ref = cell.getAttribute('r') ?? '';
+        final col = ref.replaceAll(RegExp(r'[0-9]'), '');
+        if (col.isNotEmpty) cells[col] = rc(cell) ?? '';
+      }
+      if (cells.isEmpty) continue;
+      final cols = cells.keys.toList()..sort();
+      sb.writeln(cols.map((c) => cells[c]!).join('\t'));
+    }
+    return sb.toString();
+  }
 
-      final cols = List.generate(headers.length, (i) {
-        final samples = dataRows.map((r) => i < r.length ? r[i] : '').where((v) => v.isNotEmpty).take(3).toList();
-        return _SupProfColMap(index: i, header: headers[i], samples: samples, mappedTo: idxMap[i] ?? 'ignore');
-      });
+  String _odsBytesText(Uint8List bytes) {
+    Archive archive;
+    try { archive = ZipDecoder().decodeBytes(bytes); }
+    catch (_) { throw Exception('Could not open ODS file.'); }
+    ArchiveFile? cf;
+    for (final x in archive) { if (x.name.toLowerCase() == 'content.xml') { cf = x; break; } }
+    if (cf == null) throw Exception('Not a valid ODS file.');
+    final doc = xmlp.XmlDocument.parse(utf8.decode(cf.content as List<int>));
+    String ct(xmlp.XmlElement cell) {
+      final ps = cell.descendants.whereType<xmlp.XmlElement>().where((e) => e.localName == 'p');
+      return ps.isNotEmpty ? ps.map((e) => e.innerText).join(' ').trim() : '';
+    }
+    final sb = StringBuffer();
+    for (final tbl in doc.descendants.whereType<xmlp.XmlElement>().where((e) => e.localName == 'table')) {
+      for (final row in tbl.descendants.whereType<xmlp.XmlElement>().where((e) => e.localName == 'table-row')) {
+        final cells = row.descendants.whereType<xmlp.XmlElement>()
+            .where((e) => e.localName == 'table-cell' || e.localName == 'covered-table-cell').toList();
+        if (cells.isEmpty) continue;
+        sb.writeln(cells.map(ct).join('\t'));
+      }
+    }
+    return sb.toString();
+  }
 
-      setState(() { _cols = cols; _dataRows = dataRows; _step = _SupProfStep.mapping; });
+  String _docxBytesText(Uint8List bytes) {
+    Archive archive;
+    try { archive = ZipDecoder().decodeBytes(bytes); }
+    catch (_) { throw Exception('Could not open DOCX file.'); }
+    ArchiveFile? df;
+    for (final x in archive) { if (x.name.toLowerCase() == 'word/document.xml') { df = x; break; } }
+    if (df == null) throw Exception('Not a valid DOCX file.');
+    final doc = xmlp.XmlDocument.parse(utf8.decode(df.content as List<int>));
+    final sb = StringBuffer();
+    for (final p in doc.descendants.whereType<xmlp.XmlElement>().where((e) => e.localName == 'p')) {
+      final t = p.descendants.whereType<xmlp.XmlElement>().where((e) => e.localName == 't').map((e) => e.innerText).join();
+      if (t.trim().isNotEmpty) sb.writeln(t);
+    }
+    return sb.toString();
+  }
+
+  ({List<String> headers, List<List<String>> rows}) _textToTable(String text) {
+    final lines = text.split('\n').where((l) => l.trim().isNotEmpty).toList();
+    if (lines.isEmpty) return (headers: [], rows: []);
+    final sep = lines.first.contains('\t') ? '\t' : ',';
+    var allRows = lines.map((l) =>
+        l.split(sep).map((c) => c.trim().replaceAll(RegExp(r'''^["']+|["']+$'''), '')).toList()
+    ).toList();
+    if (allRows.isEmpty) return (headers: [], rows: []);
+    final maxCols = allRows.map((r) => r.length).reduce((a, b) => a > b ? a : b);
+    allRows = allRows.map((r) {
+      if (r.length < maxCols) return [...r, ...List.filled(maxCols - r.length, '')];
+      return r;
+    }).toList();
+    final first = allRows[0];
+    final isHdr = first.every((c) => double.tryParse(c.replaceAll(RegExp(r'[₹,\s]'), '')) == null);
+    if (isHdr && allRows.length > 1) return (headers: first, rows: allRows.sublist(1));
+    return (headers: List.filled(maxCols, ''), rows: allRows);
+  }
+
+  String _geminiResponseText(String body) {
+    try {
+      final data = jsonDecode(body) as Map<String, dynamic>;
+      final cands = data['candidates'] as List<dynamic>?;
+      if (cands == null || cands.isEmpty) return '';
+      final content = (cands[0] as Map<String, dynamic>)['content'] as Map<String, dynamic>?;
+      final parts = content?['parts'] as List<dynamic>?;
+      final out = parts?.where((p) => (p as Map<String, dynamic>)['thought'] != true).toList();
+      return out?.isNotEmpty == true ? (out![0] as Map<String, dynamic>)['text'] as String? ?? '' : '';
+    } catch (_) { return ''; }
+  }
+
+  Future<({List<String> headers, List<List<String>> rows})> _geminiTable(
+      bool isImage, String mime, String b64, String pdfMime) async {
+    final prompt =
+        'Extract the tabular supplier data from this file. '
+        'Return ONLY a JSON object (no markdown fences):\n'
+        '{"headers":["col1","col2"],"rows":[["v1","v2"],...]}\n'
+        'Use empty string "" for missing headers. Include all data rows.';
+    final parts = isImage
+        ? [{'inline_data': {'mime_type': mime, 'data': b64}}, {'text': prompt}]
+        : [{'inline_data': {'mime_type': pdfMime, 'data': b64}}, {'text': prompt}];
+    final resp = await http.post(
+      Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$geminiApiKey'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'contents': [{'parts': parts}], 'generationConfig': {'temperature': 0.1, 'maxOutputTokens': 4096}}),
+    ).timeout(const Duration(seconds: 60));
+    if (resp.statusCode != 200) throw Exception('Gemini API error (HTTP ${resp.statusCode})');
+    final txt = _geminiResponseText(resp.body);
+    if (txt.isEmpty) throw Exception('Empty response from Gemini');
+    final jm = RegExp(r'\{[\s\S]*\}').firstMatch(txt);
+    if (jm == null) throw Exception('Could not parse table from file');
+    final dec = jsonDecode(jm.group(0)!) as Map<String, dynamic>;
+    final headers = (dec['headers'] as List<dynamic>?)?.map((e) => e.toString()).toList() ?? [];
+    final rows = (dec['rows'] as List<dynamic>?)
+        ?.map((r) => (r as List<dynamic>).map((e) => e.toString()).toList()).toList() ?? [];
+    return (headers: headers, rows: rows);
+  }
+
+  Future<({List<String> headers, List<List<String>> rows})> _parseFile(html.File f) async {
+    final ext = f.name.toLowerCase().split('.').last;
+    switch (ext) {
+      case 'csv': case 'tsv': case 'txt':
+        return _textToTable(await _readAsText(f));
+      case 'xlsx': case 'xls':
+        return _textToTable(_xlsxBytesText(await _readBytes(f)));
+      case 'ods':
+        return _textToTable(_odsBytesText(await _readBytes(f)));
+      case 'docx':
+        return _textToTable(_docxBytesText(await _readBytes(f)));
+      case 'pdf':
+        final bytes = await _readBytes(f);
+        final local = await _pdfText(bytes);
+        if (local.trim().length > 20) return _textToTable(local);
+        return _geminiTable(false, '', base64Encode(bytes), 'application/pdf');
+      case 'jpg': case 'jpeg':
+        return _geminiTable(true, 'image/jpeg', base64Encode(await _readBytes(f)), '');
+      case 'png':
+        return _geminiTable(true, 'image/png', base64Encode(await _readBytes(f)), '');
+      case 'webp':
+        return _geminiTable(true, 'image/webp', base64Encode(await _readBytes(f)), '');
+      case 'heic': case 'heif':
+        return _geminiTable(true, 'image/heic', base64Encode(await _readBytes(f)), '');
+      case 'gif':
+        return _geminiTable(true, 'image/gif', base64Encode(await _readBytes(f)), '');
+      default:
+        return _textToTable(await _readAsText(f));
+    }
+  }
+
+  Future<List<_SupProfColMap>> _geminiMapCols(List<String> headers, List<List<String>> dataRows) async {
+    final entries = List.generate(headers.length, (i) {
+      final samples = dataRows.map((r) => i < r.length ? r[i] : '').where((v) => v.trim().isNotEmpty).take(5).toList();
+      return {'index': i, 'header': headers[i], 'samples': samples};
+    });
+    final prompt =
+        'Map each column to the correct supplier_profiles field.\n\n'
+        'Fields: supplier_name (required — Firm Name/Company Name/Supplier maps here), '
+        'contact_name (Contact Person), phone, email, whatsapp_no, city, state, address, '
+        'pincode, gstin, drug_license, supplier_code, payment_term, store_type, range_zone, '
+        'other_contact, notes, ignore (skip)\n\n'
+        'Infer from BOTH header AND sample values. '
+        '"Firm Name","Company Name","Supplier" → supplier_name. '
+        '"Contact","Contact Person","Name" → contact_name. '
+        'Serial/index numbers → ignore.\n\n'
+        'Columns:\n${jsonEncode(entries)}\n\n'
+        'Return ONLY a JSON array: [{"index":0,"mapped_to":"supplier_name"},...]';
+    final idxMap = <int, String>{};
+    try {
+      final resp = await http.post(
+        Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$geminiApiKey'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'contents': [{'parts': [{'text': prompt}]}], 'generationConfig': {'temperature': 0.1, 'maxOutputTokens': 1024}}),
+      ).timeout(const Duration(seconds: 30));
+      if (resp.statusCode == 200) {
+        final txt = _geminiResponseText(resp.body);
+        final jm = RegExp(r'\[[\s\S]*\]').firstMatch(txt);
+        if (jm != null) {
+          for (final m in jsonDecode(jm.group(0)!) as List<dynamic>) {
+            final mm = m as Map<String, dynamic>;
+            final idx = mm['index'] as int?;
+            final mapped = mm['mapped_to'] as String? ?? 'ignore';
+            if (idx != null) idxMap[idx] = _fields.contains(mapped) ? mapped : 'ignore';
+          }
+        }
+      }
+    } catch (_) {}
+    // Heuristic fallback for unmapped columns
+    final used = <String>{...idxMap.values};
+    for (int i = 0; i < headers.length; i++) {
+      if (idxMap.containsKey(i)) continue;
+      final h = headers[i].toLowerCase().replaceAll(RegExp(r'[\s_\-]+'), '');
+      String mapped = 'ignore';
+      if (['suppliername','firmname','companyname','supplier'].contains(h) && !used.contains('supplier_name')) mapped = 'supplier_name';
+      else if (['contactname','contactperson','contact','name'].contains(h) && !used.contains('contact_name')) mapped = 'contact_name';
+      else if (['phone','mobile','mobilenumber','phonenumber','cell'].contains(h) && !used.contains('phone')) mapped = 'phone';
+      else if (['email','emailaddress','mail'].contains(h) && !used.contains('email')) mapped = 'email';
+      else if (['whatsapp','whatsappno'].contains(h) && !used.contains('whatsapp_no')) mapped = 'whatsapp_no';
+      else if (['city','town'].contains(h) && !used.contains('city')) mapped = 'city';
+      else if (['state','province'].contains(h) && !used.contains('state')) mapped = 'state';
+      else if (['address','addr'].contains(h) && !used.contains('address')) mapped = 'address';
+      else if (['pincode','pin','zip'].contains(h) && !used.contains('pincode')) mapped = 'pincode';
+      else if (['gstin','gst'].contains(h) && !used.contains('gstin')) mapped = 'gstin';
+      else if (['druglicense','dl'].contains(h) && !used.contains('drug_license')) mapped = 'drug_license';
+      else if (['suppliercode','code','vendorcode'].contains(h) && !used.contains('supplier_code')) mapped = 'supplier_code';
+      else if (['paymentterm','paymentterms','creditdays'].contains(h) && !used.contains('payment_term')) mapped = 'payment_term';
+      else if (['storetype','type'].contains(h) && !used.contains('store_type')) mapped = 'store_type';
+      else if (['rangezone','zone','range'].contains(h) && !used.contains('range_zone')) mapped = 'range_zone';
+      else if (['othercontact','altcontact'].contains(h) && !used.contains('other_contact')) mapped = 'other_contact';
+      else if (['notes','remarks','comments'].contains(h) && !used.contains('notes')) mapped = 'notes';
+      idxMap[i] = mapped;
+      if (mapped != 'ignore') used.add(mapped);
+    }
+    return List.generate(headers.length, (i) {
+      final samples = dataRows.map((r) => i < r.length ? r[i] : '').where((v) => v.isNotEmpty).take(3).toList();
+      return _SupProfColMap(index: i, header: headers[i], samples: samples, mappedTo: idxMap[i] ?? 'ignore');
+    });
+  }
+
+  Future<void> _parseAndMap() async {
+    try {
+      setState(() { _step = _SupProfStep.reading; _statusMsg = 'Reading file…'; });
+      final table = await _parseFile(widget.file);
+      if (table.rows.isEmpty) throw Exception('No data rows found in the file.');
+      setState(() { _statusMsg = 'Auto-mapping columns with Gemini…'; });
+      final cols = await _geminiMapCols(table.headers, table.rows);
+      setState(() { _cols = cols; _dataRows = table.rows; _step = _SupProfStep.mapping; });
     } catch (e) {
-      setState(() { _error = 'Failed to read CSV: $e'; });
+      if (mounted) setState(() { _error = e.toString().replaceFirst('Exception: ', ''); });
     }
   }
 
@@ -2023,7 +2211,6 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
     try {
       final colFor = <String, _SupProfColMap>{};
       for (final c in _cols) { if (c.mappedTo != 'ignore') colFor[c.mappedTo] = c; }
-
       final toInsert = <Map<String, dynamic>>[];
       for (final row in _dataRows) {
         String val(String field) {
@@ -2032,19 +2219,13 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
         }
         final name = val('supplier_name');
         if (name.isEmpty) continue;
-        final rec = <String, dynamic>{
-          'supplier_name': name,
-          'status': 'approved',
-          'approved': true,
-          'is_deleted': false,
-        };
+        final rec = <String, dynamic>{'supplier_name': name, 'status': 'approved', 'approved': true, 'is_deleted': false};
         for (final f in _fields.where((f) => f != 'supplier_name' && f != 'ignore')) {
           final v = val(f);
           if (v.isNotEmpty) rec[f] = v;
         }
         toInsert.add(rec);
       }
-
       if (toInsert.isNotEmpty) {
         await Supabase.instance.client.from('supplier_profiles').insert(toInsert);
       }
@@ -2057,8 +2238,10 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
         ));
       }
     } catch (e) {
-      if (mounted) setState(() { _step = _SupProfStep.mapping; });
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Import failed: $e'), backgroundColor: const Color(0xFFDC2626)));
+      if (mounted) {
+        setState(() { _step = _SupProfStep.mapping; });
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Import failed: $e'), backgroundColor: const Color(0xFFDC2626)));
+      }
     }
   }
 
@@ -2071,7 +2254,7 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
           child: Padding(padding: const EdgeInsets.all(24), child: Column(mainAxisSize: MainAxisSize.min, children: [
             const Icon(Icons.error_outline, color: Color(0xFFDC2626), size: 32),
             const SizedBox(height: 12),
-            Text(_error!, textAlign: TextAlign.center, style: const TextStyle(fontSize: 14)),
+            Text(_error!, textAlign: TextAlign.center, style: const TextStyle(fontSize: 14, color: Color(0xFF374151))),
             const SizedBox(height: 16),
             TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Close')),
           ]))),
@@ -2089,23 +2272,21 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
           ]))),
       );
     }
-    // Mapping step — full dialog with desktop/mobile layouts
     return Dialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
       child: ConstrainedBox(
         constraints: BoxConstraints(maxWidth: 860, maxHeight: MediaQuery.of(context).size.height * 0.85),
         child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          // Header
           Padding(
             padding: const EdgeInsets.fromLTRB(24, 20, 16, 0),
             child: Row(children: [
-              const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text('Import Suppliers — Map Columns',
+              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Text('Import Suppliers — Map Columns',
                     style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
-                SizedBox(height: 2),
-                Text('Gemini auto-mapped your columns. Correct any mismatches before importing.',
-                    style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+                const SizedBox(height: 2),
+                Text('${widget.file.name} · Gemini auto-mapped columns. Correct mismatches before importing.',
+                    style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
               ])),
               IconButton(icon: const Icon(Icons.close, size: 20), onPressed: () => Navigator.of(context).pop(),
                   padding: EdgeInsets.zero, constraints: const BoxConstraints()),
@@ -2113,25 +2294,23 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
           ),
           const SizedBox(height: 12),
           const Divider(height: 1, color: Color(0xFFE5E7EB)),
-          // Mapping body
           Flexible(child: LayoutBuilder(builder: (ctx, bc) {
             final isMobile = bc.maxWidth < 600;
             return SingleChildScrollView(
               padding: EdgeInsets.symmetric(horizontal: isMobile ? 12 : 24, vertical: 16),
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                // Desktop column headers
-                if (!isMobile)
+                if (!isMobile) ...[
                   Padding(padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
                     child: Row(children: const [
                       Expanded(flex: 4, child: Text('FILE COLUMN', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF6B7280), letterSpacing: 0.5))),
                       Expanded(flex: 5, child: Text('SAMPLE VALUES', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF6B7280), letterSpacing: 0.5))),
                       Expanded(flex: 5, child: Text('MAPS TO', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF6B7280), letterSpacing: 0.5))),
                     ])),
-                if (!isMobile) const Divider(color: Color(0xFFE5E7EB)),
+                  const Divider(color: Color(0xFFE5E7EB)),
+                ],
                 ...List.generate(_cols.length, (i) {
                   final col = _cols[i];
                   if (isMobile) {
-                    // Mobile: stacked card per row
                     return Padding(
                       padding: const EdgeInsets.only(bottom: 8),
                       child: Container(
@@ -2157,14 +2336,13 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
                               filled: true, fillColor: Colors.white,
                             ),
                             items: _fields.map((f) => DropdownMenuItem(value: f,
-                                child: Text(_label(f), style: const TextStyle(fontSize: 13)))).toList(),
+                                child: Text(_fieldLabel(f), style: const TextStyle(fontSize: 13)))).toList(),
                             onChanged: (v) => setState(() => col.mappedTo = v ?? 'ignore'),
                           ),
                         ]),
                       ),
                     );
                   }
-                  // Desktop: horizontal row
                   return Column(children: [
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 10),
@@ -2186,7 +2364,7 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
                             value: col.mappedTo, isExpanded: true,
                             style: const TextStyle(fontSize: 13, color: Color(0xFF111827)),
                             items: _fields.map((f) => DropdownMenuItem(value: f,
-                                child: Text(_label(f), style: const TextStyle(fontSize: 13)))).toList(),
+                                child: Text(_fieldLabel(f), style: const TextStyle(fontSize: 13)))).toList(),
                             onChanged: (v) => setState(() => col.mappedTo = v ?? 'ignore'),
                           )),
                         )),
@@ -2201,7 +2379,6 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
               ]),
             );
           })),
-          // Footer
           const Divider(height: 1, color: Color(0xFFE5E7EB)),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),

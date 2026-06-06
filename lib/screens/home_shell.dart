@@ -238,7 +238,12 @@ class _HomeShellState extends State<HomeShell> {
     return Scaffold(
       backgroundColor: Colors.white,
       bottomNavigationBar: isAdmin
-          ? const _AdminMobileBottomBar()
+          ? _AdminMobileBottomBar(
+              index: _index,
+              onSection: (i) => _handleAdminNav(const [
+                'dashboard', 'add_medicine', 'suppliers', 'customers', 'bills'
+              ][i]),
+            )
           : (_cartOpen
               ? null
               : _MobileBottomBar(
@@ -269,29 +274,32 @@ class _HomeShellState extends State<HomeShell> {
                   onLogoTap: onLogoTap,
                   logoTooltip: '',
                 ),
-                _MobileSearchBar(
-                  controller: _searchCtrl,
-                  isLoading: _searchLoading,
-                  onSearch: (v) => setState(() {
-                    final q = v.trim();
-                    _category = 'All';
-                    _index = 0;
-                    if (q.length >= 2) {
-                      _query = v;
-                    } else {
-                      _query = '';
-                      _scrollToTopTrigger++;
-                    }
-                  }),
-                  onScrollToResults: () => setState(() => _scrollTrigger++),
-                ),
-                _MobileCategoryChips(
-                  meta: _desktopMeta,
-                  selected: _category,
-                  onCategoryTap: (key) => _selectCategory(key),
-                ),
+                // Search + chips: storefront only (index 0)
+                if (_index == 0)
+                  _MobileSearchBar(
+                    controller: _searchCtrl,
+                    isLoading: _searchLoading,
+                    onSearch: (v) => setState(() {
+                      final q = v.trim();
+                      _category = 'All';
+                      _index = 0;
+                      if (q.length >= 2) {
+                        _query = v;
+                      } else {
+                        _query = '';
+                        _scrollToTopTrigger++;
+                      }
+                    }),
+                    onScrollToResults: () => setState(() => _scrollTrigger++),
+                  ),
+                if (_index == 0)
+                  _MobileCategoryChips(
+                    meta: _desktopMeta,
+                    selected: _category,
+                    onCategoryTap: (key) => _selectCategory(key),
+                  ),
                 Expanded(
-                  child: _FadingIndexedStack(
+                  child: IndexedStack(
                     index: _index,
                     children: pages,
                   ),
@@ -3399,13 +3407,13 @@ class _AdminDesktopHeader extends StatelessWidget {
 // ─────────────────────── Admin mobile bottom bar ──────────────────────────────
 
 class _AdminMobileBottomBar extends StatelessWidget {
-  const _AdminMobileBottomBar();
+  final int index; // current _index from HomeShellState
+  final ValueChanged<int> onSection; // 0=Dashboard,1=AddMedicine,2=Suppliers,3=Customers,4=Bills
 
-  void _openAdmin(BuildContext context, [int? section]) {
-    Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => AdminShell(initialSection: section),
-    ));
-  }
+  const _AdminMobileBottomBar({required this.index, required this.onSection});
+
+  // Maps HomeShell _index to admin section index (3=dashboard=0, etc.)
+  int get _activeSection => index >= 3 ? index - 3 : -1;
 
   @override
   Widget build(BuildContext context) {
@@ -3420,11 +3428,11 @@ class _AdminMobileBottomBar extends StatelessWidget {
           height: 60,
           child: Row(
             children: [
-              _AdminNavItem(icon: Icons.dashboard_outlined, label: 'Dashboard', onTap: () => _openAdmin(context)),
-              _AdminNavItem(icon: Icons.medication_outlined, label: 'Add Medicine', onTap: () => _openAdmin(context, 1)),
-              _AdminNavItem(icon: Icons.inventory_2_outlined, label: 'Suppliers', onTap: () => _openAdmin(context, 2)),
-              _AdminNavItem(icon: Icons.people_outline, label: 'Customers', onTap: () => _openAdmin(context, 3)),
-              _AdminNavItem(icon: Icons.inbox_outlined, label: 'Bills', onTap: () => _openAdmin(context, 4)),
+              _AdminNavItem(icon: Icons.dashboard_outlined, label: 'Dashboard', selected: _activeSection == 0, onTap: () => onSection(0)),
+              _AdminNavItem(icon: Icons.medication_outlined, label: 'Add Medicine', selected: _activeSection == 1, onTap: () => onSection(1)),
+              _AdminNavItem(icon: Icons.inventory_2_outlined, label: 'Suppliers', selected: _activeSection == 2, onTap: () => onSection(2)),
+              _AdminNavItem(icon: Icons.people_outline, label: 'Customers', selected: _activeSection == 3, onTap: () => onSection(3)),
+              _AdminNavItem(icon: Icons.inbox_outlined, label: 'Bills', selected: _activeSection == 4, onTap: () => onSection(4)),
             ],
           ),
         ),
@@ -3436,20 +3444,22 @@ class _AdminMobileBottomBar extends StatelessWidget {
 class _AdminNavItem extends StatelessWidget {
   final IconData icon;
   final String label;
+  final bool selected;
   final VoidCallback onTap;
-  const _AdminNavItem({required this.icon, required this.label, required this.onTap});
+  const _AdminNavItem({required this.icon, required this.label, required this.onTap, this.selected = false});
 
   @override
   Widget build(BuildContext context) {
+    final color = selected ? Brand.green : Brand.inkMuted;
     return Expanded(
       child: InkWell(
         onTap: onTap,
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, size: 22, color: Brand.inkMuted),
+            Icon(icon, size: 22, color: color),
             const SizedBox(height: 3),
-            Text(label, style: const TextStyle(fontSize: 10, color: Brand.inkMuted, fontWeight: FontWeight.w500)),
+            Text(label, style: TextStyle(fontSize: 10, color: color, fontWeight: FontWeight.w500)),
           ],
         ),
       ),

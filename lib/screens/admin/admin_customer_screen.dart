@@ -242,6 +242,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   List<_CustRow>     _cartRows     = [];
   List<_RegRow>      _regRows      = [];
   List<_ApprovedRow> _approvedRows = [];
+  List<Map<String, dynamic>> _deletedRows = [];
+  bool _deletedExpanded = false;
   List<_LeadItem> _loggedInLeads = [];
   List<_LeadItem> _otherLeads    = [];
   List<_AdminEntry> _admins      = [];
@@ -304,17 +306,22 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       final client = Supabase.instance.client;
       final results = await Future.wait<dynamic>([
         client.from('user_profiles').select(),
-        client.from('pharmacy_profiles').select(),
+        // Part A-2: always filter out deleted profiles from active list
+        client.from('pharmacy_profiles').select().or('is_deleted.is.null,is_deleted.eq.false'),
         client.from('orders').select().order('created_at', ascending: false),
         client.from('cart_items').select().order('id', ascending: true),
         client.rpc('get_unregistered_users').catchError((_) => <dynamic>[]),
+        // Fetch deleted profiles for "Recently Deleted" section
+        client.from('pharmacy_profiles').select().eq('is_deleted', true)
+            .order('deleted_at', ascending: false).catchError((_) => <dynamic>[]),
       ]);
 
-      final upRows    = results[0] as List;
-      final ppRows    = results[1] as List;
-      final orderRows = results[2] as List;
-      final cartRows  = results[3] as List;
-      final authRows  = results[4] as List;
+      final upRows      = results[0] as List;
+      final ppRows      = results[1] as List;
+      final orderRows   = results[2] as List;
+      final cartRows    = results[3] as List;
+      final authRows    = results[4] as List;
+      final deletedList = results[5] as List;
 
       // Auth users with no pharmacy_profile (logged-in but unregistered)
       final authMap = <String, Map<String, dynamic>>{};
@@ -441,12 +448,17 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         return bAt.compareTo(aAt);
       });
 
+      final deleted = deletedList
+          .map((r) => Map<String, dynamic>.from(r as Map))
+          .toList();
+
       if (mounted) {
         setState(() {
           _orderRows    = orders;
           _cartRows     = carts;
           _regRows      = regs;
           _approvedRows = approved;
+          _deletedRows  = deleted;
           _loading      = false;
         });
       }
@@ -753,6 +765,146 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     if (saved == true) _load(showSpinner: false);
   }
 
+  // Part A-3 / Part C-1: delete customer
+  Future<void> _deleteCustomer(_ApprovedRow row) async {
+    final displayName = row.pharmacyName.isNotEmpty ? row.pharmacyName : row.customerName;
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        title: Text('Delete $displayName?',
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700,
+                color: Color(0xFF111827))),
+        content: const Text(
+          'This will remove their login access and all registration data. '
+          'They must re-register to use mediBO.',
+          style: TextStyle(fontSize: 13, color: Color(0xFF374151)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: FilledButton.styleFrom(backgroundColor: const Color(0xFFDC2626)),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    try {
+      final client    = Supabase.instance.client;
+      final adminEmail = client.auth.currentUser?.email ?? 'admin';
+      // Part A-3: mark deleted with full snapshot
+      await client.from('pharmacy_profiles').update({
+        'is_deleted':       true,
+        'deleted_at':       DateTime.now().toUtc().toIso8601String(),
+        'deleted_by':       adminEmail,
+        'deleted_snapshot': row.rawData,
+      }).eq('id', row.id);
+      // Supabase Admin API: DELETE /auth/v1/admin/users/{user_id}
+      final uid = row.rawData['user_id'] as String?;
+      if (uid != null) {
+        try {
+          await client.functions.invoke(
+            'admin-user-actions',
+            body: {'action': 'delete_user', 'user_id': uid},
+          );
+        } catch (_) {} // non-fatal — profile already marked deleted in DB
+      }
+      _load(showSpinner: false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Customer deleted.'),
+          backgroundColor: Color(0xFF1B7A43),
+          duration: Duration(seconds: 3),
+        ));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Delete failed: $e'),
+          backgroundColor: const Color(0xFFDC2626),
+        ));
+      }
+    }
+  }
+
+  // Part A-4 / Part C-2: restore deleted customer
+  Future<void> _restoreCustomer(Map<String, dynamic> deletedRow) async {
+    final snap       = deletedRow['deleted_snapshot'] as Map<String, dynamic>? ?? deletedRow;
+    final pharmacy   = snap['pharmacy_name'] as String? ?? '';
+    final email      = snap['email'] as String? ?? deletedRow['email'] as String? ?? '';
+    final displayName = pharmacy.isNotEmpty ? pharmacy
+        : (snap['customer_name'] as String? ?? snap['owner_name'] as String? ?? 'this customer');
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        title: Text('Restore $displayName?',
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700,
+                color: Color(0xFF111827))),
+        content: Text(
+          email.isNotEmpty
+              ? 'This will restore their profile. A magic link will be sent to $email so they can log back in.'
+              : 'This will restore their profile to the active customer list.',
+          style: const TextStyle(fontSize: 13, color: Color(0xFF374151)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43)),
+            child: const Text('Restore'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    try {
+      final client = Supabase.instance.client;
+      // Part A-4: clear deleted flags
+      await client.from('pharmacy_profiles').update({
+        'is_deleted':       false,
+        'deleted_at':       null,
+        'deleted_by':       null,
+        'deleted_snapshot': null,
+      }).eq('id', deletedRow['id'] as String);
+      // Supabase Admin API: POST /auth/v1/admin/generate-link { type: 'magiclink', email }
+      if (email.isNotEmpty) {
+        try {
+          await client.functions.invoke(
+            'admin-user-actions',
+            body: {'action': 'send_magic_link', 'email': email},
+          );
+        } catch (_) {} // non-fatal — profile already restored in DB
+      }
+      _load(showSpinner: false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(email.isNotEmpty
+              ? 'Customer restored. Magic link sent to $email.'
+              : 'Customer restored.'),
+          backgroundColor: const Color(0xFF1B7A43),
+          duration: const Duration(seconds: 4),
+        ));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Restore failed: $e'),
+          backgroundColor: const Color(0xFFDC2626),
+        ));
+      }
+    }
+  }
+
   // ── Order status ───────────────────────────────────────────────────────────
 
   Future<void> _updateStatus(String orderId, String status) async {
@@ -852,15 +1004,19 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     if (_isLeadsView) return _buildLeadsContent(isDesktop);
     // Approved customers view
     if (_isApprovedView) {
-      if (_approvedRows.isEmpty) {
-        return _ssvEmptyState('0 approved customers');
-      }
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (isDesktop) _buildApprovedTableHeader(),
-          ..._approvedRows.map((r) =>
-              isDesktop ? _buildDesktopApprovedRow(r) : _buildMobileApprovedCard(r)),
+          if (_approvedRows.isEmpty)
+            _ssvEmptyState('0 approved customers')
+          else ...[
+            if (isDesktop) _buildApprovedTableHeader(),
+            ..._approvedRows.map((r) =>
+                isDesktop ? _buildDesktopApprovedRow(r) : _buildMobileApprovedCard(r)),
+          ],
+          const SizedBox(height: 32),
+          // Part C-2: collapsible Recently Deleted section
+          _buildDeletedSection(isDesktop),
           const SizedBox(height: 32),
         ],
       );
@@ -948,11 +1104,19 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
           const Expanded(
-            child: Text('Customer Dashboard',
-                style: TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w800,
-                    color: Color(0xFF111827))),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Customer Dashboard',
+                    style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w800,
+                        color: Color(0xFF111827))),
+                SizedBox(height: 2),
+                Text('Manage pharmacy accounts and registrations',
+                    style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+              ],
+            ),
           ),
           IconButton(
             onPressed: _load,
@@ -986,33 +1150,37 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     );
   }
 
+  // Part D: MouseRegion for pointer cursor on all tabs
+  // Part E: pill/chip style tabs — active = green fill, inactive = grey outline
   Widget _tab(_CustFilter f, String label) {
     final active = _filter == f;
-    return GestureDetector(
-      onTap: () {
-        if (_scrollCtrl.hasClients) _scrollCtrl.jumpTo(0);
-        setState(() {
-          _filter = f;
-          _expanded.clear();
-        });
-      },
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        decoration: BoxDecoration(
-          border: Border(
-            bottom: BorderSide(
-              color: active ? const Color(0xFF1B7A43) : Colors.transparent,
-              width: 2,
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: () {
+          if (_scrollCtrl.hasClients) _scrollCtrl.jumpTo(0);
+          setState(() {
+            _filter = f;
+            _expanded.clear();
+          });
+        },
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+          decoration: BoxDecoration(
+            color: active ? const Color(0xFF1B7A43) : Colors.transparent,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+              color: active ? const Color(0xFF1B7A43) : const Color(0xFFD1D5DB),
             ),
           ),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            fontSize: 13,
-            fontWeight: active ? FontWeight.w700 : FontWeight.w500,
-            color: active ? const Color(0xFF1B7A43) : const Color(0xFF6B7280),
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: active ? FontWeight.w700 : FontWeight.w500,
+              color: active ? Colors.white : const Color(0xFF6B7280),
+            ),
           ),
         ),
       ),
@@ -1923,7 +2091,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         _th('CODE', flex: 2),
         _th('CITY', flex: 2),
         _th('STATUS', flex: 2),
-        const SizedBox(width: 160), // actions column
+        const SizedBox(width: 230), // actions column (Edit + Suspend + Delete)
         const SizedBox(width: 32),  // chevron
       ]),
     );
@@ -1985,22 +2153,25 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
               flex: 2,
               child: _CustomerStatusBadge(status: row.status),
             ),
-            // Edit + Suspend/Reactivate actions (inner InkWells — absorb tap)
+            // Edit + Suspend/Reactivate + Delete actions (inner InkWells — absorb tap)
             SizedBox(
-              width: 160,
+              width: 230,
               child: Row(mainAxisSize: MainAxisSize.min, children: [
-                _actionBtn('Edit', const Color(0xFF2563EB),
+                _actionBtn('Edit', const Color(0xFF1B7A43),
                     () => _editCustomer(row)),
                 const SizedBox(width: 6),
                 _actionBtn(
                   row.isSuspended ? 'Reactivate' : 'Suspend',
                   row.isSuspended
                       ? const Color(0xFF1B7A43)
-                      : const Color(0xFFDC2626),
+                      : const Color(0xFFD97706),
                   () => row.isSuspended
                       ? _reactivateCustomer(row)
                       : _suspendCustomer(row),
                 ),
+                const SizedBox(width: 6),
+                _actionBtn('Delete', const Color(0xFFDC2626),
+                    () => _deleteCustomer(row)),
               ]),
             ),
             // Rotating chevron
@@ -2095,19 +2266,20 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                 ]),
                 const SizedBox(height: 12),
                 // Action buttons (inner InkWells — absorb tap)
-                Row(children: [
-                  _actionBtn('Edit', const Color(0xFF2563EB),
+                Wrap(spacing: 8, runSpacing: 6, children: [
+                  _actionBtn('Edit', const Color(0xFF1B7A43),
                       () => _editCustomer(row)),
-                  const SizedBox(width: 8),
                   _actionBtn(
                     row.isSuspended ? 'Reactivate' : 'Suspend',
                     row.isSuspended
                         ? const Color(0xFF1B7A43)
-                        : const Color(0xFFDC2626),
+                        : const Color(0xFFD97706),
                     () => row.isSuspended
                         ? _reactivateCustomer(row)
                         : _suspendCustomer(row),
                   ),
+                  _actionBtn('Delete', const Color(0xFFDC2626),
+                      () => _deleteCustomer(row)),
                 ]),
               ]),
             ),
@@ -2149,97 +2321,114 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     }
   }
 
-  // Responsive detail card rendered from an explicit, deduplicated field list.
-  // Each logical datum appears exactly once; empty fields are omitted.
-  // Semantic duplicates in the DB schema are collapsed here:
-  //   customer_name / owner_name  →  "Owner Name"
-  //   address_local / address     →  "Address"
-  //   dl_20b / drug_license       →  "Drug Licence 20B"
-  //   gst_no / gstin              →  "GST No."
-  //   whatsapp_no / phone         →  "WhatsApp"
+  // Part B + Part E-3: ALL fields always shown, empty = "—" grey italic.
+  // Semantic duplicates collapsed: customer_name/owner_name → "Owner Name" etc.
   Widget _buildDynamicDetails(
     Map<String, dynamic> rawData, {
     required double lpad,
     required double rpad,
   }) {
-    final fields = <({String label, String value})>[];
-
-    void add(String label, dynamic v, {bool isTs = false}) {
+    String val(dynamic v, {bool isTs = false}) {
       final s = isTs ? _fmtTs(v) : _str(v);
-      if (s.isNotEmpty) fields.add((label: label, value: s));
+      return s.isEmpty ? '—' : s;
     }
 
-    // ── Identity ──────────────────────────────────────────────────────────
-    add('Owner Name',     rawData['customer_name'] ?? rawData['owner_name']);
-    add('Pharmacy Name',  rawData['pharmacy_name']);
-    add('Customer Code',  rawData['customer_code']);
-    add('Email',          rawData['email']);
-    // ── Contact ───────────────────────────────────────────────────────────
-    add('WhatsApp',       rawData['whatsapp_no'] ?? rawData['phone']);
-    add('Other Contact',  rawData['other_contact_no']);
-    // ── Location ──────────────────────────────────────────────────────────
-    add('Address',        rawData['address_local'] ?? rawData['address']);
-    add('City',           rawData['city']);
-    add('State',          rawData['state']);
-    add('PIN Code',       rawData['pincode']);
-    add('Store Location', rawData['store_location_link']);
-    // ── Business ──────────────────────────────────────────────────────────
-    add('Payment Term',   rawData['payment_term']);
-    add('Store Type',     rawData['store_type']);
-    add('Range / Zone',   rawData['range_zone']);
-    // ── Compliance ────────────────────────────────────────────────────────
-    add('Drug Licence 20B', rawData['dl_20b'] ?? rawData['drug_license']);
-    add('Drug Licence 21B', rawData['dl_21b']);
-    add('GST No.',          rawData['gst_no'] ?? rawData['gstin']);
-    // ── Status / meta ─────────────────────────────────────────────────────
-    add('Status',        rawData['status']);
-    add('Approved By',   rawData['approved_by']);
-    add('Approved At',   rawData['approved_at'], isTs: true);
-    add('Registered',    rawData['created_at'],  isTs: true);
-    add('Updated',       rawData['updated_at'],  isTs: true);
-
-    if (fields.isEmpty) {
-      return Container(
-        color: const Color(0xFFF9FAFB),
-        padding: EdgeInsets.fromLTRB(lpad, 10, rpad, 14),
-        child: const Text('No additional details on record.',
-            style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF))),
-      );
-    }
+    // Sections: (title, [(label, value), ...])
+    final sections = <(String, List<(String, String)>)>[
+      ('BASIC INFO', [
+        ('Owner Name',    val(rawData['customer_name'] ?? rawData['owner_name'])),
+        ('Pharmacy Name', val(rawData['pharmacy_name'])),
+        ('Customer Code', val(rawData['customer_code'])),
+      ]),
+      ('CONTACT', [
+        ('Email',    val(rawData['email'])),
+        ('WhatsApp', val(rawData['whatsapp_no'] ?? rawData['phone'])),
+        ('Phone',    val(rawData['phone'])),
+      ]),
+      ('LOCATION', [
+        ('Address',  val(rawData['address_local'] ?? rawData['address'])),
+        ('City',     val(rawData['city'])),
+        ('State',    val(rawData['state'])),
+        ('PIN Code', val(rawData['pincode'])),
+        ('Range / Zone', val(rawData['range_zone'])),
+        ('Store Type',   val(rawData['store_type'])),
+      ]),
+      ('BUSINESS', [
+        ('Payment Term',     val(rawData['payment_term'])),
+        ('Drug Licence 20B', val(rawData['dl_20b'] ?? rawData['drug_license'])),
+        ('Drug Licence 21B', val(rawData['dl_21b'])),
+      ]),
+      ('APPROVAL', [
+        ('GSTIN',       val(rawData['gst_no'] ?? rawData['gstin'])),
+        ('Status',      val(rawData['status'])),
+        ('Approved By', val(rawData['approved_by'])),
+        ('Approved At', val(rawData['approved_at'], isTs: true)),
+        ('Registered',  val(rawData['created_at'],  isTs: true)),
+        ('',            ''),  // placeholder to fill 3-col grid
+      ]),
+    ];
 
     return Container(
       color: const Color(0xFFF9FAFB),
-      padding: EdgeInsets.fromLTRB(lpad, 12, rpad, 16),
+      padding: EdgeInsets.fromLTRB(lpad, 16, rpad, 20),
       child: LayoutBuilder(builder: (ctx, constraints) {
         final w       = constraints.maxWidth;
         final cols    = w > 600 ? 3 : (w > 380 ? 2 : 1);
         const spacing = 20.0;
-        final itemW   = ((w - spacing * (cols - 1)) / cols).clamp(80.0, 400.0);
-        return Wrap(
-          spacing: spacing,
-          runSpacing: 14,
-          children: fields.map((entry) => SizedBox(
+        final itemW   = ((w - spacing * (cols - 1)) / cols).clamp(80.0, 500.0);
+
+        Widget fieldCell(String label, String value) {
+          if (label.isEmpty) return SizedBox(width: itemW);
+          final isEmpty = value == '—';
+          return SizedBox(
             width: itemW,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  entry.label,
-                  style: const TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF9CA3AF),
-                      letterSpacing: 0.4),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  entry.value,
-                  style: const TextStyle(
-                      fontSize: 12, color: Color(0xFF374151)),
-                ),
+                Text(label,
+                    style: const TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF9CA3AF),
+                        letterSpacing: 0.5)),
+                const SizedBox(height: 3),
+                Text(value,
+                    style: TextStyle(
+                        fontSize: 14,
+                        color: isEmpty
+                            ? const Color(0xFFD1D5DB)
+                            : const Color(0xFF111827),
+                        fontStyle: isEmpty ? FontStyle.italic : FontStyle.normal)),
               ],
             ),
-          )).toList(),
+          );
+        }
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            for (int si = 0; si < sections.length; si++) ...[
+              if (si > 0) ...[
+                const SizedBox(height: 16),
+                const Divider(height: 1, color: Color(0xFFE5E7EB)),
+                const SizedBox(height: 12),
+              ],
+              Text(sections[si].$1,
+                  style: const TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF6B7280),
+                      letterSpacing: 0.6)),
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: spacing,
+                runSpacing: 14,
+                children: sections[si].$2
+                    .map((f) => fieldCell(f.$1, f.$2))
+                    .toList(),
+              ),
+            ],
+          ],
         );
       }),
     );
@@ -2664,6 +2853,195 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       if (i != -1) return i;
     }
     return null;
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // RECENTLY DELETED section  (Part C-2)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // Returns true if a new active profile exists with the same email as the deleted row.
+  bool _hasNewAccount(Map<String, dynamic> deletedRow) {
+    final snap  = deletedRow['deleted_snapshot'] as Map<String, dynamic>? ?? {};
+    final email = ((snap['email'] as String?) ??
+            (deletedRow['email'] as String?) ?? '')
+        .toLowerCase()
+        .trim();
+    if (email.isEmpty) return false;
+    return _approvedRows.any(
+          (r) => (r.rawData['email'] as String? ?? '').toLowerCase().trim() == email,
+        ) ||
+        _regRows.any(
+          (r) => (r.email ?? '').toLowerCase().trim() == email,
+        );
+  }
+
+  Widget _buildDeletedSection(bool isDesktop) {
+    final pad = isDesktop ? 28.0 : 16.0;
+    return Padding(
+      padding: EdgeInsets.symmetric(horizontal: isDesktop ? 0 : 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Collapsible header bar
+          MouseRegion(
+            cursor: SystemMouseCursors.click,
+            child: GestureDetector(
+              onTap: () => setState(() => _deletedExpanded = !_deletedExpanded),
+              child: Container(
+                width: double.infinity,
+                padding: EdgeInsets.symmetric(horizontal: pad, vertical: 11),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF3F4F6),
+                  border: Border.all(color: const Color(0xFFE5E7EB)),
+                  borderRadius: _deletedExpanded
+                      ? const BorderRadius.vertical(top: Radius.circular(8))
+                      : BorderRadius.circular(8),
+                ),
+                child: Row(children: [
+                  AnimatedRotation(
+                    turns: _deletedExpanded ? 0.0 : -0.25,
+                    duration: const Duration(milliseconds: 200),
+                    child: const Icon(Icons.expand_more,
+                        size: 18, color: Color(0xFF1B7A43)),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Recently Deleted (${_deletedRows.length})',
+                    style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF374151)),
+                  ),
+                ]),
+              ),
+            ),
+          ),
+          // Collapsible body
+          if (_deletedExpanded) ...[
+            Container(
+              decoration: BoxDecoration(
+                border: Border.all(color: const Color(0xFFE5E7EB)),
+                borderRadius:
+                    const BorderRadius.vertical(bottom: Radius.circular(8)),
+              ),
+              child: _deletedRows.isEmpty
+                  ? Padding(
+                      padding:
+                          EdgeInsets.symmetric(horizontal: pad, vertical: 20),
+                      child: const Text('No deleted customers.',
+                          style: TextStyle(
+                              fontSize: 13, color: Color(0xFF9CA3AF))),
+                    )
+                  : Column(
+                      children: _deletedRows
+                          .map((r) => _buildDeletedRow(r, isDesktop))
+                          .toList(),
+                    ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDeletedRow(Map<String, dynamic> row, bool isDesktop) {
+    final snap      = row['deleted_snapshot'] as Map<String, dynamic>? ?? row;
+    final pharmacy  = snap['pharmacy_name'] as String? ?? '';
+    final email     = snap['email'] as String? ?? row['email'] as String? ?? '';
+    final deletedAt = _fmtTs(row['deleted_at']);
+    final deletedBy = row['deleted_by'] as String? ?? '';
+    final hasNew    = _hasNewAccount(row);
+    final pad       = isDesktop ? 28.0 : 16.0;
+    final isLast    = _deletedRows.last == row;
+
+    return Opacity(
+      opacity: 0.85,
+      child: Container(
+        padding: EdgeInsets.symmetric(horizontal: pad, vertical: 12),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFAFAFA),
+          border: isLast
+              ? null
+              : const Border(bottom: BorderSide(color: Color(0xFFEEEEEE))),
+        ),
+        child: Row(children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Pharmacy name + "New account exists" badge
+                Row(children: [
+                  Flexible(
+                    child: Text(
+                      pharmacy.isNotEmpty
+                          ? pharmacy
+                          : email.isNotEmpty
+                              ? email
+                              : 'Deleted Customer',
+                      style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFF374151)),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  if (hasNew) ...[
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 7, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFEF3C7),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: const Color(0xFFF59E0B)),
+                      ),
+                      child: const Text('New account exists',
+                          style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w600,
+                              color: Color(0xFF92400E))),
+                    ),
+                  ],
+                ]),
+                const SizedBox(height: 3),
+                // Email · Deleted At · Deleted By
+                Text(
+                  [
+                    if (email.isNotEmpty) email,
+                    if (deletedAt.isNotEmpty) 'Deleted: $deletedAt',
+                    if (deletedBy.isNotEmpty) 'By: $deletedBy',
+                  ].join('  ·  '),
+                  style: const TextStyle(
+                      fontSize: 11, color: Color(0xFF9CA3AF)),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          // Restore button (green outlined)
+          InkWell(
+            onTap: () => _restoreCustomer(row),
+            borderRadius: BorderRadius.circular(6),
+            mouseCursor: SystemMouseCursors.click,
+            child: Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.transparent,
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: const Color(0xFF1B7A43)),
+              ),
+              child: const Text('Restore',
+                  style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF1B7A43))),
+            ),
+          ),
+        ]),
+      ),
+    );
   }
 }
 

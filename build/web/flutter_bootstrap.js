@@ -44,7 +44,7 @@ _flutter.loader.load({
     useLocalCanvasKit: false,
   },
   serviceWorkerSettings: {
-    serviceWorkerVersion: "3595702105" /* Flutter's service worker is deprecated and will be removed in a future Flutter release. */,
+    serviceWorkerVersion: "4195222672" /* Flutter's service worker is deprecated and will be removed in a future Flutter release. */,
   },
   onEntrypointLoaded: async (engineInitializer) => {
     const appRunner = await engineInitializer.initializeEngine({});

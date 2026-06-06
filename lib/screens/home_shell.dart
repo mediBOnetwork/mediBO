@@ -279,7 +279,7 @@ class _HomeShellState extends State<HomeShell> {
               ],
             ),
           ),
-          if (_index == 0 && AppState.of(context).distinctItems > 0)
+          if (_index == 0 && AppState.of(context).distinctItems > 0 && !UserState.of(context).isAdmin)
             Positioned(
               bottom: 16,
               left: 0,
@@ -379,7 +379,7 @@ class _HomeShellState extends State<HomeShell> {
               ),
             ],
           ),
-          if (_index == 0 && AppState.of(context).distinctItems > 0)
+          if (_index == 0 && AppState.of(context).distinctItems > 0 && !UserState.of(context).isAdmin)
             Positioned(
               left: 0,
               right: 0,
@@ -504,8 +504,9 @@ class _LocationHeader extends StatelessWidget {
               const SizedBox(width: 4),
               _AdminBackBtn(onTap: () => Navigator.pop(context)),
             ],
-            // RIGHT: cart icon
-            _MobileCartIcon(cartItems: cartItems, onCart: onCart),
+            // RIGHT: cart icon (hidden for admins — admins don't shop)
+            if (!isAdmin)
+              _MobileCartIcon(cartItems: cartItems, onCart: onCart),
           ],
         ),
       ),
@@ -538,7 +539,7 @@ class _AdminBackBtn extends StatelessWidget {
             Icon(Icons.admin_panel_settings_outlined,
                 size: 14, color: Color(0xFF1B5E20)),
             SizedBox(width: 4),
-            Text('Admin',
+            Text('Admin Panel',
                 style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w700,
@@ -2143,6 +2144,7 @@ class _MobileBottomBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cart = AppState.of(context);
+    final isAdmin = UserState.of(context).isAdmin;
     final bottomNavIndex = index == 1 ? 2 : index == 2 ? 3 : 0;
     return BottomNavigationBar(
           currentIndex: bottomNavIndex,
@@ -2166,12 +2168,12 @@ class _MobileBottomBar extends StatelessWidget {
             ),
             BottomNavigationBarItem(
               icon: Badge(
-                isLabelVisible: cart.orders.isNotEmpty,
+                isLabelVisible: !isAdmin && cart.orders.isNotEmpty,
                 label: Text('${cart.orders.length}'),
                 child: const Icon(Icons.receipt_long_outlined),
               ),
               activeIcon: Badge(
-                isLabelVisible: cart.orders.isNotEmpty,
+                isLabelVisible: !isAdmin && cart.orders.isNotEmpty,
                 label: Text('${cart.orders.length}'),
                 child: const Icon(Icons.receipt_long),
               ),
@@ -2777,6 +2779,7 @@ class _DesktopHeaderState extends State<_DesktopHeader> {
   @override
   Widget build(BuildContext context) {
     final cartItems = AppState.of(context).distinctItems;
+    final isAdmin = UserState.of(context).isAdmin;
     final isBulk = widget.index == 2 && !widget.cartOpen;
     final isOrders = widget.index == 1 && !widget.cartOpen;
 
@@ -2962,38 +2965,40 @@ class _DesktopHeaderState extends State<_DesktopHeader> {
             selected: isOrders,
             onTap: widget.onOrders,
           ),
-          const SizedBox(width: 8),
-          // 5. Cart
-          PressEffect(
-            child: InkWell(
-              onTap: widget.onCart,
-              borderRadius: BorderRadius.circular(8),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Badge(
-                      isLabelVisible: cartItems > 0,
-                      label: Text('$cartItems',
-                          style: const TextStyle(fontSize: 10)),
-                      child: const Icon(Icons.shopping_cart_outlined,
-                          size: 22, color: Brand.ink),
-                    ),
-                    const SizedBox(width: 6),
-                    const Text(
-                      'Cart',
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                        color: Brand.ink,
+          if (!isAdmin) ...[
+            const SizedBox(width: 8),
+            // 5. Cart (hidden for admins — admins don't shop)
+            PressEffect(
+              child: InkWell(
+                onTap: widget.onCart,
+                borderRadius: BorderRadius.circular(8),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Badge(
+                        isLabelVisible: cartItems > 0,
+                        label: Text('$cartItems',
+                            style: const TextStyle(fontSize: 10)),
+                        child: const Icon(Icons.shopping_cart_outlined,
+                            size: 22, color: Brand.ink),
                       ),
-                    ),
-                  ],
+                      const SizedBox(width: 6),
+                      const Text(
+                        'Cart',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: Brand.ink,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
-          ),
+          ],
           const SizedBox(width: 16),
           // 6. Auth button (Login or profile dropdown) — far right
           _DesktopProfileButton(onLogin: widget.onLogin),
@@ -3041,7 +3046,7 @@ class _DesktopProfileButton extends StatelessWidget {
     }
 
     final profile = auth.profile;
-    final displayName = profile?.displayName ?? 'Account';
+    final displayName = auth.isAdmin ? 'Admin' : (profile?.displayName ?? 'Account');
     final initial = displayName.isNotEmpty ? displayName[0].toUpperCase() : '?';
     final shortName =
         displayName.length > 16 ? '${displayName.substring(0, 14)}…' : displayName;

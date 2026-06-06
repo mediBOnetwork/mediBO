@@ -10,6 +10,13 @@
 Run ~/deploy.sh — this builds, commits, and pushes to production (Cloudflare Pages → medibo.in).
 There is no local preview step. Every change goes straight to production via deploy.sh.
 
+## VERIFICATION RULE (NEVER BREAK)
+VERIFICATION PROOF = the live version.json commit hash matching the just-built commit.
+- After every deploy, poll https://medibo.in/version.json and confirm `"commit"` equals the SHORT hash from `git rev-parse --short HEAD`.
+- NEVER use `grep -c` on a common word (e.g. "Dashboard", "mediBO", "Pharmacy") as proof of deploy — it false-positives on page headings and cached stale HTML.
+- Feature proof = paste the corrected source code, not a word count.
+- Deploy proof = `{"commit":"<HASH>"}` live on medibo.in/version.json matching the just-built hash.
+
 ## Behaviour
 - Wait for user instruction
 - Do NOT auto-suggest next steps

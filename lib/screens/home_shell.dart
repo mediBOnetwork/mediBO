@@ -316,21 +316,7 @@ class _HomeShellState extends State<HomeShell> {
             children: [
               if (isAdmin)
                 _AdminDesktopHeader(
-                  searchCtrl: _searchCtrl,
-                  isLoading: _searchLoading,
                   scrolled: _desktopScrolled,
-                  onSearch: (v) => setState(() {
-                    final q = v.trim();
-                    _category = 'All';
-                    _index = 0;
-                    if (q.length >= 2) {
-                      _query = v;
-                    } else {
-                      _query = '';
-                      _scrollToTopTrigger++;
-                    }
-                  }),
-                  onScrollToResults: () => setState(() => _scrollTrigger++),
                   onHome: onLogoTap,
                 )
               else
@@ -345,9 +331,8 @@ class _HomeShellState extends State<HomeShell> {
                   index: _index,
                   cartOpen: _cartOpen,
                 ),
-              // ── Full-width search row (non-admin desktop only) ──────────────
-              if (!isAdmin)
-                _DesktopSearchRow(
+              // ── Full-width search row (both admin and non-admin desktop) ───
+              _DesktopSearchRow(
                   controller: _searchCtrl,
                   isLoading: _searchLoading,
                   onSearch: (v) => setState(() {
@@ -3300,71 +3285,16 @@ class _MobileProfileButton extends StatelessWidget {
 
 // ─────────────────────── Admin desktop header ────────────────────────────────
 
-class _AdminDesktopHeader extends StatefulWidget {
-  final TextEditingController searchCtrl;
-  final bool isLoading;
+class _AdminDesktopHeader extends StatelessWidget {
   final bool scrolled;
-  final ValueChanged<String> onSearch;
-  final VoidCallback onScrollToResults;
   final VoidCallback onHome;
 
   const _AdminDesktopHeader({
-    required this.searchCtrl,
-    required this.isLoading,
-    required this.onSearch,
-    required this.onScrollToResults,
     required this.onHome,
     this.scrolled = false,
   });
 
-  @override
-  State<_AdminDesktopHeader> createState() => _AdminDesktopHeaderState();
-}
-
-class _AdminDesktopHeaderState extends State<_AdminDesktopHeader> {
-  Timer? _debounce;
-  bool _hasText = false;
-
-  @override
-  void initState() {
-    super.initState();
-    widget.searchCtrl.addListener(_onControllerChange);
-    _hasText = widget.searchCtrl.text.isNotEmpty;
-  }
-
-  @override
-  void dispose() {
-    widget.searchCtrl.removeListener(_onControllerChange);
-    _debounce?.cancel();
-    super.dispose();
-  }
-
-  void _onControllerChange() {
-    final hasText = widget.searchCtrl.text.isNotEmpty;
-    if (hasText != _hasText) setState(() => _hasText = hasText);
-  }
-
-  void _onChanged(String v) {
-    _debounce?.cancel();
-    _debounce = Timer(const Duration(milliseconds: 300), () => widget.onSearch(v));
-  }
-
-  void _submitNow() {
-    _debounce?.cancel();
-    final text = widget.searchCtrl.text;
-    widget.onSearch(text);
-    if (text.trim().length >= 2) widget.onScrollToResults();
-    FocusManager.instance.primaryFocus?.unfocus();
-  }
-
-  void _clearSearch() {
-    _debounce?.cancel();
-    widget.searchCtrl.clear();
-    widget.onSearch('');
-    FocusManager.instance.primaryFocus?.unfocus();
-  }
-
-  void _openAdmin([int? section]) {
+  void _openAdmin(BuildContext context, [int? section]) {
     Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => AdminShell(initialSection: section),
     ));
@@ -3373,9 +3303,9 @@ class _AdminDesktopHeaderState extends State<_AdminDesktopHeader> {
   @override
   Widget build(BuildContext context) {
     final shadow = BoxShadow(
-      color: Colors.black.withValues(alpha: widget.scrolled ? 0.11 : 0.04),
-      blurRadius: widget.scrolled ? 14.0 : 4.0,
-      offset: widget.scrolled ? const Offset(0, 4) : const Offset(0, 1),
+      color: Colors.black.withValues(alpha: scrolled ? 0.11 : 0.04),
+      blurRadius: scrolled ? 14.0 : 4.0,
+      offset: scrolled ? const Offset(0, 4) : const Offset(0, 1),
     );
     return AnimatedContainer(
       duration: const Duration(milliseconds: 220),
@@ -3384,105 +3314,31 @@ class _AdminDesktopHeaderState extends State<_AdminDesktopHeader> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          SizedBox(
-            width: 200,
-            child: Padding(
-              padding: const EdgeInsets.only(left: 24),
-              child: MouseRegion(
-                cursor: SystemMouseCursors.click,
-                child: GestureDetector(
-                  onTap: widget.onHome,
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Container(
-                        width: 40,
-                        height: 40,
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF1B5E20),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: const Icon(Icons.add, color: Colors.white, size: 24),
-                      ),
-                      const SizedBox(width: 10),
-                      RichText(
-                        text: const TextSpan(
-                          children: [
-                            TextSpan(text: 'medi', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700, color: Color(0xFF1B5E20), letterSpacing: -0.3)),
-                            TextSpan(text: 'BO', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: Color(0xFF4CAF50), letterSpacing: -0.3)),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24),
-              child: Container(
-                height: 46,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF9FAFB),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: const Color(0xFFD1D5DB)),
-                ),
+          Padding(
+            padding: const EdgeInsets.only(left: 24),
+            child: MouseRegion(
+              cursor: SystemMouseCursors.click,
+              child: GestureDetector(
+                onTap: onHome,
                 child: Row(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 14),
-                      child: Icon(Icons.search, color: Color(0xFF9CA3AF), size: 20),
-                    ),
-                    Expanded(
-                      child: TextField(
-                        controller: widget.searchCtrl,
-                        onChanged: _onChanged,
-                        onSubmitted: (_) => _submitNow(),
-                        textInputAction: TextInputAction.search,
-                        autocorrect: false,
-                        enableSuggestions: false,
-                        keyboardType: TextInputType.text,
-                        style: const TextStyle(fontSize: 14, color: Brand.ink),
-                        decoration: const InputDecoration(
-                          border: InputBorder.none,
-                          enabledBorder: InputBorder.none,
-                          focusedBorder: InputBorder.none,
-                          hintText: 'Search for medicines',
-                          hintStyle: TextStyle(color: Brand.inkMuted, fontSize: 14),
-                          isDense: true,
-                          contentPadding: EdgeInsets.symmetric(vertical: 14),
-                          filled: false,
-                        ),
+                    Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF1B5E20),
+                        borderRadius: BorderRadius.circular(8),
                       ),
+                      child: const Icon(Icons.add, color: Colors.white, size: 24),
                     ),
-                    if (widget.isLoading)
-                      const Padding(
-                        padding: EdgeInsets.symmetric(horizontal: 10),
-                        child: SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Brand.green)),
-                      )
-                    else if (_hasText)
-                      IconButton(
-                        onPressed: _clearSearch,
-                        icon: const Icon(Icons.close, size: 18, color: Color(0xFF6B7280)),
-                        visualDensity: VisualDensity.compact,
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                      ),
-                    GestureDetector(
-                      onTap: _submitNow,
-                      child: Container(
-                        height: double.infinity,
-                        padding: const EdgeInsets.symmetric(horizontal: 22),
-                        decoration: const BoxDecoration(
-                          color: Brand.green,
-                          borderRadius: BorderRadius.only(
-                            topRight: Radius.circular(9),
-                            bottomRight: Radius.circular(9),
-                          ),
-                        ),
-                        child: const Center(child: Text('Search', style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600))),
+                    const SizedBox(width: 10),
+                    RichText(
+                      text: const TextSpan(
+                        children: [
+                          TextSpan(text: 'medi', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700, color: Color(0xFF1B5E20), letterSpacing: -0.3)),
+                          TextSpan(text: 'BO', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: Color(0xFF4CAF50), letterSpacing: -0.3)),
+                        ],
                       ),
                     ),
                   ],
@@ -3490,15 +3346,16 @@ class _AdminDesktopHeaderState extends State<_AdminDesktopHeader> {
               ),
             ),
           ),
-          _DesktopNavLink(label: 'Dashboard', icon: Icons.dashboard_outlined, selected: false, onTap: () => _openAdmin()),
+          const Spacer(),
+          _DesktopNavLink(label: 'Dashboard', icon: Icons.dashboard_outlined, selected: false, onTap: () => _openAdmin(context)),
           const SizedBox(width: 2),
-          _DesktopNavLink(label: 'Add Medicine', icon: Icons.medication_outlined, selected: false, onTap: () => _openAdmin(1)),
+          _DesktopNavLink(label: 'Add Medicine', icon: Icons.medication_outlined, selected: false, onTap: () => _openAdmin(context, 1)),
           const SizedBox(width: 2),
-          _DesktopNavLink(label: 'Suppliers', icon: Icons.inventory_2_outlined, selected: false, onTap: () => _openAdmin(2)),
+          _DesktopNavLink(label: 'Suppliers', icon: Icons.inventory_2_outlined, selected: false, onTap: () => _openAdmin(context, 2)),
           const SizedBox(width: 2),
-          _DesktopNavLink(label: 'Customers', icon: Icons.people_outline, selected: false, onTap: () => _openAdmin(3)),
+          _DesktopNavLink(label: 'Customers', icon: Icons.people_outline, selected: false, onTap: () => _openAdmin(context, 3)),
           const SizedBox(width: 2),
-          _DesktopNavLink(label: 'Bills', icon: Icons.inbox_outlined, selected: false, onTap: () => _openAdmin(4)),
+          _DesktopNavLink(label: 'Bills', icon: Icons.inbox_outlined, selected: false, onTap: () => _openAdmin(context, 4)),
           const SizedBox(width: 8),
           _DesktopProfileButton(onLogin: () {}),
           const SizedBox(width: 24),

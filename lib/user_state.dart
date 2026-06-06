@@ -37,26 +37,54 @@ class AuthNotifier extends ChangeNotifier {
   };
 
   late final StreamSubscription<AuthState> _sub;
+  // Prevents _init() and initialSession from both finalising loading state.
+  bool _initDone = false;
 
   AuthNotifier() {
     _sub = Supabase.instance.client.auth.onAuthStateChange.listen(_onAuthChange);
     _init();
   }
 
+  // Fallback: if currentUser is already available synchronously (e.g. the
+  // initialSession stream event fired before we subscribed), resolve loading
+  // immediately so there is no blank splash on fast restores.
   Future<void> _init() async {
     final user = Supabase.instance.client.auth.currentUser;
-    if (user != null) {
+    if (user != null && !_initDone) {
+      _initDone = true;
       await Future.wait([
         _loadProfile(user.id),
         _checkAdminStatus(user.email ?? ''),
       ]);
+      if (_loading) {
+        _loading = false;
+        notifyListeners();
+      }
     }
-    _loading = false;
-    notifyListeners();
+    // If user is null here the session may still be restoring from localStorage;
+    // _onAuthChange(initialSession) will handle it and clear _loading.
   }
 
   void _onAuthChange(AuthState state) async {
-    if (_loading) return; // _init handles initial auth state
+    // initialSession fires on every startup — it carries the localStorage-restored
+    // session (or null). Must NOT be blocked by the _loading guard.
+    if (state.event == AuthChangeEvent.initialSession) {
+      if (_initDone) return; // synchronous _init() already handled it
+      _initDone = true;
+      final user = state.session?.user;
+      if (user != null) {
+        await Future.wait([
+          _loadProfile(user.id),
+          _checkAdminStatus(user.email ?? ''),
+        ]);
+      }
+      _loading = false;
+      notifyListeners();
+      return;
+    }
+
+    if (_loading) return; // wait for initialSession to finish first
+
     if (state.event == AuthChangeEvent.signedIn) {
       final user = state.session?.user;
       if (user != null) {

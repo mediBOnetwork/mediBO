@@ -956,17 +956,21 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
       ),
       Expanded(child: SingleChildScrollView(
         padding: EdgeInsets.symmetric(horizontal: isDesktop ? 24 : 12, vertical: 20),
-        child: Center(child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 920), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          // Column headers
-          Padding(padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6), child: Row(children: const [
-            Expanded(flex: 4, child: Text('FILE COLUMN', style: _kTh)),
-            Expanded(flex: 6, child: Text('SAMPLE VALUES', style: _kTh)),
-            Expanded(flex: 5, child: Text('MAPS TO', style: _kTh)),
-          ])),
-          const Divider(color: Color(0xFFE5E7EB)),
+        child: Center(child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 920), child: LayoutBuilder(builder: (ctx, bc) {
+          final isMobile = bc.maxWidth < 600;
+          return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          // Column headers — desktop only
+          if (!isMobile)
+            Padding(padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6), child: Row(children: const [
+              Expanded(flex: 4, child: Text('FILE COLUMN', style: _kTh)),
+              Expanded(flex: 6, child: Text('SAMPLE VALUES', style: _kTh)),
+              Expanded(flex: 5, child: Text('MAPS TO', style: _kTh)),
+            ])),
+          if (!isMobile) const Divider(color: Color(0xFFE5E7EB)),
           for (int i = 0; i < _cols.length; i++) ...[
-            _buildColRow(_cols[i]),
-            const Divider(height: 1, color: Color(0xFFF3F4F6)),
+            _buildColRow(_cols[i], isMobile: isMobile),
+            if (!isMobile) const Divider(height: 1, color: Color(0xFFF3F4F6)),
+            if (isMobile) const SizedBox(height: 8),
           ],
           const SizedBox(height: 24),
           SizedBox(width: double.infinity, height: 48, child: FilledButton(
@@ -975,12 +979,12 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
             child: const Text('Confirm Mapping & Start Matching', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
           )),
-        ]))),
+        ]); }))),
       )),
     ]);
   }
 
-  Widget _buildColRow(_ImpCol col) {
+  Widget _buildColRow(_ImpCol col, {bool isMobile = false}) {
     final ctrl = _newColCtrls[col.fileIndex] ??= TextEditingController();
     final isCreate = col.mappedTo == 'create_new';
     final items = <DropdownMenuItem<String>>[
@@ -988,6 +992,64 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
       const DropdownMenuItem(value: 'ignore', child: Text('— Ignore —', style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)))),
       const DropdownMenuItem(value: 'create_new', child: Text('Create new column…', style: TextStyle(fontSize: 13, color: Color(0xFF1B7A43)))),
     ];
+
+    if (isMobile) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
+        child: Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: const Color(0xFFE5E7EB)),
+          ),
+          padding: const EdgeInsets.all(12),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(
+              col.header.isNotEmpty ? col.header : 'Column ${col.fileIndex + 1}',
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
+                  color: col.header.isNotEmpty ? const Color(0xFF111827) : const Color(0xFF9CA3AF)),
+            ),
+            if (col.samples.isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Text(col.samples.take(3).join(' · '),
+                  style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+                  overflow: TextOverflow.ellipsis),
+            ],
+            const SizedBox(height: 8),
+            DropdownButtonFormField<String>(
+              value: col.mappedTo,
+              isExpanded: true,
+              decoration: InputDecoration(isDense: true,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+                enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+                focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF1B7A43))),
+                filled: true, fillColor: Colors.white,
+              ),
+              items: items,
+              onChanged: (v) { if (v != null) setState(() { col.mappedTo = v; }); },
+              style: const TextStyle(fontSize: 13, color: Color(0xFF111827)),
+            ),
+            if (isCreate) ...[
+              const SizedBox(height: 10),
+              TextFormField(
+                controller: ctrl,
+                onChanged: (v) => col.newColName = v,
+                decoration: InputDecoration(isDense: true, hintText: 'new_column_name',
+                  hintStyle: const TextStyle(color: Color(0xFFD1D5DB)),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF1B7A43))),
+                  enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF1B7A43))),
+                  filled: true, fillColor: const Color(0xFFECFDF5),
+                ),
+                style: const TextStyle(fontSize: 13),
+              ),
+            ],
+          ]),
+        ),
+      );
+    }
+
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [

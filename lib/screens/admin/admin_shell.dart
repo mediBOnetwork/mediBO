@@ -7,6 +7,7 @@ import '../../user_state.dart';
 import 'admin_add_medicine_screen.dart';
 import 'admin_alert_overlay.dart';
 import 'admin_customer_screen.dart';
+import 'admin_supplier_screen.dart';
 import 'admin_dashboard_screen.dart';
 import 'admin_manage_admins_screen.dart';
 import 'admin_pending_bills_screen.dart';
@@ -168,6 +169,7 @@ class _AdminShellState extends State<AdminShell> {
       child: const AdminDashboardScreen(),
     );
     if (_index == 1) return const AdminAddMedicineScreen();
+    if (_index == 2) return const AdminSupplierScreen();
     if (_index == 3) return const AdminCustomerScreen();
     if (_index == 4) return PendingBillsScreen(onCountChanged: _loadPendingCount);
     if (isSuperAdmin && _index == 5) return const AdminManageAdminsScreen();

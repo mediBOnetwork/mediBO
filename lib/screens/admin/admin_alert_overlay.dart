@@ -134,6 +134,7 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
 
   RealtimeChannel? _channel;
   RealtimeChannel? _orderChannel;
+  RealtimeChannel? _supplierChannel;
   late final AnimationController _flashCtrl;
   late final Animation<double> _flashAnim;
   late final AnimationController _slideCtrl;
@@ -158,6 +159,7 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
 
     _subscribeRealtime();
     _subscribeOrders();
+    _subscribeSuppliers();
 
     // Listen for messages from the FCM service worker (dedup: SW posts when
     // app is focused so we don't also get the OS notification)
@@ -196,6 +198,28 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
             final id       = rec['id']       as String? ?? '';
             if (!approved && (status == 'pending' || status.isEmpty)) {
               _enqueue(rec, id);
+            }
+          },
+        )
+        .subscribe();
+  }
+
+  void _subscribeSuppliers() {
+    final ts = DateTime.now().millisecondsSinceEpoch;
+    _supplierChannel = Supabase.instance.client
+        .channel('admin_new_sup_reg_$ts')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.insert,
+          schema: 'public',
+          table: 'supplier_profiles',
+          callback: (payload) {
+            final rec = Map<String, dynamic>.from(payload.newRecord);
+            if (rec.isEmpty) return;
+            final approved = rec['approved'] as bool? ?? false;
+            final status   = rec['status']   as String? ?? '';
+            final id       = rec['id']       as String? ?? '';
+            if (!approved && (status == 'pending' || status.isEmpty)) {
+              _enqueueSupplier(rec, id);
             }
           },
         )
@@ -248,6 +272,16 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
     }
   }
 
+  void _enqueueSupplier(Map<String, dynamic> rec, String id) {
+    if (id.isNotEmpty && _seenIds.contains(id)) return;
+    if (id.isNotEmpty) _seenIds.add(id);
+    final tagged = {...rec, '_alertType': 'supplier_registration'};
+    if (mounted) {
+      setState(() { _queue.add(tagged); _detailsOpen = false; });
+      if (_queue.length == 1) _onFirstAlert();
+    }
+  }
+
   void _enqueueOrder(Map<String, dynamic> rec, String id) {
     if (id.isNotEmpty && _orderSeenIds.contains(id)) return;
     if (id.isNotEmpty) _orderSeenIds.add(id);
@@ -266,7 +300,7 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
     if (type == 'order') {
       _jsOrderAudioStart();
     } else {
-      _jsAudioStart();
+      _jsAudioStart(); // registration and supplier_registration share the same alert sound
     }
     _slideCtrl.forward(from: 0);
   }
@@ -296,13 +330,20 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
     }
   }
 
+  String _tableForCurrentAlert() {
+    if (_queue.isEmpty) return 'pharmacy_profiles';
+    final type = _queue.first['_alertType'] as String? ?? 'registration';
+    return type == 'supplier_registration' ? 'supplier_profiles' : 'pharmacy_profiles';
+  }
+
   Future<void> _approve() async {
     if (_queue.isEmpty || _busy) return;
     setState(() => _busy = true);
-    final rec = _queue.first;
-    final id  = rec['id'] as String? ?? '';
+    final rec   = _queue.first;
+    final id    = rec['id'] as String? ?? '';
+    final table = _tableForCurrentAlert();
     try {
-      await Supabase.instance.client.from('pharmacy_profiles').update({
+      await Supabase.instance.client.from(table).update({
         'approved': true,
         'status': 'approved',
         'approved_at': DateTime.now().toUtc().toIso8601String(),
@@ -329,10 +370,11 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
   Future<void> _reject() async {
     if (_queue.isEmpty || _busy) return;
     setState(() => _busy = true);
-    final rec = _queue.first;
-    final id  = rec['id'] as String? ?? '';
+    final rec   = _queue.first;
+    final id    = rec['id'] as String? ?? '';
+    final table = _tableForCurrentAlert();
     try {
-      await Supabase.instance.client.from('pharmacy_profiles')
+      await Supabase.instance.client.from(table)
           .update({'approved': false, 'status': 'rejected'}).eq('id', id);
       Supabase.instance.client.functions.invoke('notify-registration', body: {
         'action': 'reject',
@@ -363,6 +405,7 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
   void dispose() {
     _channel?.unsubscribe();
     _orderChannel?.unsubscribe();
+    _supplierChannel?.unsubscribe();
     _jsAudioStop();
     _jsOrderAudioStop();
     _flashCtrl.dispose();
@@ -400,6 +443,7 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
   Widget _buildCard(Map<String, dynamic> rec) {
     final type = rec['_alertType'] as String? ?? 'registration';
     if (type == 'order') return _buildOrderCard(rec);
+    if (type == 'supplier_registration') return _buildSupplierRegCard(rec);
     return _buildRegistrationCard(rec);
   }
 
@@ -563,6 +607,113 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
                           style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
                     ),
                   ),
+                ]),
+        ),
+      ]),
+    );
+  }
+
+  Widget _buildSupplierRegCard(Map<String, dynamic> rec) {
+    final supplierName = rec['supplier_name'] as String? ?? '';
+    final contactName  = rec['contact_name']  as String? ?? '';
+    final phone        = rec['whatsapp_no']   as String? ?? rec['phone'] as String? ?? '';
+    final city         = rec['city']          as String? ?? '';
+    final state        = rec['state']         as String? ?? '';
+    final queueLen     = _queue.length;
+    final location     = [city, state].where((s) => s.isNotEmpty).join(', ');
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.25), blurRadius: 24, offset: const Offset(0, 8))],
+      ),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        FadeTransition(
+          opacity: _flashAnim,
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            decoration: const BoxDecoration(
+              color: Color(0xFF0284C7),
+              borderRadius: BorderRadius.only(topLeft: Radius.circular(16), topRight: Radius.circular(16)),
+            ),
+            child: Row(children: [
+              const Icon(Icons.add_business_outlined, color: Colors.white, size: 18),
+              const SizedBox(width: 8),
+              Expanded(child: Text(
+                queueLen > 1 ? 'NEW SUPPLIER  ·  $queueLen pending' : 'NEW SUPPLIER REGISTRATION',
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: Colors.white, letterSpacing: 0.5),
+              )),
+              InkWell(
+                onTap: _toggleMute,
+                borderRadius: BorderRadius.circular(20),
+                child: Padding(padding: const EdgeInsets.all(4),
+                  child: Icon(_muted ? Icons.volume_off : Icons.volume_up,
+                      color: Colors.white.withValues(alpha: _muted ? 0.5 : 1.0), size: 18)),
+              ),
+            ]),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            if (supplierName.isNotEmpty)
+              Text(supplierName, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: Color(0xFF111827))),
+            if (contactName.isNotEmpty) ...[
+              const SizedBox(height: 3),
+              Text(contactName, style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+            ],
+            const SizedBox(height: 12),
+            Wrap(spacing: 16, runSpacing: 8, children: [
+              if (phone.isNotEmpty)    _chip(Icons.phone_outlined,       phone),
+              if (location.isNotEmpty) _chip(Icons.location_on_outlined, location),
+            ]),
+          ]),
+        ),
+        const SizedBox(height: 8),
+        InkWell(
+          onTap: () => setState(() => _detailsOpen = !_detailsOpen),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+            child: Row(children: [
+              const Text('View full details', style: TextStyle(fontSize: 12, color: Color(0xFF0284C7), fontWeight: FontWeight.w600)),
+              const SizedBox(width: 4),
+              AnimatedRotation(
+                turns: _detailsOpen ? 0.5 : 0.0,
+                duration: const Duration(milliseconds: 180),
+                child: const Icon(Icons.expand_more, size: 16, color: Color(0xFF0284C7)),
+              ),
+            ]),
+          ),
+        ),
+        if (_detailsOpen) _buildDetails(rec),
+        const Divider(height: 1, color: Color(0xFFE5E7EB)),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+          child: _busy
+              ? const Center(child: SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF1B5E20))))
+              : Row(children: [
+                  if (queueLen > 1) ...[
+                    OutlinedButton(
+                      onPressed: _dismiss,
+                      style: OutlinedButton.styleFrom(foregroundColor: const Color(0xFF6B7280), side: const BorderSide(color: Color(0xFFD1D5DB)), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)), padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10)),
+                      child: const Text('Skip', style: TextStyle(fontSize: 12)),
+                    ),
+                    const SizedBox(width: 8),
+                  ],
+                  Expanded(child: OutlinedButton(
+                    onPressed: _reject,
+                    style: OutlinedButton.styleFrom(foregroundColor: const Color(0xFFDC2626), side: const BorderSide(color: Color(0xFFDC2626)), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)), padding: const EdgeInsets.symmetric(vertical: 12)),
+                    child: const Text('Reject', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+                  )),
+                  const SizedBox(width: 10),
+                  Expanded(child: FilledButton(
+                    onPressed: _approve,
+                    style: FilledButton.styleFrom(backgroundColor: const Color(0xFF0284C7), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)), padding: const EdgeInsets.symmetric(vertical: 12)),
+                    child: const Text('Approve', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+                  )),
                 ]),
         ),
       ]),

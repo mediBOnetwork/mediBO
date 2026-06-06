@@ -10,6 +10,10 @@ import '../url_sync.dart';
 import '../user_state.dart';
 import '../util.dart';
 import '../widgets/animations.dart';
+import 'admin/admin_add_medicine_screen.dart';
+import 'admin/admin_customer_screen.dart';
+import 'admin/admin_dashboard_screen.dart';
+import 'admin/admin_pending_bills_screen.dart';
 import 'admin/admin_shell.dart';
 import 'auth/login_screen.dart';
 import 'bulk_upload_screen.dart';
@@ -140,6 +144,20 @@ class _HomeShellState extends State<HomeShell> {
     if (mounted) setState(() => _desktopMeta = meta);
   }
 
+  // Admin section indices in the pages list: 3=Dashboard, 4=AddMedicine,
+  // 5=Suppliers, 6=Customers, 7=Bills
+  void _handleAdminNav(String route) {
+    if (!mounted) return;
+    switch (route) {
+      case 'home': _goHome(); break;
+      case 'dashboard': setState(() { _index = 3; _cartOpen = false; }); break;
+      case 'add_medicine': setState(() { _index = 4; _cartOpen = false; }); break;
+      case 'suppliers': setState(() { _index = 5; _cartOpen = false; }); break;
+      case 'customers': setState(() { _index = 6; _cartOpen = false; }); break;
+      case 'bills': setState(() { _index = 7; _cartOpen = false; }); break;
+    }
+  }
+
   @override
   void dispose() {
     _searchCtrl.dispose();
@@ -194,6 +212,16 @@ class _HomeShellState extends State<HomeShell> {
           ),
           const OrdersScreen(),
           BulkUploadScreen(key: _bulkUploadKey),
+          // Admin-only pages: indices 3–7 (desktop only; built for admin users)
+          // Kept alive in IndexedStack so no state loss on tab switch.
+          QuickLinkNavigator(
+            navigate: _handleAdminNav,
+            child: const AdminDashboardScreen(),
+          ),
+          const AdminAddMedicineScreen(),
+          const _AdminSuppliersPage(),
+          const AdminCustomerScreen(),
+          const PendingBillsScreen(),
         ];
 
         final isAdmin = UserState.of(context).isAdmin;
@@ -318,6 +346,9 @@ class _HomeShellState extends State<HomeShell> {
                 _AdminDesktopHeader(
                   scrolled: _desktopScrolled,
                   onHome: onLogoTap,
+                  onSection: (i) => _handleAdminNav(const [
+                    'dashboard', 'add_medicine', 'suppliers', 'customers', 'bills'
+                  ][i]),
                 )
               else
                 _DesktopHeader(
@@ -331,8 +362,9 @@ class _HomeShellState extends State<HomeShell> {
                   index: _index,
                   cartOpen: _cartOpen,
                 ),
-              // ── Full-width search row (both admin and non-admin desktop) ───
-              _DesktopSearchRow(
+              // ── Search + chips: storefront only (index 0) ─────────────────
+              if (_index == 0)
+                _DesktopSearchRow(
                   controller: _searchCtrl,
                   isLoading: _searchLoading,
                   onSearch: (v) => setState(() {
@@ -348,7 +380,6 @@ class _HomeShellState extends State<HomeShell> {
                   }),
                   onScrollToResults: () => setState(() => _scrollTrigger++),
                 ),
-              // ── Horizontal category chips (storefront tab, admin + customer) ─
               if (_index == 0)
                 _MobileCategoryChips(
                   meta: _desktopMeta,
@@ -356,8 +387,6 @@ class _HomeShellState extends State<HomeShell> {
                   onCategoryTap: (key) => _selectCategory(key),
                 ),
               Expanded(
-                // NotificationListener only fires setState when crossing the
-                // 400px threshold — at most twice per session, never per-frame.
                 child: NotificationListener<ScrollNotification>(
                   onNotification: (n) {
                     if (_index != 0) return false;
@@ -367,7 +396,7 @@ class _HomeShellState extends State<HomeShell> {
                     }
                     return false;
                   },
-                  child: _FadingIndexedStack(
+                  child: IndexedStack(
                     index: _index,
                     children: pages,
                   ),
@@ -3294,17 +3323,13 @@ class _MobileProfileButton extends StatelessWidget {
 class _AdminDesktopHeader extends StatelessWidget {
   final bool scrolled;
   final VoidCallback onHome;
+  final ValueChanged<int> onSection; // 0=Dashboard,1=AddMedicine,2=Suppliers,3=Customers,4=Bills
 
   const _AdminDesktopHeader({
     required this.onHome,
+    required this.onSection,
     this.scrolled = false,
   });
-
-  void _openAdmin(BuildContext context, [int? section]) {
-    Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => AdminShell(initialSection: section),
-    ));
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -3353,15 +3378,15 @@ class _AdminDesktopHeader extends StatelessWidget {
             ),
           ),
           const Spacer(),
-          _DesktopNavLink(label: 'Dashboard', icon: Icons.dashboard_outlined, selected: false, onTap: () => _openAdmin(context)),
+          _DesktopNavLink(label: 'Dashboard', icon: Icons.dashboard_outlined, selected: false, onTap: () => onSection(0)),
           const SizedBox(width: 2),
-          _DesktopNavLink(label: 'Add Medicine', icon: Icons.medication_outlined, selected: false, onTap: () => _openAdmin(context, 1)),
+          _DesktopNavLink(label: 'Add Medicine', icon: Icons.medication_outlined, selected: false, onTap: () => onSection(1)),
           const SizedBox(width: 2),
-          _DesktopNavLink(label: 'Suppliers', icon: Icons.inventory_2_outlined, selected: false, onTap: () => _openAdmin(context, 2)),
+          _DesktopNavLink(label: 'Suppliers', icon: Icons.inventory_2_outlined, selected: false, onTap: () => onSection(2)),
           const SizedBox(width: 2),
-          _DesktopNavLink(label: 'Customers', icon: Icons.people_outline, selected: false, onTap: () => _openAdmin(context, 3)),
+          _DesktopNavLink(label: 'Customers', icon: Icons.people_outline, selected: false, onTap: () => onSection(3)),
           const SizedBox(width: 2),
-          _DesktopNavLink(label: 'Bills', icon: Icons.inbox_outlined, selected: false, onTap: () => _openAdmin(context, 4)),
+          _DesktopNavLink(label: 'Bills', icon: Icons.inbox_outlined, selected: false, onTap: () => onSection(4)),
           const SizedBox(width: 8),
           _DesktopProfileButton(onLogin: () {}),
           const SizedBox(width: 24),
@@ -3648,6 +3673,29 @@ class _DesktopNavLinkState extends State<_DesktopNavLink> {
 }
 
 // ─── Fading tab switcher ──────────────────────────────────────────────────────
+
+// ─── Admin suppliers placeholder ─────────────────────────────────────────────
+
+class _AdminSuppliersPage extends StatelessWidget {
+  const _AdminSuppliersPage();
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Container(
+          width: 80, height: 80,
+          decoration: BoxDecoration(color: const Color(0xFFECFDF5), borderRadius: BorderRadius.circular(20)),
+          child: const Icon(Icons.inventory_2_outlined, size: 40, color: Color(0xFF1B7A43)),
+        ),
+        const SizedBox(height: 20),
+        const Text('Suppliers', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: Color(0xFF111827))),
+        const SizedBox(height: 10),
+        const Text('Coming soon — this section will be built out.', textAlign: TextAlign.center, style: TextStyle(fontSize: 14, color: Color(0xFF6B7280))),
+      ]),
+    );
+  }
+}
 
 class _FadingIndexedStack extends StatefulWidget {
   final int index;

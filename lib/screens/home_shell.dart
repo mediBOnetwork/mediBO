@@ -10,9 +10,6 @@ import '../url_sync.dart';
 import '../user_state.dart';
 import '../util.dart';
 import '../widgets/animations.dart';
-import 'admin/admin_add_medicine_screen.dart';
-import 'admin/admin_customer_screen.dart';
-import 'admin/admin_pending_bills_screen.dart';
 import 'auth/login_screen.dart';
 import 'bulk_upload_screen.dart';
 import 'cart_screen.dart';
@@ -164,7 +161,6 @@ class _HomeShellState extends State<HomeShell> {
     return LayoutBuilder(
       builder: (context, constraints) {
         final isDesktop = constraints.maxWidth >= 900;
-        final isAdmin = UserState.of(context).isAdmin;
 
         void onLogoTap() {
           if (_index != 0) _goHome();
@@ -212,7 +208,6 @@ class _HomeShellState extends State<HomeShell> {
   // ─── Mobile / tablet layout (< 900px) ────────────────────────────────────
 
   Widget _buildMobile(List<Widget> pages, VoidCallback onLogoTap, String logoTooltip) {
-    final isAdmin = UserState.of(context).isAdmin;
     return Scaffold(
       backgroundColor: Colors.white,
       bottomNavigationBar: _cartOpen
@@ -222,30 +217,14 @@ class _HomeShellState extends State<HomeShell> {
               cartOpen: _cartOpen,
               onCartTap: () => setState(() => _cartOpen = true),
               onNavTap: (i) {
-                if (isAdmin) {
-                  switch (i) {
-                    case 0:
-                      _setIndex(0);
-                    case 1:
-                      Navigator.push(context, MaterialPageRoute(
-                        builder: (_) => const AdminAddMedicineScreen()));
-                    case 2:
-                      Navigator.push(context, MaterialPageRoute(
-                        builder: (_) => const AdminCustomerScreen()));
-                    case 3:
-                      Navigator.push(context, MaterialPageRoute(
-                        builder: (_) => const PendingBillsScreen()));
-                  }
-                } else {
-                  switch (i) {
-                    case 0:
-                    case 1:
-                      _setIndex(0);
-                    case 2:
-                      _setIndex(1);
-                    case 3:
-                      _setIndex(2);
-                  }
+                switch (i) {
+                  case 0:
+                  case 1:
+                    _setIndex(0);
+                  case 2:
+                    _setIndex(1);
+                  case 3:
+                    _setIndex(2);
                 }
               },
             ),
@@ -290,7 +269,7 @@ class _HomeShellState extends State<HomeShell> {
               ],
             ),
           ),
-          if (_index == 0 && AppState.of(context).distinctItems > 0 && !UserState.of(context).isAdmin)
+          if (_index == 0 && AppState.of(context).distinctItems > 0)
             Positioned(
               bottom: 16,
               left: 0,
@@ -390,7 +369,7 @@ class _HomeShellState extends State<HomeShell> {
               ),
             ],
           ),
-          if (_index == 0 && AppState.of(context).distinctItems > 0 && !UserState.of(context).isAdmin)
+          if (_index == 0 && AppState.of(context).distinctItems > 0)
             Positioned(
               left: 0,
               right: 0,
@@ -443,7 +422,6 @@ class _LocationHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cartItems = AppState.of(context).distinctItems;
-    final isAdmin = UserState.of(context).isAdmin;
     return SafeArea(
       bottom: false,
       child: Container(
@@ -511,9 +489,8 @@ class _LocationHeader extends StatelessWidget {
                 ),
               ),
             ),
-            // RIGHT: cart icon (hidden for admins — admins don't shop)
-            if (!isAdmin)
-              _MobileCartIcon(cartItems: cartItems, onCart: onCart),
+            // RIGHT: cart icon
+            _MobileCartIcon(cartItems: cartItems, onCart: onCart),
           ],
         ),
       ),
@@ -2113,68 +2090,46 @@ class _MobileBottomBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cart = AppState.of(context);
-    final isAdmin = UserState.of(context).isAdmin;
-    final bottomNavIndex = isAdmin ? 0 : (index == 1 ? 2 : index == 2 ? 3 : 0);
+    final bottomNavIndex = index == 1 ? 2 : index == 2 ? 3 : 0;
     return BottomNavigationBar(
-          currentIndex: bottomNavIndex,
-          type: BottomNavigationBarType.fixed,
-          selectedItemColor: Brand.green,
-          unselectedItemColor: Brand.inkMuted,
-          selectedFontSize: 10,
-          unselectedFontSize: 10,
-          elevation: 8,
-          onTap: onNavTap,
-          items: isAdmin ? const [
-            BottomNavigationBarItem(
-              icon: Icon(Icons.home_outlined),
-              activeIcon: Icon(Icons.home),
-              label: 'Home',
-            ),
-            BottomNavigationBarItem(
-              icon: Icon(Icons.medication_outlined),
-              activeIcon: Icon(Icons.medication),
-              label: 'Add Med',
-            ),
-            BottomNavigationBarItem(
-              icon: Icon(Icons.people_outline),
-              activeIcon: Icon(Icons.people),
-              label: 'Customers',
-            ),
-            BottomNavigationBarItem(
-              icon: Icon(Icons.inbox_outlined),
-              activeIcon: Icon(Icons.inbox),
-              label: 'Bills',
-            ),
-          ] : [
-            const BottomNavigationBarItem(
-              icon: Icon(Icons.home_outlined),
-              activeIcon: Icon(Icons.home),
-              label: 'Home',
-            ),
-            const BottomNavigationBarItem(
-              icon: Icon(Icons.grid_view_outlined),
-              activeIcon: Icon(Icons.grid_view),
-              label: 'Catalogue',
-            ),
-            BottomNavigationBarItem(
-              icon: Badge(
-                isLabelVisible: cart.orders.isNotEmpty,
-                label: Text('${cart.orders.length}'),
-                child: const Icon(Icons.receipt_long_outlined),
-              ),
-              activeIcon: Badge(
-                isLabelVisible: cart.orders.isNotEmpty,
-                label: Text('${cart.orders.length}'),
-                child: const Icon(Icons.receipt_long),
-              ),
-              label: 'Orders',
-            ),
-            const BottomNavigationBarItem(
-              icon: Icon(Icons.upload_file_outlined),
-              activeIcon: Icon(Icons.upload_file),
-              label: 'Bulk',
-            ),
-          ],
+      currentIndex: bottomNavIndex,
+      type: BottomNavigationBarType.fixed,
+      selectedItemColor: Brand.green,
+      unselectedItemColor: Brand.inkMuted,
+      selectedFontSize: 10,
+      unselectedFontSize: 10,
+      elevation: 8,
+      onTap: onNavTap,
+      items: [
+        const BottomNavigationBarItem(
+          icon: Icon(Icons.home_outlined),
+          activeIcon: Icon(Icons.home),
+          label: 'Home',
+        ),
+        const BottomNavigationBarItem(
+          icon: Icon(Icons.grid_view_outlined),
+          activeIcon: Icon(Icons.grid_view),
+          label: 'Catalogue',
+        ),
+        BottomNavigationBarItem(
+          icon: Badge(
+            isLabelVisible: cart.orders.isNotEmpty,
+            label: Text('${cart.orders.length}'),
+            child: const Icon(Icons.receipt_long_outlined),
+          ),
+          activeIcon: Badge(
+            isLabelVisible: cart.orders.isNotEmpty,
+            label: Text('${cart.orders.length}'),
+            child: const Icon(Icons.receipt_long),
+          ),
+          label: 'Orders',
+        ),
+        const BottomNavigationBarItem(
+          icon: Icon(Icons.upload_file_outlined),
+          activeIcon: Icon(Icons.upload_file),
+          label: 'Bulk',
+        ),
+      ],
     );
   }
 }
@@ -2769,7 +2724,6 @@ class _DesktopHeaderState extends State<_DesktopHeader> {
   @override
   Widget build(BuildContext context) {
     final cartItems = AppState.of(context).distinctItems;
-    final isAdmin = UserState.of(context).isAdmin;
     final isBulk = widget.index == 2 && !widget.cartOpen;
     final isOrders = widget.index == 1 && !widget.cartOpen;
 
@@ -2935,87 +2889,52 @@ class _DesktopHeaderState extends State<_DesktopHeader> {
               ),
             ),
           ),
-          if (isAdmin) ...[
-            // Admin nav: Add Medicine, Suppliers, Customers, Bills
-            _DesktopNavLink(
-              label: 'Add Medicine',
-              icon: Icons.medication_outlined,
-              selected: false,
-              onTap: () => Navigator.push(context, MaterialPageRoute(
-                builder: (_) => const AdminAddMedicineScreen())),
-            ),
-            const SizedBox(width: 4),
-            _DesktopNavLink(
-              label: 'Suppliers',
-              icon: Icons.inventory_2_outlined,
-              selected: false,
-              onTap: () => Navigator.push(context, MaterialPageRoute(
-                builder: (_) => const _AdminSuppliersScreen())),
-            ),
-            const SizedBox(width: 4),
-            _DesktopNavLink(
-              label: 'Customers',
-              icon: Icons.people_outline,
-              selected: false,
-              onTap: () => Navigator.push(context, MaterialPageRoute(
-                builder: (_) => const AdminCustomerScreen())),
-            ),
-            const SizedBox(width: 4),
-            _DesktopNavLink(
-              label: 'Bills',
-              icon: Icons.inbox_outlined,
-              selected: false,
-              onTap: () => Navigator.push(context, MaterialPageRoute(
-                builder: (_) => const PendingBillsScreen())),
-            ),
-          ] else ...[
-            // Customer nav: Bulk Upload, Orders, Cart
-            _DesktopNavLink(
-              label: 'Bulk Upload',
-              icon: Icons.upload_file_outlined,
-              selected: isBulk,
-              onTap: widget.onBulk,
-            ),
-            const SizedBox(width: 4),
-            _DesktopNavLink(
-              label: 'Orders',
-              icon: Icons.receipt_long_outlined,
-              selected: isOrders,
-              onTap: widget.onOrders,
-            ),
-            const SizedBox(width: 8),
-            // Cart
-            PressEffect(
-              child: InkWell(
-                onTap: widget.onCart,
-                borderRadius: BorderRadius.circular(8),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Badge(
-                        isLabelVisible: cartItems > 0,
-                        label: Text('$cartItems',
-                            style: const TextStyle(fontSize: 10)),
-                        child: const Icon(Icons.shopping_cart_outlined,
-                            size: 22, color: Brand.ink),
+          // Customer nav: Bulk Upload, Orders, Cart
+          _DesktopNavLink(
+            label: 'Bulk Upload',
+            icon: Icons.upload_file_outlined,
+            selected: isBulk,
+            onTap: widget.onBulk,
+          ),
+          const SizedBox(width: 4),
+          _DesktopNavLink(
+            label: 'Orders',
+            icon: Icons.receipt_long_outlined,
+            selected: isOrders,
+            onTap: widget.onOrders,
+          ),
+          const SizedBox(width: 8),
+          // Cart
+          PressEffect(
+            child: InkWell(
+              onTap: widget.onCart,
+              borderRadius: BorderRadius.circular(8),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Badge(
+                      isLabelVisible: cartItems > 0,
+                      label: Text('$cartItems',
+                          style: const TextStyle(fontSize: 10)),
+                      child: const Icon(Icons.shopping_cart_outlined,
+                          size: 22, color: Brand.ink),
+                    ),
+                    const SizedBox(width: 6),
+                    const Text(
+                      'Cart',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: Brand.ink,
                       ),
-                      const SizedBox(width: 6),
-                      const Text(
-                        'Cart',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                          color: Brand.ink,
-                        ),
-                      ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
               ),
             ),
-          ],
+          ),
           const SizedBox(width: 16),
           // 6. Auth button (Login or profile dropdown) — far right
           _DesktopProfileButton(onLogin: widget.onLogin),
@@ -3063,7 +2982,7 @@ class _DesktopProfileButton extends StatelessWidget {
     }
 
     final profile = auth.profile;
-    final displayName = auth.isAdmin ? 'Admin' : (profile?.displayName ?? 'Account');
+    final displayName = profile?.displayName ?? 'Account';
     final initial = displayName.isNotEmpty ? displayName[0].toUpperCase() : '?';
     final shortName =
         displayName.length > 16 ? '${displayName.substring(0, 14)}…' : displayName;
@@ -3586,48 +3505,4 @@ class _FadingIndexedStackState extends State<_FadingIndexedStack>
   }
 }
 
-// ─────────────────────── Admin suppliers placeholder ──────────────────────
-
-class _AdminSuppliersScreen extends StatelessWidget {
-  const _AdminSuppliersScreen();
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFFF5F6F8),
-      appBar: AppBar(
-        backgroundColor: Colors.white,
-        elevation: 0,
-        title: const Text(
-          'Supplier Dashboard',
-          style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: Color(0xFF111827)),
-        ),
-        iconTheme: const IconThemeData(color: Color(0xFF374151)),
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(1),
-          child: Container(height: 1, color: const Color(0xFFE5E7EB)),
-        ),
-      ),
-      body: const Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.inventory_2_outlined, size: 48, color: Color(0xFF1B7A43)),
-            SizedBox(height: 16),
-            Text(
-              'Supplier Dashboard',
-              style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: Color(0xFF111827)),
-            ),
-            SizedBox(height: 10),
-            Text(
-              'Coming soon — this section will be built out.',
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 14, color: Color(0xFF6B7280)),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
 

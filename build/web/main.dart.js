@@ -33008,22 +33008,25 @@ Rc(a,b,c){var s=null,r=A.C(6),q=b.aN(0.07),p=A.C(6),o=A.b9(b.aN(0.3),1)
 return A.cH(!1,r,!0,A.P(s,A.l(a,s,s,s,s,s,A.by(s,s,b,s,s,s,s,s,s,s,s,11,s,s,B.B,s,s,!0,s,s,s,s,s,s,s,s),s,s,s),B.i,s,s,new A.a0(q,s,o,p,s,s,B.m),s,s,s,s,B.AI,s,s,s),s,!0,s,s,s,s,s,s,s,s,s,c,s,s,s,s,s,s,s)},
 byv(a){var s
 A:{if("supplier_name"===a){s="Supplier Name *"
-break A}if("contact_name"===a){s="Contact Person"
-break A}if("phone"===a){s="Phone"
-break A}if("email"===a){s="Email"
+break A}if("contact_person"===a){s="Contact Person"
+break A}if("contact_no"===a){s="Contact No"
 break A}if("whatsapp_no"===a){s="WhatsApp No"
+break A}if("email"===a){s="Email"
+break A}if("status"===a){s="Status"
+break A}if("margin"===a){s="Margin"
+break A}if("behaviour"===a){s="Behaviour"
+break A}if("cd_condition"===a){s="CD Condition"
+break A}if("payment_type"===a){s="Payment Type"
+break A}if("deal"===a){s="Deal"
+break A}if("street_address"===a){s="Street Address"
 break A}if("city"===a){s="City"
 break A}if("state"===a){s="State"
-break A}if("address"===a){s="Address"
-break A}if("pincode"===a){s="Pincode"
-break A}if("gstin"===a){s="GSTIN"
-break A}if("drug_license"===a){s="Drug License"
-break A}if("supplier_code"===a){s="Supplier Code"
-break A}if("payment_term"===a){s="Payment Term"
-break A}if("store_type"===a){s="Store Type"
-break A}if("range_zone"===a){s="Range / Zone"
-break A}if("other_contact"===a){s="Other Contact"
-break A}if("notes"===a){s="Notes"
+break A}if("pin_code"===a){s="Pin Code"
+break A}if("map_link"===a){s="Map Link"
+break A}if("stockist_type"===a){s="Stockist Type"
+break A}if("dl_1"===a){s="DL 1"
+break A}if("dl_2"===a){s="DL 2"
+break A}if("gst"===a){s="GST"
 break A}s="\u2014 Ignore \u2014"
 break A}return s},
 bpb(a,b){var s,r,q
@@ -105461,7 +105464,7 @@ r=A.b([],s)
 q=c.y
 q.toString
 p=J.y(q,null)
-if(p==null)p=B.ou
+if(p==null)p=B.ot
 o=A.o(t.T,t.UX)
 q=c.y
 q.toString
@@ -105481,8 +105484,8 @@ if(j){r=A.b([],s)
 i=c.y
 i.toString
 p=J.y(i,h.ghT())
-if(p==null)p=B.ou}else{r=B.ou
-p=B.ou}l=h
+if(p==null)p=B.ot}else{r=B.ot
+p=B.ot}l=h
 continue}if(j){i=h.b
 i=i==null?b:i.galr()
 j=i===!0}else j=!1
@@ -126123,7 +126126,7 @@ A.B1.prototype={
 a1(){return new A.VT(B.xS,A.b([],t.w8),A.b([],t.rj),A.o(t.S,t.QX),A.b([],t.s))},
 GD(){return this.d.$0()}}
 A.VT.prototype={
-gJu(){var s=A.K(B.ot,t.N)
+gJu(){var s=A.K(B.ou,t.N)
 B.b.D(s,this.y)
 s.push("ignore")
 return s},
@@ -126409,7 +126412,7 @@ JA(a,b){return this.aFB(a,b)},
 aFB(a6,a7){var s=0,r=A.w(t.YS),q,p=2,o=[],n=this,m,l,k,j,i,h,g,f,e,d,c,b,a,a0,a1,a2,a3,a4,a5
 var $async$JA=A.x(function(a8,a9){if(a8===1){o.push(a9)
 s=p}for(;;)switch(s){case 0:a1=J.am(a6)
-a2='Map each column to the correct supplier_profiles field.\n\nFields: supplier_name (required \u2014 Firm Name/Company Name/Supplier maps here), contact_name (Contact Person), phone, email, whatsapp_no, city, state, address, pincode, gstin, drug_license, supplier_code, payment_term, store_type, range_zone, other_contact, notes, ignore (skip)\n\nInfer from BOTH header AND sample values. "Firm Name","Company Name","Supplier" \u2192 supplier_name. "Contact","Contact Person","Name" \u2192 contact_name. Serial/index numbers \u2192 ignore.\n\nColumns:\n'+B.a0.hK(A.kD(a1.gC(a6),new A.bfE(a7,a6),!0,t.nf),null)+'\n\nReturn ONLY a JSON array: [{"index":0,"mapped_to":"supplier_name"},...]'
+a2='Map each column to the correct supplier_profiles field.\n\nFields: supplier_name (required \u2014 Firm Name/Company Name/Supplier maps here), contact_person (Contact Person/Name), contact_no (Phone/Mobile/Contact No), whatsapp_no, email, status, margin, behaviour, cd_condition, payment_type, deal, street_address (Address/Street), city, state, pin_code (Pincode/ZIP), map_link, stockist_type (Type/Category), dl_1 (Drug License 1), dl_2 (Drug License 2), gst (GST/GSTIN), ignore (skip)\n\nInfer from BOTH header AND sample values. "Firm Name","Company Name","Supplier" \u2192 supplier_name. "Contact","Contact Person","Name" \u2192 contact_person. "Phone","Mobile","Contact No" \u2192 contact_no. Serial/index numbers \u2192 ignore.\n\nColumns:\n'+B.a0.hK(A.kD(a1.gC(a6),new A.bfE(a7,a6),!0,t.nf),null)+'\n\nReturn ONLY a JSON array: [{"index":0,"mapped_to":"supplier_name"},...]'
 a3=t.N
 a4=A.o(t.S,a3)
 p=4
@@ -126430,7 +126433,7 @@ i=e.a(j)
 h=A.ds(J.y(i,"index"))
 d=A.E(J.y(i,"mapped_to"))
 g=d==null?"ignore":d
-if(h!=null){c=B.b.n(B.ot,g)||J.e(g,"ignore")?g:"ignore"
+if(h!=null){c=B.b.n(B.ou,g)||J.e(g,"ignore")?g:"ignore"
 J.bl(a4,h,c)}}}}p=2
 s=6
 break
@@ -126447,22 +126450,25 @@ e=a1.i(a6,a)
 c=A.aQ("[\\s_\\-]+",!0,!1)
 a0=A.aM(e.toLowerCase(),c,"")
 if(B.b.n(A.b(["suppliername","firmname","companyname","supplier"],f),a0)&&!a3.n(0,"supplier_name"))g="supplier_name"
-else if(B.b.n(A.b(["contactname","contactperson","contact","name"],f),a0)&&!a3.n(0,"contact_name"))g="contact_name"
-else if(B.b.n(A.b(["phone","mobile","mobilenumber","phonenumber","cell"],f),a0)&&!a3.n(0,"phone"))g="phone"
+else if(B.b.n(A.b(["contactname","contactperson","contact","name"],f),a0)&&!a3.n(0,"contact_person"))g="contact_person"
+else if(B.b.n(A.b(["phone","mobile","mobilenumber","phonenumber","cell","contactno"],f),a0)&&!a3.n(0,"contact_no"))g="contact_no"
 else if(B.b.n(A.b(["email","emailaddress","mail"],f),a0)&&!a3.n(0,"email"))g="email"
 else if(B.b.n(A.b(["whatsapp","whatsappno"],f),a0)&&!a3.n(0,"whatsapp_no"))g="whatsapp_no"
 else if(B.b.n(A.b(["city","town"],f),a0)&&!a3.n(0,"city"))g="city"
 else if(B.b.n(A.b(["state","province"],f),a0)&&!a3.n(0,"state"))g="state"
-else if(B.b.n(A.b(["address","addr"],f),a0)&&!a3.n(0,"address"))g="address"
-else if(B.b.n(A.b(["pincode","pin","zip"],f),a0)&&!a3.n(0,"pincode"))g="pincode"
-else if(B.b.n(A.b(["gstin","gst"],f),a0)&&!a3.n(0,"gstin"))g="gstin"
-else if(B.b.n(A.b(["druglicense","dl"],f),a0)&&!a3.n(0,"drug_license"))g="drug_license"
-else if(B.b.n(A.b(["suppliercode","code","vendorcode"],f),a0)&&!a3.n(0,"supplier_code"))g="supplier_code"
-else if(B.b.n(A.b(["paymentterm","paymentterms","creditdays"],f),a0)&&!a3.n(0,"payment_term"))g="payment_term"
-else if(B.b.n(A.b(["storetype","type"],f),a0)&&!a3.n(0,"store_type"))g="store_type"
-else if(B.b.n(A.b(["rangezone","zone","range"],f),a0)&&!a3.n(0,"range_zone"))g="range_zone"
-else if(B.b.n(A.b(["othercontact","altcontact"],f),a0)&&!a3.n(0,"other_contact"))g="other_contact"
-else g=B.b.n(A.b(["notes","remarks","comments"],f),a0)&&!a3.n(0,"notes")?"notes":"ignore"
+else if(B.b.n(A.b(["address","addr","streetaddress","street"],f),a0)&&!a3.n(0,"street_address"))g="street_address"
+else if(B.b.n(A.b(["pincode","pin","zip","pinno"],f),a0)&&!a3.n(0,"pin_code"))g="pin_code"
+else if(B.b.n(A.b(["gst","gstin","gstnumber"],f),a0)&&!a3.n(0,"gst"))g="gst"
+else if(B.b.n(A.b(["dl1","druglicense1","druglicense"],f),a0)&&!a3.n(0,"dl_1"))g="dl_1"
+else if(B.b.n(A.b(["dl2","druglicense2"],f),a0)&&!a3.n(0,"dl_2"))g="dl_2"
+else if(B.b.n(A.b(["paymenttype","paymentterm","paymentterms","creditdays"],f),a0)&&!a3.n(0,"payment_type"))g="payment_type"
+else if(B.b.n(A.b(["stockisttype","storetype","type","vendortype"],f),a0)&&!a3.n(0,"stockist_type"))g="stockist_type"
+else if(B.b.n(A.b(["margin"],f),a0)&&!a3.n(0,"margin"))g="margin"
+else if(B.b.n(A.b(["behaviour","behavior"],f),a0)&&!a3.n(0,"behaviour"))g="behaviour"
+else if(B.b.n(A.b(["cdcondition","cd"],f),a0)&&!a3.n(0,"cd_condition"))g="cd_condition"
+else if(B.b.n(A.b(["deal"],f),a0)&&!a3.n(0,"deal"))g="deal"
+else if(B.b.n(A.b(["maplink","maplocation","location"],f),a0)&&!a3.n(0,"map_link"))g="map_link"
+else g=B.b.n(A.b(["status"],f),a0)&&!a3.n(0,"status")?"status":"ignore"
 J.bl(a4,a,g)
 if(g!=="ignore")a3.G(0,g)}q=A.kD(a1.gC(a6),new A.bfF(a7,a6,a4),!0,t.Jz)
 s=1
@@ -126487,7 +126493,7 @@ if(!g.b.test(e)){k=n.c.X(t.q).f
 j=A.l('"'+e+u.n,null,null,null,null,null,null,null,null,null)
 k.cz(new A.hP(j,null,null,null,null,null,null,null,B.bz,null,null,null,null,B.am,!1,null,null,null,B.u,null))
 s=1
-break A}if(B.b.n(B.ot,e)){k=n.c.X(t.q).f
+break A}if(B.b.n(B.ou,e)){k=n.c.X(t.q).f
 j=A.l('"'+e+u.C,null,null,null,null,null,null,null,null,null)
 k.cz(new A.hP(j,null,null,null,null,null,null,null,B.bz,null,null,null,null,B.am,!1,null,null,null,B.u,null))
 s=1
@@ -126569,7 +126575,7 @@ q=3
 b=t.N
 n=A.o(b,t.Jz)
 for(a=J.aT(o.f);a.u();){m=a.gR(a)
-if(m.d!=="ignore"&&m.d!=="create_new")J.bl(n,m.d,m)}a=A.K(B.ot,b)
+if(m.d!=="ignore"&&m.d!=="create_new")J.bl(n,m.d,m)}a=A.K(B.ou,b)
 l=a
 J.It(l,o.y)
 k=l
@@ -174370,7 +174376,6 @@ B.R2=new A.og(3,"company")
 B.R3=new A.og(4,"deliveryPartner")
 B.aab=s([B.qm,B.R0,B.R1,B.R2,B.R3],A.aX("B<og>"))
 B.CH=s(["product_name","salt_composition","marketer","mrp","pack_qty","pack_size","pack_type","therapeutic_class","rx_required","status","uses","benefits","side_effects","storage","chemical_class","action_class","product_introduction","product_highlight"],t.s)
-B.ot=s(["supplier_name","contact_name","phone","email","whatsapp_no","city","state","address","pincode","gstin","drug_license","supplier_code","payment_term","store_type","range_zone","other_contact","notes"],t.s)
 B.a4x=new A.az(58307,"MaterialIcons",!1)
 B.hk=new A.D(1,0.2980392156862745,0.6862745098039216,0.3137254901960784,B.l)
 B.a5F=new A.aH(B.a4x,13,B.hk,null,null)
@@ -174539,7 +174544,7 @@ B.abu=s([],t.fJ)
 B.abJ=s([],t.ER)
 B.aDW=s([],t.ss)
 B.CU=s([],t.tc)
-B.ou=s([],t.jl)
+B.ot=s([],t.jl)
 B.aDX=s([],t.yv)
 B.CY=s([],t.wi)
 B.abz=s([],A.aX("B<p6<@>>"))
@@ -174672,6 +174677,7 @@ B.acs=s([8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8
 B.act=s(["pointerdown","pointermove","pointerleave","pointerup","pointercancel","touchstart","touchend","touchmove","touchcancel","mousedown","mousemove","mouseleave","mouseup","wheel"],t.s)
 B.D7=s([1,2,4,8,16,32,64,128,256,512,1024,2048,4096,8192,16384,32768,65536,131072,262144,524288,1048576,2097152,4194304,8388608,16777216,33554432,67108864,134217728,268435456,536870912,1073741824,2147483648],t.t)
 B.acv=s([250,333,713,500,549,833,778,439,333,333,500,549,250,549,250,278,500,500,500,500,500,500,500,500,500,500,278,278,549,549,549,444,549,722,667,722,612,611,763,603,722,333,631,722,686,889,722,722,768,741,556,592,611,690,439,768,645,795,611,333,863,333,658,500,500,631,549,549,494,439,521,411,603,329,603,549,549,576,521,549,549,521,549,603,439,576,713,686,493,686,494,480,200,480,549,750,620,247,549,167,713,500,753,753,753,753,1042,987,603,987,603,400,549,411,549,549,713,494,460,549,549,549,549,1000,603,1000,658,823,686,795,987,768,768,823,768,768,713,713,713,713,713,713,713,768,713,790,790,890,823,549,250,713,603,603,1042,987,603,987,603,494,329,790,790,786,713,384,384,384,384,384,384,494,494,494,494,329,274,686,686,686,384,384,384,384,384,384,494,494,494,-1],t.t)
+B.ou=s(["supplier_name","contact_person","contact_no","whatsapp_no","email","status","margin","behaviour","cd_condition","payment_type","deal","street_address","city","state","pin_code","map_link","stockist_type","dl_1","dl_2","gst"],t.s)
 B.a5G=new A.aH(B.u5,24,B.hk,null,null)
 B.N=new A.ae(8,null,null,null)
 B.asC=new A.m(!0,B.j,null,null,null,null,20,B.aU,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null)

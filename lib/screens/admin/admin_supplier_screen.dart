@@ -1900,31 +1900,34 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
   List<String> _dynamicFields = [];
 
   static const _baseFields = [
-    'supplier_name', 'contact_name', 'phone', 'email', 'whatsapp_no',
-    'city', 'state', 'address', 'pincode', 'gstin', 'drug_license',
-    'supplier_code', 'payment_term', 'store_type', 'range_zone',
-    'other_contact', 'notes',
+    'supplier_name', 'contact_person', 'contact_no', 'whatsapp_no', 'email',
+    'status', 'margin', 'behaviour', 'cd_condition', 'payment_type', 'deal',
+    'street_address', 'city', 'state', 'pin_code', 'map_link',
+    'stockist_type', 'dl_1', 'dl_2', 'gst',
   ];
   List<String> get _fields => [..._baseFields, ..._dynamicFields, 'ignore'];
 
   static String _fieldLabel(String f) => switch (f) {
     'supplier_name'  => 'Supplier Name *',
-    'contact_name'   => 'Contact Person',
-    'phone'          => 'Phone',
-    'email'          => 'Email',
+    'contact_person' => 'Contact Person',
+    'contact_no'     => 'Contact No',
     'whatsapp_no'    => 'WhatsApp No',
+    'email'          => 'Email',
+    'status'         => 'Status',
+    'margin'         => 'Margin',
+    'behaviour'      => 'Behaviour',
+    'cd_condition'   => 'CD Condition',
+    'payment_type'   => 'Payment Type',
+    'deal'           => 'Deal',
+    'street_address' => 'Street Address',
     'city'           => 'City',
     'state'          => 'State',
-    'address'        => 'Address',
-    'pincode'        => 'Pincode',
-    'gstin'          => 'GSTIN',
-    'drug_license'   => 'Drug License',
-    'supplier_code'  => 'Supplier Code',
-    'payment_term'   => 'Payment Term',
-    'store_type'     => 'Store Type',
-    'range_zone'     => 'Range / Zone',
-    'other_contact'  => 'Other Contact',
-    'notes'          => 'Notes',
+    'pin_code'       => 'Pin Code',
+    'map_link'       => 'Map Link',
+    'stockist_type'  => 'Stockist Type',
+    'dl_1'           => 'DL 1',
+    'dl_2'           => 'DL 2',
+    'gst'            => 'GST',
     _                => '— Ignore —',
   };
 
@@ -2144,12 +2147,15 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
     final prompt =
         'Map each column to the correct supplier_profiles field.\n\n'
         'Fields: supplier_name (required — Firm Name/Company Name/Supplier maps here), '
-        'contact_name (Contact Person), phone, email, whatsapp_no, city, state, address, '
-        'pincode, gstin, drug_license, supplier_code, payment_term, store_type, range_zone, '
-        'other_contact, notes, ignore (skip)\n\n'
+        'contact_person (Contact Person/Name), contact_no (Phone/Mobile/Contact No), '
+        'whatsapp_no, email, status, margin, behaviour, cd_condition, payment_type, deal, '
+        'street_address (Address/Street), city, state, pin_code (Pincode/ZIP), map_link, '
+        'stockist_type (Type/Category), dl_1 (Drug License 1), dl_2 (Drug License 2), '
+        'gst (GST/GSTIN), ignore (skip)\n\n'
         'Infer from BOTH header AND sample values. '
         '"Firm Name","Company Name","Supplier" → supplier_name. '
-        '"Contact","Contact Person","Name" → contact_name. '
+        '"Contact","Contact Person","Name" → contact_person. '
+        '"Phone","Mobile","Contact No" → contact_no. '
         'Serial/index numbers → ignore.\n\n'
         'Columns:\n${jsonEncode(entries)}\n\n'
         'Return ONLY a JSON array: [{"index":0,"mapped_to":"supplier_name"},...]';
@@ -2180,22 +2186,25 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
       final h = headers[i].toLowerCase().replaceAll(RegExp(r'[\s_\-]+'), '');
       String mapped = 'ignore';
       if (['suppliername','firmname','companyname','supplier'].contains(h) && !used.contains('supplier_name')) mapped = 'supplier_name';
-      else if (['contactname','contactperson','contact','name'].contains(h) && !used.contains('contact_name')) mapped = 'contact_name';
-      else if (['phone','mobile','mobilenumber','phonenumber','cell'].contains(h) && !used.contains('phone')) mapped = 'phone';
+      else if (['contactname','contactperson','contact','name'].contains(h) && !used.contains('contact_person')) mapped = 'contact_person';
+      else if (['phone','mobile','mobilenumber','phonenumber','cell','contactno'].contains(h) && !used.contains('contact_no')) mapped = 'contact_no';
       else if (['email','emailaddress','mail'].contains(h) && !used.contains('email')) mapped = 'email';
       else if (['whatsapp','whatsappno'].contains(h) && !used.contains('whatsapp_no')) mapped = 'whatsapp_no';
       else if (['city','town'].contains(h) && !used.contains('city')) mapped = 'city';
       else if (['state','province'].contains(h) && !used.contains('state')) mapped = 'state';
-      else if (['address','addr'].contains(h) && !used.contains('address')) mapped = 'address';
-      else if (['pincode','pin','zip'].contains(h) && !used.contains('pincode')) mapped = 'pincode';
-      else if (['gstin','gst'].contains(h) && !used.contains('gstin')) mapped = 'gstin';
-      else if (['druglicense','dl'].contains(h) && !used.contains('drug_license')) mapped = 'drug_license';
-      else if (['suppliercode','code','vendorcode'].contains(h) && !used.contains('supplier_code')) mapped = 'supplier_code';
-      else if (['paymentterm','paymentterms','creditdays'].contains(h) && !used.contains('payment_term')) mapped = 'payment_term';
-      else if (['storetype','type'].contains(h) && !used.contains('store_type')) mapped = 'store_type';
-      else if (['rangezone','zone','range'].contains(h) && !used.contains('range_zone')) mapped = 'range_zone';
-      else if (['othercontact','altcontact'].contains(h) && !used.contains('other_contact')) mapped = 'other_contact';
-      else if (['notes','remarks','comments'].contains(h) && !used.contains('notes')) mapped = 'notes';
+      else if (['address','addr','streetaddress','street'].contains(h) && !used.contains('street_address')) mapped = 'street_address';
+      else if (['pincode','pin','zip','pinno'].contains(h) && !used.contains('pin_code')) mapped = 'pin_code';
+      else if (['gst','gstin','gstnumber'].contains(h) && !used.contains('gst')) mapped = 'gst';
+      else if (['dl1','druglicense1','druglicense'].contains(h) && !used.contains('dl_1')) mapped = 'dl_1';
+      else if (['dl2','druglicense2'].contains(h) && !used.contains('dl_2')) mapped = 'dl_2';
+      else if (['paymenttype','paymentterm','paymentterms','creditdays'].contains(h) && !used.contains('payment_type')) mapped = 'payment_type';
+      else if (['stockisttype','storetype','type','vendortype'].contains(h) && !used.contains('stockist_type')) mapped = 'stockist_type';
+      else if (['margin'].contains(h) && !used.contains('margin')) mapped = 'margin';
+      else if (['behaviour','behavior'].contains(h) && !used.contains('behaviour')) mapped = 'behaviour';
+      else if (['cdcondition','cd'].contains(h) && !used.contains('cd_condition')) mapped = 'cd_condition';
+      else if (['deal'].contains(h) && !used.contains('deal')) mapped = 'deal';
+      else if (['maplink','maplocation','location'].contains(h) && !used.contains('map_link')) mapped = 'map_link';
+      else if (['status'].contains(h) && !used.contains('status')) mapped = 'status';
       idxMap[i] = mapped;
       if (mapped != 'ignore') used.add(mapped);
     }

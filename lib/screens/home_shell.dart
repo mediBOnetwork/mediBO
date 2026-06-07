@@ -11,6 +11,7 @@ import '../user_state.dart';
 import '../util.dart';
 import '../widgets/animations.dart';
 import 'admin/admin_add_medicine_screen.dart';
+import 'admin/admin_manage_admins_screen.dart';
 import 'admin/admin_customer_screen.dart';
 import 'admin/admin_dashboard_screen.dart';
 import 'admin/admin_pending_bills_screen.dart';
@@ -154,9 +155,21 @@ class _HomeShellState extends State<HomeShell> {
       case 'home': _goHome(); break;
       case 'dashboard': setState(() { _index = 3; _cartOpen = false; }); break;
       case 'add_medicine': setState(() { _index = 4; _cartOpen = false; }); break;
-      case 'suppliers': setState(() { _index = 5; _cartOpen = false; }); break;
-      case 'customers': setState(() { _index = 6; _cartOpen = false; }); break;
+      case 'suppliers':
+      case 'add_supplier':
+        setState(() { _index = 5; _cartOpen = false; }); break;
+      case 'customers':
+      case 'add_customer':
+        setState(() { _index = 6; _cartOpen = false; }); break;
       case 'bills': setState(() { _index = 7; _cartOpen = false; }); break;
+      case 'manage_admins':
+        if (UserState.of(context).isSuperAdmin) {
+          Navigator.push(context,
+              MaterialPageRoute(builder: (_) => const AdminManageAdminsScreen()));
+        }
+        break;
+      case 'logout':
+        UserState.read(context).signOut(); break;
     }
   }
 
@@ -283,6 +296,8 @@ class _HomeShellState extends State<HomeShell> {
                   onHome: _goHome,
                   onLogoTap: onLogoTap,
                   logoTooltip: '',
+                  onAdminNav: isAdmin ? _handleAdminNav : null,
+                  isSuperAdmin: isAdmin ? UserState.of(context).isSuperAdmin : false,
                 ),
                 // Search + chips: storefront only (index 0)
                 if (_index == 0)
@@ -367,6 +382,8 @@ class _HomeShellState extends State<HomeShell> {
                   onSection: (i) => _handleAdminNav(const [
                     'dashboard', 'add_medicine', 'suppliers', 'customers', 'bills'
                   ][i]),
+                  onAdminNav: _handleAdminNav,
+                  isSuperAdmin: UserState.of(context).isSuperAdmin,
                 )
               else
                 _DesktopHeader(
@@ -468,12 +485,16 @@ class _LocationHeader extends StatelessWidget {
   final VoidCallback onHome;
   final VoidCallback onLogoTap;
   final String logoTooltip;
+  final ValueChanged<String>? onAdminNav;
+  final bool isSuperAdmin;
   const _LocationHeader({
     required this.isAdmin,
     required this.onCart,
     required this.onHome,
     required this.onLogoTap,
     required this.logoTooltip,
+    this.onAdminNav,
+    this.isSuperAdmin = false,
   });
 
   @override
@@ -492,7 +513,7 @@ class _LocationHeader extends StatelessWidget {
         child: Row(
           children: [
             // LEFT: profile avatar
-            _MobileProfileAvatar(),
+            _MobileProfileAvatar(onAdminNav: onAdminNav, isSuperAdmin: isSuperAdmin),
             // CENTER: logo — context-aware navigation
             Expanded(
               child: Center(
@@ -558,6 +579,10 @@ class _LocationHeader extends StatelessWidget {
 // ─────────────────────── Mobile profile avatar (left) ───────────────────────
 
 class _MobileProfileAvatar extends StatelessWidget {
+  final ValueChanged<String>? onAdminNav;
+  final bool isSuperAdmin;
+  const _MobileProfileAvatar({this.onAdminNav, this.isSuperAdmin = false});
+
   @override
   Widget build(BuildContext context) {
     final auth = UserState.of(context);
@@ -573,6 +598,8 @@ class _MobileProfileAvatar extends StatelessWidget {
           if (!auth.isAuthenticated) {
             Navigator.push(context,
                 MaterialPageRoute(builder: (_) => const LoginScreen()));
+          } else if (onAdminNav != null) {
+            _showAdminSheet(context, auth);
           } else {
             Navigator.push(context,
                 MaterialPageRoute(builder: (_) => const ProfileScreen()));
@@ -611,6 +638,98 @@ class _MobileProfileAvatar extends StatelessWidget {
                     color: Colors.white, size: 20),
           ),
         ),
+      ),
+    );
+  }
+
+  void _showAdminSheet(BuildContext context, AuthNotifier auth) {
+    final profile = auth.profile;
+    final nav = onAdminNav!;
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      backgroundColor: Colors.white,
+      builder: (_) => Padding(
+        padding: const EdgeInsets.fromLTRB(24, 16, 24, 40),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFD1D5DB),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              profile?.displayName ?? 'Admin',
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827)),
+            ),
+            const SizedBox(height: 4),
+            const Text('Administrator', style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+            const SizedBox(height: 16),
+            const Divider(),
+            _SheetTile(icon: Icons.person_outline, label: 'View Profile', onTap: () {
+              Navigator.pop(context);
+              Navigator.push(context, MaterialPageRoute(builder: (_) => const ProfileScreen()));
+            }),
+            if (isSuperAdmin)
+              _SheetTile(
+                icon: Icons.admin_panel_settings_outlined,
+                label: 'Manage Admins',
+                color: const Color(0xFF1B7A43),
+                onTap: () { Navigator.pop(context); nav('manage_admins'); },
+              ),
+            _SheetTile(
+              icon: Icons.add_business_outlined,
+              label: 'Add Supplier',
+              onTap: () { Navigator.pop(context); nav('add_supplier'); },
+            ),
+            _SheetTile(
+              icon: Icons.person_add_outlined,
+              label: 'Add Customer',
+              onTap: () { Navigator.pop(context); nav('add_customer'); },
+            ),
+            const Divider(),
+            _SheetTile(
+              icon: Icons.logout,
+              label: 'Logout',
+              color: const Color(0xFFDC2626),
+              onTap: () { Navigator.pop(context); nav('logout'); },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SheetTile extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final Color color;
+  final VoidCallback onTap;
+  const _SheetTile({required this.icon, required this.label, required this.onTap, this.color = const Color(0xFF374151)});
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 12),
+        child: Row(children: [
+          Icon(icon, size: 20, color: color),
+          const SizedBox(width: 12),
+          Text(label, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: color)),
+        ]),
       ),
     );
   }
@@ -3000,7 +3119,9 @@ class _DesktopSearchRowState extends State<_DesktopSearchRow> {
 /// "Hello [name]" avatar pill with dropdown when logged in.
 class _DesktopProfileButton extends StatelessWidget {
   final VoidCallback onLogin;
-  const _DesktopProfileButton({required this.onLogin});
+  final ValueChanged<String>? onAdminNav;
+  final bool isSuperAdmin;
+  const _DesktopProfileButton({required this.onLogin, this.onAdminNav, this.isSuperAdmin = false});
 
   @override
   Widget build(BuildContext context) {
@@ -3035,6 +3156,7 @@ class _DesktopProfileButton extends StatelessWidget {
     final initial = displayName.isNotEmpty ? displayName[0].toUpperCase() : '?';
     final shortName =
         displayName.length > 16 ? '${displayName.substring(0, 14)}…' : displayName;
+    final hasAdminNav = onAdminNav != null;
 
     return ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 200),
@@ -3054,6 +3176,35 @@ class _DesktopProfileButton extends StatelessWidget {
             ],
           ),
         ),
+        if (hasAdminNav) ...[
+          const PopupMenuDivider(),
+          if (isSuperAdmin)
+            const PopupMenuItem(
+              value: 'manage_admins',
+              child: Row(children: [
+                Icon(Icons.admin_panel_settings_outlined, size: 16, color: Color(0xFF1B7A43)),
+                SizedBox(width: 10),
+                Text('Manage Admins', style: TextStyle(fontSize: 14, color: Color(0xFF1B7A43))),
+              ]),
+            ),
+          const PopupMenuItem(
+            value: 'add_supplier',
+            child: Row(children: [
+              Icon(Icons.add_business_outlined, size: 16, color: Color(0xFF374151)),
+              SizedBox(width: 10),
+              Text('Add Supplier', style: TextStyle(fontSize: 14, color: Color(0xFF374151))),
+            ]),
+          ),
+          const PopupMenuItem(
+            value: 'add_customer',
+            child: Row(children: [
+              Icon(Icons.person_add_outlined, size: 16, color: Color(0xFF374151)),
+              SizedBox(width: 10),
+              Text('Add Customer', style: TextStyle(fontSize: 14, color: Color(0xFF374151))),
+            ]),
+          ),
+          const PopupMenuDivider(),
+        ],
         PopupMenuItem(
           value: 'logout',
           child: const Row(
@@ -3070,8 +3221,11 @@ class _DesktopProfileButton extends StatelessWidget {
         if (val == 'profile' && context.mounted) {
           Navigator.push(context,
               MaterialPageRoute(builder: (_) => const ProfileScreen()));
+        } else if (val == 'logout') {
+          await UserState.read(context).signOut();
+        } else if (onAdminNav != null) {
+          onAdminNav!(val);
         }
-        if (val == 'logout') await UserState.read(context).signOut();
       },
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -3333,10 +3487,14 @@ class _AdminDesktopHeader extends StatelessWidget {
   final bool scrolled;
   final VoidCallback onHome;
   final ValueChanged<int> onSection; // 0=Dashboard,1=AddMedicine,2=Suppliers,3=Customers,4=Bills
+  final ValueChanged<String> onAdminNav;
+  final bool isSuperAdmin;
 
   const _AdminDesktopHeader({
     required this.onHome,
     required this.onSection,
+    required this.onAdminNav,
+    this.isSuperAdmin = false,
     this.scrolled = false,
   });
 
@@ -3397,7 +3555,7 @@ class _AdminDesktopHeader extends StatelessWidget {
           const SizedBox(width: 2),
           _DesktopNavLink(label: 'Bills', icon: Icons.inbox_outlined, selected: false, onTap: () => onSection(4)),
           const SizedBox(width: 8),
-          _DesktopProfileButton(onLogin: () {}),
+          _DesktopProfileButton(onLogin: () {}, onAdminNav: onAdminNav, isSuperAdmin: isSuperAdmin),
           const SizedBox(width: 24),
         ],
       ),

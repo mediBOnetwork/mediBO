@@ -1231,169 +1231,111 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       return s.isEmpty ? '—' : s;
     }
 
+    // All fields in display order — shown as a flat 2-column key-value grid on desktop.
+    final fields = <(String, String)>[
+      ('Supplier Name',  val(rawData['supplier_name'])),
+      ('Contact Name',   val(rawData['contact_name'])),
+      ('Code',           val(rawData['supplier_code'])),
+      ('Email',          val(rawData['email'])),
+      ('WhatsApp',       val(rawData['whatsapp_no'])),
+      ('Phone',          val(rawData['phone'])),
+      ('Other Contact',  val(rawData['other_contact'])),
+      ('Address',        val(rawData['address'])),
+      ('City',           val(rawData['city'])),
+      ('State',          val(rawData['state'])),
+      ('PIN Code',       val(rawData['pincode'])),
+      ('Range / Zone',   val(rawData['range_zone'])),
+      ('Payment Term',   val(rawData['payment_term'])),
+      ('GSTIN',          val(rawData['gstin'])),
+      ('Drug License',   val(rawData['drug_license'])),
+      ('Store Type',     val(rawData['store_type'])),
+      ('Notes',          val(rawData['notes'])),
+      ('Margin',         val(rawData['margin'])),
+      ('Behaviour',      val(rawData['behaviour'])),
+      ('CD Condition',   val(rawData['cd_condition'])),
+      ('Deal',           val(rawData['deal'])),
+      ('Stockist Type',  val(rawData['stockist_type'])),
+      ('Status',         val(rawData['status'])),
+      ('Approved By',    val(rawData['approved_by'])),
+    ];
+
     return Container(
       color: const Color(0xFFF9FAFB),
-      padding: EdgeInsets.fromLTRB(lpad, 14, rpad, 16),
+      padding: EdgeInsets.fromLTRB(lpad, 6, rpad, 8),
       child: LayoutBuilder(builder: (ctx, constraints) {
         final isMobile = constraints.maxWidth < 600;
 
-        Widget field(String label, String value) {
+        // One key-value row: label (fixed 110px, muted) | value (bold, fills rest).
+        Widget kvRow(String label, String value, {bool isLast = false}) {
           final isEmpty = value == '—';
-          return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(label,
-                style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w600,
-                    color: Color(0xFF9CA3AF), letterSpacing: 0.4)),
-            const SizedBox(height: 3),
-            Text(value,
-                style: TextStyle(fontSize: 13,
-                    color: isEmpty ? const Color(0xFFD1D5DB) : const Color(0xFF111827),
-                    fontStyle: isEmpty ? FontStyle.italic : FontStyle.normal),
-                overflow: TextOverflow.ellipsis,
-                maxLines: 2),
-          ]);
+          return Container(
+            height: 28,
+            decoration: isLast
+                ? null
+                : const BoxDecoration(
+                    border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB), width: 0.5))),
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Row(children: [
+              SizedBox(
+                width: 110,
+                child: Text(label,
+                    style: const TextStyle(
+                        fontSize: 11, color: Color(0xFF9CA3AF), fontWeight: FontWeight.w500),
+                    overflow: TextOverflow.ellipsis),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(value,
+                    style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: isEmpty ? const Color(0xFFD1D5DB) : const Color(0xFF111827),
+                        fontStyle: isEmpty ? FontStyle.italic : FontStyle.normal),
+                    overflow: TextOverflow.ellipsis),
+              ),
+            ]),
+          );
         }
 
-        Widget secHeader(String title) => Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: Text(title,
-                  style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700,
-                      color: Color(0xFF6B7280), letterSpacing: 0.6)),
-            );
+        if (isMobile) {
+          // Single column stacked list
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              for (int i = 0; i < fields.length; i++)
+                kvRow(fields[i].$1, fields[i].$2, isLast: i == fields.length - 1),
+            ],
+          );
+        }
 
-        const divider = Padding(
-          padding: EdgeInsets.symmetric(vertical: 10),
-          child: Divider(height: 1, color: Color(0xFFE5E7EB)),
+        // Desktop: two columns side by side, each column is a list of kvRows.
+        // Split fields into left half and right half.
+        final half = (fields.length / 2).ceil();
+        final left  = fields.sublist(0, half);
+        final right = fields.sublist(half);
+
+        // Vertical divider between the two columns.
+        return IntrinsicHeight(
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Expanded(
+              child: Column(
+                children: [
+                  for (int i = 0; i < left.length; i++)
+                    kvRow(left[i].$1, left[i].$2, isLast: i == left.length - 1),
+                ],
+              ),
+            ),
+            const VerticalDivider(width: 1, thickness: 0.5, color: Color(0xFFE5E7EB)),
+            Expanded(
+              child: Column(
+                children: [
+                  for (int i = 0; i < right.length; i++)
+                    kvRow(right[i].$1, right[i].$2, isLast: i == right.length - 1),
+                ],
+              ),
+            ),
+          ]),
         );
-
-        Widget basicInfo() => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              secHeader('BASIC INFO'),
-              if (isMobile) ...[
-                field('Supplier Name', val(rawData['supplier_name'])),
-                const SizedBox(height: 8),
-                field('Contact Name', val(rawData['contact_name'])),
-                const SizedBox(height: 8),
-                field('Supplier Code', val(rawData['supplier_code'])),
-              ] else
-                Row(children: [
-                  Expanded(child: field('Supplier Name', val(rawData['supplier_name']))),
-                  const SizedBox(width: 8),
-                  Expanded(child: field('Contact Name', val(rawData['contact_name']))),
-                  const SizedBox(width: 8),
-                  Expanded(child: field('Supplier Code', val(rawData['supplier_code']))),
-                ]),
-            ]);
-
-        Widget contact() => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              secHeader('CONTACT'),
-              if (isMobile) ...[
-                field('Email', val(rawData['email'])),
-                const SizedBox(height: 8),
-                field('WhatsApp', val(rawData['whatsapp_no'])),
-                const SizedBox(height: 8),
-                field('Phone', val(rawData['phone'])),
-                const SizedBox(height: 8),
-                field('Other Contact', val(rawData['other_contact'])),
-              ] else ...[
-                Row(children: [
-                  Expanded(child: field('Email', val(rawData['email']))),
-                  const SizedBox(width: 8),
-                  Expanded(child: field('WhatsApp', val(rawData['whatsapp_no']))),
-                ]),
-                const SizedBox(height: 8),
-                Row(children: [
-                  Expanded(child: field('Phone', val(rawData['phone']))),
-                  const SizedBox(width: 8),
-                  Expanded(child: field('Other Contact', val(rawData['other_contact']))),
-                ]),
-              ],
-            ]);
-
-        Widget location() => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              secHeader('LOCATION'),
-              if (isMobile) ...[
-                field('Address', val(rawData['address'])),
-                const SizedBox(height: 8),
-                field('City', val(rawData['city'])),
-                const SizedBox(height: 8),
-                field('State', val(rawData['state'])),
-                const SizedBox(height: 8),
-                field('PIN Code', val(rawData['pincode'])),
-                const SizedBox(height: 8),
-                field('Range / Zone', val(rawData['range_zone'])),
-              ] else
-                Wrap(spacing: 16, runSpacing: 8, children: [
-                  SizedBox(width: constraints.maxWidth * 0.38,
-                      child: field('Address', val(rawData['address']))),
-                  SizedBox(width: constraints.maxWidth * 0.18,
-                      child: field('City', val(rawData['city']))),
-                  SizedBox(width: constraints.maxWidth * 0.16,
-                      child: field('State', val(rawData['state']))),
-                  SizedBox(width: constraints.maxWidth * 0.12,
-                      child: field('PIN Code', val(rawData['pincode']))),
-                  SizedBox(width: constraints.maxWidth * 0.14,
-                      child: field('Range / Zone', val(rawData['range_zone']))),
-                ]),
-            ]);
-
-        Widget business() => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              secHeader('BUSINESS'),
-              if (isMobile) ...[
-                field('Payment Term', val(rawData['payment_term'])),
-                const SizedBox(height: 8),
-                field('GSTIN', val(rawData['gstin'])),
-                const SizedBox(height: 8),
-                field('Drug License', val(rawData['drug_license'])),
-                const SizedBox(height: 8),
-                field('Store Type', val(rawData['store_type'])),
-                const SizedBox(height: 8),
-                field('Notes', val(rawData['notes'])),
-              ] else
-                Row(children: [
-                  Expanded(child: field('Payment Term', val(rawData['payment_term']))),
-                  const SizedBox(width: 8),
-                  Expanded(child: field('GSTIN', val(rawData['gstin']))),
-                  const SizedBox(width: 8),
-                  Expanded(child: field('Drug License', val(rawData['drug_license']))),
-                  const SizedBox(width: 8),
-                  Expanded(child: field('Store Type', val(rawData['store_type']))),
-                  const SizedBox(width: 8),
-                  Expanded(child: field('Notes', val(rawData['notes']))),
-                ]),
-            ]);
-
-        Widget approval() => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              secHeader('APPROVAL'),
-              if (isMobile) ...[
-                field('Status', val(rawData['status'])),
-                const SizedBox(height: 8),
-                field('Approved By', val(rawData['approved_by'])),
-                const SizedBox(height: 8),
-                field('Approved At', val(rawData['approved_at'], isTs: true)),
-                const SizedBox(height: 8),
-                field('Registered', val(rawData['created_at'], isTs: true)),
-              ] else
-                Row(children: [
-                  Expanded(child: field('Status', val(rawData['status']))),
-                  const SizedBox(width: 8),
-                  Expanded(child: field('Approved By', val(rawData['approved_by']))),
-                  const SizedBox(width: 8),
-                  Expanded(child: field('Approved At', val(rawData['approved_at'], isTs: true))),
-                  const SizedBox(width: 8),
-                  Expanded(child: field('Registered', val(rawData['created_at'], isTs: true))),
-                ]),
-            ]);
-
-        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          basicInfo(),
-          divider,
-          contact(),
-          divider,
-          location(),
-          divider,
-          business(),
-          divider,
-          approval(),
-        ]);
       }),
     );
   }

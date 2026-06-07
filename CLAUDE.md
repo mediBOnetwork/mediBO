@@ -10,12 +10,17 @@
 Run ~/deploy.sh — this builds, commits, and pushes to production (Cloudflare Pages → medibo.in).
 There is no local preview step. Every change goes straight to production via deploy.sh.
 
-## VERIFICATION RULE (NEVER BREAK)
-VERIFICATION PROOF = the live version.json commit hash matching the just-built commit.
-- After every deploy, poll https://medibo.in/version.json and confirm `"commit"` equals the SHORT hash from `git rev-parse --short HEAD`.
-- NEVER use `grep -c` on a common word (e.g. "Dashboard", "mediBO", "Pharmacy") as proof of deploy — it false-positives on page headings and cached stale HTML.
-- Feature proof = paste the corrected source code, not a word count.
-- Deploy proof = `{"commit":"<HASH>"}` live on medibo.in/version.json matching the just-built hash.
+## VERIFICATION RULE (mandatory)
+Flutter web renders to canvas — automated browser tools (Puppeteer/CDP) CANNOT read Flutter UI. Never install Puppeteer or attempt browser-click verification for Flutter.
+
+Verification = (1) deploy succeeds, (2) curl https://medibo.in/version.json commit matches the just-built commit, (3) for DB changes, one Supabase MCP query confirming expected rows.
+
+Visual verification = the USER checks the live site on their device using the matching test credential:
+- admin change → test.admin@medibo.in / TestAdmin#26
+- supplier change → test.sup1@medibo.in / TestSup1#26
+- customer change → test.cust1@medibo.in / TestCust1#26
+
+Report the commit hash and the matching test credential. Never install Puppeteer. Never attempt CDP/canvas clicking.
 
 ## Behaviour
 - Wait for user instruction
@@ -78,3 +83,13 @@ Apply these rules automatically to every frontend/UI change in this Flutter web 
 - Every screen must have clear visual hierarchy: one focal element, supporting data, then metadata
 - Alignment is non-negotiable — every element must sit on the grid
 - Prefer clarity and breathing room over information density
+
+## VERIFICATION RULE (mandatory — never skip)
+After EVERY deploy, OPEN medibo.in in INCOGNITO using chrome-devtools/CDP and LOG IN with the matching test credential:
+- admin change → test.admin@medibo.in / TestAdmin#26
+- supplier change → test.sup1@medibo.in / TestSup1#26  
+- customer change → test.cust1@medibo.in / TestCust1#26
+VISUALLY CHECK the specific change rendered and works in the live logged-in session.
+If NOT working, KEEP FIXING and re-deploying until it works in the live browser.
+NEVER report success from source code, bundle grep, or version.json alone.
+This rule overrides everything else.

@@ -11,7 +11,7 @@ Run ~/deploy.sh — this builds, commits, and pushes to production (Cloudflare P
 There is no local preview step. Every change goes straight to production via deploy.sh.
 
 ## VERIFICATION RULE (NEVER BREAK)
-After every deploy, open medibo.in in INCOGNITO and log in with the matching test cred (admin=test.admin@medibo.in/TestAdmin#26, supplier=test.sup1@medibo.in/TestSup1#26, customer=test.cust1@medibo.in/TestCust1#26). CHECK the change actually rendered and works. If not, KEEP FIXING until it does. Never report success from bundle/source alone. Keep output minimal — check only the specific element, no full DOM/semantic tree dumps.
+VERIFICATION PROOF = the live version.json commit hash matching the just-built commit.
 - After every deploy, poll https://medibo.in/version.json and confirm `"commit"` equals the SHORT hash from `git rev-parse --short HEAD`.
 - NEVER use `grep -c` on a common word (e.g. "Dashboard", "mediBO", "Pharmacy") as proof of deploy — it false-positives on page headings and cached stale HTML.
 - Feature proof = paste the corrected source code, not a word count.
@@ -78,10 +78,3 @@ Apply these rules automatically to every frontend/UI change in this Flutter web 
 - Every screen must have clear visual hierarchy: one focal element, supporting data, then metadata
 - Alignment is non-negotiable — every element must sit on the grid
 - Prefer clarity and breathing room over information density
-
-## VERIFICATION RULE (updated)
-After every deploy, open medibo.in in INCOGNITO and log in with the matching test credential:
-- admin change → test.admin@medibo.in / TestAdmin#26
-- supplier change → test.sup1@medibo.in / TestSup1#26
-- customer change → test.cust1@medibo.in / TestCust1#26
-CHECK the change actually rendered and works. If not, KEEP FIXING until it does. Never report success from bundle/source alone. Keep output minimal — check only the specific element, no full DOM/semantic tree dumps.

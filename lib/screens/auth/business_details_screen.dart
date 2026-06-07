@@ -59,7 +59,6 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
 
   bool _saving = false;
   String? _saveError;
-  bool _autoFill = false;
 
   static const _storeTypes = [
     'Retail Pharmacy',
@@ -84,35 +83,6 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
     final stripped = widget.phone.replaceAll('+91', '').trim();
     if (stripped.length == 10) _whatsappCtrl.text = stripped;
     if (widget.email.isNotEmpty) _emailCtrl.text = widget.email;
-  }
-
-  bool get _isGoogleUser {
-    final meta = Supabase.instance.client.auth.currentUser?.appMetadata;
-    return meta?['provider'] == 'google' ||
-        (meta?['providers'] as List?)?.contains('google') == true;
-  }
-
-  String get _googleDisplayName =>
-      (Supabase.instance.client.auth.currentUser?.userMetadata?['full_name'] ??
-       Supabase.instance.client.auth.currentUser?.userMetadata?['name'] ??
-       '') as String;
-
-  String get _googleEmail =>
-      (Supabase.instance.client.auth.currentUser?.userMetadata?['email'] ??
-       Supabase.instance.client.auth.currentUser?.email ??
-       '') as String;
-
-  void _setAutoFill(bool on) {
-    setState(() {
-      _autoFill = on;
-      if (on) {
-        _customerNameCtrl.text = _googleDisplayName;
-        _emailCtrl.text = _googleEmail;
-      } else {
-        _customerNameCtrl.clear();
-        _emailCtrl.text = widget.email;
-      }
-    });
   }
 
   void _onCodeChanged(String value) {
@@ -316,54 +286,6 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    // ── Auto-fill toggle ──────────────────────────────────
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                      decoration: BoxDecoration(
-                        color: _isGoogleUser
-                            ? (_autoFill ? const Color(0xFFECFDF5) : const Color(0xFFF9FAFB))
-                            : const Color(0xFFF3F4F6),
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(
-                          color: _isGoogleUser
-                              ? const Color(0xFFD1FAE5)
-                              : const Color(0xFFE5E7EB),
-                        ),
-                      ),
-                      child: Row(children: [
-                        Icon(
-                          Icons.auto_awesome,
-                          size: 18,
-                          color: _isGoogleUser
-                              ? const Color(0xFF1B5E20)
-                              : const Color(0xFF9CA3AF),
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Text(
-                            _isGoogleUser
-                                ? 'Auto-fill from Google account'
-                                : 'Sign in with Google to use auto-fill',
-                            style: TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                              color: _isGoogleUser
-                                  ? const Color(0xFF065F46)
-                                  : const Color(0xFF9CA3AF),
-                            ),
-                          ),
-                        ),
-                        if (_isGoogleUser)
-                          Switch(
-                            value: _autoFill,
-                            onChanged: _setAutoFill,
-                            activeColor: const Color(0xFF1B5E20),
-                          ),
-                      ]),
-                    ),
-                    const SizedBox(height: 16),
-
-                    // ── Info banner ───────────────────────────────────────
                     Container(
                       padding: const EdgeInsets.all(14),
                       decoration: BoxDecoration(
@@ -568,7 +490,7 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
                       hint: 'pharmacy@example.com',
                       keyboardType: TextInputType.emailAddress,
                       capitalization: TextCapitalization.none,
-                      readOnly: widget.email.isNotEmpty && !_autoFill,
+                      readOnly: widget.email.isNotEmpty,
                       validator: (v) {
                         if (v == null || v.trim().isEmpty) return 'Required';
                         if (!v.trim().contains('@')) return 'Invalid email';

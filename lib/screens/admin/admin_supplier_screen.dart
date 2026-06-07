@@ -718,10 +718,8 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         _th('CONTACT', flex: 3),
         _th('PHONE', flex: 2),
         _th('CODE', flex: 2),
-        _th('CITY', flex: 2),
-        _th('STATUS', flex: 2),
-        const SizedBox(width: 230),
-        const SizedBox(width: 32),
+        _th('CITY', flex: 3),
+        const SizedBox(width: 360), // right action cluster placeholder
       ]),
     );
   }
@@ -748,34 +746,40 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                 style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)))),
             Expanded(flex: 2, child: Text(row.supplierCode.isNotEmpty ? row.supplierCode : '—',
                 style: const TextStyle(fontSize: 12, color: Color(0xFF374151), fontFamily: 'monospace'))),
-            Expanded(flex: 2, child: Text(
+            Expanded(flex: 3, child: Text(
                 [row.city, row.state].where((s) => s.isNotEmpty).join(', ').let((s) => s.isNotEmpty ? s : '—'),
                 style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)), overflow: TextOverflow.ellipsis)),
-            GestureDetector(
-              onTap: () => _toggleCompanies(row.id),
-              behavior: HitTestBehavior.opaque,
-              child: _SupplierCompaniesButton(
-                count: _companyCounts[row.id] ?? 0,
-                isOpen: _companiesSupplierId == row.id,
-              ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(flex: 2, child: _StatusBadge(status: row.status)),
-            SizedBox(width: 230, child: Row(mainAxisSize: MainAxisSize.min, children: [
-              _actionBtn('Edit',        const Color(0xFF1B7A43),  () => _editSupplier(row)),
-              const SizedBox(width: 6),
-              _actionBtn(
-                row.isSuspended ? 'Reactivate' : 'Suspend',
-                row.isSuspended ? const Color(0xFF1B7A43) : const Color(0xFFD97706),
-                () => row.isSuspended ? _reactivateSupplier(row) : _suspendSupplier(row),
-              ),
-              const SizedBox(width: 6),
-              _actionBtn('Delete',      const Color(0xFFDC2626),  () => _deleteSupplier(row)),
-            ])),
-            SizedBox(width: 32, child: AnimatedRotation(
-              turns: isExpanded ? 0.5 : 0.0,
-              duration: const Duration(milliseconds: 200),
-              child: const Icon(Icons.expand_more, size: 18, color: Color(0xFF6B7280)),
+            // ── Right action cluster (fixed 360px) — all non-data controls ──────
+            SizedBox(width: 360, child: Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                GestureDetector(
+                  onTap: () => _toggleCompanies(row.id),
+                  behavior: HitTestBehavior.opaque,
+                  child: _SupplierCompaniesButton(
+                    count: _companyCounts[row.id] ?? 0,
+                    isOpen: _companiesSupplierId == row.id,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                _StatusBadge(status: row.status),
+                const SizedBox(width: 14),
+                _actionBtn('Edit', const Color(0xFF1B7A43), () => _editSupplier(row)),
+                const SizedBox(width: 6),
+                _actionBtn(
+                  row.isSuspended ? 'Reactivate' : 'Suspend',
+                  row.isSuspended ? const Color(0xFF1B7A43) : const Color(0xFFD97706),
+                  () => row.isSuspended ? _reactivateSupplier(row) : _suspendSupplier(row),
+                ),
+                const SizedBox(width: 6),
+                _actionBtn('Delete', const Color(0xFFDC2626), () => _deleteSupplier(row)),
+                const SizedBox(width: 10),
+                AnimatedRotation(
+                  turns: isExpanded ? 0.5 : 0.0,
+                  duration: const Duration(milliseconds: 200),
+                  child: const Icon(Icons.expand_more, size: 18, color: Color(0xFF6B7280)),
+                ),
+              ],
             )),
           ]),
         ),
@@ -785,7 +789,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           supplierId: row.id,
           onCompanyAdded: () => _reloadCompanyCount(row.id),
         ),
-      if (isExpanded) _buildDetails(row.rawData, lpad: 44, rpad: 28),
+      if (isExpanded) _buildDetails(row.rawData, lpad: 28, rpad: 28),
     ]);
   }
 
@@ -1023,7 +1027,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           ]),
         ),
       ),
-      if (isExpanded) _buildDetails(row.rawData, lpad: 44, rpad: 28),
+      if (isExpanded) _buildDetails(row.rawData, lpad: 28, rpad: 28),
     ]);
   }
 
@@ -1362,45 +1366,39 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       int globalRowIndex = 0;
 
       for (final group in groups) {
-        // Category header — spans full width.
-        tableRows.add(Container(
-          height: 28,
-          decoration: BoxDecoration(
+        // Category header — green left accent bar, light bg, no outer L/R border.
+        tableRows.add(Row(children: [
+          Container(width: 3, height: 28, color: const Color(0xFF1B8A5A)),
+          Expanded(child: Container(
+            height: 28,
             color: catBg,
-            border: Border(
-              top:    border,
-              bottom: border,
-              right:  border,
-              left:   const BorderSide(color: Color(0xFF1B8A5A), width: 3),
-            ),
-          ),
-          padding: const EdgeInsets.symmetric(horizontal: 8),
-          alignment: Alignment.centerLeft,
-          child: Text('▸ ${group.$1}',
-              style: const TextStyle(
-                  fontSize: 11, fontWeight: FontWeight.w600,
-                  color: Color(0xFF1B8A5A), letterSpacing: 0.8)),
-        ));
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            alignment: Alignment.centerLeft,
+            child: Text('▸ ${group.$1}',
+                style: const TextStyle(
+                    fontSize: 11, fontWeight: FontWeight.w600,
+                    color: Color(0xFF1B8A5A), letterSpacing: 0.8)),
+          )),
+        ]));
 
         for (int i = 0; i < group.$2.length; i++) {
           final field    = group.$2[i];
           final isEmpty  = field.$2 == '—';
           final rowColor = globalRowIndex.isEven ? evenRowBg : oddRowBg;
-          // Top border only on first data row after category header (header already draws bottom).
+          // Hairline divider between data rows; none above first row (header already provides bottom).
           final topBorder = i == 0 ? BorderSide.none : border;
 
           tableRows.add(SizedBox(
             height: 36,
             child: Row(children: [
-              // FIELD NAME cell
+              // FIELD NAME cell — no outer left border, hairline right divider only
               Container(
                 width: fieldColW,
                 decoration: BoxDecoration(
                   color: fieldBg,
                   border: Border(
                     top:   topBorder,
-                    right: border,
-                    left:  border,
+                    right: border, // vertical divider between label and value
                   ),
                 ),
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
@@ -1411,15 +1409,12 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                         color: Color(0xFF57606A)),
                     overflow: TextOverflow.ellipsis),
               ),
-              // VALUE cell
+              // VALUE cell — no outer right border
               Expanded(
                 child: Container(
                   decoration: BoxDecoration(
                     color: rowColor,
-                    border: Border(
-                      top:   topBorder,
-                      right: border,
-                    ),
+                    border: Border(top: topBorder),
                   ),
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
                   alignment: Alignment.centerLeft,
@@ -1438,12 +1433,10 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         }
       }
 
-      // Wrap in outer border container + bottom border.
+      // Flat panel — no outer box, no border frame, flush with row padding.
       return Container(
-        margin: EdgeInsets.fromLTRB(lpad, 8, rpad, 8),
-        decoration: BoxDecoration(
-          border: Border(bottom: border),
-        ),
+        padding: EdgeInsets.fromLTRB(lpad, 0, rpad, 0),
+        color: const Color(0xFFF9FAFB),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: tableRows,

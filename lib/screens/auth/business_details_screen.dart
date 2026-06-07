@@ -26,9 +26,9 @@ extension _RoleX on _Role {
     switch (this) {
       case _Role.pharmacy: return Icons.local_pharmacy;
       case _Role.supplier: return Icons.inventory_2_outlined;
-      case _Role.mr: return Icons.badge;
+      case _Role.mr: return Icons.assignment_ind;
       case _Role.company: return Icons.business_outlined;
-      case _Role.deliveryPartner: return Icons.delivery_dining;
+      case _Role.deliveryPartner: return Icons.local_shipping;
     }
   }
 }

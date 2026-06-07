@@ -1288,7 +1288,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       return s.isEmpty ? '—' : s;
     }
 
-    final rows = <(String, List<(String, String)>)>[
+    final groups = <(String, List<(String, String)>)>[
       ('IDENTITY', [
         ('Supplier Name', val(rawData['supplier_name'])),
         ('Code',          val(rawData['supplier_code'])),
@@ -1330,179 +1330,112 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       ]),
     ];
 
-    return Container(
-      color: const Color(0xFFF9FAFB),
-      padding: EdgeInsets.fromLTRB(lpad, 0, rpad, 0),
-      child: LayoutBuilder(builder: (ctx, constraints) {
-        final isMobile = constraints.maxWidth < 600;
+    const gridColor  = Color(0xFFD0D7DE);
+    const catBg      = Color(0xFF24292F);
+    const fieldBg    = Color(0xFFF6F8FA);
+    const evenRowBg  = Color(0xFFFFFFFF);
+    const oddRowBg   = Color(0xFFF9FAFB);
+    const emptyColor = Color(0xFF8C959F);
+    const valueColor = Color(0xFF24292F);
+    const border     = BorderSide(color: gridColor);
 
-        // ── MOBILE: card sections with green left border, 2 fields per Wrap row ──
-        if (isMobile) {
-          Widget mobileField(String label, String value) {
-            final isEmpty = value == '—';
-            return SizedBox(
-              width: (constraints.maxWidth - lpad - rpad - 24) / 2,
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(label,
-                    style: const TextStyle(fontSize: 10, color: Color(0xFF999999),
-                        fontWeight: FontWeight.w400),
-                    overflow: TextOverflow.ellipsis),
-                const SizedBox(height: 2),
-                Text(value,
-                    style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
-                        color: isEmpty ? const Color(0xFFCCCCCC) : const Color(0xFF111111)),
-                    overflow: TextOverflow.ellipsis,
-                    maxLines: 2),
-              ]),
-            );
-          }
+    return LayoutBuilder(builder: (ctx, constraints) {
+      final isMobile    = constraints.maxWidth < 600;
+      final fieldColW   = isMobile ? 120.0 : 180.0;
 
-          // NOTES section is full-width, handled separately.
-          final dataRows   = rows.sublist(0, rows.length - 1);
-          final notesVal   = rows.last.$2.first.$2;
-          final notesEmpty = notesVal == '—';
+      // Build a flat list of row widgets: category header + data rows.
+      final tableRows = <Widget>[];
+      int globalRowIndex = 0;
 
-          return Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              for (final row in dataRows)
-                Container(
-                  margin: const EdgeInsets.only(bottom: 8),
-                  decoration: const BoxDecoration(
-                    border: Border(left: BorderSide(color: Color(0xFF1B8A5A), width: 4)),
-                  ),
-                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text(row.$1,
-                        style: const TextStyle(fontSize: 11, color: Color(0xFF888888),
-                            fontWeight: FontWeight.w600, letterSpacing: 0.5)),
-                    const SizedBox(height: 8),
-                    Wrap(spacing: 8, runSpacing: 8,
-                        children: row.$2.map((f) => mobileField(f.$1, f.$2)).toList()),
-                  ]),
-                ),
-              // NOTES — full width
-              Container(
-                margin: const EdgeInsets.only(bottom: 8),
-                decoration: const BoxDecoration(
-                  border: Border(left: BorderSide(color: Color(0xFF1B8A5A), width: 4)),
-                ),
-                padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  const Text('NOTES',
-                      style: TextStyle(fontSize: 11, color: Color(0xFF888888),
-                          fontWeight: FontWeight.w600, letterSpacing: 0.5)),
-                  const SizedBox(height: 6),
-                  Text(notesVal,
-                      style: TextStyle(
-                          fontSize: 13, fontWeight: FontWeight.w700,
-                          color: notesEmpty ? const Color(0xFFCCCCCC) : const Color(0xFF111111)),
-                      maxLines: 4,
-                      overflow: TextOverflow.ellipsis),
-                ]),
-              ),
-            ]),
-          );
-        }
-
-        // ── DESKTOP: one horizontal row per category, 52px tall ──────────────────
-        Widget fieldCell(String label, String value) {
-          final isEmpty = value == '—';
-          return Expanded(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(label,
-                      style: const TextStyle(fontSize: 10, color: Color(0xFF999999),
-                          fontWeight: FontWeight.w400),
-                      overflow: TextOverflow.ellipsis),
-                  const SizedBox(height: 2),
-                  Text(value,
-                      style: TextStyle(
-                          fontSize: 13, fontWeight: FontWeight.w700,
-                          color: isEmpty ? const Color(0xFFCCCCCC) : const Color(0xFF111111)),
-                      overflow: TextOverflow.ellipsis,
-                      maxLines: 1),
-                ],
-              ),
+      for (final group in groups) {
+        // Category header — spans full width.
+        tableRows.add(Container(
+          height: 28,
+          decoration: BoxDecoration(
+            color: catBg,
+            border: Border(
+              top:    border,
+              bottom: border,
+              left:   border,
+              right:  border,
             ),
-          );
-        }
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          alignment: Alignment.centerLeft,
+          child: Text('▸ ${group.$1}',
+              style: const TextStyle(
+                  fontSize: 11, fontWeight: FontWeight.w700,
+                  color: Colors.white, letterSpacing: 0.8)),
+        ));
 
-        // NOTES row: full width, wrappable.
-        Widget notesRow(String value) {
-          final isEmpty = value == '—';
-          return Container(
-            constraints: const BoxConstraints(minHeight: 52),
-            decoration: const BoxDecoration(
-              border: Border(top: BorderSide(color: Color(0xFFEEEEEE))),
-            ),
-            child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-              SizedBox(
-                width: 80,
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  child: Text('NOTES',
-                      style: const TextStyle(fontSize: 11, color: Color(0xFF888888),
-                          fontWeight: FontWeight.w600, letterSpacing: 0.5)),
-                ),
-              ),
-              Container(width: 0.5, height: 52, color: const Color(0xFFEEEEEE)),
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  child: Text(value,
-                      style: TextStyle(
-                          fontSize: 13, fontWeight: FontWeight.w700,
-                          color: isEmpty ? const Color(0xFFCCCCCC) : const Color(0xFF111111)),
-                      maxLines: 3,
-                      overflow: TextOverflow.ellipsis),
-                ),
-              ),
-            ]),
-          );
-        }
+        for (int i = 0; i < group.$2.length; i++) {
+          final field    = group.$2[i];
+          final isEmpty  = field.$2 == '—';
+          final rowColor = globalRowIndex.isEven ? evenRowBg : oddRowBg;
+          // Top border only on first data row after category header (header already draws bottom).
+          final topBorder = i == 0 ? BorderSide.none : border;
 
-        final dataRows = rows.sublist(0, rows.length - 1);
-        final notesVal = rows.last.$2.first.$2;
-
-        return Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 0),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            for (int ri = 0; ri < dataRows.length; ri++)
+          tableRows.add(SizedBox(
+            height: 36,
+            child: Row(children: [
+              // FIELD NAME cell
               Container(
-                height: 52,
+                width: fieldColW,
                 decoration: BoxDecoration(
+                  color: fieldBg,
                   border: Border(
-                    top: ri == 0
-                        ? BorderSide.none
-                        : const BorderSide(color: Color(0xFFEEEEEE)),
+                    top:   topBorder,
+                    right: border,
+                    left:  border,
                   ),
                 ),
-                child: Row(children: [
-                  SizedBox(
-                    width: 80,
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
-                      child: Text(dataRows[ri].$1,
-                          style: const TextStyle(fontSize: 11, color: Color(0xFF888888),
-                              fontWeight: FontWeight.w600, letterSpacing: 0.5)),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                alignment: Alignment.centerLeft,
+                child: Text(field.$1,
+                    style: const TextStyle(
+                        fontSize: 12, fontWeight: FontWeight.w600,
+                        color: Color(0xFF57606A)),
+                    overflow: TextOverflow.ellipsis),
+              ),
+              // VALUE cell
+              Expanded(
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: rowColor,
+                    border: Border(
+                      top:   topBorder,
+                      right: border,
                     ),
                   ),
-                  Container(width: 0.5, height: 52, color: const Color(0xFFEEEEEE)),
-                  ...dataRows[ri].$2.map((f) => fieldCell(f.$1, f.$2)),
-                ]),
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                  alignment: Alignment.centerLeft,
+                  child: Text(field.$2,
+                      style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w400,
+                          color: isEmpty ? emptyColor : valueColor),
+                      overflow: TextOverflow.ellipsis,
+                      maxLines: 1),
+                ),
               ),
-            notesRow(notesVal),
-          ]),
-        );
-      }),
-    );
+            ]),
+          ));
+          globalRowIndex++;
+        }
+      }
+
+      // Wrap in outer border container + bottom border.
+      return Container(
+        margin: EdgeInsets.fromLTRB(lpad, 8, rpad, 8),
+        decoration: BoxDecoration(
+          border: Border(bottom: border),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: tableRows,
+        ),
+      );
+    });
   }
 
   // ── Helpers ──────────────────────────────────────────────────────────────────

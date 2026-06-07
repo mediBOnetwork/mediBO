@@ -2023,6 +2023,7 @@ class _SupProfColMap {
 }
 
 enum _SupProfStep { reading, mapping, importing }
+enum _SupImportDest { supplierProfiles, supplierCompanyTerms }
 
 class _SupProfileImportDialog extends StatefulWidget {
   final html.File file;
@@ -2034,6 +2035,8 @@ class _SupProfileImportDialog extends StatefulWidget {
 
 class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
   _SupProfStep _step = _SupProfStep.reading;
+  _SupImportDest _dest = _SupImportDest.supplierProfiles;
+  bool _destUserOverridden = false;
   String _statusMsg = 'Reading file…';
   List<_SupProfColMap> _cols = [];
   List<List<String>> _dataRows = [];
@@ -2047,10 +2050,17 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
     'street_address', 'city', 'state', 'pin_code', 'map_link',
     'stockist_type', 'dl_1', 'dl_2', 'gst',
   ];
-  List<String> get _fields => [..._baseFields, ..._dynamicFields, 'ignore'];
+  static const _sctFields = [
+    'supplier_name', 'company_name', 'margin', 'cd_condition', 'payment_type', 'deal', 'status',
+  ];
+  List<String> get _activeBaseFields => _dest == _SupImportDest.supplierProfiles ? _baseFields : _sctFields;
+  List<String> get _fields => _dest == _SupImportDest.supplierProfiles
+      ? [..._baseFields, ..._dynamicFields, 'ignore']
+      : [..._sctFields, 'ignore'];
 
   static String _fieldLabel(String f) => switch (f) {
     'supplier_name'  => 'Supplier Name *',
+    'company_name'   => 'Company Name *',
     'contact_person' => 'Contact Person',
     'contact_no'     => 'Contact No',
     'whatsapp_no'    => 'WhatsApp No',
@@ -2080,6 +2090,19 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
   void dispose() {
     for (final c in _newColCtrls.values) c.dispose();
     super.dispose();
+  }
+
+  // ── Destination sniffing ──────────────────────────────────────────────────────
+
+  _SupImportDest _sniffDest(List<String> headers) {
+    final hs = headers.map((h) => h.toLowerCase().replaceAll(RegExp(r'[\s_\-./]+'), '')).toSet();
+    final sctHits = ['companyname','margin','cd','cdcondition','cddiscount','paymenttype','paymentterm','deal']
+        .where(hs.contains).length;
+    final profileHits = ['phone','mobile','contactno','city','state','address','stockisttype','gst','gstin','druglicense','dl1','dl2']
+        .where(hs.contains).length;
+    return sctHits >= 2 && sctHits > profileHits
+        ? _SupImportDest.supplierCompanyTerms
+        : _SupImportDest.supplierProfiles;
   }
 
   // ── File parsing (reused from Add-Medicine pipeline) ─────────────────────────
@@ -2282,25 +2305,44 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
   }
 
   Future<List<_SupProfColMap>> _geminiMapCols(List<String> headers, List<List<String>> dataRows) async {
+    final isSCT = _dest == _SupImportDest.supplierCompanyTerms;
+    final activeBase = _activeBaseFields;
     final entries = List.generate(headers.length, (i) {
       final samples = dataRows.map((r) => i < r.length ? r[i] : '').where((v) => v.trim().isNotEmpty).take(5).toList();
       return {'index': i, 'header': headers[i], 'samples': samples};
     });
-    final prompt =
-        'Map each column to the correct supplier_profiles field.\n\n'
-        'Fields: supplier_name (required — Firm Name/Company Name/Supplier maps here), '
-        'contact_person (Contact Person/Name), contact_no (Phone/Mobile/Contact No), '
-        'whatsapp_no, email, status, margin, behaviour, cd_condition, payment_type, deal, '
-        'street_address (Address/Street), city, state, pin_code (Pincode/ZIP), map_link, '
-        'stockist_type (Type/Category), dl_1 (Drug License 1), dl_2 (Drug License 2), '
-        'gst (GST/GSTIN), ignore (skip)\n\n'
-        'Infer from BOTH header AND sample values. '
-        '"Firm Name","Company Name","Supplier" → supplier_name. '
-        '"Contact","Contact Person","Name" → contact_person. '
-        '"Phone","Mobile","Contact No" → contact_no. '
-        'Serial/index numbers → ignore.\n\n'
-        'Columns:\n${jsonEncode(entries)}\n\n'
-        'Return ONLY a JSON array: [{"index":0,"mapped_to":"supplier_name"},...]';
+    final String prompt;
+    if (isSCT) {
+      prompt =
+          'Map each column to the correct supplier_company_terms field.\n\n'
+          'Fields: supplier_name (required — Firm/Supplier/Distributor name), '
+          'company_name (required — Pharma company/brand name), '
+          'margin (discount %, trade margin), cd_condition (CD/cash discount), '
+          'payment_type (payment terms, credit days), deal (scheme/bonus deal), '
+          'status (active/inactive), ignore (skip)\n\n'
+          'Infer from BOTH header AND sample values. '
+          '"Firm","Supplier","Distributor" → supplier_name. '
+          '"Company","Brand","Manufacturer" → company_name. '
+          'Serial/index numbers → ignore.\n\n'
+          'Columns:\n${jsonEncode(entries)}\n\n'
+          'Return ONLY a JSON array: [{"index":0,"mapped_to":"supplier_name"},...]';
+    } else {
+      prompt =
+          'Map each column to the correct supplier_profiles field.\n\n'
+          'Fields: supplier_name (required — Firm Name/Company Name/Supplier maps here), '
+          'contact_person (Contact Person/Name), contact_no (Phone/Mobile/Contact No), '
+          'whatsapp_no, email, status, margin, behaviour, cd_condition, payment_type, deal, '
+          'street_address (Address/Street), city, state, pin_code (Pincode/ZIP), map_link, '
+          'stockist_type (Type/Category), dl_1 (Drug License 1), dl_2 (Drug License 2), '
+          'gst (GST/GSTIN), ignore (skip)\n\n'
+          'Infer from BOTH header AND sample values. '
+          '"Firm Name","Company Name","Supplier" → supplier_name. '
+          '"Contact","Contact Person","Name" → contact_person. '
+          '"Phone","Mobile","Contact No" → contact_no. '
+          'Serial/index numbers → ignore.\n\n'
+          'Columns:\n${jsonEncode(entries)}\n\n'
+          'Return ONLY a JSON array: [{"index":0,"mapped_to":"supplier_name"},...]';
+    }
     final idxMap = <int, String>{};
     try {
       final resp = await http.post(
@@ -2316,7 +2358,7 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
             final mm = m as Map<String, dynamic>;
             final idx = mm['index'] as int?;
             final mapped = mm['mapped_to'] as String? ?? 'ignore';
-            if (idx != null) idxMap[idx] = (_baseFields.contains(mapped) || mapped == 'ignore') ? mapped : 'ignore';
+            if (idx != null) idxMap[idx] = (activeBase.contains(mapped) || mapped == 'ignore') ? mapped : 'ignore';
           }
         }
       }
@@ -2327,26 +2369,36 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
       if (idxMap.containsKey(i)) continue;
       final h = headers[i].toLowerCase().replaceAll(RegExp(r'[\s_\-]+'), '');
       String mapped = 'ignore';
-      if (['suppliername','firmname','companyname','supplier'].contains(h) && !used.contains('supplier_name')) mapped = 'supplier_name';
-      else if (['contactname','contactperson','contact','name'].contains(h) && !used.contains('contact_person')) mapped = 'contact_person';
-      else if (['phone','mobile','mobilenumber','phonenumber','cell','contactno'].contains(h) && !used.contains('contact_no')) mapped = 'contact_no';
-      else if (['email','emailaddress','mail'].contains(h) && !used.contains('email')) mapped = 'email';
-      else if (['whatsapp','whatsappno'].contains(h) && !used.contains('whatsapp_no')) mapped = 'whatsapp_no';
-      else if (['city','town'].contains(h) && !used.contains('city')) mapped = 'city';
-      else if (['state','province'].contains(h) && !used.contains('state')) mapped = 'state';
-      else if (['address','addr','streetaddress','street'].contains(h) && !used.contains('street_address')) mapped = 'street_address';
-      else if (['pincode','pin','zip','pinno'].contains(h) && !used.contains('pin_code')) mapped = 'pin_code';
-      else if (['gst','gstin','gstnumber'].contains(h) && !used.contains('gst')) mapped = 'gst';
-      else if (['dl1','druglicense1','druglicense'].contains(h) && !used.contains('dl_1')) mapped = 'dl_1';
-      else if (['dl2','druglicense2'].contains(h) && !used.contains('dl_2')) mapped = 'dl_2';
-      else if (['paymenttype','paymentterm','paymentterms','creditdays'].contains(h) && !used.contains('payment_type')) mapped = 'payment_type';
-      else if (['stockisttype','storetype','type','vendortype'].contains(h) && !used.contains('stockist_type')) mapped = 'stockist_type';
-      else if (['margin'].contains(h) && !used.contains('margin')) mapped = 'margin';
-      else if (['behaviour','behavior'].contains(h) && !used.contains('behaviour')) mapped = 'behaviour';
-      else if (['cdcondition','cd'].contains(h) && !used.contains('cd_condition')) mapped = 'cd_condition';
-      else if (['deal'].contains(h) && !used.contains('deal')) mapped = 'deal';
-      else if (['maplink','maplocation','location'].contains(h) && !used.contains('map_link')) mapped = 'map_link';
-      else if (['status'].contains(h) && !used.contains('status')) mapped = 'status';
+      if (isSCT) {
+        if (['suppliername','firmname','supplier','firm','distributor'].contains(h) && !used.contains('supplier_name')) mapped = 'supplier_name';
+        else if (['companyname','company','brand','manufacturer','pharmacompany'].contains(h) && !used.contains('company_name')) mapped = 'company_name';
+        else if (['margin','trademargin','discount'].contains(h) && !used.contains('margin')) mapped = 'margin';
+        else if (['cdcondition','cd','cashdiscount','cddiscount'].contains(h) && !used.contains('cd_condition')) mapped = 'cd_condition';
+        else if (['paymenttype','paymentterm','paymentterms','creditdays'].contains(h) && !used.contains('payment_type')) mapped = 'payment_type';
+        else if (['deal','scheme','bonus'].contains(h) && !used.contains('deal')) mapped = 'deal';
+        else if (['status'].contains(h) && !used.contains('status')) mapped = 'status';
+      } else {
+        if (['suppliername','firmname','companyname','supplier'].contains(h) && !used.contains('supplier_name')) mapped = 'supplier_name';
+        else if (['contactname','contactperson','contact','name'].contains(h) && !used.contains('contact_person')) mapped = 'contact_person';
+        else if (['phone','mobile','mobilenumber','phonenumber','cell','contactno'].contains(h) && !used.contains('contact_no')) mapped = 'contact_no';
+        else if (['email','emailaddress','mail'].contains(h) && !used.contains('email')) mapped = 'email';
+        else if (['whatsapp','whatsappno'].contains(h) && !used.contains('whatsapp_no')) mapped = 'whatsapp_no';
+        else if (['city','town'].contains(h) && !used.contains('city')) mapped = 'city';
+        else if (['state','province'].contains(h) && !used.contains('state')) mapped = 'state';
+        else if (['address','addr','streetaddress','street'].contains(h) && !used.contains('street_address')) mapped = 'street_address';
+        else if (['pincode','pin','zip','pinno'].contains(h) && !used.contains('pin_code')) mapped = 'pin_code';
+        else if (['gst','gstin','gstnumber'].contains(h) && !used.contains('gst')) mapped = 'gst';
+        else if (['dl1','druglicense1','druglicense'].contains(h) && !used.contains('dl_1')) mapped = 'dl_1';
+        else if (['dl2','druglicense2'].contains(h) && !used.contains('dl_2')) mapped = 'dl_2';
+        else if (['paymenttype','paymentterm','paymentterms','creditdays'].contains(h) && !used.contains('payment_type')) mapped = 'payment_type';
+        else if (['stockisttype','storetype','type','vendortype'].contains(h) && !used.contains('stockist_type')) mapped = 'stockist_type';
+        else if (['margin'].contains(h) && !used.contains('margin')) mapped = 'margin';
+        else if (['behaviour','behavior'].contains(h) && !used.contains('behaviour')) mapped = 'behaviour';
+        else if (['cdcondition','cd'].contains(h) && !used.contains('cd_condition')) mapped = 'cd_condition';
+        else if (['deal'].contains(h) && !used.contains('deal')) mapped = 'deal';
+        else if (['maplink','maplocation','location'].contains(h) && !used.contains('map_link')) mapped = 'map_link';
+        else if (['status'].contains(h) && !used.contains('status')) mapped = 'status';
+      }
       idxMap[i] = mapped;
       if (mapped != 'ignore') used.add(mapped);
     }
@@ -2357,6 +2409,10 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
   }
 
   Future<void> _confirmMapping() async {
+    if (_dest == _SupImportDest.supplierCompanyTerms) {
+      await _doImportSCT();
+      return;
+    }
     // Validate create_new entries
     for (final col in _cols.where((c) => c.mappedTo == 'create_new')) {
       final name = (_newColCtrls[col.index]?.text ?? '').trim();
@@ -2419,11 +2475,28 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
       setState(() { _step = _SupProfStep.reading; _statusMsg = 'Reading file…'; });
       final table = await _parseFile(widget.file);
       if (table.rows.isEmpty) throw Exception('No data rows found in the file.');
+      // Auto-suggest destination from headers if admin hasn't overridden
+      if (!_destUserOverridden) {
+        _dest = _sniffDest(table.headers);
+      }
       setState(() { _statusMsg = 'Auto-mapping columns with Gemini…'; });
       final cols = await _geminiMapCols(table.headers, table.rows);
       setState(() { _cols = cols; _dataRows = table.rows; _step = _SupProfStep.mapping; });
     } catch (e) {
       if (mounted) setState(() { _error = e.toString().replaceFirst('Exception: ', ''); });
+    }
+  }
+
+  Future<void> _remapCols() async {
+    setState(() { _step = _SupProfStep.reading; _statusMsg = 'Re-mapping columns…'; });
+    try {
+      final cols = await _geminiMapCols(
+        _cols.map((c) => c.header).toList(),
+        _dataRows,
+      );
+      setState(() { _cols = cols; _step = _SupProfStep.mapping; });
+    } catch (e) {
+      if (mounted) setState(() { _step = _SupProfStep.mapping; });
     }
   }
 
@@ -2467,6 +2540,91 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
     }
   }
 
+  Future<void> _doImportSCT() async {
+    setState(() { _step = _SupProfStep.importing; _statusMsg = 'Resolving suppliers & companies…'; });
+    try {
+      final colFor = <String, _SupProfColMap>{};
+      for (final c in _cols) { if (c.mappedTo != 'ignore') colFor[c.mappedTo] = c; }
+      String rowVal(List<String> row, String field) {
+        final c = colFor[field];
+        return c != null && c.index < row.length ? row[c.index].trim() : '';
+      }
+      // Collect unique names
+      final supplierNames = _dataRows.map((r) => rowVal(r, 'supplier_name')).where((s) => s.isNotEmpty).toSet().toList();
+      final companyNames  = _dataRows.map((r) => rowVal(r, 'company_name')).where((s) => s.isNotEmpty).toSet().toList();
+      if (supplierNames.isEmpty || companyNames.isEmpty) throw Exception('No supplier_name or company_name column mapped.');
+
+      // Resolve supplier names → IDs
+      final supplierRows = await Supabase.instance.client
+          .from('supplier_profiles').select('id, supplier_name').inFilter('supplier_name', supplierNames);
+      final supplierMap = <String, String>{};
+      for (final r in supplierRows as List<dynamic>) {
+        supplierMap[(r['supplier_name'] as String).toLowerCase()] = r['id'] as String;
+      }
+
+      // Resolve company names → IDs (via pharma_companies + company_aliases)
+      final companyMap = <String, String>{};
+      final existingCos = await Supabase.instance.client
+          .from('pharma_companies').select('id, canonical_name').inFilter('canonical_name', companyNames);
+      for (final r in existingCos as List<dynamic>) {
+        companyMap[(r['canonical_name'] as String).toLowerCase()] = r['id'] as String;
+      }
+      // Check aliases for remaining
+      final unmatchedByName = companyNames.where((n) => !companyMap.containsKey(n.toLowerCase())).toList();
+      if (unmatchedByName.isNotEmpty) {
+        final aliasRows = await Supabase.instance.client
+            .from('company_aliases').select('company_id, alias_name').inFilter('alias_name', unmatchedByName);
+        for (final r in aliasRows as List<dynamic>) {
+          companyMap[(r['alias_name'] as String).toLowerCase()] = r['company_id'] as String;
+        }
+      }
+      // Create pharma_companies entries for any still-missing companies
+      final stillMissing = companyNames.where((n) => !companyMap.containsKey(n.toLowerCase())).toList();
+      for (final name in stillMissing) {
+        final newCo = await Supabase.instance.client
+            .from('pharma_companies').insert({'canonical_name': name}).select('id').single();
+        companyMap[name.toLowerCase()] = newCo['id'] as String;
+      }
+
+      // Build insert rows
+      final toInsert = <Map<String, dynamic>>[];
+      int skipped = 0;
+      for (final row in _dataRows) {
+        final supplierName = rowVal(row, 'supplier_name');
+        final companyName  = rowVal(row, 'company_name');
+        if (supplierName.isEmpty || companyName.isEmpty) { skipped++; continue; }
+        final supplierId = supplierMap[supplierName.toLowerCase()];
+        final companyId  = companyMap[companyName.toLowerCase()];
+        if (supplierId == null) { skipped++; continue; } // supplier not in DB
+        if (companyId == null)  { skipped++; continue; }
+        final rec = <String, dynamic>{'supplier_id': supplierId, 'company_id': companyId};
+        for (final f in ['margin', 'cd_condition', 'payment_type', 'deal', 'status']) {
+          final v = rowVal(row, f);
+          if (v.isNotEmpty) rec[f] = v;
+        }
+        toInsert.add(rec);
+      }
+      if (toInsert.isNotEmpty) {
+        await Supabase.instance.client.from('supplier_company_terms').insert(toInsert);
+      }
+      if (mounted) {
+        Navigator.of(context).pop();
+        widget.onImported();
+        final skipNote = skipped > 0 ? ' ($skipped skipped — supplier not found)' : '';
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Imported ${toInsert.length} term${toInsert.length == 1 ? '' : 's'}$skipNote'),
+          backgroundColor: const Color(0xFF1B7A43),
+          duration: const Duration(seconds: 5),
+        ));
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() { _step = _SupProfStep.mapping; });
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Import failed: $e'), backgroundColor: const Color(0xFFDC2626)));
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_error != null) {
@@ -2489,11 +2647,13 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
           child: Padding(padding: const EdgeInsets.all(32), child: Column(mainAxisSize: MainAxisSize.min, children: [
             const CircularProgressIndicator(color: Color(0xFF1B7A43), strokeWidth: 2),
             const SizedBox(height: 16),
-            Text(_step == _SupProfStep.reading ? _statusMsg : 'Importing suppliers…',
+            Text(_step == _SupProfStep.reading ? _statusMsg
+                : (_dest == _SupImportDest.supplierCompanyTerms ? _statusMsg : 'Importing suppliers…'),
                 textAlign: TextAlign.center, style: const TextStyle(fontSize: 14, color: Color(0xFF6B7280))),
           ]))),
       );
     }
+    final isSCT = _dest == _SupImportDest.supplierCompanyTerms;
     return Dialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
@@ -2515,6 +2675,47 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
             ]),
           ),
           const SizedBox(height: 12),
+          // ── Destination selector ────────────────────────────────────────────
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 0, 24, 12),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text('IMPORT DESTINATION', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF6B7280), letterSpacing: 0.5)),
+              const SizedBox(height: 8),
+              Container(
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF5F6F8),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: const Color(0xFFE5E7EB)),
+                ),
+                padding: const EdgeInsets.all(4),
+                child: Row(children: [
+                  Expanded(child: _DestTab(
+                    label: 'Supplier (master info)',
+                    sublabel: '→ supplier_profiles',
+                    selected: !isSCT,
+                    onTap: () {
+                      if (isSCT) {
+                        setState(() { _dest = _SupImportDest.supplierProfiles; _destUserOverridden = true; });
+                        _remapCols();
+                      }
+                    },
+                  )),
+                  const SizedBox(width: 4),
+                  Expanded(child: _DestTab(
+                    label: 'Supplier–Company (terms)',
+                    sublabel: '→ supplier_company_terms',
+                    selected: isSCT,
+                    onTap: () {
+                      if (!isSCT) {
+                        setState(() { _dest = _SupImportDest.supplierCompanyTerms; _destUserOverridden = true; });
+                        _remapCols();
+                      }
+                    },
+                  )),
+                ]),
+              ),
+            ]),
+          ),
           const Divider(height: 1, color: Color(0xFFE5E7EB)),
           Flexible(child: LayoutBuilder(builder: (ctx, bc) {
             final isMobile = bc.maxWidth < 600;
@@ -2561,7 +2762,7 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
                             items: [
                               ..._fields.map((f) => DropdownMenuItem(value: f,
                                   child: Text(_fieldLabel(f), style: const TextStyle(fontSize: 13)))),
-                              const DropdownMenuItem(value: 'create_new',
+                              if (!isSCT) const DropdownMenuItem(value: 'create_new',
                                   child: Text('+ Create new field', style: TextStyle(fontSize: 13, color: Color(0xFF1B7A43), fontWeight: FontWeight.w600))),
                             ],
                             onChanged: (v) { if (v != null) setState(() => col.mappedTo = v); },
@@ -2612,7 +2813,7 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
                             items: [
                               ..._fields.map((f) => DropdownMenuItem(value: f,
                                   child: Text(_fieldLabel(f), style: const TextStyle(fontSize: 13)))),
-                              const DropdownMenuItem(value: 'create_new',
+                              if (!isSCT) const DropdownMenuItem(value: 'create_new',
                                   child: Text('+ Create new field', style: TextStyle(fontSize: 13, color: Color(0xFF1B7A43), fontWeight: FontWeight.w600))),
                             ],
                             onChanged: (v) { if (v != null) setState(() => col.mappedTo = v); },
@@ -2665,7 +2866,9 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
                   ]);
                 }),
                 const SizedBox(height: 8),
-                Text('${_dataRows.length} row${_dataRows.length == 1 ? '' : 's'} will be imported as approved suppliers',
+                Text(isSCT
+                    ? '${_dataRows.length} row${_dataRows.length == 1 ? '' : 's'} will be imported into supplier_company_terms'
+                    : '${_dataRows.length} row${_dataRows.length == 1 ? '' : 's'} will be imported as approved suppliers',
                     style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
               ]),
             );
@@ -2682,11 +2885,46 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
                 style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                     padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12)),
-                child: Text('Import ${_dataRows.length} Supplier${_dataRows.length == 1 ? '' : 's'}',
+                child: Text(isSCT
+                    ? 'Import ${_dataRows.length} Term${_dataRows.length == 1 ? '' : 's'}'
+                    : 'Import ${_dataRows.length} Supplier${_dataRows.length == 1 ? '' : 's'}',
                     style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
               ),
             ]),
           ),
+        ]),
+      ),
+    );
+  }
+}
+
+// ── Destination tab widget for import dialog ──────────────────────────────────
+
+class _DestTab extends StatelessWidget {
+  final String label;
+  final String sublabel;
+  final bool selected;
+  final VoidCallback onTap;
+  const _DestTab({required this.label, required this.sublabel, required this.selected, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: selected ? Colors.white : Colors.transparent,
+          borderRadius: BorderRadius.circular(6),
+          border: selected ? Border.all(color: const Color(0xFF1B7A43), width: 1.5) : null,
+          boxShadow: selected ? [BoxShadow(color: Colors.black.withOpacity(0.06), blurRadius: 4, offset: const Offset(0, 1))] : null,
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+          Text(label, style: TextStyle(fontSize: 13, fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+              color: selected ? const Color(0xFF1B7A43) : const Color(0xFF6B7280))),
+          const SizedBox(height: 2),
+          Text(sublabel, style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
         ]),
       ),
     );

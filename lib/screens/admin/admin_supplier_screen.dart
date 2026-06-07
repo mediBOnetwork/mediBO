@@ -141,9 +141,11 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   bool _deletedExpanded = false;
   bool _loading = true;
   _SupFilter _filter = _SupFilter.suppliers;
-  final Set<String> _expanded = {};
+  // Supplier detail expand — only one supplier open at a time.
+  String? _expandedSupplierId;
+  // Companies section — only one supplier open at a time; mutually exclusive with detail.
+  String? _companiesSupplierId;
   final Set<String> _expandedLeads = {};
-  final Set<String> _companiesExpanded = {};
   final Map<String, int> _companyCounts = {};
   final ScrollController _scrollCtrl = ScrollController();
   final List<RealtimeChannel> _channels = [];
@@ -187,8 +189,14 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     _debounce = Timer(const Duration(milliseconds: 500), () => _load(showSpinner: false));
   }
 
-  void _toggleCompanies(String id) => setState(() =>
-      _companiesExpanded.contains(id) ? _companiesExpanded.remove(id) : _companiesExpanded.add(id));
+  void _toggleCompanies(String id) => setState(() {
+    if (_companiesSupplierId == id) {
+      _companiesSupplierId = null; // close
+    } else {
+      _companiesSupplierId = id;
+      _expandedSupplierId  = null; // close detail when companies opens
+    }
+  });
 
   Future<void> _reloadCompanyCount(String supplierId) async {
     try {
@@ -449,8 +457,14 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     }
   }
 
-  void _toggleExpand(String key) => setState(
-      () => _expanded.contains(key) ? _expanded.remove(key) : _expanded.add(key));
+  void _toggleExpand(String key) => setState(() {
+    if (_expandedSupplierId == key) {
+      _expandedSupplierId = null; // close
+    } else {
+      _expandedSupplierId  = key;
+      _companiesSupplierId = null; // close companies when detail opens
+    }
+  });
 
   // ── Build ──────────────────────────────────────────────────────────────────
 
@@ -534,7 +548,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       child: GestureDetector(
         onTap: () {
           if (_scrollCtrl.hasClients) _scrollCtrl.jumpTo(0);
-          setState(() { _filter = f; _expanded.clear(); });
+          setState(() { _filter = f; _expandedSupplierId = null; _companiesSupplierId = null; });
         },
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 150),
@@ -713,7 +727,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   }
 
   Widget _desktopSupRow(_SupRow row) {
-    final isExpanded = _expanded.contains(row.id);
+    final isExpanded = _expandedSupplierId == row.id;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       InkWell(
         onTap: () => _toggleExpand(row.id),
@@ -742,7 +756,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
               behavior: HitTestBehavior.opaque,
               child: _SupplierCompaniesButton(
                 count: _companyCounts[row.id] ?? 0,
-                isOpen: _companiesExpanded.contains(row.id),
+                isOpen: _companiesSupplierId == row.id,
               ),
             ),
             const SizedBox(width: 8),
@@ -766,7 +780,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           ]),
         ),
       ),
-      if (_companiesExpanded.contains(row.id))
+      if (_companiesSupplierId == row.id)
         _CompaniesInlineSection(
           supplierId: row.id,
           onCompanyAdded: () => _reloadCompanyCount(row.id),
@@ -776,7 +790,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   }
 
   Widget _mobileSupCard(_SupRow row) {
-    final isExpanded = _expanded.contains(row.id);
+    final isExpanded = _expandedSupplierId == row.id;
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 10, 16, 0),
       decoration: BoxDecoration(
@@ -803,7 +817,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                     behavior: HitTestBehavior.opaque,
                     child: _SupplierCompaniesButton(
                       count: _companyCounts[row.id] ?? 0,
-                      isOpen: _companiesExpanded.contains(row.id),
+                      isOpen: _companiesSupplierId == row.id,
                     ),
                   ),
                   const SizedBox(width: 6),
@@ -835,7 +849,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                 ]),
               ]),
             ),
-            if (_companiesExpanded.contains(row.id)) ...[
+            if (_companiesSupplierId == row.id) ...[
               const Divider(height: 1, color: Color(0xFFE5E7EB)),
               _CompaniesInlineSection(
                 supplierId: row.id,
@@ -973,7 +987,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   }
 
   Widget _desktopPendingRow(_PendingRow row) {
-    final isExpanded = _expanded.contains(row.id);
+    final isExpanded = _expandedSupplierId == row.id;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       InkWell(
         onTap: () => _toggleExpand(row.id),
@@ -1014,7 +1028,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   }
 
   Widget _mobilePendingCard(_PendingRow row) {
-    final isExpanded = _expanded.contains(row.id);
+    final isExpanded = _expandedSupplierId == row.id;
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 10, 16, 0),
       decoration: BoxDecoration(

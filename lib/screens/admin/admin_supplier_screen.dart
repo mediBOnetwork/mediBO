@@ -3156,33 +3156,41 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                             fontWeight: FontWeight.w700,
                             color: Color(0xFF374151))),
                     const SizedBox(height: 10),
-                    DropdownButtonFormField<String>(
-                      value: _selCoId,
-                      isExpanded: true,
-                      hint: const Text('Select company',
-                          style: TextStyle(fontSize: 13)),
-                      decoration: InputDecoration(
-                        isDense: true,
-                        contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 10, vertical: 8),
-                        border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(6),
-                            borderSide:
-                                const BorderSide(color: Color(0xFFE5E7EB))),
-                        enabledBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(6),
-                            borderSide:
-                                const BorderSide(color: Color(0xFFE5E7EB))),
+                    Theme(
+                      data: Theme.of(context).copyWith(
+                        canvasColor: Colors.white,
+                        focusColor: const Color(0xFFE8F5EE),
                       ),
-                      items: _allPhCos
-                          .map((c) => DropdownMenuItem<String>(
-                                value: c['id'] as String,
-                                child: Text(
-                                    c['canonical_name'] as String? ?? '',
-                                    style: const TextStyle(fontSize: 13)),
-                              ))
-                          .toList(),
-                      onChanged: (v) => setState(() => _selCoId = v),
+                      child: DropdownButtonFormField<String>(
+                        value: _selCoId,
+                        isExpanded: true,
+                        dropdownColor: Colors.white,
+                        hint: const Text('Select company',
+                            style: TextStyle(fontSize: 13)),
+                        decoration: InputDecoration(
+                          isDense: true,
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 10, vertical: 8),
+                          border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(6),
+                              borderSide:
+                                  const BorderSide(color: Color(0xFFE5E7EB))),
+                          enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(6),
+                              borderSide:
+                                  const BorderSide(color: Color(0xFFE5E7EB))),
+                        ),
+                        items: _allPhCos
+                            .map((c) => DropdownMenuItem<String>(
+                                  value: c['id'] as String,
+                                  child: Text(
+                                      c['canonical_name'] as String? ?? '',
+                                      style: const TextStyle(
+                                          fontSize: 13, color: Color(0xFF111827))),
+                                ))
+                            .toList(),
+                        onChanged: (v) => setState(() => _selCoId = v),
+                      ),
                     ),
                     const SizedBox(height: 8),
                     Row(children: [

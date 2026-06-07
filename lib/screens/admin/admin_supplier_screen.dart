@@ -1231,41 +1231,64 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       return s.isEmpty ? '—' : s;
     }
 
-    // All fields in display order — shown as a flat 2-column key-value grid on desktop.
-    final fields = <(String, String)>[
-      ('Supplier Name',  val(rawData['supplier_name'])),
-      ('Contact Name',   val(rawData['contact_name'])),
-      ('Code',           val(rawData['supplier_code'])),
-      ('Email',          val(rawData['email'])),
-      ('WhatsApp',       val(rawData['whatsapp_no'])),
-      ('Phone',          val(rawData['phone'])),
-      ('Other Contact',  val(rawData['other_contact'])),
-      ('Address',        val(rawData['address'])),
-      ('City',           val(rawData['city'])),
-      ('State',          val(rawData['state'])),
-      ('PIN Code',       val(rawData['pincode'])),
-      ('Range / Zone',   val(rawData['range_zone'])),
-      ('Payment Term',   val(rawData['payment_term'])),
-      ('GSTIN',          val(rawData['gstin'])),
-      ('Drug License',   val(rawData['drug_license'])),
-      ('Store Type',     val(rawData['store_type'])),
-      ('Notes',          val(rawData['notes'])),
-      ('Margin',         val(rawData['margin'])),
-      ('Behaviour',      val(rawData['behaviour'])),
-      ('CD Condition',   val(rawData['cd_condition'])),
-      ('Deal',           val(rawData['deal'])),
-      ('Stockist Type',  val(rawData['stockist_type'])),
-      ('Status',         val(rawData['status'])),
-      ('Approved By',    val(rawData['approved_by'])),
+    // 4 sections: each has a title, left fields, right fields.
+    // (title, leftFields, rightFields)
+    final sections = <(String, List<(String, String)>, List<(String, String)>)>[
+      ('IDENTITY', [
+        ('Supplier Name', val(rawData['supplier_name'])),
+        ('Contact Name',  val(rawData['contact_name'])),
+        ('Code',          val(rawData['supplier_code'])),
+        ('Stockist Type', val(rawData['stockist_type'])),
+      ], [
+        ('Status',        val(rawData['status'])),
+        ('Margin',        val(rawData['margin'])),
+        ('Behaviour',     val(rawData['behaviour'])),
+        ('Deal',          val(rawData['deal'])),
+      ]),
+      ('CONTACT', [
+        ('WhatsApp',      val(rawData['whatsapp_no'])),
+        ('Phone',         val(rawData['phone'])),
+        ('Email',         val(rawData['email'])),
+      ], [
+        ('Other Contact', val(rawData['other_contact'])),
+        ('Notes',         val(rawData['notes'])),
+      ]),
+      ('LOCATION', [
+        ('Address',       val(rawData['address'])),
+        ('City',          val(rawData['city'])),
+        ('State',         val(rawData['state'])),
+      ], [
+        ('PIN Code',      val(rawData['pincode'])),
+        ('Range / Zone',  val(rawData['range_zone'])),
+      ]),
+      ('COMPLIANCE & TERMS', [
+        ('Payment Term',  val(rawData['payment_term'])),
+        ('CD Condition',  val(rawData['cd_condition'])),
+      ], [
+        ('GSTIN',         val(rawData['gstin'])),
+        ('Drug License',  val(rawData['drug_license'])),
+        ('Store Type',    val(rawData['store_type'])),
+        ('Approved By',   val(rawData['approved_by'])),
+      ]),
     ];
+
+    // Flat ordered list for mobile (no headers).
+    final allFields = sections.expand((s) {
+      final pairs = <(String, String)>[];
+      final maxLen = s.$2.length > s.$3.length ? s.$2.length : s.$3.length;
+      for (int i = 0; i < maxLen; i++) {
+        if (i < s.$2.length) pairs.add(s.$2[i]);
+        if (i < s.$3.length) pairs.add(s.$3[i]);
+      }
+      return pairs;
+    }).toList();
 
     return Container(
       color: const Color(0xFFF9FAFB),
-      padding: EdgeInsets.fromLTRB(lpad, 6, rpad, 8),
+      padding: EdgeInsets.fromLTRB(lpad, 4, rpad, 6),
       child: LayoutBuilder(builder: (ctx, constraints) {
         final isMobile = constraints.maxWidth < 600;
 
-        // One key-value row: label (fixed 110px, muted) | value (bold, fills rest).
         Widget kvRow(String label, String value, {bool isLast = false}) {
           final isEmpty = value == '—';
           return Container(
@@ -1298,43 +1321,57 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         }
 
         if (isMobile) {
-          // Single column stacked list
           return Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              for (int i = 0; i < fields.length; i++)
-                kvRow(fields[i].$1, fields[i].$2, isLast: i == fields.length - 1),
+              for (int i = 0; i < allFields.length; i++)
+                kvRow(allFields[i].$1, allFields[i].$2, isLast: i == allFields.length - 1),
             ],
           );
         }
 
-        // Desktop: two columns side by side, each column is a list of kvRows.
-        // Split fields into left half and right half.
-        final half = (fields.length / 2).ceil();
-        final left  = fields.sublist(0, half);
-        final right = fields.sublist(half);
+        // Desktop: section header + 2-column grid per section.
+        Widget sectionHeader(String title, {bool isFirst = false}) => Container(
+              decoration: BoxDecoration(
+                border: Border(
+                  top: isFirst
+                      ? BorderSide.none
+                      : const BorderSide(color: Color(0xFFE5E7EB), width: 0.5),
+                  bottom: const BorderSide(color: Color(0xFFE5E7EB), width: 0.5),
+                ),
+                color: const Color(0xFFF3F4F6),
+              ),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              child: Text(title,
+                  style: const TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF9CA3AF),
+                      letterSpacing: 0.6)),
+            );
 
-        // Vertical divider between the two columns.
-        return IntrinsicHeight(
-          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Expanded(
-              child: Column(
-                children: [
-                  for (int i = 0; i < left.length; i++)
-                    kvRow(left[i].$1, left[i].$2, isLast: i == left.length - 1),
-                ],
+        Widget columnList(List<(String, String)> rows) => Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (int i = 0; i < rows.length; i++)
+                  kvRow(rows[i].$1, rows[i].$2, isLast: i == rows.length - 1),
+              ],
+            );
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            for (int si = 0; si < sections.length; si++) ...[
+              sectionHeader(sections[si].$1, isFirst: si == 0),
+              IntrinsicHeight(
+                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Expanded(child: columnList(sections[si].$2)),
+                  const VerticalDivider(width: 1, thickness: 0.5, color: Color(0xFFE5E7EB)),
+                  Expanded(child: columnList(sections[si].$3)),
+                ]),
               ),
-            ),
-            const VerticalDivider(width: 1, thickness: 0.5, color: Color(0xFFE5E7EB)),
-            Expanded(
-              child: Column(
-                children: [
-                  for (int i = 0; i < right.length; i++)
-                    kvRow(right[i].$1, right[i].$2, isLast: i == right.length - 1),
-                ],
-              ),
-            ),
-          ]),
+            ],
+          ],
         );
       }),
     );

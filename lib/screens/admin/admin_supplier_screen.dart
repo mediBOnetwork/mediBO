@@ -789,7 +789,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           supplierId: row.id,
           onCompanyAdded: () => _reloadCompanyCount(row.id),
         ),
-      if (isExpanded) _buildDetails(row.rawData, lpad: 28, rpad: 28),
+      if (isExpanded) _buildDetails(row.rawData, lpad: 0, rpad: 0),
     ]);
   }
 
@@ -862,7 +862,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
             ],
             if (isExpanded) ...[
               const Divider(height: 1, color: Color(0xFFE5E7EB)),
-              _buildDetails(row.rawData, lpad: 16, rpad: 16),
+              _buildDetails(row.rawData, lpad: 0, rpad: 0),
             ],
           ]),
         ),
@@ -1027,7 +1027,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           ]),
         ),
       ),
-      if (isExpanded) _buildDetails(row.rawData, lpad: 28, rpad: 28),
+      if (isExpanded) _buildDetails(row.rawData, lpad: 0, rpad: 0),
     ]);
   }
 
@@ -1075,7 +1075,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
             ),
             if (isExpanded) ...[
               const Divider(height: 1, color: Color(0xFFE5E7EB)),
-              _buildDetails(row.rawData, lpad: 16, rpad: 16),
+              _buildDetails(row.rawData, lpad: 0, rpad: 0),
             ],
           ]),
         ),
@@ -1349,10 +1349,10 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     ];
 
     const gridColor  = Color(0xFFD0D7DE);
-    const catBg      = Color(0xFFF0F6FF);
-    const fieldBg    = Color(0xFFF6F8FA);
-    const evenRowBg  = Color(0xFFFFFFFF);
-    const oddRowBg   = Color(0xFFF9FAFB);
+    const catBg      = Colors.white;
+    const fieldBg    = Colors.white;
+    const evenRowBg  = Colors.white;
+    const oddRowBg   = Colors.white;
     const emptyColor = Color(0xFF8C959F);
     const valueColor = Color(0xFF24292F);
     const border     = BorderSide(color: gridColor);
@@ -1433,10 +1433,9 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         }
       }
 
-      // Flat panel — no outer box, no border frame, flush with row padding.
-      return Container(
-        padding: EdgeInsets.fromLTRB(lpad, 0, rpad, 0),
-        color: const Color(0xFFF9FAFB),
+      // Flat panel — pure white, full width, no inset.
+      return ColoredBox(
+        color: Colors.white,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: tableRows,

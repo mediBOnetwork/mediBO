@@ -789,7 +789,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           supplierId: row.id,
           onCompanyAdded: () => _reloadCompanyCount(row.id),
         ),
-      if (isExpanded) _buildDetails(row.rawData, lpad: 0, rpad: 0),
+      if (isExpanded) _buildDetails(row.rawData, lpad: 28, rpad: 0),
     ]);
   }
 
@@ -1027,7 +1027,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           ]),
         ),
       ),
-      if (isExpanded) _buildDetails(row.rawData, lpad: 0, rpad: 0),
+      if (isExpanded) _buildDetails(row.rawData, lpad: 28, rpad: 0),
     ]);
   }
 
@@ -1433,9 +1433,10 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         }
       }
 
-      // Flat panel — pure white, full width, no inset.
-      return ColoredBox(
+      // Pure white. Left padding aligns panel with the supplier name column above.
+      return Container(
         color: Colors.white,
+        padding: EdgeInsets.only(left: lpad.toDouble()),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: tableRows,

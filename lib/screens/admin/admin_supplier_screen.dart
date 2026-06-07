@@ -572,7 +572,8 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       if (_suppliers.isEmpty)
         _emptyState('0 approved suppliers')
       else ...[
-        ..._suppliers.map((r) => _supplierCard(r)),
+        if (isDesktop) _suppliersTableHeader(),
+        ..._suppliers.map((r) => isDesktop ? _desktopSupRow(r) : _mobileSupCard(r)),
       ],
       const SizedBox(height: 32),
       _buildDeletedSection(isDesktop),
@@ -711,7 +712,70 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     );
   }
 
-  Widget _supplierCard(_SupRow row) {
+  Widget _desktopSupRow(_SupRow row) {
+    final isExpanded = _expanded.contains(row.id);
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      InkWell(
+        onTap: () => _toggleExpand(row.id),
+        mouseCursor: SystemMouseCursors.click,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 13),
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
+          ),
+          child: Row(children: [
+            Expanded(flex: 4, child: Text(row.supplierName.isNotEmpty ? row.supplierName : '—',
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
+                overflow: TextOverflow.ellipsis)),
+            Expanded(flex: 3, child: Text(row.contactName.isNotEmpty ? row.contactName : '—',
+                style: const TextStyle(fontSize: 13, color: Color(0xFF374151)), overflow: TextOverflow.ellipsis)),
+            Expanded(flex: 2, child: Text(row.phone.isNotEmpty ? row.phone : '—',
+                style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)))),
+            Expanded(flex: 2, child: Text(row.supplierCode.isNotEmpty ? row.supplierCode : '—',
+                style: const TextStyle(fontSize: 12, color: Color(0xFF374151), fontFamily: 'monospace'))),
+            Expanded(flex: 2, child: Text(
+                [row.city, row.state].where((s) => s.isNotEmpty).join(', ').let((s) => s.isNotEmpty ? s : '—'),
+                style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)), overflow: TextOverflow.ellipsis)),
+            GestureDetector(
+              onTap: () => _toggleCompanies(row.id),
+              behavior: HitTestBehavior.opaque,
+              child: _SupplierCompaniesButton(
+                count: _companyCounts[row.id] ?? 0,
+                isOpen: _companiesExpanded.contains(row.id),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(flex: 2, child: _StatusBadge(status: row.status)),
+            SizedBox(width: 230, child: Row(mainAxisSize: MainAxisSize.min, children: [
+              _actionBtn('Edit',        const Color(0xFF1B7A43),  () => _editSupplier(row)),
+              const SizedBox(width: 6),
+              _actionBtn(
+                row.isSuspended ? 'Reactivate' : 'Suspend',
+                row.isSuspended ? const Color(0xFF1B7A43) : const Color(0xFFD97706),
+                () => row.isSuspended ? _reactivateSupplier(row) : _suspendSupplier(row),
+              ),
+              const SizedBox(width: 6),
+              _actionBtn('Delete',      const Color(0xFFDC2626),  () => _deleteSupplier(row)),
+            ])),
+            SizedBox(width: 32, child: AnimatedRotation(
+              turns: isExpanded ? 0.5 : 0.0,
+              duration: const Duration(milliseconds: 200),
+              child: const Icon(Icons.expand_more, size: 18, color: Color(0xFF6B7280)),
+            )),
+          ]),
+        ),
+      ),
+      if (_companiesExpanded.contains(row.id))
+        _CompaniesInlineSection(
+          supplierId: row.id,
+          onCompanyAdded: () => _reloadCompanyCount(row.id),
+        ),
+      if (isExpanded) _buildDetails(row.rawData, lpad: 44, rpad: 28),
+    ]);
+  }
+
+  Widget _mobileSupCard(_SupRow row) {
     final isExpanded = _expanded.contains(row.id);
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 10, 16, 0),
@@ -719,7 +783,6 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: row.isSuspended ? const Color(0xFFFECACA) : const Color(0xFFE5E7EB)),
-        boxShadow: const [BoxShadow(color: Color(0x08000000), blurRadius: 4, offset: Offset(0, 2))],
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(12),
@@ -729,13 +792,10 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
             Padding(
               padding: const EdgeInsets.all(14),
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                // Line 1: Name | Companies pill | Status badge | Chevron
                 Row(children: [
                   Expanded(child: Text(
-                      row.supplierName.isNotEmpty ? row.supplierName
-                          : row.contactName.isNotEmpty ? row.contactName : 'Unknown',
-                      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700,
-                          color: Color(0xFF111827)),
+                      row.supplierName.isNotEmpty ? row.supplierName : row.contactName.isNotEmpty ? row.contactName : 'Unknown',
+                      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF111827)),
                       overflow: TextOverflow.ellipsis)),
                   const SizedBox(width: 8),
                   GestureDetector(
@@ -755,42 +815,26 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                     child: const Icon(Icons.expand_more, size: 18, color: Color(0xFF9CA3AF)),
                   ),
                 ]),
-                // Line 2: Contact name
-                if (row.contactName.isNotEmpty) ...[
-                  const SizedBox(height: 3),
-                  Text(row.contactName,
-                      style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
-                      overflow: TextOverflow.ellipsis),
-                ],
-                // Line 3: Phone
-                if (row.phone.isNotEmpty) ...[
-                  const SizedBox(height: 2),
-                  Text(row.phone,
-                      style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
-                ],
+                if (row.contactName.isNotEmpty) ...[const SizedBox(height: 3), Text(row.contactName, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)), overflow: TextOverflow.ellipsis)],
+                if (row.phone.isNotEmpty) ...[const SizedBox(height: 2), Text(row.phone, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)))],
                 const SizedBox(height: 8),
-                // Line 4: Code / Payment / City chips
                 Wrap(spacing: 12, runSpacing: 4, children: [
                   if (row.supplierCode.isNotEmpty) _mobileField('Code', row.supplierCode),
                   if (row.paymentTerm.isNotEmpty)  _mobileField('Payment', row.paymentTerm),
-                  if (row.city.isNotEmpty)
-                    _mobileField('City',
-                        [row.city, row.state].where((s) => s.isNotEmpty).join(', ')),
+                  if (row.city.isNotEmpty)          _mobileField('City', [row.city, row.state].where((s) => s.isNotEmpty).join(', ')),
                 ]),
                 const SizedBox(height: 12),
-                // Action buttons
                 Wrap(spacing: 8, runSpacing: 6, children: [
-                  _actionBtn('Edit', const Color(0xFF1B7A43), () => _editSupplier(row)),
+                  _actionBtn('Edit',        const Color(0xFF1B7A43),  () => _editSupplier(row)),
                   _actionBtn(
                     row.isSuspended ? 'Reactivate' : 'Suspend',
                     row.isSuspended ? const Color(0xFF1B7A43) : const Color(0xFFD97706),
                     () => row.isSuspended ? _reactivateSupplier(row) : _suspendSupplier(row),
                   ),
-                  _actionBtn('Delete', const Color(0xFFDC2626), () => _deleteSupplier(row)),
+                  _actionBtn('Delete',      const Color(0xFFDC2626),  () => _deleteSupplier(row)),
                 ]),
               ]),
             ),
-            // Companies inline section
             if (_companiesExpanded.contains(row.id)) ...[
               const Divider(height: 1, color: Color(0xFFE5E7EB)),
               _CompaniesInlineSection(
@@ -798,7 +842,6 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                 onCompanyAdded: () => _reloadCompanyCount(row.id),
               ),
             ],
-            // Supplier detail section
             if (isExpanded) ...[
               const Divider(height: 1, color: Color(0xFFE5E7EB)),
               _buildDetails(row.rawData, lpad: 16, rpad: 16),

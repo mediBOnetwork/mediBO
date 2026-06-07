@@ -710,7 +710,11 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
             Expanded(flex: 2, child: Text(
                 [row.city, row.state].where((s) => s.isNotEmpty).join(', ').let((s) => s.isNotEmpty ? s : '—'),
                 style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)), overflow: TextOverflow.ellipsis)),
-            _SupplierCompaniesButton(supplierId: row.id),
+            GestureDetector(
+              onTap: () {}, // absorb tap so parent InkWell doesn't expand/collapse
+              behavior: HitTestBehavior.opaque,
+              child: _SupplierCompaniesButton(supplierId: row.id),
+            ),
             const SizedBox(width: 8),
             Expanded(flex: 2, child: _StatusBadge(status: row.status)),
             SizedBox(width: 230, child: Row(mainAxisSize: MainAxisSize.min, children: [
@@ -2676,22 +2680,7 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
   }
 }
 
-// ── Supplier Companies button + popover ───────────────────────────────────────
-
-class _CompanyRow {
-  final String companyId;
-  final String canonicalName;
-  final List<String> aliases;
-  final String margin;
-  final String cdCondition;
-  final String paymentType;
-  final String deal;
-  const _CompanyRow({
-    required this.companyId, required this.canonicalName,
-    required this.aliases, required this.margin,
-    required this.cdCondition, required this.paymentType, required this.deal,
-  });
-}
+// ── Supplier Companies button + dialog ────────────────────────────────────────
 
 class _SupplierCompaniesButton extends StatefulWidget {
   final String supplierId;
@@ -2702,10 +2691,82 @@ class _SupplierCompaniesButton extends StatefulWidget {
 }
 
 class _SupplierCompaniesButtonState extends State<_SupplierCompaniesButton> {
-  List<_CompanyRow>? _companies;
+  int _count = 0;
   bool _loading = true;
-  final LayerLink _layerLink = LayerLink();
-  OverlayEntry? _overlay;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCount();
+  }
+
+  Future<void> _loadCount() async {
+    try {
+      final rows = await Supabase.instance.client
+          .from('supplier_company_terms')
+          .select('id')
+          .eq('supplier_id', widget.supplierId);
+      if (mounted) setState(() { _count = (rows as List).length; _loading = false; });
+    } catch (_) {
+      if (mounted) setState(() { _loading = false; });
+    }
+  }
+
+  Future<void> _openDialog() async {
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      builder: (_) => _CompaniesDialog(supplierId: widget.supplierId),
+    );
+    // Refresh count after dialog closes (user may have added a link)
+    _loadCount();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: () { _openDialog(); },
+      behavior: HitTestBehavior.opaque,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: const Color(0xFFEFF6FF),
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: const Color(0xFF93C5FD)),
+          ),
+          child: _loading
+              ? const SizedBox(width: 14, height: 14,
+                  child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF2563EB)))
+              : Text('Companies ($_count)',
+                  style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF2563EB))),
+        ),
+      ),
+    );
+  }
+}
+
+// Full dialog shown when button is tapped
+class _CompaniesDialog extends StatefulWidget {
+  final String supplierId;
+  const _CompaniesDialog({required this.supplierId});
+
+  @override
+  State<_CompaniesDialog> createState() => _CompaniesDialogState();
+}
+
+class _CompaniesDialogState extends State<_CompaniesDialog> {
+  bool _loading = true;
+  List<Map<String, dynamic>> _linked   = [];
+  List<Map<String, dynamic>> _allPhCos = [];
+  bool _showForm    = false;
+  bool _saving      = false;
+  String? _selCoId;
+  final _marginCtrl  = TextEditingController();
+  final _cdCtrl      = TextEditingController();
+  final _payCtrl     = TextEditingController();
+  final _dealCtrl    = TextEditingController();
 
   @override
   void initState() {
@@ -2715,145 +2776,73 @@ class _SupplierCompaniesButtonState extends State<_SupplierCompaniesButton> {
 
   @override
   void dispose() {
-    _closeOverlay();
+    _marginCtrl.dispose(); _cdCtrl.dispose();
+    _payCtrl.dispose(); _dealCtrl.dispose();
     super.dispose();
   }
 
   Future<void> _load() async {
+    if (mounted) setState(() => _loading = true);
     try {
       final client = Supabase.instance.client;
-      final rows = await client
+      final linked = await client
           .from('supplier_company_terms')
-          .select('company_id, margin, cd_condition, payment_type, deal, pharma_companies(canonical_name, company_aliases(alias_name))')
+          .select('id, company_id, margin, cd_condition, payment_type, deal')
           .eq('supplier_id', widget.supplierId);
-
-      final companies = (rows as List).map((r) {
-        final pc = r['pharma_companies'] as Map<String, dynamic>? ?? {};
-        final aliasRows = pc['company_aliases'] as List? ?? [];
-        return _CompanyRow(
-          companyId:     r['company_id'] as String? ?? '',
-          canonicalName: pc['canonical_name'] as String? ?? '',
-          aliases:       aliasRows.map((a) => a['alias_name'] as String? ?? '').where((s) => s.isNotEmpty).toList(),
-          margin:        r['margin'] as String? ?? '',
-          cdCondition:   r['cd_condition'] as String? ?? '',
-          paymentType:   r['payment_type'] as String? ?? '',
-          deal:          r['deal'] as String? ?? '',
-        );
-      }).toList();
-
-      if (mounted) setState(() { _companies = companies; _loading = false; });
-    } catch (_) {
-      if (mounted) setState(() { _companies = []; _loading = false; });
-    }
-  }
-
-  void _closeOverlay() {
-    _overlay?.remove();
-    _overlay = null;
-  }
-
-  void _toggleOverlay(BuildContext ctx) {
-    if (_overlay != null) { _closeOverlay(); return; }
-    _overlay = OverlayEntry(builder: (_) => _PopoverContent(
-      layerLink: _layerLink,
-      companies: _companies ?? [],
-      supplierId: widget.supplierId,
-      onClose: _closeOverlay,
-      onAdded: () { _closeOverlay(); _load(); },
-    ));
-    Overlay.of(ctx).insert(_overlay!);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final count = _companies?.length ?? 0;
-    return CompositedTransformTarget(
-      link: _layerLink,
-      child: GestureDetector(
-        onTap: () => _toggleOverlay(context),
-        child: MouseRegion(
-          cursor: SystemMouseCursors.click,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(
-              color: const Color(0xFFEFF6FF),
-              borderRadius: BorderRadius.circular(6),
-              border: Border.all(color: const Color(0xFF93C5FD)),
-            ),
-            child: _loading
-                ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF2563EB)))
-                : Text('Companies ($count)',
-                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF2563EB))),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _PopoverContent extends StatefulWidget {
-  final LayerLink layerLink;
-  final List<_CompanyRow> companies;
-  final String supplierId;
-  final VoidCallback onClose;
-  final VoidCallback onAdded;
-  const _PopoverContent({
-    required this.layerLink, required this.companies, required this.supplierId,
-    required this.onClose, required this.onAdded,
-  });
-
-  @override
-  State<_PopoverContent> createState() => _PopoverContentState();
-}
-
-class _PopoverContentState extends State<_PopoverContent> {
-  bool _showForm = false;
-  List<Map<String, dynamic>> _allCompanies = [];
-  String? _selectedCompanyId;
-  final _marginCtrl      = TextEditingController();
-  final _cdCtrl          = TextEditingController();
-  final _paymentCtrl     = TextEditingController();
-  final _dealCtrl        = TextEditingController();
-  bool _saving = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadAllCompanies();
-  }
-
-  @override
-  void dispose() {
-    _marginCtrl.dispose(); _cdCtrl.dispose();
-    _paymentCtrl.dispose(); _dealCtrl.dispose();
-    super.dispose();
-  }
-
-  Future<void> _loadAllCompanies() async {
-    try {
-      final rows = await Supabase.instance.client
+      final allCos = await client
           .from('pharma_companies')
           .select('id, canonical_name')
           .order('canonical_name');
-      if (mounted) setState(() => _allCompanies = (rows as List).map((r) => Map<String, dynamic>.from(r as Map)).toList());
-    } catch (_) {}
+
+      // For each linked term, fetch canonical_name + aliases
+      final enriched = <Map<String, dynamic>>[];
+      for (final t in (linked as List)) {
+        final cid = t['company_id'] as String;
+        final co = (allCos as List).firstWhere(
+          (c) => (c as Map)['id'] == cid, orElse: () => <String, dynamic>{});
+        final aliases = await client
+            .from('company_aliases')
+            .select('alias_name')
+            .eq('company_id', cid);
+        enriched.add({
+          ...Map<String, dynamic>.from(t as Map),
+          'canonical_name': (co as Map)['canonical_name'] ?? '',
+          'aliases': (aliases as List).map((a) => (a as Map)['alias_name'] as String? ?? '').toList(),
+        });
+      }
+
+      if (mounted) setState(() {
+        _linked   = enriched;
+        _allPhCos = (allCos as List).map((r) => Map<String, dynamic>.from(r as Map)).toList();
+        _loading  = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _loading = false);
+    }
   }
 
   Future<void> _save() async {
-    if (_selectedCompanyId == null) return;
+    if (_selCoId == null) return;
     setState(() => _saving = true);
     try {
       await Supabase.instance.client.from('supplier_company_terms').insert({
         'supplier_id':  widget.supplierId,
-        'company_id':   _selectedCompanyId,
+        'company_id':   _selCoId,
         'margin':       _marginCtrl.text.trim(),
         'cd_condition': _cdCtrl.text.trim(),
-        'payment_type': _paymentCtrl.text.trim(),
+        'payment_type': _payCtrl.text.trim(),
         'deal':         _dealCtrl.text.trim(),
       });
-      widget.onAdded();
-    } catch (_) {
-      if (mounted) setState(() => _saving = false);
+      _selCoId = null;
+      _marginCtrl.clear(); _cdCtrl.clear(); _payCtrl.clear(); _dealCtrl.clear();
+      setState(() { _showForm = false; _saving = false; });
+      _load();
+    } catch (e) {
+      if (mounted) {
+        setState(() => _saving = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Save failed: $e'), backgroundColor: const Color(0xFFDC2626)));
+      }
     }
   }
 
@@ -2867,140 +2856,7 @@ class _PopoverContentState extends State<_PopoverContent> {
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Stack(children: [
-      // Dismiss backdrop
-      Positioned.fill(child: GestureDetector(onTap: widget.onClose, behavior: HitTestBehavior.translucent)),
-      CompositedTransformFollower(
-        link: widget.layerLink,
-        showWhenUnlinked: false,
-        offset: const Offset(0, 32),
-        child: Material(
-          elevation: 8,
-          borderRadius: BorderRadius.circular(10),
-          color: Colors.white,
-          child: Container(
-            width: 380,
-            constraints: const BoxConstraints(maxHeight: 400),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: const Color(0xFFE5E7EB)),
-            ),
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-              // Header
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                decoration: const BoxDecoration(
-                  border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
-                ),
-                child: Row(children: [
-                  const Text('Linked Companies', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
-                  const Spacer(),
-                  GestureDetector(onTap: widget.onClose, child: const Icon(Icons.close, size: 16, color: Color(0xFF9CA3AF))),
-                ]),
-              ),
-              // Company list
-              Flexible(
-                child: ListView(shrinkWrap: true, children: [
-                  if (widget.companies.isEmpty && !_showForm)
-                    const Padding(
-                      padding: EdgeInsets.all(16),
-                      child: Text('No companies linked.', style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
-                    )
-                  else
-                    for (final c in widget.companies)
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                        decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: Color(0xFFF3F4F6)))),
-                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                          Text(c.canonicalName, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
-                          if (c.aliases.isNotEmpty) ...[
-                            const SizedBox(height: 2),
-                            Text(c.aliases.join(' · '), style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
-                          ],
-                          const SizedBox(height: 4),
-                          Wrap(children: [
-                            _chip('Margin', c.margin),
-                            _chip('CD', c.cdCondition),
-                            _chip('Deal', c.deal),
-                            _chip('Payment', c.paymentType),
-                          ]),
-                        ]),
-                      ),
-                  // Add form
-                  if (_showForm)
-                    Padding(
-                      padding: const EdgeInsets.all(14),
-                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        const Text('Add Company Link', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFF374151))),
-                        const SizedBox(height: 8),
-                        DropdownButtonFormField<String>(
-                          value: _selectedCompanyId,
-                          isExpanded: true,
-                          hint: const Text('Select company', style: TextStyle(fontSize: 13)),
-                          decoration: InputDecoration(
-                            isDense: true,
-                            contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                            border: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
-                            enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
-                          ),
-                          items: _allCompanies.map((c) => DropdownMenuItem<String>(
-                            value: c['id'] as String,
-                            child: Text(c['canonical_name'] as String? ?? '', style: const TextStyle(fontSize: 13)),
-                          )).toList(),
-                          onChanged: (v) => setState(() => _selectedCompanyId = v),
-                        ),
-                        const SizedBox(height: 6),
-                        Row(children: [
-                          Expanded(child: _formField(_marginCtrl, 'Margin')),
-                          const SizedBox(width: 8),
-                          Expanded(child: _formField(_cdCtrl, 'CD Condition')),
-                        ]),
-                        const SizedBox(height: 6),
-                        Row(children: [
-                          Expanded(child: _formField(_paymentCtrl, 'Payment Type')),
-                          const SizedBox(width: 8),
-                          Expanded(child: _formField(_dealCtrl, 'Deal')),
-                        ]),
-                        const SizedBox(height: 10),
-                        Row(mainAxisAlignment: MainAxisAlignment.end, children: [
-                          TextButton(onPressed: () => setState(() => _showForm = false), child: const Text('Cancel', style: TextStyle(fontSize: 12))),
-                          const SizedBox(width: 8),
-                          FilledButton(
-                            onPressed: _saving ? null : _save,
-                            style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43), padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8)),
-                            child: _saving
-                                ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 1.5, color: Colors.white))
-                                : const Text('Save', style: TextStyle(fontSize: 12)),
-                          ),
-                        ]),
-                      ]),
-                    ),
-                ]),
-              ),
-              // Footer
-              if (!_showForm)
-                Container(
-                  decoration: const BoxDecoration(border: Border(top: BorderSide(color: Color(0xFFE5E7EB)))),
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                  child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
-                    TextButton.icon(
-                      onPressed: () => setState(() => _showForm = true),
-                      icon: const Icon(Icons.add, size: 14),
-                      label: const Text('Add Company', style: TextStyle(fontSize: 12)),
-                      style: TextButton.styleFrom(foregroundColor: const Color(0xFF2563EB)),
-                    ),
-                  ]),
-                ),
-            ]),
-          ),
-        ),
-      ),
-    ]);
-  }
-
-  Widget _formField(TextEditingController ctrl, String hint) => TextField(
+  Widget _field(TextEditingController ctrl, String hint) => TextField(
     controller: ctrl,
     style: const TextStyle(fontSize: 13),
     decoration: InputDecoration(
@@ -3010,8 +2866,150 @@ class _PopoverContentState extends State<_PopoverContent> {
       contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       border: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
       enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: const BorderSide(color: Color(0xFF1B7A43))),
     ),
   );
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: SizedBox(
+        width: 420,
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          // Header
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 12, 14),
+            child: Row(children: [
+              const Text('Linked Companies',
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+              const Spacer(),
+              IconButton(
+                onPressed: () => Navigator.pop(context),
+                icon: const Icon(Icons.close, size: 18, color: Color(0xFF9CA3AF)),
+                visualDensity: VisualDensity.compact,
+              ),
+            ]),
+          ),
+          const Divider(height: 1, color: Color(0xFFE5E7EB)),
+          // Body
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 360),
+            child: _loading
+                ? const Padding(
+                    padding: EdgeInsets.all(32),
+                    child: Center(child: CircularProgressIndicator(color: Color(0xFF1B7A43), strokeWidth: 2)),
+                  )
+                : SingleChildScrollView(
+                    child: Column(mainAxisSize: MainAxisSize.min, children: [
+                      if (_linked.isEmpty && !_showForm)
+                        const Padding(
+                          padding: EdgeInsets.all(20),
+                          child: Text('No companies linked yet.',
+                              style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
+                        ),
+                      for (final t in _linked)
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                          decoration: const BoxDecoration(
+                              border: Border(bottom: BorderSide(color: Color(0xFFF3F4F6)))),
+                          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                            Text(t['canonical_name'] as String? ?? '—',
+                                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+                            if ((t['aliases'] as List? ?? []).isNotEmpty) ...[
+                              const SizedBox(height: 2),
+                              Text((t['aliases'] as List).join(' · '),
+                                  style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
+                            ],
+                            const SizedBox(height: 4),
+                            Wrap(children: [
+                              _chip('Margin',  t['margin']       as String? ?? ''),
+                              _chip('CD',      t['cd_condition'] as String? ?? ''),
+                              _chip('Deal',    t['deal']         as String? ?? ''),
+                              _chip('Payment', t['payment_type'] as String? ?? ''),
+                            ]),
+                          ]),
+                        ),
+                      if (_showForm)
+                        Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                            const Text('Link a Company',
+                                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF374151))),
+                            const SizedBox(height: 10),
+                            DropdownButtonFormField<String>(
+                              value: _selCoId,
+                              isExpanded: true,
+                              hint: const Text('Select company', style: TextStyle(fontSize: 13)),
+                              decoration: InputDecoration(
+                                isDense: true,
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                                border: OutlineInputBorder(borderRadius: BorderRadius.circular(6),
+                                    borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+                                enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6),
+                                    borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+                              ),
+                              items: _allPhCos.map((c) => DropdownMenuItem<String>(
+                                value: c['id'] as String,
+                                child: Text(c['canonical_name'] as String? ?? '',
+                                    style: const TextStyle(fontSize: 13)),
+                              )).toList(),
+                              onChanged: (v) => setState(() => _selCoId = v),
+                            ),
+                            const SizedBox(height: 8),
+                            Row(children: [
+                              Expanded(child: _field(_marginCtrl, 'Margin')),
+                              const SizedBox(width: 8),
+                              Expanded(child: _field(_cdCtrl, 'CD Condition')),
+                            ]),
+                            const SizedBox(height: 8),
+                            Row(children: [
+                              Expanded(child: _field(_payCtrl, 'Payment Type')),
+                              const SizedBox(width: 8),
+                              Expanded(child: _field(_dealCtrl, 'Deal')),
+                            ]),
+                            const SizedBox(height: 12),
+                            Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+                              TextButton(
+                                onPressed: () => setState(() => _showForm = false),
+                                child: const Text('Cancel', style: TextStyle(fontSize: 13)),
+                              ),
+                              const SizedBox(width: 8),
+                              FilledButton(
+                                onPressed: _saving ? null : _save,
+                                style: FilledButton.styleFrom(
+                                    backgroundColor: const Color(0xFF1B7A43),
+                                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10)),
+                                child: _saving
+                                    ? const SizedBox(width: 14, height: 14,
+                                        child: CircularProgressIndicator(strokeWidth: 1.5, color: Colors.white))
+                                    : const Text('Save', style: TextStyle(fontSize: 13)),
+                              ),
+                            ]),
+                          ]),
+                        ),
+                    ]),
+                  ),
+          ),
+          // Footer
+          if (!_showForm && !_loading) ...[
+            const Divider(height: 1, color: Color(0xFFE5E7EB)),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+                TextButton.icon(
+                  onPressed: () => setState(() => _showForm = true),
+                  icon: const Icon(Icons.add, size: 15),
+                  label: const Text('Add Company', style: TextStyle(fontSize: 13)),
+                  style: TextButton.styleFrom(foregroundColor: const Color(0xFF2563EB)),
+                ),
+              ]),
+            ),
+          ],
+        ]),
+      ),
+    );
+  }
 }
 
 extension _ListExt<T> on List<T> {

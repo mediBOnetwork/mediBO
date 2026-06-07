@@ -2680,7 +2680,7 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
   }
 }
 
-// ── Supplier Companies button + dialog ────────────────────────────────────────
+// ── Supplier Companies button + anchored dropdown ─────────────────────────────
 
 class _SupplierCompaniesButton extends StatefulWidget {
   final String supplierId;
@@ -2691,13 +2691,22 @@ class _SupplierCompaniesButton extends StatefulWidget {
 }
 
 class _SupplierCompaniesButtonState extends State<_SupplierCompaniesButton> {
-  int _count = 0;
+  int  _count   = 0;
   bool _loading = true;
+  // LayerLink anchors the overlay to this button's position.
+  final _link = LayerLink();
+  OverlayEntry? _entry;
 
   @override
   void initState() {
     super.initState();
     _loadCount();
+  }
+
+  @override
+  void dispose() {
+    _close();
+    super.dispose();
   }
 
   Future<void> _loadCount() async {
@@ -2708,65 +2717,77 @@ class _SupplierCompaniesButtonState extends State<_SupplierCompaniesButton> {
           .eq('supplier_id', widget.supplierId);
       if (mounted) setState(() { _count = (rows as List).length; _loading = false; });
     } catch (_) {
-      if (mounted) setState(() { _loading = false; });
+      if (mounted) setState(() => _loading = false);
     }
   }
 
-  Future<void> _openDialog() async {
-    await showDialog<void>(
-      context: context,
-      barrierDismissible: true,
-      builder: (_) => _CompaniesDialog(supplierId: widget.supplierId),
-    );
-    // Refresh count after dialog closes (user may have added a link)
-    _loadCount();
+  void _close() {
+    _entry?.remove();
+    _entry = null;
+  }
+
+  void _toggle() {
+    if (_entry != null) { _close(); return; }
+
+    _entry = OverlayEntry(builder: (ctx) => _CompaniesDropdown(
+      link:       _link,
+      supplierId: widget.supplierId,
+      onClose:    () { _close(); _loadCount(); },
+    ));
+    Overlay.of(context).insert(_entry!);
   }
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () { _openDialog(); },
-      behavior: HitTestBehavior.opaque,
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          decoration: BoxDecoration(
-            color: const Color(0xFFEFF6FF),
-            borderRadius: BorderRadius.circular(6),
-            border: Border.all(color: const Color(0xFF93C5FD)),
+    return CompositedTransformTarget(
+      link: _link,
+      child: GestureDetector(
+        onTap: _toggle,
+        behavior: HitTestBehavior.opaque,
+        child: MouseRegion(
+          cursor: SystemMouseCursors.click,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: const Color(0xFFEFF6FF),
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(color: const Color(0xFF93C5FD)),
+            ),
+            child: _loading
+                ? const SizedBox(width: 14, height: 14,
+                    child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF2563EB)))
+                : Text('Companies ($_count)',
+                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
+                        color: Color(0xFF2563EB))),
           ),
-          child: _loading
-              ? const SizedBox(width: 14, height: 14,
-                  child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF2563EB)))
-              : Text('Companies ($_count)',
-                  style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF2563EB))),
         ),
       ),
     );
   }
 }
 
-// Full dialog shown when button is tapped
-class _CompaniesDialog extends StatefulWidget {
-  final String supplierId;
-  const _CompaniesDialog({required this.supplierId});
+// Dropdown anchored below the button via CompositedTransformFollower.
+class _CompaniesDropdown extends StatefulWidget {
+  final LayerLink link;
+  final String    supplierId;
+  final VoidCallback onClose;
+  const _CompaniesDropdown({required this.link, required this.supplierId, required this.onClose});
 
   @override
-  State<_CompaniesDialog> createState() => _CompaniesDialogState();
+  State<_CompaniesDropdown> createState() => _CompaniesDropdownState();
 }
 
-class _CompaniesDialogState extends State<_CompaniesDialog> {
+class _CompaniesDropdownState extends State<_CompaniesDropdown> {
   bool _loading = true;
   List<Map<String, dynamic>> _linked   = [];
   List<Map<String, dynamic>> _allPhCos = [];
-  bool _showForm    = false;
-  bool _saving      = false;
+  bool _showForm = false;
+  bool _saving   = false;
   String? _selCoId;
-  final _marginCtrl  = TextEditingController();
-  final _cdCtrl      = TextEditingController();
-  final _payCtrl     = TextEditingController();
-  final _dealCtrl    = TextEditingController();
+  final _marginCtrl = TextEditingController();
+  final _cdCtrl     = TextEditingController();
+  final _payCtrl    = TextEditingController();
+  final _dealCtrl   = TextEditingController();
 
   @override
   void initState() {
@@ -2777,7 +2798,7 @@ class _CompaniesDialogState extends State<_CompaniesDialog> {
   @override
   void dispose() {
     _marginCtrl.dispose(); _cdCtrl.dispose();
-    _payCtrl.dispose(); _dealCtrl.dispose();
+    _payCtrl.dispose();    _dealCtrl.dispose();
     super.dispose();
   }
 
@@ -2794,12 +2815,11 @@ class _CompaniesDialogState extends State<_CompaniesDialog> {
           .select('id, canonical_name')
           .order('canonical_name');
 
-      // For each linked term, fetch canonical_name + aliases
       final enriched = <Map<String, dynamic>>[];
       for (final t in (linked as List)) {
         final cid = t['company_id'] as String;
-        final co = (allCos as List).firstWhere(
-          (c) => (c as Map)['id'] == cid, orElse: () => <String, dynamic>{});
+        final co  = (allCos as List).firstWhere(
+            (c) => (c as Map)['id'] == cid, orElse: () => <String, dynamic>{});
         final aliases = await client
             .from('company_aliases')
             .select('alias_name')
@@ -2807,13 +2827,18 @@ class _CompaniesDialogState extends State<_CompaniesDialog> {
         enriched.add({
           ...Map<String, dynamic>.from(t as Map),
           'canonical_name': (co as Map)['canonical_name'] ?? '',
-          'aliases': (aliases as List).map((a) => (a as Map)['alias_name'] as String? ?? '').toList(),
+          'aliases': (aliases as List)
+              .map((a) => (a as Map)['alias_name'] as String? ?? '')
+              .where((s) => s.isNotEmpty)
+              .toList(),
         });
       }
 
       if (mounted) setState(() {
         _linked   = enriched;
-        _allPhCos = (allCos as List).map((r) => Map<String, dynamic>.from(r as Map)).toList();
+        _allPhCos = (allCos as List)
+            .map((r) => Map<String, dynamic>.from(r as Map))
+            .toList();
         _loading  = false;
       });
     } catch (_) {
@@ -2835,180 +2860,230 @@ class _CompaniesDialogState extends State<_CompaniesDialog> {
       });
       _selCoId = null;
       _marginCtrl.clear(); _cdCtrl.clear(); _payCtrl.clear(); _dealCtrl.clear();
-      setState(() { _showForm = false; _saving = false; });
+      if (mounted) setState(() { _showForm = false; _saving = false; });
       _load();
     } catch (e) {
-      if (mounted) {
-        setState(() => _saving = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Save failed: $e'), backgroundColor: const Color(0xFFDC2626)));
-      }
+      if (mounted) setState(() => _saving = false);
     }
   }
 
   Widget _chip(String label, String value) {
     if (value.isEmpty) return const SizedBox.shrink();
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
       margin: const EdgeInsets.only(right: 4, bottom: 2),
       decoration: BoxDecoration(color: const Color(0xFFF3F4F6), borderRadius: BorderRadius.circular(4)),
-      child: Text('$label: $value', style: const TextStyle(fontSize: 10, color: Color(0xFF374151))),
+      child: Text('$label: $value',
+          style: const TextStyle(fontSize: 10, color: Color(0xFF374151))),
     );
   }
 
   Widget _field(TextEditingController ctrl, String hint) => TextField(
     controller: ctrl,
-    style: const TextStyle(fontSize: 13),
+    style: const TextStyle(fontSize: 12),
     decoration: InputDecoration(
       hintText: hint,
-      hintStyle: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)),
+      hintStyle: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
       isDense: true,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      border: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
-      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
-      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: const BorderSide(color: Color(0xFF1B7A43))),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(5),
+          borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(5),
+          borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(5),
+          borderSide: const BorderSide(color: Color(0xFF1B7A43))),
     ),
   );
 
   @override
   Widget build(BuildContext context) {
-    return Dialog(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: SizedBox(
-        width: 420,
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          // Header
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 14, 12, 14),
-            child: Row(children: [
-              const Text('Linked Companies',
-                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
-              const Spacer(),
-              IconButton(
-                onPressed: () => Navigator.pop(context),
-                icon: const Icon(Icons.close, size: 18, color: Color(0xFF9CA3AF)),
-                visualDensity: VisualDensity.compact,
+    return Stack(children: [
+      // Full-screen transparent barrier — tap outside closes dropdown.
+      Positioned.fill(
+        child: GestureDetector(
+          onTap: widget.onClose,
+          behavior: HitTestBehavior.translucent,
+          child: const SizedBox.expand(),
+        ),
+      ),
+      // Anchored panel — follows the button via LayerLink.
+      CompositedTransformFollower(
+        link:             widget.link,
+        showWhenUnlinked: false,
+        targetAnchor:     Alignment.bottomLeft,
+        followerAnchor:   Alignment.topLeft,
+        offset:           const Offset(0, 4),
+        child: Material(
+          elevation: 8,
+          borderRadius: BorderRadius.circular(10),
+          color: Colors.white,
+          child: Container(
+            width: 350,
+            constraints: const BoxConstraints(maxHeight: 320),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: const Color(0xFFE5E7EB)),
+            ),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              // Body — scrollable list of linked companies + optional add form.
+              Flexible(
+                child: _loading
+                    ? const Padding(
+                        padding: EdgeInsets.all(24),
+                        child: Center(
+                          child: CircularProgressIndicator(
+                              color: Color(0xFF1B7A43), strokeWidth: 2)),
+                      )
+                    : SingleChildScrollView(
+                        child: Column(mainAxisSize: MainAxisSize.min, children: [
+                          if (_linked.isEmpty && !_showForm)
+                            const Padding(
+                              padding: EdgeInsets.symmetric(horizontal: 14, vertical: 16),
+                              child: Text('No companies linked yet.',
+                                  style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF))),
+                            ),
+                          for (final t in _linked)
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 14, vertical: 9),
+                              decoration: const BoxDecoration(
+                                  border: Border(
+                                      bottom: BorderSide(color: Color(0xFFF3F4F6)))),
+                              child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                Text(t['canonical_name'] as String? ?? '—',
+                                    style: const TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w700,
+                                        color: Color(0xFF111827))),
+                                if ((t['aliases'] as List? ?? []).isNotEmpty) ...[
+                                  const SizedBox(height: 2),
+                                  Text((t['aliases'] as List).join(' · '),
+                                      style: const TextStyle(
+                                          fontSize: 10, color: Color(0xFF9CA3AF))),
+                                ],
+                                const SizedBox(height: 4),
+                                Wrap(children: [
+                                  _chip('Margin',  t['margin']       as String? ?? ''),
+                                  _chip('CD',      t['cd_condition'] as String? ?? ''),
+                                  _chip('Deal',    t['deal']         as String? ?? ''),
+                                  _chip('Payment', t['payment_type'] as String? ?? ''),
+                                ]),
+                              ]),
+                            ),
+                          // Add form (inline in dropdown)
+                          if (_showForm)
+                            Padding(
+                              padding: const EdgeInsets.all(12),
+                              child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                const Text('Link a Company',
+                                    style: TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w700,
+                                        color: Color(0xFF374151))),
+                                const SizedBox(height: 8),
+                                DropdownButtonFormField<String>(
+                                  value: _selCoId,
+                                  isExpanded: true,
+                                  hint: const Text('Select company',
+                                      style: TextStyle(fontSize: 12)),
+                                  decoration: InputDecoration(
+                                    isDense: true,
+                                    contentPadding: const EdgeInsets.symmetric(
+                                        horizontal: 8, vertical: 7),
+                                    border: OutlineInputBorder(
+                                        borderRadius: BorderRadius.circular(5),
+                                        borderSide: const BorderSide(
+                                            color: Color(0xFFE5E7EB))),
+                                    enabledBorder: OutlineInputBorder(
+                                        borderRadius: BorderRadius.circular(5),
+                                        borderSide: const BorderSide(
+                                            color: Color(0xFFE5E7EB))),
+                                  ),
+                                  items: _allPhCos
+                                      .map((c) => DropdownMenuItem<String>(
+                                            value: c['id'] as String,
+                                            child: Text(
+                                                c['canonical_name'] as String? ?? '',
+                                                style: const TextStyle(fontSize: 12)),
+                                          ))
+                                      .toList(),
+                                  onChanged: (v) =>
+                                      setState(() => _selCoId = v),
+                                ),
+                                const SizedBox(height: 6),
+                                Row(children: [
+                                  Expanded(child: _field(_marginCtrl, 'Margin')),
+                                  const SizedBox(width: 6),
+                                  Expanded(child: _field(_cdCtrl, 'CD')),
+                                ]),
+                                const SizedBox(height: 6),
+                                Row(children: [
+                                  Expanded(child: _field(_payCtrl, 'Payment')),
+                                  const SizedBox(width: 6),
+                                  Expanded(child: _field(_dealCtrl, 'Deal')),
+                                ]),
+                                const SizedBox(height: 8),
+                                Row(mainAxisAlignment: MainAxisAlignment.end,
+                                    children: [
+                                  TextButton(
+                                    onPressed: () =>
+                                        setState(() => _showForm = false),
+                                    style: TextButton.styleFrom(
+                                        visualDensity: VisualDensity.compact),
+                                    child: const Text('Cancel',
+                                        style: TextStyle(fontSize: 12)),
+                                  ),
+                                  const SizedBox(width: 6),
+                                  FilledButton(
+                                    onPressed: _saving ? null : _save,
+                                    style: FilledButton.styleFrom(
+                                        backgroundColor: const Color(0xFF1B7A43),
+                                        visualDensity: VisualDensity.compact,
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 14, vertical: 8)),
+                                    child: _saving
+                                        ? const SizedBox(
+                                            width: 12, height: 12,
+                                            child: CircularProgressIndicator(
+                                                strokeWidth: 1.5,
+                                                color: Colors.white))
+                                        : const Text('Save',
+                                            style: TextStyle(fontSize: 12)),
+                                  ),
+                                ]),
+                              ]),
+                            ),
+                        ]),
+                      ),
               ),
+              // Footer: "+ Add Company" button.
+              if (!_showForm && !_loading)
+                Container(
+                  decoration: const BoxDecoration(
+                      border: Border(top: BorderSide(color: Color(0xFFE5E7EB)))),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+                    TextButton.icon(
+                      onPressed: () => setState(() => _showForm = true),
+                      icon: const Icon(Icons.add, size: 13),
+                      label: const Text('Add Company',
+                          style: TextStyle(fontSize: 12)),
+                      style: TextButton.styleFrom(
+                          foregroundColor: const Color(0xFF2563EB),
+                          visualDensity: VisualDensity.compact),
+                    ),
+                  ]),
+                ),
             ]),
           ),
-          const Divider(height: 1, color: Color(0xFFE5E7EB)),
-          // Body
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 360),
-            child: _loading
-                ? const Padding(
-                    padding: EdgeInsets.all(32),
-                    child: Center(child: CircularProgressIndicator(color: Color(0xFF1B7A43), strokeWidth: 2)),
-                  )
-                : SingleChildScrollView(
-                    child: Column(mainAxisSize: MainAxisSize.min, children: [
-                      if (_linked.isEmpty && !_showForm)
-                        const Padding(
-                          padding: EdgeInsets.all(20),
-                          child: Text('No companies linked yet.',
-                              style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
-                        ),
-                      for (final t in _linked)
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                          decoration: const BoxDecoration(
-                              border: Border(bottom: BorderSide(color: Color(0xFFF3F4F6)))),
-                          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                            Text(t['canonical_name'] as String? ?? '—',
-                                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
-                            if ((t['aliases'] as List? ?? []).isNotEmpty) ...[
-                              const SizedBox(height: 2),
-                              Text((t['aliases'] as List).join(' · '),
-                                  style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
-                            ],
-                            const SizedBox(height: 4),
-                            Wrap(children: [
-                              _chip('Margin',  t['margin']       as String? ?? ''),
-                              _chip('CD',      t['cd_condition'] as String? ?? ''),
-                              _chip('Deal',    t['deal']         as String? ?? ''),
-                              _chip('Payment', t['payment_type'] as String? ?? ''),
-                            ]),
-                          ]),
-                        ),
-                      if (_showForm)
-                        Padding(
-                          padding: const EdgeInsets.all(16),
-                          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                            const Text('Link a Company',
-                                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF374151))),
-                            const SizedBox(height: 10),
-                            DropdownButtonFormField<String>(
-                              value: _selCoId,
-                              isExpanded: true,
-                              hint: const Text('Select company', style: TextStyle(fontSize: 13)),
-                              decoration: InputDecoration(
-                                isDense: true,
-                                contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                                border: OutlineInputBorder(borderRadius: BorderRadius.circular(6),
-                                    borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
-                                enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6),
-                                    borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
-                              ),
-                              items: _allPhCos.map((c) => DropdownMenuItem<String>(
-                                value: c['id'] as String,
-                                child: Text(c['canonical_name'] as String? ?? '',
-                                    style: const TextStyle(fontSize: 13)),
-                              )).toList(),
-                              onChanged: (v) => setState(() => _selCoId = v),
-                            ),
-                            const SizedBox(height: 8),
-                            Row(children: [
-                              Expanded(child: _field(_marginCtrl, 'Margin')),
-                              const SizedBox(width: 8),
-                              Expanded(child: _field(_cdCtrl, 'CD Condition')),
-                            ]),
-                            const SizedBox(height: 8),
-                            Row(children: [
-                              Expanded(child: _field(_payCtrl, 'Payment Type')),
-                              const SizedBox(width: 8),
-                              Expanded(child: _field(_dealCtrl, 'Deal')),
-                            ]),
-                            const SizedBox(height: 12),
-                            Row(mainAxisAlignment: MainAxisAlignment.end, children: [
-                              TextButton(
-                                onPressed: () => setState(() => _showForm = false),
-                                child: const Text('Cancel', style: TextStyle(fontSize: 13)),
-                              ),
-                              const SizedBox(width: 8),
-                              FilledButton(
-                                onPressed: _saving ? null : _save,
-                                style: FilledButton.styleFrom(
-                                    backgroundColor: const Color(0xFF1B7A43),
-                                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10)),
-                                child: _saving
-                                    ? const SizedBox(width: 14, height: 14,
-                                        child: CircularProgressIndicator(strokeWidth: 1.5, color: Colors.white))
-                                    : const Text('Save', style: TextStyle(fontSize: 13)),
-                              ),
-                            ]),
-                          ]),
-                        ),
-                    ]),
-                  ),
-          ),
-          // Footer
-          if (!_showForm && !_loading) ...[
-            const Divider(height: 1, color: Color(0xFFE5E7EB)),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
-                TextButton.icon(
-                  onPressed: () => setState(() => _showForm = true),
-                  icon: const Icon(Icons.add, size: 15),
-                  label: const Text('Add Company', style: TextStyle(fontSize: 13)),
-                  style: TextButton.styleFrom(foregroundColor: const Color(0xFF2563EB)),
-                ),
-              ]),
-            ),
-          ],
-        ]),
+        ),
       ),
-    );
+    ]);
   }
 }
 

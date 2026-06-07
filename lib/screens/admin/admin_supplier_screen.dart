@@ -1874,7 +1874,10 @@ class _SupProfColMap {
   final String header;
   final List<String> samples;
   String mappedTo;
-  _SupProfColMap({required this.index, required this.header, required this.samples, required this.mappedTo});
+  String newColName;
+  String newColType;
+  _SupProfColMap({required this.index, required this.header, required this.samples, required this.mappedTo,
+    this.newColName = '', this.newColType = 'text'});
 }
 
 enum _SupProfStep { reading, mapping, importing }
@@ -1893,13 +1896,16 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
   List<_SupProfColMap> _cols = [];
   List<List<String>> _dataRows = [];
   String? _error;
+  final Map<int, TextEditingController> _newColCtrls = {};
+  List<String> _dynamicFields = [];
 
-  static const _fields = [
+  static const _baseFields = [
     'supplier_name', 'contact_name', 'phone', 'email', 'whatsapp_no',
     'city', 'state', 'address', 'pincode', 'gstin', 'drug_license',
     'supplier_code', 'payment_term', 'store_type', 'range_zone',
-    'other_contact', 'notes', 'ignore',
+    'other_contact', 'notes',
   ];
+  List<String> get _fields => [..._baseFields, ..._dynamicFields, 'ignore'];
 
   static String _fieldLabel(String f) => switch (f) {
     'supplier_name'  => 'Supplier Name *',
@@ -1924,6 +1930,12 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
 
   @override
   void initState() { super.initState(); _parseAndMap(); }
+
+  @override
+  void dispose() {
+    for (final c in _newColCtrls.values) c.dispose();
+    super.dispose();
+  }
 
   // ── File parsing (reused from Add-Medicine pipeline) ─────────────────────────
 
@@ -2156,7 +2168,7 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
             final mm = m as Map<String, dynamic>;
             final idx = mm['index'] as int?;
             final mapped = mm['mapped_to'] as String? ?? 'ignore';
-            if (idx != null) idxMap[idx] = _fields.contains(mapped) ? mapped : 'ignore';
+            if (idx != null) idxMap[idx] = (_baseFields.contains(mapped) || mapped == 'ignore') ? mapped : 'ignore';
           }
         }
       }
@@ -2193,6 +2205,64 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
     });
   }
 
+  Future<void> _confirmMapping() async {
+    // Validate create_new entries
+    for (final col in _cols.where((c) => c.mappedTo == 'create_new')) {
+      final name = (_newColCtrls[col.index]?.text ?? '').trim();
+      if (name.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Enter a name for the new column "${col.header.isNotEmpty ? col.header : "Column ${col.index + 1}"}"'),
+          behavior: SnackBarBehavior.floating,
+        ));
+        return;
+      }
+      if (!RegExp(r'^[a-z][a-z0-9_]*$').hasMatch(name)) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('"$name" is invalid — use lowercase letters, numbers, underscores, starting with a letter'),
+          behavior: SnackBarBehavior.floating,
+        ));
+        return;
+      }
+      if (_baseFields.contains(name)) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('"$name" already exists — map directly to that column instead'),
+          behavior: SnackBarBehavior.floating,
+        ));
+        return;
+      }
+      col.newColName = name;
+    }
+
+    // Create new columns via RPC
+    final toCreate = _cols.where((c) => c.mappedTo == 'create_new').toList();
+    if (toCreate.isNotEmpty) {
+      setState(() { _step = _SupProfStep.importing; _statusMsg = 'Creating new columns…'; });
+      for (final col in toCreate) {
+        try {
+          await Supabase.instance.client.rpc('add_supplier_column', params: {
+            'col_name': col.newColName,
+            'col_type': col.newColType,
+          });
+          setState(() {
+            col.mappedTo = col.newColName;
+            if (!_dynamicFields.contains(col.newColName)) _dynamicFields.add(col.newColName);
+          });
+        } catch (e) {
+          if (!mounted) return;
+          setState(() { _step = _SupProfStep.mapping; });
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('Could not create column "${col.newColName}": ${e.toString().replaceFirst('Exception: ', '')}'),
+            behavior: SnackBarBehavior.floating, duration: const Duration(seconds: 8),
+          ));
+          return;
+        }
+      }
+      setState(() { _step = _SupProfStep.mapping; });
+    }
+
+    await _doImport();
+  }
+
   Future<void> _parseAndMap() async {
     try {
       setState(() { _step = _SupProfStep.reading; _statusMsg = 'Reading file…'; });
@@ -2210,7 +2280,8 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
     setState(() { _step = _SupProfStep.importing; });
     try {
       final colFor = <String, _SupProfColMap>{};
-      for (final c in _cols) { if (c.mappedTo != 'ignore') colFor[c.mappedTo] = c; }
+      for (final c in _cols) { if (c.mappedTo != 'ignore' && c.mappedTo != 'create_new') colFor[c.mappedTo] = c; }
+      final allFields = [..._baseFields, ..._dynamicFields];
       final toInsert = <Map<String, dynamic>>[];
       for (final row in _dataRows) {
         String val(String field) {
@@ -2220,7 +2291,7 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
         final name = val('supplier_name');
         if (name.isEmpty) continue;
         final rec = <String, dynamic>{'supplier_name': name, 'status': 'approved', 'approved': true, 'is_deleted': false};
-        for (final f in _fields.where((f) => f != 'supplier_name' && f != 'ignore')) {
+        for (final f in allFields.where((f) => f != 'supplier_name')) {
           final v = val(f);
           if (v.isNotEmpty) rec[f] = v;
         }
@@ -2327,7 +2398,8 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
                           ],
                           const SizedBox(height: 8),
                           DropdownButtonFormField<String>(
-                            value: col.mappedTo, isExpanded: true,
+                            value: _fields.contains(col.mappedTo) || col.mappedTo == 'create_new' ? col.mappedTo : 'ignore',
+                            isExpanded: true,
                             decoration: InputDecoration(isDense: true,
                               contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                               border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
@@ -2335,39 +2407,107 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
                               focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF1B7A43))),
                               filled: true, fillColor: Colors.white,
                             ),
-                            items: _fields.map((f) => DropdownMenuItem(value: f,
-                                child: Text(_fieldLabel(f), style: const TextStyle(fontSize: 13)))).toList(),
-                            onChanged: (v) => setState(() => col.mappedTo = v ?? 'ignore'),
+                            items: [
+                              ..._fields.map((f) => DropdownMenuItem(value: f,
+                                  child: Text(_fieldLabel(f), style: const TextStyle(fontSize: 13)))),
+                              const DropdownMenuItem(value: 'create_new',
+                                  child: Text('+ Create new field', style: TextStyle(fontSize: 13, color: Color(0xFF1B7A43), fontWeight: FontWeight.w600))),
+                            ],
+                            onChanged: (v) { if (v != null) setState(() => col.mappedTo = v); },
                           ),
+                          if (col.mappedTo == 'create_new') ...[
+                            const SizedBox(height: 8),
+                            TextFormField(
+                              controller: _newColCtrls[col.index] ??= TextEditingController(),
+                              onChanged: (v) => col.newColName = v,
+                              decoration: InputDecoration(isDense: true, hintText: 'new_column_name',
+                                hintStyle: const TextStyle(color: Color(0xFFD1D5DB)),
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF1B7A43))),
+                                enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF1B7A43))),
+                                filled: true, fillColor: const Color(0xFFECFDF5),
+                              ),
+                              style: const TextStyle(fontSize: 13),
+                            ),
+                          ],
                         ]),
                       ),
                     );
                   }
+                  final isCreate = col.mappedTo == 'create_new';
+                  final ctrl = _newColCtrls[col.index] ??= TextEditingController();
                   return Column(children: [
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 10),
-                      child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-                        Expanded(flex: 4, child: Text(
-                          col.header.isNotEmpty ? col.header : 'Column ${i + 1}',
-                          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
-                        )),
-                        Expanded(flex: 5, child: Text(
-                          col.samples.join(' · '), maxLines: 1, overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
-                        )),
-                        Expanded(flex: 5, child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10),
-                          decoration: BoxDecoration(color: const Color(0xFFF5F6F8),
-                              border: Border.all(color: const Color(0xFFE5E7EB)),
-                              borderRadius: BorderRadius.circular(8)),
-                          child: DropdownButtonHideUnderline(child: DropdownButton<String>(
-                            value: col.mappedTo, isExpanded: true,
-                            style: const TextStyle(fontSize: 13, color: Color(0xFF111827)),
-                            items: _fields.map((f) => DropdownMenuItem(value: f,
-                                child: Text(_fieldLabel(f), style: const TextStyle(fontSize: 13)))).toList(),
-                            onChanged: (v) => setState(() => col.mappedTo = v ?? 'ignore'),
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+                          Expanded(flex: 4, child: Text(
+                            col.header.isNotEmpty ? col.header : 'Column ${i + 1}',
+                            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
                           )),
-                        )),
+                          Expanded(flex: 5, child: Text(
+                            col.samples.join(' · '), maxLines: 1, overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+                          )),
+                          Expanded(flex: 5, child: DropdownButtonFormField<String>(
+                            value: _fields.contains(col.mappedTo) || col.mappedTo == 'create_new' ? col.mappedTo : 'ignore',
+                            decoration: InputDecoration(isDense: true,
+                              contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+                              enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+                              focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF1B7A43))),
+                              filled: true, fillColor: Colors.white,
+                            ),
+                            items: [
+                              ..._fields.map((f) => DropdownMenuItem(value: f,
+                                  child: Text(_fieldLabel(f), style: const TextStyle(fontSize: 13)))),
+                              const DropdownMenuItem(value: 'create_new',
+                                  child: Text('+ Create new field', style: TextStyle(fontSize: 13, color: Color(0xFF1B7A43), fontWeight: FontWeight.w600))),
+                            ],
+                            onChanged: (v) { if (v != null) setState(() => col.mappedTo = v); },
+                            style: const TextStyle(fontSize: 13, color: Color(0xFF111827)),
+                          )),
+                        ]),
+                        if (isCreate) ...[
+                          const SizedBox(height: 8),
+                          Row(children: [
+                            const SizedBox(width: 12),
+                            const Icon(Icons.subdirectory_arrow_right, size: 16, color: Color(0xFF9CA3AF)),
+                            const SizedBox(width: 8),
+                            Expanded(flex: 3, child: TextFormField(
+                              controller: ctrl,
+                              onChanged: (v) => col.newColName = v,
+                              decoration: InputDecoration(isDense: true, hintText: 'new_column_name',
+                                hintStyle: const TextStyle(color: Color(0xFFD1D5DB)),
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF1B7A43))),
+                                enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF1B7A43))),
+                                filled: true, fillColor: const Color(0xFFECFDF5),
+                              ),
+                              style: const TextStyle(fontSize: 13),
+                            )),
+                            const SizedBox(width: 10),
+                            const Text('Type:', style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+                            const SizedBox(width: 6),
+                            Expanded(flex: 2, child: DropdownButtonFormField<String>(
+                              value: col.newColType,
+                              decoration: InputDecoration(isDense: true,
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF1B7A43))),
+                                enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF1B7A43))),
+                                filled: true, fillColor: const Color(0xFFECFDF5),
+                              ),
+                              items: const [
+                                DropdownMenuItem(value: 'text', child: Text('text', style: TextStyle(fontSize: 13))),
+                                DropdownMenuItem(value: 'numeric', child: Text('number', style: TextStyle(fontSize: 13))),
+                                DropdownMenuItem(value: 'date', child: Text('date', style: TextStyle(fontSize: 13))),
+                                DropdownMenuItem(value: 'boolean', child: Text('boolean', style: TextStyle(fontSize: 13))),
+                              ],
+                              onChanged: (v) { if (v != null) setState(() => col.newColType = v); },
+                              style: const TextStyle(fontSize: 13, color: Color(0xFF111827)),
+                            )),
+                          ]),
+                        ],
                       ]),
                     ),
                     if (i < _cols.length - 1) const Divider(height: 1, color: Color(0xFFF3F4F6)),
@@ -2387,7 +2527,7 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
                   child: const Text('Cancel', style: TextStyle(color: Color(0xFF6B7280)))),
               const SizedBox(width: 8),
               FilledButton(
-                onPressed: _doImport,
+                onPressed: _confirmMapping,
                 style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                     padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12)),

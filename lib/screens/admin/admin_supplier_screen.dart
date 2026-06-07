@@ -1231,146 +1231,195 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       return s.isEmpty ? '—' : s;
     }
 
-    // 4 sections: each has a title, left fields, right fields.
-    // (title, leftFields, rightFields)
-    final sections = <(String, List<(String, String)>, List<(String, String)>)>[
+    // 6 horizontal category rows. Each row = category label (140px) + fields spread with Expanded.
+    // (categoryLabel, [(fieldLabel, value), ...])
+    final rows = <(String, List<(String, String)>)>[
       ('IDENTITY', [
         ('Supplier Name', val(rawData['supplier_name'])),
-        ('Contact Name',  val(rawData['contact_name'])),
         ('Code',          val(rawData['supplier_code'])),
         ('Stockist Type', val(rawData['stockist_type'])),
-      ], [
         ('Status',        val(rawData['status'])),
-        ('Margin',        val(rawData['margin'])),
-        ('Behaviour',     val(rawData['behaviour'])),
-        ('Deal',          val(rawData['deal'])),
       ]),
       ('CONTACT', [
-        ('WhatsApp',      val(rawData['whatsapp_no'])),
+        ('Contact Name',  val(rawData['contact_person'] ?? rawData['contact_name'])),
         ('Phone',         val(rawData['phone'])),
+        ('WhatsApp No',   val(rawData['whatsapp_no'])),
+        ('Contact No',    val(rawData['contact_no'])),
         ('Email',         val(rawData['email'])),
-      ], [
         ('Other Contact', val(rawData['other_contact'])),
-        ('Notes',         val(rawData['notes'])),
       ]),
       ('LOCATION', [
-        ('Address',       val(rawData['address'])),
-        ('City',          val(rawData['city'])),
-        ('State',         val(rawData['state'])),
-      ], [
-        ('PIN Code',      val(rawData['pincode'])),
-        ('Range / Zone',  val(rawData['range_zone'])),
+        ('Street Address', val(rawData['street_address'] ?? rawData['address'])),
+        ('City',           val(rawData['city'])),
+        ('State',          val(rawData['state'])),
+        ('PIN Code',       val(rawData['pin_code'] ?? rawData['pincode'])),
+        ('Range / Zone',   val(rawData['range_zone'])),
+        ('Map Link',       val(rawData['map_link'])),
       ]),
-      ('COMPLIANCE & TERMS', [
-        ('Payment Term',  val(rawData['payment_term'])),
+      ('TERMS', [
+        ('Margin',        val(rawData['margin'])),
         ('CD Condition',  val(rawData['cd_condition'])),
-      ], [
-        ('GSTIN',         val(rawData['gstin'])),
-        ('Drug License',  val(rawData['drug_license'])),
+        ('Payment Type',  val(rawData['payment_type'] ?? rawData['payment_term'])),
+        ('Deal',          val(rawData['deal'])),
+        ('Behaviour',     val(rawData['behaviour'])),
+      ]),
+      ('COMPLIANCE', [
+        ('DL 1',          val(rawData['dl_1'] ?? rawData['drug_license'])),
+        ('DL 2',          val(rawData['dl_2'])),
+        ('GST',           val(rawData['gst'] ?? rawData['gstin'])),
         ('Store Type',    val(rawData['store_type'])),
         ('Approved By',   val(rawData['approved_by'])),
       ]),
+      ('NOTES', [
+        ('Notes', val(rawData['notes'])),
+      ]),
     ];
 
-    // Flat ordered list for mobile (no headers).
-    final allFields = sections.expand((s) {
-      final pairs = <(String, String)>[];
-      final maxLen = s.$2.length > s.$3.length ? s.$2.length : s.$3.length;
-      for (int i = 0; i < maxLen; i++) {
-        if (i < s.$2.length) pairs.add(s.$2[i]);
-        if (i < s.$3.length) pairs.add(s.$3[i]);
-      }
-      return pairs;
-    }).toList();
+    // Flat list for mobile (no category labels).
+    final mobileFields = rows.expand((r) => r.$2).toList();
 
     return Container(
       color: const Color(0xFFF9FAFB),
-      padding: EdgeInsets.fromLTRB(lpad, 4, rpad, 6),
+      padding: EdgeInsets.fromLTRB(lpad, 0, rpad, 0),
       child: LayoutBuilder(builder: (ctx, constraints) {
         final isMobile = constraints.maxWidth < 600;
 
-        Widget kvRow(String label, String value, {bool isLast = false}) {
+        // Mobile: simple 28px kv rows, single column, no category labels.
+        if (isMobile) {
+          Widget mobileKv(String label, String value, {bool isLast = false}) {
+            final isEmpty = value == '—';
+            return Container(
+              height: 28,
+              decoration: isLast
+                  ? null
+                  : const BoxDecoration(
+                      border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB), width: 0.5))),
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: Row(children: [
+                SizedBox(
+                  width: 110,
+                  child: Text(label,
+                      style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF), fontWeight: FontWeight.w500),
+                      overflow: TextOverflow.ellipsis),
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(value,
+                      style: TextStyle(
+                          fontSize: 12, fontWeight: FontWeight.w600,
+                          color: isEmpty ? const Color(0xFFD1D5DB) : const Color(0xFF111827),
+                          fontStyle: isEmpty ? FontStyle.italic : FontStyle.normal),
+                      overflow: TextOverflow.ellipsis),
+                ),
+              ]),
+            );
+          }
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              for (int i = 0; i < mobileFields.length; i++)
+                mobileKv(mobileFields[i].$1, mobileFields[i].$2, isLast: i == mobileFields.length - 1),
+            ],
+          );
+        }
+
+        // Desktop: one horizontal row per category, 56px tall.
+        Widget fieldCell(String label, String value) {
+          final isEmpty = value == '—';
+          return Expanded(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(label,
+                      style: const TextStyle(fontSize: 10, color: Color(0xFF9CA3AF),
+                          fontWeight: FontWeight.w500, letterSpacing: 0.2),
+                      overflow: TextOverflow.ellipsis),
+                  const SizedBox(height: 2),
+                  Text(value,
+                      style: TextStyle(
+                          fontSize: 13, fontWeight: FontWeight.w600,
+                          color: isEmpty ? const Color(0xFFD1D5DB) : const Color(0xFF111827),
+                          fontStyle: isEmpty ? FontStyle.italic : FontStyle.normal),
+                      overflow: TextOverflow.ellipsis,
+                      maxLines: 1),
+                ],
+              ),
+            ),
+          );
+        }
+
+        // NOTES row: single field, value allowed to wrap.
+        Widget notesRow(String value) {
           final isEmpty = value == '—';
           return Container(
-            height: 28,
-            decoration: isLast
-                ? null
-                : const BoxDecoration(
-                    border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB), width: 0.5))),
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            child: Row(children: [
-              SizedBox(
-                width: 110,
-                child: Text(label,
-                    style: const TextStyle(
-                        fontSize: 11, color: Color(0xFF9CA3AF), fontWeight: FontWeight.w500),
-                    overflow: TextOverflow.ellipsis),
+            constraints: const BoxConstraints(minHeight: 56),
+            decoration: const BoxDecoration(
+              border: Border(top: BorderSide(color: Color(0xFFE5E7EB), width: 0.5)),
+            ),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+              Container(
+                width: 140,
+                alignment: Alignment.centerLeft,
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                child: const Text('NOTES',
+                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700,
+                        color: Color(0xFF9CA3AF), letterSpacing: 0.5)),
               ),
-              const SizedBox(width: 6),
+              Container(width: 0.5, height: 56, color: const Color(0xFFE5E7EB)),
               Expanded(
-                child: Text(value,
-                    style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        color: isEmpty ? const Color(0xFFD1D5DB) : const Color(0xFF111827),
-                        fontStyle: isEmpty ? FontStyle.italic : FontStyle.normal),
-                    overflow: TextOverflow.ellipsis),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  child: Text(value,
+                      style: TextStyle(
+                          fontSize: 13, fontWeight: FontWeight.w500,
+                          color: isEmpty ? const Color(0xFFD1D5DB) : const Color(0xFF111827),
+                          fontStyle: isEmpty ? FontStyle.italic : FontStyle.normal),
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis),
+                ),
               ),
             ]),
           );
         }
 
-        if (isMobile) {
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              for (int i = 0; i < allFields.length; i++)
-                kvRow(allFields[i].$1, allFields[i].$2, isLast: i == allFields.length - 1),
-            ],
-          );
-        }
-
-        // Desktop: section header + 2-column grid per section.
-        Widget sectionHeader(String title, {bool isFirst = false}) => Container(
-              decoration: BoxDecoration(
-                border: Border(
-                  top: isFirst
-                      ? BorderSide.none
-                      : const BorderSide(color: Color(0xFFE5E7EB), width: 0.5),
-                  bottom: const BorderSide(color: Color(0xFFE5E7EB), width: 0.5),
-                ),
-                color: const Color(0xFFF3F4F6),
-              ),
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-              child: Text(title,
-                  style: const TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w700,
-                      color: Color(0xFF9CA3AF),
-                      letterSpacing: 0.6)),
-            );
-
-        Widget columnList(List<(String, String)> rows) => Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                for (int i = 0; i < rows.length; i++)
-                  kvRow(rows[i].$1, rows[i].$2, isLast: i == rows.length - 1),
-              ],
-            );
+        final dataRows = rows.sublist(0, rows.length - 1); // all except NOTES
+        final notesVal = rows.last.$2.first.$2;
 
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            for (int si = 0; si < sections.length; si++) ...[
-              sectionHeader(sections[si].$1, isFirst: si == 0),
-              IntrinsicHeight(
-                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Expanded(child: columnList(sections[si].$2)),
-                  const VerticalDivider(width: 1, thickness: 0.5, color: Color(0xFFE5E7EB)),
-                  Expanded(child: columnList(sections[si].$3)),
+            for (int ri = 0; ri < dataRows.length; ri++)
+              Container(
+                height: 56,
+                decoration: BoxDecoration(
+                  border: Border(
+                    top: ri == 0
+                        ? BorderSide.none
+                        : const BorderSide(color: Color(0xFFE5E7EB), width: 0.5),
+                  ),
+                ),
+                child: Row(children: [
+                  // Category label — 140px fixed, vertically centred, muted small caps bold.
+                  SizedBox(
+                    width: 140,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      child: Text(dataRows[ri].$1,
+                          style: const TextStyle(
+                              fontSize: 11, fontWeight: FontWeight.w700,
+                              color: Color(0xFF9CA3AF), letterSpacing: 0.5)),
+                    ),
+                  ),
+                  // Thin vertical divider.
+                  Container(width: 0.5, height: 56, color: const Color(0xFFE5E7EB)),
+                  // Fields spread with Expanded.
+                  ...dataRows[ri].$2.map((f) => fieldCell(f.$1, f.$2)),
                 ]),
               ),
-            ],
+            notesRow(notesVal),
           ],
         );
       }),

@@ -2970,122 +2970,183 @@ class _CompaniesInlineSection extends StatefulWidget {
 
 class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
   bool _loading = true;
-  List<Map<String, dynamic>> _linked   = [];
-  List<Map<String, dynamic>> _allPhCos = [];
-  bool _showForm = false;
-  bool _saving   = false;
-  String? _selCoId;
-  final _marginCtrl = TextEditingController();
-  final _cdCtrl     = TextEditingController();
-  final _payCtrl    = TextEditingController();
-  final _dealCtrl   = TextEditingController();
+  bool _refreshing = false;
+  List<Map<String, dynamic>> _rows = [];
+  List<String> _medMarketers = [];
+  bool _showAddForm = false;
+  bool _saving = false;
+  final _supplierCompanyCtrl = TextEditingController();
 
   @override
-  void initState() {
-    super.initState();
-    _load();
-  }
+  void initState() { super.initState(); _load(); }
 
   @override
-  void dispose() {
-    _marginCtrl.dispose(); _cdCtrl.dispose();
-    _payCtrl.dispose();    _dealCtrl.dispose();
-    super.dispose();
-  }
+  void dispose() { _supplierCompanyCtrl.dispose(); super.dispose(); }
 
   Future<void> _load() async {
     if (mounted) setState(() => _loading = true);
     try {
       final client = Supabase.instance.client;
-      final linked = await client
+      final rows = await client
           .from('supplier_company_terms')
-          .select('id, company_id, margin, cd_condition, payment_type, deal')
-          .eq('supplier_id', widget.supplierId);
-      final allCos = await client
-          .from('pharma_companies')
-          .select('id, canonical_name')
-          .order('canonical_name');
+          .select('id, supplier_company, company_1, company_2, company_3, company_4, company_5, margin, cd_condition, payment_type, deal')
+          .eq('supplier_id', widget.supplierId)
+          .order('created_at');
 
-      final enriched = <Map<String, dynamic>>[];
-      for (final t in (linked as List)) {
-        final cid = t['company_id'] as String;
-        final co  = (allCos as List).firstWhere(
-            (c) => (c as Map)['id'] == cid, orElse: () => <String, dynamic>{});
-        final aliases = await client
-            .from('company_aliases')
-            .select('alias_name')
-            .eq('company_id', cid);
-        enriched.add({
-          ...Map<String, dynamic>.from(t as Map),
-          'canonical_name': (co as Map)['canonical_name'] ?? '',
-          'aliases': (aliases as List)
-              .map((a) => (a as Map)['alias_name'] as String? ?? '')
-              .where((s) => s.isNotEmpty)
-              .toList(),
-        });
+      if (_medMarketers.isEmpty) {
+        final meds = await client.from('MEDICINE').select('marketer').limit(30000);
+        final seen = <String>{};
+        final list = <String>[];
+        for (final r in meds as List) {
+          final m = ((r as Map)['marketer'] as String? ?? '').trim();
+          if (m.isNotEmpty && seen.add(m.toLowerCase())) list.add(m);
+        }
+        list.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+        _medMarketers = list;
       }
 
       if (mounted) setState(() {
-        _linked   = enriched;
-        _allPhCos = (allCos as List)
-            .map((r) => Map<String, dynamic>.from(r as Map))
-            .toList();
-        _loading  = false;
+        _rows = (rows as List).map((r) => Map<String, dynamic>.from(r as Map)).toList();
+        _loading = false;
       });
     } catch (_) {
       if (mounted) setState(() => _loading = false);
     }
   }
 
-  Future<void> _save() async {
-    if (_selCoId == null) return;
+  Future<void> _addRow() async {
+    final raw = _supplierCompanyCtrl.text.trim();
+    if (raw.isEmpty) return;
     setState(() => _saving = true);
     try {
       await Supabase.instance.client.from('supplier_company_terms').insert({
-        'supplier_id':  widget.supplierId,
-        'company_id':   _selCoId,
-        'margin':       _marginCtrl.text.trim(),
-        'cd_condition': _cdCtrl.text.trim(),
-        'payment_type': _payCtrl.text.trim(),
-        'deal':         _dealCtrl.text.trim(),
+        'supplier_id': widget.supplierId,
+        'supplier_company': raw,
       });
-      _selCoId = null;
-      _marginCtrl.clear(); _cdCtrl.clear(); _payCtrl.clear(); _dealCtrl.clear();
-      if (mounted) setState(() { _showForm = false; _saving = false; });
+      _supplierCompanyCtrl.clear();
+      if (mounted) setState(() { _showAddForm = false; _saving = false; });
       widget.onCompanyAdded();
-      _load();
-    } catch (e) {
+      await _load();
+    } catch (_) {
       if (mounted) setState(() => _saving = false);
     }
   }
 
-  Widget _chip(String label, String value) {
-    if (value.isEmpty) return const SizedBox.shrink();
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-      margin: const EdgeInsets.only(right: 4, bottom: 2),
-      decoration: BoxDecoration(
-          color: const Color(0xFFF3F4F6), borderRadius: BorderRadius.circular(4)),
-      child: Text('$label: $value',
-          style: const TextStyle(fontSize: 10, color: Color(0xFF374151))),
-    );
+  Future<void> _updateCell(String rowId, String col, String? value) async {
+    final v = (value == null || value.isEmpty) ? null : value;
+    try {
+      await Supabase.instance.client
+          .from('supplier_company_terms')
+          .update({col: v}).eq('id', rowId);
+      final idx = _rows.indexWhere((r) => r['id'] == rowId);
+      if (idx >= 0 && mounted) setState(() => _rows[idx][col] = v);
+    } catch (_) {}
   }
 
-  Widget _field(TextEditingController ctrl, String hint) => TextField(
-    controller: ctrl,
-    style: const TextStyle(fontSize: 13),
-    decoration: InputDecoration(
-      hintText: hint,
-      hintStyle: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)),
-      isDense: true,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      border: OutlineInputBorder(borderRadius: BorderRadius.circular(6),
-          borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
-      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6),
-          borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
-      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6),
-          borderSide: const BorderSide(color: Color(0xFF1B7A43))),
-    ),
+  // ── 2-stage fuzzy matcher (trigram → DL, same weights as bulk_upload) ────────
+  String _normS(String s) =>
+      s.toLowerCase().replaceAll(RegExp(r'[^a-z0-9\s]'), ' ').trim().replaceAll(RegExp(r'\s+'), ' ');
+
+  Set<String> _tri(String s) {
+    if (s.length < 3) return {};
+    final t = <String>{};
+    for (int i = 0; i + 3 <= s.length; i++) t.add(s.substring(i, i + 3));
+    return t;
+  }
+
+  int _ed(String s, String t) {
+    final m = s.length, n = t.length;
+    if (m == 0) return n; if (n == 0) return m;
+    final dp = List.generate(m + 1, (_) => List.filled(n + 1, 0));
+    for (int i = 0; i <= m; i++) dp[i][0] = i;
+    for (int j = 0; j <= n; j++) dp[0][j] = j;
+    for (int i = 1; i <= m; i++) for (int j = 1; j <= n; j++) {
+      if (s[i-1] == t[j-1]) { dp[i][j] = dp[i-1][j-1]; }
+      else { final a = dp[i-1][j], b = dp[i][j-1], c = dp[i-1][j-1]; dp[i][j] = 1 + (a < b ? (a < c ? a : c) : (b < c ? b : c)); }
+    }
+    return dp[m][n];
+  }
+
+  int _dl(String s, String t) {
+    final m = s.length, n = t.length;
+    if (m == 0) return n; if (n == 0) return m;
+    final dp = List.generate(m + 1, (_) => List.filled(n + 1, 0));
+    for (int i = 0; i <= m; i++) dp[i][0] = i;
+    for (int j = 0; j <= n; j++) dp[0][j] = j;
+    for (int i = 1; i <= m; i++) for (int j = 1; j <= n; j++) {
+      if (s[i-1] == t[j-1]) { dp[i][j] = dp[i-1][j-1]; }
+      else { final a = dp[i-1][j], b = dp[i][j-1], c = dp[i-1][j-1]; dp[i][j] = 1 + (a < b ? (a < c ? a : c) : (b < c ? b : c)); }
+      if (i > 1 && j > 1 && s[i-1] == t[j-2] && s[i-2] == t[j-1]) {
+        final tr = dp[i-2][j-2] + 1; if (tr < dp[i][j]) dp[i][j] = tr;
+      }
+    }
+    return dp[m][n];
+  }
+
+  double _s1(String q, String c) {
+    final qn = _normS(q).replaceAll(' ', ''), cn = _normS(c).replaceAll(' ', '');
+    if (qn.isEmpty || cn.isEmpty) return 0.0;
+    final qt = _tri(qn), ct = _tri(cn);
+    final tri = qt.union(ct).isEmpty ? 0.0 : qt.intersection(ct).length / qt.union(ct).length.toDouble();
+    final ml = qn.length > cn.length ? qn.length : cn.length;
+    return 0.55 * tri + 0.45 * (1.0 - _ed(qn, cn) / ml);
+  }
+
+  double _s2(String q, String c) {
+    final qn = _normS(q), cn = _normS(c);
+    if (qn.isEmpty || cn.isEmpty) return 0.0;
+    final ml = qn.length > cn.length ? qn.length : cn.length;
+    final er = 1.0 - _dl(qn, cn) / ml;
+    final qw = qn.split(' ').where((t) => t.isNotEmpty).toSet();
+    final cw = cn.split(' ').where((t) => t.isNotEmpty).toSet();
+    final tj = qw.union(cw).isEmpty ? 0.0 : qw.intersection(cw).length / qw.union(cw).length.toDouble();
+    final tr = qw.isEmpty ? 0.0 : qw.where((t) => cw.contains(t)).length / qw.length;
+    final ql = qn.split(' ').where((t) => t.isNotEmpty).toList();
+    final cl = cn.split(' ').where((t) => t.isNotEmpty).toList();
+    final qf = ql.isEmpty ? '' : ql[0], cf = cl.isEmpty ? '' : cl[0];
+    final fm = qf.length > cf.length ? qf.length : cf.length;
+    final pr = fm == 0 ? 0.0 : 1.0 - _dl(qf, cf) / fm;
+    final qft = _tri(qf), cft = _tri(cf);
+    final fw = qft.union(cft).isEmpty ? 0.0 : qft.intersection(cft).length / qft.union(cft).length.toDouble();
+    return 0.50 * er + 0.12 * tj + 0.13 * tr + 0.20 * pr + 0.05 * fw;
+  }
+
+  List<String> _top5(String raw) {
+    if (raw.isEmpty || _medMarketers.isEmpty) return [];
+    final s1 = _medMarketers.map((m) => (m, _s1(raw, m))).where((p) => p.$2 > 0.05).toList()
+      ..sort((a, b) => b.$2.compareTo(a.$2));
+    final shortlist = s1.take(60).map((p) => p.$1).toList();
+    final s2 = shortlist.map((m) => (m, _s2(raw, m))).toList()
+      ..sort((a, b) => b.$2.compareTo(a.$2));
+    return s2.take(5).map((p) => p.$1).toList();
+  }
+
+  Future<void> _refresh() async {
+    if (_rows.isEmpty) return;
+    setState(() => _refreshing = true);
+    try {
+      final client = Supabase.instance.client;
+      for (final row in _rows) {
+        final raw = (row['supplier_company'] as String? ?? '').trim();
+        if (raw.isEmpty) continue;
+        final top = _top5(raw);
+        String? n(int i) => i < top.length && top[i].isNotEmpty ? top[i] : null;
+        await client.from('supplier_company_terms').update({
+          'company_1': n(0), 'company_2': n(1), 'company_3': n(2),
+          'company_4': n(3), 'company_5': n(4),
+        }).eq('id', row['id'] as String);
+      }
+      await _load();
+    } finally {
+      if (mounted) setState(() => _refreshing = false);
+    }
+  }
+
+  Widget _hdr(String label, double w) => SizedBox(
+    width: w,
+    child: Text(label, style: const TextStyle(
+        fontSize: 10, fontWeight: FontWeight.w700,
+        color: Color(0xFF6B7280), letterSpacing: 0.4)),
   );
 
   @override
@@ -3093,164 +3154,259 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
     return Container(
       decoration: const BoxDecoration(
         color: Color(0xFFF0F7FF),
-        border: Border(
-          top:    BorderSide(color: Color(0xFFBFDBFE)),
-          bottom: BorderSide(color: Color(0xFFBFDBFE)),
-        ),
+        border: Border(top: BorderSide(color: Color(0xFFBFDBFE)), bottom: BorderSide(color: Color(0xFFBFDBFE))),
       ),
       child: _loading
-          ? const Padding(
-              padding: EdgeInsets.all(20),
-              child: Center(
-                  child: CircularProgressIndicator(
-                      color: Color(0xFF1B7A43), strokeWidth: 2)),
-            )
+          ? const Padding(padding: EdgeInsets.all(20),
+              child: Center(child: CircularProgressIndicator(color: Color(0xFF1B7A43), strokeWidth: 2)))
           : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              // Company cards
-              if (_linked.isEmpty && !_showForm)
+              // ── Header ───────────────────────────────────────────────────────
+              Padding(
+                padding: const EdgeInsets.fromLTRB(14, 10, 8, 6),
+                child: Row(children: [
+                  const Text("Supplier's Companies",
+                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF374151))),
+                  const Spacer(),
+                  if (_rows.isNotEmpty)
+                    TextButton.icon(
+                      onPressed: _refreshing ? null : _refresh,
+                      icon: _refreshing
+                          ? const SizedBox(width: 13, height: 13, child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF2563EB)))
+                          : const Icon(Icons.refresh, size: 15),
+                      label: Text(_refreshing ? 'Matching…' : 'Refresh',
+                          style: const TextStyle(fontSize: 12)),
+                      style: TextButton.styleFrom(
+                          foregroundColor: const Color(0xFF2563EB),
+                          visualDensity: VisualDensity.compact),
+                    ),
+                ]),
+              ),
+              const Divider(height: 1, color: Color(0xFFBFDBFE)),
+              // ── Empty state ──────────────────────────────────────────────────
+              if (_rows.isEmpty && !_showAddForm)
                 const Padding(
                   padding: EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                   child: Text('No companies linked yet.',
                       style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
                 ),
-              for (final t in _linked)
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                  decoration: const BoxDecoration(
-                      border: Border(
-                          bottom: BorderSide(color: Color(0xFFDBEAFE)))),
-                  child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                    Text(t['canonical_name'] as String? ?? '—',
-                        style: const TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w700,
-                            color: Color(0xFF111827))),
-                    if ((t['aliases'] as List? ?? []).isNotEmpty) ...[
-                      const SizedBox(height: 2),
-                      Text((t['aliases'] as List).join(' · '),
-                          style: const TextStyle(
-                              fontSize: 11, color: Color(0xFF9CA3AF))),
-                    ],
-                    const SizedBox(height: 4),
-                    Wrap(children: [
-                      _chip('Margin',  t['margin']       as String? ?? ''),
-                      _chip('CD',      t['cd_condition'] as String? ?? ''),
-                      _chip('Deal',    t['deal']         as String? ?? ''),
-                      _chip('Payment', t['payment_type'] as String? ?? ''),
-                    ]),
-                  ]),
-                ),
-              // Add form
-              if (_showForm)
-                Padding(
-                  padding: const EdgeInsets.all(14),
-                  child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                    const Text('Link a Company',
-                        style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w700,
-                            color: Color(0xFF374151))),
-                    const SizedBox(height: 10),
-                    Theme(
-                      data: Theme.of(context).copyWith(
-                        canvasColor: Colors.white,
-                        focusColor: const Color(0xFFE8F5EE),
+              // ── Grid ─────────────────────────────────────────────────────────
+              if (_rows.isNotEmpty)
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
+                        child: Row(children: [
+                          _hdr('SUPPLIER COMPANY', 172),
+                          const SizedBox(width: 4),
+                          _hdr('COMPANY 1', 156),
+                          const SizedBox(width: 4),
+                          _hdr('COMPANY 2', 156),
+                          const SizedBox(width: 4),
+                          _hdr('COMPANY 3', 156),
+                          const SizedBox(width: 4),
+                          _hdr('COMPANY 4', 156),
+                          const SizedBox(width: 4),
+                          _hdr('COMPANY 5', 156),
+                        ]),
                       ),
-                      child: DropdownButtonFormField<String>(
-                        value: _selCoId,
-                        isExpanded: true,
-                        dropdownColor: Colors.white,
-                        hint: const Text('Select company',
-                            style: TextStyle(fontSize: 13)),
-                        decoration: InputDecoration(
-                          isDense: true,
-                          contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 10, vertical: 8),
-                          border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(6),
-                              borderSide:
-                                  const BorderSide(color: Color(0xFFE5E7EB))),
-                          enabledBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(6),
-                              borderSide:
-                                  const BorderSide(color: Color(0xFFE5E7EB))),
+                      const Divider(height: 1, color: Color(0xFFDBEAFE)),
+                      for (int ri = 0; ri < _rows.length; ri++) ...[
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+                          child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+                            SizedBox(width: 172, child: Text(
+                              _rows[ri]['supplier_company'] as String? ?? '—',
+                              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
+                              maxLines: 2, overflow: TextOverflow.ellipsis,
+                            )),
+                            for (final col in ['company_1','company_2','company_3','company_4','company_5']) ...[
+                              const SizedBox(width: 4),
+                              _CompanyCell(
+                                value: _rows[ri][col] as String?,
+                                options: _medMarketers,
+                                onChanged: (v) => _updateCell(_rows[ri]['id'] as String, col, v),
+                              ),
+                            ],
+                          ]),
                         ),
-                        items: _allPhCos
-                            .map((c) => DropdownMenuItem<String>(
-                                  value: c['id'] as String,
-                                  child: Text(
-                                      c['canonical_name'] as String? ?? '',
-                                      style: const TextStyle(
-                                          fontSize: 13, color: Color(0xFF111827))),
-                                ))
-                            .toList(),
-                        onChanged: (v) => setState(() => _selCoId = v),
+                        if (ri < _rows.length - 1) const Divider(height: 1, color: Color(0xFFEFF6FF)),
+                      ],
+                    ]),
+                  ),
+                ),
+              // ── Add-row form ─────────────────────────────────────────────────
+              if (_showAddForm)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+                  child: Row(children: [
+                    Expanded(child: TextField(
+                      controller: _supplierCompanyCtrl,
+                      autofocus: true,
+                      style: const TextStyle(fontSize: 13),
+                      decoration: InputDecoration(
+                        hintText: 'Company name as supplier wrote it',
+                        hintStyle: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)),
+                        isDense: true,
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+                        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+                        focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: const BorderSide(color: Color(0xFF1B7A43))),
                       ),
+                    )),
+                    const SizedBox(width: 8),
+                    TextButton(
+                      onPressed: () => setState(() { _showAddForm = false; _supplierCompanyCtrl.clear(); }),
+                      child: const Text('Cancel', style: TextStyle(fontSize: 13)),
                     ),
-                    const SizedBox(height: 8),
-                    Row(children: [
-                      Expanded(child: _field(_marginCtrl, 'Margin')),
-                      const SizedBox(width: 8),
-                      Expanded(child: _field(_cdCtrl, 'CD Condition')),
-                    ]),
-                    const SizedBox(height: 8),
-                    Row(children: [
-                      Expanded(child: _field(_payCtrl, 'Payment Type')),
-                      const SizedBox(width: 8),
-                      Expanded(child: _field(_dealCtrl, 'Deal')),
-                    ]),
-                    const SizedBox(height: 10),
-                    Row(mainAxisAlignment: MainAxisAlignment.end, children: [
-                      TextButton(
-                        onPressed: () => setState(() => _showForm = false),
-                        child: const Text('Cancel',
-                            style: TextStyle(fontSize: 13)),
-                      ),
-                      const SizedBox(width: 8),
-                      FilledButton(
-                        onPressed: _saving ? null : _save,
-                        style: FilledButton.styleFrom(
-                            backgroundColor: const Color(0xFF1B7A43),
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 20, vertical: 10)),
-                        child: _saving
-                            ? const SizedBox(
-                                width: 14, height: 14,
-                                child: CircularProgressIndicator(
-                                    strokeWidth: 1.5, color: Colors.white))
-                            : const Text('Save',
-                                style: TextStyle(fontSize: 13)),
-                      ),
-                    ]),
+                    const SizedBox(width: 4),
+                    FilledButton(
+                      onPressed: _saving ? null : _addRow,
+                      style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43),
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10)),
+                      child: _saving
+                          ? const SizedBox(width: 13, height: 13, child: CircularProgressIndicator(strokeWidth: 1.5, color: Colors.white))
+                          : const Text('Add', style: TextStyle(fontSize: 13)),
+                    ),
                   ]),
                 ),
-              // Footer: + Add Company
-              if (!_showForm)
+              // ── Footer ───────────────────────────────────────────────────────
+              if (!_showAddForm)
                 Container(
-                  decoration: const BoxDecoration(
-                      border:
-                          Border(top: BorderSide(color: Color(0xFFBFDBFE)))),
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                  child: Row(mainAxisAlignment: MainAxisAlignment.end,
-                      children: [
+                  decoration: const BoxDecoration(border: Border(top: BorderSide(color: Color(0xFFBFDBFE)))),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
                     TextButton.icon(
-                      onPressed: () => setState(() => _showForm = true),
+                      onPressed: () => setState(() => _showAddForm = true),
                       icon: const Icon(Icons.add, size: 15),
-                      label: const Text('Add Company',
-                          style: TextStyle(fontSize: 13)),
-                      style: TextButton.styleFrom(
-                          foregroundColor: const Color(0xFF2563EB),
-                          visualDensity: VisualDensity.compact),
+                      label: const Text('Add Company', style: TextStyle(fontSize: 13)),
+                      style: TextButton.styleFrom(foregroundColor: const Color(0xFF2563EB), visualDensity: VisualDensity.compact),
                     ),
                   ]),
                 ),
             ]),
+    );
+  }
+}
+
+// ── Tappable company cell (opens marketer picker) ─────────────────────────────
+
+class _CompanyCell extends StatelessWidget {
+  final String? value;
+  final List<String> options;
+  final ValueChanged<String?> onChanged;
+  const _CompanyCell({this.value, required this.options, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    final filled = value != null && value!.isNotEmpty;
+    return GestureDetector(
+      onTap: () async {
+        final result = await showDialog<String>(
+          context: context,
+          builder: (_) => _MarketersPickerDialog(options: options, current: value),
+        );
+        if (result != null) onChanged(result.isEmpty ? null : result);
+      },
+      child: Container(
+        width: 152,
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+        decoration: BoxDecoration(
+          color: filled ? const Color(0xFFECFDF5) : Colors.white,
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: filled ? const Color(0xFF6EE7B7) : const Color(0xFFE5E7EB)),
+        ),
+        child: Row(children: [
+          Expanded(child: Text(
+            filled ? value! : '—',
+            style: TextStyle(fontSize: 11,
+                color: filled ? const Color(0xFF065F46) : const Color(0xFF9CA3AF)),
+            overflow: TextOverflow.ellipsis, maxLines: 1,
+          )),
+          const Icon(Icons.arrow_drop_down, size: 14, color: Color(0xFF9CA3AF)),
+        ]),
+      ),
+    );
+  }
+}
+
+// ── Marketer picker dialog ────────────────────────────────────────────────────
+
+class _MarketersPickerDialog extends StatefulWidget {
+  final List<String> options;
+  final String? current;
+  const _MarketersPickerDialog({required this.options, this.current});
+  @override
+  State<_MarketersPickerDialog> createState() => _MarketersPickerDialogState();
+}
+
+class _MarketersPickerDialogState extends State<_MarketersPickerDialog> {
+  String _q = '';
+  List<String> get _filtered => _q.isEmpty
+      ? widget.options
+      : widget.options.where((o) => o.toLowerCase().contains(_q.toLowerCase())).toList();
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: 380, maxHeight: MediaQuery.of(context).size.height * 0.72),
+        child: Column(children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+            child: TextField(
+              autofocus: true,
+              onChanged: (v) => setState(() => _q = v),
+              decoration: InputDecoration(
+                hintText: 'Search MEDICINE company…',
+                hintStyle: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)),
+                prefixIcon: const Icon(Icons.search, size: 18, color: Color(0xFF9CA3AF)),
+                isDense: true,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+                focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF1B7A43))),
+                filled: true, fillColor: const Color(0xFFF9FAFB),
+              ),
+            ),
+          ),
+          if (widget.current != null && widget.current!.isNotEmpty)
+            InkWell(
+              onTap: () => Navigator.of(context).pop(''),
+              child: const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Row(children: [
+                  Icon(Icons.clear, size: 14, color: Color(0xFF9CA3AF)),
+                  SizedBox(width: 8),
+                  Text('Clear selection', style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
+                ]),
+              ),
+            ),
+          const Divider(height: 1, color: Color(0xFFE5E7EB)),
+          Expanded(child: ListView.builder(
+            itemCount: _filtered.length,
+            itemBuilder: (_, i) {
+              final opt = _filtered[i];
+              final isCur = opt == widget.current;
+              return InkWell(
+                onTap: () => Navigator.of(context).pop(opt),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                  child: Row(children: [
+                    Expanded(child: Text(opt, style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: isCur ? FontWeight.w700 : FontWeight.normal,
+                        color: isCur ? const Color(0xFF1B7A43) : const Color(0xFF111827)))),
+                    if (isCur) const Icon(Icons.check, size: 15, color: Color(0xFF1B7A43)),
+                  ]),
+                ),
+              );
+            },
+          )),
+        ]),
+      ),
     );
   }
 }

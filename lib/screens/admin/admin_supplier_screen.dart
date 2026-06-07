@@ -1331,7 +1331,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     ];
 
     const gridColor  = Color(0xFFD0D7DE);
-    const catBg      = Color(0xFF24292F);
+    const catBg      = Color(0xFFF0F6FF);
     const fieldBg    = Color(0xFFF6F8FA);
     const evenRowBg  = Color(0xFFFFFFFF);
     const oddRowBg   = Color(0xFFF9FAFB);
@@ -1356,16 +1356,16 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
             border: Border(
               top:    border,
               bottom: border,
-              left:   border,
               right:  border,
+              left:   const BorderSide(color: Color(0xFF1B8A5A), width: 3),
             ),
           ),
           padding: const EdgeInsets.symmetric(horizontal: 8),
           alignment: Alignment.centerLeft,
           child: Text('▸ ${group.$1}',
               style: const TextStyle(
-                  fontSize: 11, fontWeight: FontWeight.w700,
-                  color: Colors.white, letterSpacing: 0.8)),
+                  fontSize: 11, fontWeight: FontWeight.w600,
+                  color: Color(0xFF1B8A5A), letterSpacing: 0.8)),
         ));
 
         for (int i = 0; i < group.$2.length; i++) {

@@ -135,6 +135,9 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
   RealtimeChannel? _channel;
   RealtimeChannel? _orderChannel;
   RealtimeChannel? _supplierChannel;
+  RealtimeChannel? _mrChannel;
+  RealtimeChannel? _companyChannel;
+  RealtimeChannel? _dpChannel;
   late final AnimationController _flashCtrl;
   late final Animation<double> _flashAnim;
   late final AnimationController _slideCtrl;
@@ -160,6 +163,9 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
     _subscribeRealtime();
     _subscribeOrders();
     _subscribeSuppliers();
+    _subscribeMr();
+    _subscribeCompanies();
+    _subscribeDeliveryPartners();
 
     // Listen for messages from the FCM service worker (dedup: SW posts when
     // app is focused so we don't also get the OS notification)
@@ -226,6 +232,57 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
         .subscribe();
   }
 
+  void _subscribeMr() {
+    final ts = DateTime.now().millisecondsSinceEpoch;
+    _mrChannel = Supabase.instance.client
+        .channel('admin_new_mr_$ts')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.insert,
+          schema: 'public',
+          table: 'mr_registrations',
+          callback: (payload) {
+            final rec = Map<String, dynamic>.from(payload.newRecord);
+            if (rec.isEmpty) return;
+            _enqueueGeneric(rec, rec['id'] as String? ?? '', 'mr_registration');
+          },
+        )
+        .subscribe();
+  }
+
+  void _subscribeCompanies() {
+    final ts = DateTime.now().millisecondsSinceEpoch;
+    _companyChannel = Supabase.instance.client
+        .channel('admin_new_co_$ts')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.insert,
+          schema: 'public',
+          table: 'company_registrations',
+          callback: (payload) {
+            final rec = Map<String, dynamic>.from(payload.newRecord);
+            if (rec.isEmpty) return;
+            _enqueueGeneric(rec, rec['id'] as String? ?? '', 'company_registration');
+          },
+        )
+        .subscribe();
+  }
+
+  void _subscribeDeliveryPartners() {
+    final ts = DateTime.now().millisecondsSinceEpoch;
+    _dpChannel = Supabase.instance.client
+        .channel('admin_new_dp_$ts')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.insert,
+          schema: 'public',
+          table: 'delivery_partner_registrations',
+          callback: (payload) {
+            final rec = Map<String, dynamic>.from(payload.newRecord);
+            if (rec.isEmpty) return;
+            _enqueueGeneric(rec, rec['id'] as String? ?? '', 'dp_registration');
+          },
+        )
+        .subscribe();
+  }
+
   void _subscribeOrders() {
     final ts = DateTime.now().millisecondsSinceEpoch;
     _orderChannel = Supabase.instance.client
@@ -276,6 +333,16 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
     if (id.isNotEmpty && _seenIds.contains(id)) return;
     if (id.isNotEmpty) _seenIds.add(id);
     final tagged = {...rec, '_alertType': 'supplier_registration'};
+    if (mounted) {
+      setState(() { _queue.add(tagged); _detailsOpen = false; });
+      if (_queue.length == 1) _onFirstAlert();
+    }
+  }
+
+  void _enqueueGeneric(Map<String, dynamic> rec, String id, String alertType) {
+    if (id.isNotEmpty && _seenIds.contains(id)) return;
+    if (id.isNotEmpty) _seenIds.add(id);
+    final tagged = {...rec, '_alertType': alertType};
     if (mounted) {
       setState(() { _queue.add(tagged); _detailsOpen = false; });
       if (_queue.length == 1) _onFirstAlert();
@@ -406,6 +473,9 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
     _channel?.unsubscribe();
     _orderChannel?.unsubscribe();
     _supplierChannel?.unsubscribe();
+    _mrChannel?.unsubscribe();
+    _companyChannel?.unsubscribe();
+    _dpChannel?.unsubscribe();
     _jsAudioStop();
     _jsOrderAudioStop();
     _flashCtrl.dispose();
@@ -444,6 +514,9 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
     final type = rec['_alertType'] as String? ?? 'registration';
     if (type == 'order') return _buildOrderCard(rec);
     if (type == 'supplier_registration') return _buildSupplierRegCard(rec);
+    if (type == 'mr_registration') return _buildSimpleRegCard(rec, title: 'NEW MR REGISTRATION', color: const Color(0xFF7C3AED), nameKey: 'full_name', subtitleKey: 'company_represented');
+    if (type == 'company_registration') return _buildSimpleRegCard(rec, title: 'NEW COMPANY REGISTRATION', color: const Color(0xFF0369A1), nameKey: 'company_name', subtitleKey: 'contact_person');
+    if (type == 'dp_registration') return _buildSimpleRegCard(rec, title: 'NEW DELIVERY PARTNER', color: const Color(0xFFB45309), nameKey: 'full_name', subtitleKey: 'vehicle_type');
     return _buildRegistrationCard(rec);
   }
 
@@ -1052,6 +1125,88 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
           );
         }),
       ),
+    );
+  }
+
+  Widget _buildSimpleRegCard(Map<String, dynamic> rec, {
+    required String title,
+    required Color color,
+    required String nameKey,
+    required String subtitleKey,
+  }) {
+    final name     = rec[nameKey]     as String? ?? '';
+    final subtitle = rec[subtitleKey] as String? ?? '';
+    final phone    = rec['phone']     as String? ?? '';
+    final city     = rec['city']      as String? ?? '';
+    final state    = rec['state']     as String? ?? '';
+    final location = [city, state].where((s) => s.isNotEmpty).join(', ');
+    final queueLen = _queue.length;
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+      decoration: BoxDecoration(
+        color: Colors.white, borderRadius: BorderRadius.circular(16),
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.25), blurRadius: 24, offset: const Offset(0, 8))],
+      ),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        FadeTransition(
+          opacity: _flashAnim,
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            decoration: BoxDecoration(color: color, borderRadius: const BorderRadius.only(topLeft: Radius.circular(16), topRight: Radius.circular(16))),
+            child: Row(children: [
+              const Icon(Icons.person_add_outlined, color: Colors.white, size: 18),
+              const SizedBox(width: 8),
+              Expanded(child: Text(
+                queueLen > 1 ? '$title  ·  $queueLen pending' : title,
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: Colors.white, letterSpacing: 0.5),
+              )),
+              InkWell(onTap: _toggleMute, borderRadius: BorderRadius.circular(20), child: Padding(padding: const EdgeInsets.all(4),
+                child: Icon(_muted ? Icons.volume_off : Icons.volume_up, color: Colors.white.withValues(alpha: _muted ? 0.5 : 1.0), size: 18))),
+            ]),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            if (name.isNotEmpty) Text(name, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: Color(0xFF111827))),
+            if (subtitle.isNotEmpty) ...[const SizedBox(height: 3), Text(subtitle, style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280)))],
+            const SizedBox(height: 12),
+            Wrap(spacing: 16, runSpacing: 8, children: [
+              if (phone.isNotEmpty)    _chip(Icons.phone_outlined,       phone),
+              if (location.isNotEmpty) _chip(Icons.location_on_outlined, location),
+            ]),
+          ]),
+        ),
+        const SizedBox(height: 8),
+        InkWell(
+          onTap: () => setState(() => _detailsOpen = !_detailsOpen),
+          child: Padding(padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+            child: Row(children: [
+              Text('View full details', style: TextStyle(fontSize: 12, color: color, fontWeight: FontWeight.w600)),
+              const SizedBox(width: 4),
+              AnimatedRotation(turns: _detailsOpen ? 0.5 : 0.0, duration: const Duration(milliseconds: 180),
+                child: Icon(Icons.expand_more, size: 16, color: color)),
+            ])),
+        ),
+        if (_detailsOpen) _buildDetails(rec),
+        const Divider(height: 1, color: Color(0xFFE5E7EB)),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+          child: Row(children: [
+            if (queueLen > 1) ...[
+              OutlinedButton(onPressed: _dismiss,
+                style: OutlinedButton.styleFrom(foregroundColor: const Color(0xFF6B7280), side: const BorderSide(color: Color(0xFFD1D5DB)), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)), padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10)),
+                child: const Text('Skip', style: TextStyle(fontSize: 12))),
+              const SizedBox(width: 8),
+            ],
+            Expanded(child: OutlinedButton(onPressed: _dismiss,
+              style: OutlinedButton.styleFrom(foregroundColor: const Color(0xFF6B7280), side: const BorderSide(color: Color(0xFFD1D5DB)), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)), padding: const EdgeInsets.symmetric(vertical: 12)),
+              child: const Text('Dismiss', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700)))),
+          ]),
+        ),
+      ]),
     );
   }
 

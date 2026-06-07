@@ -13,7 +13,10 @@ import '../widgets/animations.dart';
 import 'admin/admin_add_medicine_screen.dart';
 import 'admin/admin_manage_admins_screen.dart';
 import 'admin/admin_customer_screen.dart';
+import 'admin/admin_company_screen.dart';
 import 'admin/admin_dashboard_screen.dart';
+import 'admin/admin_delivery_partner_screen.dart';
+import 'admin/admin_mr_screen.dart';
 import 'admin/admin_pending_bills_screen.dart';
 import 'admin/admin_alert_overlay.dart';
 import 'admin/admin_shell.dart';
@@ -162,6 +165,9 @@ class _HomeShellState extends State<HomeShell> {
       case 'add_customer':
         setState(() { _index = 6; _cartOpen = false; }); break;
       case 'bills': setState(() { _index = 7; _cartOpen = false; }); break;
+      case 'mr': setState(() { _index = 8; _cartOpen = false; }); break;
+      case 'companies': setState(() { _index = 9; _cartOpen = false; }); break;
+      case 'delivery_partners': setState(() { _index = 10; _cartOpen = false; }); break;
       case 'manage_admins':
         if (UserState.of(context).isSuperAdmin) {
           Navigator.push(context,
@@ -237,6 +243,9 @@ class _HomeShellState extends State<HomeShell> {
           const AdminSupplierScreen(),
           const AdminCustomerScreen(),
           const PendingBillsScreen(),
+          const AdminMrScreen(),
+          const AdminCompanyScreen(),
+          const AdminDeliveryPartnerScreen(),
         ];
 
         final isAdmin = UserState.of(context).isAdmin;
@@ -696,6 +705,21 @@ class _MobileProfileAvatar extends StatelessWidget {
               icon: Icons.person_add_outlined,
               label: 'Add Customer',
               onTap: () { Navigator.pop(context); nav('add_customer'); },
+            ),
+            _SheetTile(
+              icon: Icons.badge_outlined,
+              label: 'MR Registrations',
+              onTap: () { Navigator.pop(context); nav('mr'); },
+            ),
+            _SheetTile(
+              icon: Icons.business_outlined,
+              label: 'Company Registrations',
+              onTap: () { Navigator.pop(context); nav('companies'); },
+            ),
+            _SheetTile(
+              icon: Icons.delivery_dining_outlined,
+              label: 'Delivery Partners',
+              onTap: () { Navigator.pop(context); nav('delivery_partners'); },
             ),
             const Divider(),
             _SheetTile(
@@ -3201,6 +3225,30 @@ class _DesktopProfileButton extends StatelessWidget {
               Icon(Icons.person_add_outlined, size: 16, color: Color(0xFF374151)),
               SizedBox(width: 10),
               Text('Add Customer', style: TextStyle(fontSize: 14, color: Color(0xFF374151))),
+            ]),
+          ),
+          const PopupMenuItem(
+            value: 'mr',
+            child: Row(children: [
+              Icon(Icons.badge_outlined, size: 16, color: Color(0xFF374151)),
+              SizedBox(width: 10),
+              Text('MR Registrations', style: TextStyle(fontSize: 14, color: Color(0xFF374151))),
+            ]),
+          ),
+          const PopupMenuItem(
+            value: 'companies',
+            child: Row(children: [
+              Icon(Icons.business_outlined, size: 16, color: Color(0xFF374151)),
+              SizedBox(width: 10),
+              Text('Company Registrations', style: TextStyle(fontSize: 14, color: Color(0xFF374151))),
+            ]),
+          ),
+          const PopupMenuItem(
+            value: 'delivery_partners',
+            child: Row(children: [
+              Icon(Icons.delivery_dining_outlined, size: 16, color: Color(0xFF374151)),
+              SizedBox(width: 10),
+              Text('Delivery Partners', style: TextStyle(fontSize: 14, color: Color(0xFF374151))),
             ]),
           ),
           const PopupMenuDivider(),

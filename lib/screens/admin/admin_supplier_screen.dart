@@ -2690,7 +2690,7 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
                 padding: const EdgeInsets.all(4),
                 child: Row(children: [
                   Expanded(child: _DestTab(
-                    label: 'Supplier (master info)',
+                    label: 'Supplier',
                     sublabel: '→ supplier_profiles',
                     selected: !isSCT,
                     onTap: () {
@@ -2702,7 +2702,7 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
                   )),
                   const SizedBox(width: 4),
                   Expanded(child: _DestTab(
-                    label: 'Supplier–Company (terms)',
+                    label: "Supplier's Company",
                     sublabel: '→ supplier_company_terms',
                     selected: isSCT,
                     onTap: () {

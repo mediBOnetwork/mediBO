@@ -1867,7 +1867,7 @@ class _SupCsvImportDialogState extends State<_SupCsvImportDialog> {
   }
 }
 
-// ─── Supplier Profile Import (CSV / Excel / ODS / PDF / DOCX / Images) ────────
+// ─── Supplier Profile Import (CSV / Excel / ODS / PDF / DOCX / Images) ── #70 ─
 
 class _SupProfColMap {
   final int index;

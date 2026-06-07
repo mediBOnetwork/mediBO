@@ -1288,8 +1288,6 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       return s.isEmpty ? '—' : s;
     }
 
-    // 6 horizontal category rows. Each row = category label (140px) + fields spread with Expanded.
-    // (categoryLabel, [(fieldLabel, value), ...])
     final rows = <(String, List<(String, String)>)>[
       ('IDENTITY', [
         ('Supplier Name', val(rawData['supplier_name'])),
@@ -1332,74 +1330,102 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       ]),
     ];
 
-    // Flat list for mobile (no category labels).
-    final mobileFields = rows.expand((r) => r.$2).toList();
-
     return Container(
       color: const Color(0xFFF9FAFB),
       padding: EdgeInsets.fromLTRB(lpad, 0, rpad, 0),
       child: LayoutBuilder(builder: (ctx, constraints) {
         final isMobile = constraints.maxWidth < 600;
 
-        // Mobile: simple 28px kv rows, single column, no category labels.
+        // ── MOBILE: card sections with green left border, 2 fields per Wrap row ──
         if (isMobile) {
-          Widget mobileKv(String label, String value, {bool isLast = false}) {
+          Widget mobileField(String label, String value) {
             final isEmpty = value == '—';
-            return Container(
-              height: 28,
-              decoration: isLast
-                  ? null
-                  : const BoxDecoration(
-                      border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB), width: 0.5))),
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              child: Row(children: [
-                SizedBox(
-                  width: 110,
-                  child: Text(label,
-                      style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF), fontWeight: FontWeight.w500),
-                      overflow: TextOverflow.ellipsis),
-                ),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Text(value,
-                      style: TextStyle(
-                          fontSize: 12, fontWeight: FontWeight.w600,
-                          color: isEmpty ? const Color(0xFFD1D5DB) : const Color(0xFF111827),
-                          fontStyle: isEmpty ? FontStyle.italic : FontStyle.normal),
-                      overflow: TextOverflow.ellipsis),
-                ),
+            return SizedBox(
+              width: (constraints.maxWidth - lpad - rpad - 24) / 2,
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(label,
+                    style: const TextStyle(fontSize: 10, color: Color(0xFF999999),
+                        fontWeight: FontWeight.w400),
+                    overflow: TextOverflow.ellipsis),
+                const SizedBox(height: 2),
+                Text(value,
+                    style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: isEmpty ? const Color(0xFFCCCCCC) : const Color(0xFF111111)),
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 2),
               ]),
             );
           }
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              for (int i = 0; i < mobileFields.length; i++)
-                mobileKv(mobileFields[i].$1, mobileFields[i].$2, isLast: i == mobileFields.length - 1),
-            ],
+
+          // NOTES section is full-width, handled separately.
+          final dataRows   = rows.sublist(0, rows.length - 1);
+          final notesVal   = rows.last.$2.first.$2;
+          final notesEmpty = notesVal == '—';
+
+          return Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              for (final row in dataRows)
+                Container(
+                  margin: const EdgeInsets.only(bottom: 8),
+                  decoration: const BoxDecoration(
+                    border: Border(left: BorderSide(color: Color(0xFF1B8A5A), width: 4)),
+                  ),
+                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(row.$1,
+                        style: const TextStyle(fontSize: 11, color: Color(0xFF888888),
+                            fontWeight: FontWeight.w600, letterSpacing: 0.5)),
+                    const SizedBox(height: 8),
+                    Wrap(spacing: 8, runSpacing: 8,
+                        children: row.$2.map((f) => mobileField(f.$1, f.$2)).toList()),
+                  ]),
+                ),
+              // NOTES — full width
+              Container(
+                margin: const EdgeInsets.only(bottom: 8),
+                decoration: const BoxDecoration(
+                  border: Border(left: BorderSide(color: Color(0xFF1B8A5A), width: 4)),
+                ),
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const Text('NOTES',
+                      style: TextStyle(fontSize: 11, color: Color(0xFF888888),
+                          fontWeight: FontWeight.w600, letterSpacing: 0.5)),
+                  const SizedBox(height: 6),
+                  Text(notesVal,
+                      style: TextStyle(
+                          fontSize: 13, fontWeight: FontWeight.w700,
+                          color: notesEmpty ? const Color(0xFFCCCCCC) : const Color(0xFF111111)),
+                      maxLines: 4,
+                      overflow: TextOverflow.ellipsis),
+                ]),
+              ),
+            ]),
           );
         }
 
-        // Desktop: one horizontal row per category, 56px tall.
+        // ── DESKTOP: one horizontal row per category, 52px tall ──────────────────
         Widget fieldCell(String label, String value) {
           final isEmpty = value == '—';
           return Expanded(
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 8),
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(label,
-                      style: const TextStyle(fontSize: 10, color: Color(0xFF9CA3AF),
-                          fontWeight: FontWeight.w500, letterSpacing: 0.2),
+                      style: const TextStyle(fontSize: 10, color: Color(0xFF999999),
+                          fontWeight: FontWeight.w400),
                       overflow: TextOverflow.ellipsis),
                   const SizedBox(height: 2),
                   Text(value,
                       style: TextStyle(
-                          fontSize: 13, fontWeight: FontWeight.w600,
-                          color: isEmpty ? const Color(0xFFD1D5DB) : const Color(0xFF111827),
-                          fontStyle: isEmpty ? FontStyle.italic : FontStyle.normal),
+                          fontSize: 13, fontWeight: FontWeight.w700,
+                          color: isEmpty ? const Color(0xFFCCCCCC) : const Color(0xFF111111)),
                       overflow: TextOverflow.ellipsis,
                       maxLines: 1),
                 ],
@@ -1408,32 +1434,32 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           );
         }
 
-        // NOTES row: single field, value allowed to wrap.
+        // NOTES row: full width, wrappable.
         Widget notesRow(String value) {
           final isEmpty = value == '—';
           return Container(
-            constraints: const BoxConstraints(minHeight: 56),
+            constraints: const BoxConstraints(minHeight: 52),
             decoration: const BoxDecoration(
-              border: Border(top: BorderSide(color: Color(0xFFE5E7EB), width: 0.5)),
+              border: Border(top: BorderSide(color: Color(0xFFEEEEEE))),
             ),
             child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-              Container(
-                width: 140,
-                alignment: Alignment.centerLeft,
-                padding: const EdgeInsets.symmetric(horizontal: 10),
-                child: const Text('NOTES',
-                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700,
-                        color: Color(0xFF9CA3AF), letterSpacing: 0.5)),
+              SizedBox(
+                width: 80,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  child: Text('NOTES',
+                      style: const TextStyle(fontSize: 11, color: Color(0xFF888888),
+                          fontWeight: FontWeight.w600, letterSpacing: 0.5)),
+                ),
               ),
-              Container(width: 0.5, height: 56, color: const Color(0xFFE5E7EB)),
+              Container(width: 0.5, height: 52, color: const Color(0xFFEEEEEE)),
               Expanded(
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   child: Text(value,
                       style: TextStyle(
-                          fontSize: 13, fontWeight: FontWeight.w500,
-                          color: isEmpty ? const Color(0xFFD1D5DB) : const Color(0xFF111827),
-                          fontStyle: isEmpty ? FontStyle.italic : FontStyle.normal),
+                          fontSize: 13, fontWeight: FontWeight.w700,
+                          color: isEmpty ? const Color(0xFFCCCCCC) : const Color(0xFF111111)),
                       maxLines: 3,
                       overflow: TextOverflow.ellipsis),
                 ),
@@ -1442,42 +1468,38 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           );
         }
 
-        final dataRows = rows.sublist(0, rows.length - 1); // all except NOTES
+        final dataRows = rows.sublist(0, rows.length - 1);
         final notesVal = rows.last.$2.first.$2;
 
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 0),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             for (int ri = 0; ri < dataRows.length; ri++)
               Container(
-                height: 56,
+                height: 52,
                 decoration: BoxDecoration(
                   border: Border(
                     top: ri == 0
                         ? BorderSide.none
-                        : const BorderSide(color: Color(0xFFE5E7EB), width: 0.5),
+                        : const BorderSide(color: Color(0xFFEEEEEE)),
                   ),
                 ),
                 child: Row(children: [
-                  // Category label — 140px fixed, vertically centred, muted small caps bold.
                   SizedBox(
-                    width: 140,
+                    width: 80,
                     child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
                       child: Text(dataRows[ri].$1,
-                          style: const TextStyle(
-                              fontSize: 11, fontWeight: FontWeight.w700,
-                              color: Color(0xFF9CA3AF), letterSpacing: 0.5)),
+                          style: const TextStyle(fontSize: 11, color: Color(0xFF888888),
+                              fontWeight: FontWeight.w600, letterSpacing: 0.5)),
                     ),
                   ),
-                  // Thin vertical divider.
-                  Container(width: 0.5, height: 56, color: const Color(0xFFE5E7EB)),
-                  // Fields spread with Expanded.
+                  Container(width: 0.5, height: 52, color: const Color(0xFFEEEEEE)),
                   ...dataRows[ri].$2.map((f) => fieldCell(f.$1, f.$2)),
                 ]),
               ),
             notesRow(notesVal),
-          ],
+          ]),
         );
       }),
     );

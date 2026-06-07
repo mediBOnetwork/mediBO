@@ -49,7 +49,7 @@ class _AdminCompanyScreenState extends State<AdminCompanyScreen> with SingleTick
   }
 
   Future<void> _review(Map<String, dynamic> row, String status) async {
-    final adminEmail = Supabase.instance.client.auth.currentUser?.email ?? '';
+    final adminEmail = Supabase.instance.client.auth.currentUser?.id ?? '';
     await Supabase.instance.client.from('company_registrations').update({
       'status': status,
       'reviewed_by': adminEmail,

@@ -3267,6 +3267,20 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
     }
   }
 
+  Future<void> _openSpn() async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (_) => _SpnEditorDialog(supplierId: widget.supplierId),
+    );
+    if (result == true && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Supplier terms updated.'),
+        backgroundColor: Color(0xFF1B7A43),
+        duration: Duration(seconds: 2),
+      ));
+    }
+  }
+
   Widget _hdr(String label, int flex) => Expanded(
     flex: flex,
     child: Text(label, style: const TextStyle(
@@ -3392,8 +3406,23 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                           height: 44,
                           color: _flaggedRows.contains(ri) ? const Color(0xFFFFFBEB) : null,
                           alignment: Alignment.centerLeft,
-                          padding: const EdgeInsets.fromLTRB(14, 0, 8, 0),
+                          padding: const EdgeInsets.fromLTRB(8, 0, 8, 0),
                           child: Row(children: [
+                            GestureDetector(
+                              onTap: _openSpn,
+                              child: Container(
+                                width: 30, height: 20,
+                                alignment: Alignment.center,
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.circular(4),
+                                  border: Border.all(color: const Color(0xFFD1D5DB)),
+                                ),
+                                child: const Text('SPN', style: TextStyle(
+                                    fontSize: 8, fontWeight: FontWeight.w700, color: Color(0xFF374151))),
+                              ),
+                            ),
+                            const SizedBox(width: 6),
                             if (_flaggedRows.contains(ri)) ...[
                               const Icon(Icons.flag, size: 11, color: Color(0xFFF59E0B)),
                               const SizedBox(width: 4),
@@ -3562,6 +3591,158 @@ class _CompanyCell extends StatelessWidget {
         ]),
       ),
     );
+  }
+}
+
+// ── SPN (Supplier Profile Notes) editor dialog ────────────────────────────────
+
+class _SpnEditorDialog extends StatefulWidget {
+  final String supplierId;
+  const _SpnEditorDialog({required this.supplierId});
+  @override
+  State<_SpnEditorDialog> createState() => _SpnEditorDialogState();
+}
+
+class _SpnEditorDialogState extends State<_SpnEditorDialog> {
+  static const _fields = [
+    ('Margin', 'margin'),
+    ('CD Condition', 'cd_condition'),
+    ('Behaviour', 'behaviour'),
+    ('Payment Term', 'payment_term'),
+  ];
+
+  String? _pickedLabel;
+  String? _pickedField;
+  final _ctrl = TextEditingController();
+  bool _loading = false;
+  bool _saving = false;
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadCurrent(String field) async {
+    setState(() => _loading = true);
+    try {
+      final rows = await Supabase.instance.client
+          .from('supplier_profiles')
+          .select(field)
+          .eq('id', widget.supplierId)
+          .limit(1);
+      if (rows.isNotEmpty) {
+        _ctrl.text = (rows.first[field] as String?) ?? '';
+      }
+    } catch (_) {} finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _save() async {
+    if (_pickedField == null) return;
+    setState(() => _saving = true);
+    try {
+      await Supabase.instance.client
+          .from('supplier_profiles')
+          .update({_pickedField!: _ctrl.text.trim()})
+          .eq('id', widget.supplierId);
+      if (mounted) Navigator.pop(context, true);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Save failed: $e'),
+          backgroundColor: const Color(0xFF991B1B),
+        ));
+        setState(() => _saving = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: SizedBox(
+        width: 360,
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: _pickedField == null ? _buildStep1() : _buildStep2(),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStep1() {
+    return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+      const Text('Edit Supplier Profile', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+      const SizedBox(height: 4),
+      const Text('Select a field to edit:', style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+      const SizedBox(height: 12),
+      for (final (label, field) in _fields)
+        InkWell(
+          borderRadius: BorderRadius.circular(8),
+          onTap: () async {
+            setState(() { _pickedLabel = label; _pickedField = field; });
+            await _loadCurrent(field);
+          },
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+            margin: const EdgeInsets.only(bottom: 8),
+            decoration: BoxDecoration(
+              border: Border.all(color: const Color(0xFFE5E7EB)),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text(label, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: Color(0xFF111827))),
+          ),
+        ),
+      const SizedBox(height: 4),
+      Align(
+        alignment: Alignment.centerRight,
+        child: TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+      ),
+    ]);
+  }
+
+  Widget _buildStep2() {
+    return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(children: [
+        GestureDetector(
+          onTap: () => setState(() { _pickedLabel = null; _pickedField = null; _ctrl.clear(); }),
+          child: const Icon(Icons.arrow_back, size: 18, color: Color(0xFF6B7280)),
+        ),
+        const SizedBox(width: 8),
+        Text(_pickedLabel ?? '', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+      ]),
+      const SizedBox(height: 16),
+      if (_loading)
+        const Center(child: CircularProgressIndicator(strokeWidth: 2))
+      else
+        TextField(
+          controller: _ctrl,
+          autofocus: true,
+          decoration: InputDecoration(
+            hintText: 'Enter value…',
+            filled: true, fillColor: const Color(0xFFF5F6F8),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+          ),
+          style: const TextStyle(fontSize: 14),
+        ),
+      const SizedBox(height: 16),
+      Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+        TextButton(onPressed: _saving ? null : () => Navigator.pop(context, false), child: const Text('Cancel')),
+        const SizedBox(width: 8),
+        FilledButton(
+          onPressed: (_saving || _loading) ? null : _save,
+          style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43)),
+          child: _saving
+              ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+              : const Text('Save'),
+        ),
+      ]),
+    ]);
   }
 }
 

@@ -2933,8 +2933,10 @@ class _CompaniesInlineSection extends StatefulWidget {
 class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
   bool _loading = true;
   bool _refreshing = false;
+  bool _mapped = false;
   List<Map<String, dynamic>> _rows = [];
   List<String> _medMarketers = [];
+  List<String> _companyCorpus = [];
   bool _showAddForm = false;
   bool _saving = false;
   final _supplierCompanyCtrl = TextEditingController();
@@ -3082,22 +3084,69 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
     return s2.take(5).map((p) => p.$1).toList();
   }
 
-  Future<void> _refresh() async {
+  List<String> _top5corpus(String raw, List<String> corpus) {
+    if (raw.isEmpty || corpus.isEmpty) return [];
+    final s1 = corpus.map((m) => (m, _s1(raw, m))).where((p) => p.$2 > 0.05).toList()
+      ..sort((a, b) => b.$2.compareTo(a.$2));
+    final shortlist = s1.take(60).map((p) => p.$1).toList();
+    final s2 = shortlist.map((m) => (m, _s2(raw, m))).toList()
+      ..sort((a, b) => b.$2.compareTo(a.$2));
+    return s2.take(5).map((p) => p.$1).toList();
+  }
+
+  Future<void> _mapCompanies() async {
     if (_rows.isEmpty) return;
+    setState(() => _refreshing = true);
+    try {
+      if (_companyCorpus.isEmpty) {
+        final res = await Supabase.instance.client
+            .from('company')
+            .select('company_name');
+        final list = (res as List)
+            .map((r) => ((r as Map)['company_name'] as String? ?? '').trim())
+            .where((s) => s.isNotEmpty)
+            .toList();
+        list.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+        _companyCorpus = list;
+      }
+      final updated = _rows.map((row) {
+        final raw = (row['supplier_company'] as String? ?? '').trim();
+        final top = _top5corpus(raw, _companyCorpus);
+        String? n(int i) => i < top.length && top[i].isNotEmpty ? top[i] : null;
+        return Map<String, dynamic>.from(row)
+          ..['company_1'] = n(0)
+          ..['company_2'] = n(1)
+          ..['company_3'] = n(2)
+          ..['company_4'] = n(3)
+          ..['company_5'] = n(4);
+      }).toList();
+      if (mounted) setState(() { _rows = updated; _mapped = true; });
+    } finally {
+      if (mounted) setState(() => _refreshing = false);
+    }
+  }
+
+  Future<void> _saveMatches() async {
     setState(() => _refreshing = true);
     try {
       final client = Supabase.instance.client;
       for (final row in _rows) {
-        final raw = (row['supplier_company'] as String? ?? '').trim();
-        if (raw.isEmpty) continue;
-        final top = _top5(raw);
-        String? n(int i) => i < top.length && top[i].isNotEmpty ? top[i] : null;
         await client.from('supplier_company').update({
-          'company_1': n(0), 'company_2': n(1), 'company_3': n(2),
-          'company_4': n(3), 'company_5': n(4),
+          'company_1': row['company_1'],
+          'company_2': row['company_2'],
+          'company_3': row['company_3'],
+          'company_4': row['company_4'],
+          'company_5': row['company_5'],
         }).eq('id', row['id'] as String);
       }
-      await _load();
+      if (mounted) {
+        setState(() => _mapped = false);
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Saved.'),
+          backgroundColor: Color(0xFF1B7A43),
+          duration: Duration(seconds: 3),
+        ));
+      }
     } finally {
       if (mounted) setState(() => _refreshing = false);
     }
@@ -3131,14 +3180,16 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                   const Spacer(),
                   if (_rows.isNotEmpty)
                     TextButton.icon(
-                      onPressed: _refreshing ? null : _refresh,
+                      onPressed: _refreshing ? null : (_mapped ? _saveMatches : _mapCompanies),
                       icon: _refreshing
                           ? const SizedBox(width: 13, height: 13, child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF2563EB)))
-                          : const Icon(Icons.refresh, size: 15),
-                      label: Text(_refreshing ? 'Matching…' : 'Refresh',
-                          style: const TextStyle(fontSize: 12)),
+                          : Icon(_mapped ? Icons.save_outlined : Icons.auto_awesome, size: 15),
+                      label: Text(
+                        _refreshing ? 'Matching…' : (_mapped ? 'Save' : 'Map Companies'),
+                        style: const TextStyle(fontSize: 12),
+                      ),
                       style: TextButton.styleFrom(
-                          foregroundColor: const Color(0xFF2563EB),
+                          foregroundColor: _mapped ? const Color(0xFF1B7A43) : const Color(0xFF2563EB),
                           visualDensity: VisualDensity.compact),
                     ),
                 ]),
@@ -3188,7 +3239,12 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                           Expanded(flex: 14, child: _CompanyCell(
                             value: _rows[ri][col] as String?,
                             options: _medMarketers,
-                            onChanged: (v) => _updateCell(_rows[ri]['id'] as String, col, v),
+                            onChanged: (v) => _mapped
+                                ? setState(() => _rows[ri][col] = (v == null || v.isEmpty) ? null : v)
+                                : _updateCell(_rows[ri]['id'] as String, col, v),
+                            onClear: (_rows[ri][col] != null && (_rows[ri][col] as String).isNotEmpty)
+                                ? () => setState(() => _rows[ri][col] = null)
+                                : null,
                           )),
                         ],
                       ]),
@@ -3257,7 +3313,8 @@ class _CompanyCell extends StatelessWidget {
   final String? value;
   final List<String> options;
   final ValueChanged<String?> onChanged;
-  const _CompanyCell({this.value, required this.options, required this.onChanged});
+  final VoidCallback? onClear;
+  const _CompanyCell({this.value, required this.options, required this.onChanged, this.onClear});
 
   @override
   Widget build(BuildContext context) {
@@ -3271,7 +3328,7 @@ class _CompanyCell extends StatelessWidget {
         if (result != null) onChanged(result.isEmpty ? null : result);
       },
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+        padding: EdgeInsets.only(left: 8, top: 7, bottom: 7, right: filled && onClear != null ? 2 : 8),
         decoration: BoxDecoration(
           color: filled ? const Color(0xFFECFDF5) : Colors.white,
           borderRadius: BorderRadius.circular(6),
@@ -3284,7 +3341,16 @@ class _CompanyCell extends StatelessWidget {
                 color: filled ? const Color(0xFF065F46) : const Color(0xFF9CA3AF)),
             overflow: TextOverflow.ellipsis, maxLines: 1,
           )),
-          const Icon(Icons.arrow_drop_down, size: 14, color: Color(0xFF9CA3AF)),
+          if (filled && onClear != null)
+            GestureDetector(
+              onTap: onClear,
+              child: const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 2),
+                child: Icon(Icons.close, size: 12, color: Color(0xFF6EE7B7)),
+              ),
+            )
+          else
+            const Icon(Icons.arrow_drop_down, size: 14, color: Color(0xFF9CA3AF)),
         ]),
       ),
     );

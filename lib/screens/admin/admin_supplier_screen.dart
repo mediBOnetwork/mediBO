@@ -3774,6 +3774,9 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
   Future<void> _submitAll() async {
     if (_submitting || !mounted) return;
     setState(() => _submitting = true);
+    // Debug: surface supplierId validity and value state to render-log.
+    RenderLog.write('spn_submit_id_len', widget.supplierId.length);
+    RenderLog.write('spn_submit_margin_set', _values['margin'] != null ? 1 : 0);
     try {
       final client = Supabase.instance.client;
       final result = await client

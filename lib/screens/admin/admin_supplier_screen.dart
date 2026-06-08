@@ -216,7 +216,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       final client = Supabase.instance.client;
       final results = await Future.wait<dynamic>([
         client.from('supplier_profiles').select().or('is_deleted.is.null,is_deleted.eq.false')
-            .catchError((_) => <dynamic>[]),
+            .order('supplier_name').catchError((_) => <dynamic>[]),
         client.from('supplier_orders').select().order('created_at', ascending: false)
             .catchError((_) => <dynamic>[]),
         client.from('supplier_leads').select().order('created_at', ascending: false)
@@ -2964,7 +2964,7 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
           .from('supplier_company')
           .select('id, supplier_company, supplier_name, $colList')
           .eq('supplier_id', widget.supplierId)
-          .order('created_at');
+          .order('supplier_company');
       if (mounted) setState(() {
         _rows = (rows as List).map((r) => Map<String, dynamic>.from(r as Map)).toList();
         _loading = false;

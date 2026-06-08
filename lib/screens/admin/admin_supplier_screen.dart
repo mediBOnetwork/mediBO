@@ -3141,10 +3141,6 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
         final row = updated[ri];
         final raw = (row['supplier_company'] as String? ?? '').trim();
         if (raw.isEmpty) continue;
-        // Skip rows already saved (have at least one non-null company col)
-        final alreadyFilled = _companyCols.any((c) => row[c] != null && (row[c] as String).isNotEmpty);
-        if (alreadyFilled) continue;
-
         final candidates = _candidateShortlist(raw, _companyCorpus);
         if (candidates.isEmpty) { flagged++; flaggedSet.add(ri); continue; }
 

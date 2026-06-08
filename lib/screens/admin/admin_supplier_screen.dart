@@ -1378,11 +1378,21 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     await input.onChange.first;
     final file = input.files?.first;
     if (file == null || !mounted) return;
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => _SupProfileImportDialog(file: file, onImported: () { if (mounted) _load(showSpinner: false); }),
-    );
+    final ext = file.name.toLowerCase().split('.').last;
+    final isImage = ['jpg','jpeg','png','webp','heic','heif','gif'].contains(ext);
+    if (isImage) {
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => _SupCardImportDialog(file: file, onImported: () { if (mounted) _load(showSpinner: false); }),
+      );
+    } else {
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => _SupProfileImportDialog(file: file, onImported: () { if (mounted) _load(showSpinner: false); }),
+      );
+    }
   }
 
   Future<void> _pickAndImportCsv() async {
@@ -3509,6 +3519,487 @@ class _MarketersPickerDialogState extends State<_MarketersPickerDialog> {
               );
             },
           )),
+        ]),
+      ),
+    );
+  }
+}
+
+// ─── Top-level fuzzy helpers (used by _SupCardImportDialog) ──────────────────
+
+String _fzNorm(String s) =>
+    s.toLowerCase().replaceAll(RegExp(r'[^a-z0-9\s]'), ' ').trim().replaceAll(RegExp(r'\s+'), ' ');
+
+Set<String> _fzTri(String s) {
+  if (s.length < 3) return {};
+  final t = <String>{};
+  for (int i = 0; i + 3 <= s.length; i++) t.add(s.substring(i, i + 3));
+  return t;
+}
+
+int _fzEd(String s, String t) {
+  final m = s.length, n = t.length;
+  if (m == 0) return n; if (n == 0) return m;
+  final dp = List.generate(m + 1, (_) => List.filled(n + 1, 0));
+  for (int i = 0; i <= m; i++) dp[i][0] = i;
+  for (int j = 0; j <= n; j++) dp[0][j] = j;
+  for (int i = 1; i <= m; i++) for (int j = 1; j <= n; j++) {
+    if (s[i-1] == t[j-1]) { dp[i][j] = dp[i-1][j-1]; }
+    else { final a = dp[i-1][j], b = dp[i][j-1], c = dp[i-1][j-1]; dp[i][j] = 1 + (a < b ? (a < c ? a : c) : (b < c ? b : c)); }
+  }
+  return dp[m][n];
+}
+
+int _fzDl(String s, String t) {
+  final m = s.length, n = t.length;
+  if (m == 0) return n; if (n == 0) return m;
+  final dp = List.generate(m + 1, (_) => List.filled(n + 1, 0));
+  for (int i = 0; i <= m; i++) dp[i][0] = i;
+  for (int j = 0; j <= n; j++) dp[0][j] = j;
+  for (int i = 1; i <= m; i++) for (int j = 1; j <= n; j++) {
+    if (s[i-1] == t[j-1]) { dp[i][j] = dp[i-1][j-1]; }
+    else { final a = dp[i-1][j], b = dp[i][j-1], c = dp[i-1][j-1]; dp[i][j] = 1 + (a < b ? (a < c ? a : c) : (b < c ? b : c)); }
+    if (i > 1 && j > 1 && s[i-1] == t[j-2] && s[i-2] == t[j-1]) {
+      final tr = dp[i-2][j-2] + 1; if (tr < dp[i][j]) dp[i][j] = tr;
+    }
+  }
+  return dp[m][n];
+}
+
+double _fzS1(String q, String c) {
+  final qn = _fzNorm(q).replaceAll(' ', ''), cn = _fzNorm(c).replaceAll(' ', '');
+  if (qn.isEmpty || cn.isEmpty) return 0.0;
+  final qt = _fzTri(qn), ct = _fzTri(cn);
+  final tri = qt.union(ct).isEmpty ? 0.0 : qt.intersection(ct).length / qt.union(ct).length.toDouble();
+  final ml = qn.length > cn.length ? qn.length : cn.length;
+  return 0.55 * tri + 0.45 * (1.0 - _fzEd(qn, cn) / ml);
+}
+
+double _fzS2(String q, String c) {
+  final qn = _fzNorm(q), cn = _fzNorm(c);
+  if (qn.isEmpty || cn.isEmpty) return 0.0;
+  final ml = qn.length > cn.length ? qn.length : cn.length;
+  final er = 1.0 - _fzDl(qn, cn) / ml;
+  final qw = qn.split(' ').where((t) => t.isNotEmpty).toSet();
+  final cw = cn.split(' ').where((t) => t.isNotEmpty).toSet();
+  final tj = qw.union(cw).isEmpty ? 0.0 : qw.intersection(cw).length / qw.union(cw).length.toDouble();
+  final tr = qw.isEmpty ? 0.0 : qw.where((t) => cw.contains(t)).length / qw.length;
+  final ql = qn.split(' ').where((t) => t.isNotEmpty).toList();
+  final cl = cn.split(' ').where((t) => t.isNotEmpty).toList();
+  final qf = ql.isEmpty ? '' : ql[0], cf = cl.isEmpty ? '' : cl[0];
+  final fm = qf.length > cf.length ? qf.length : cf.length;
+  final pr = fm == 0 ? 0.0 : 1.0 - _fzDl(qf, cf) / fm;
+  final qft = _fzTri(qf), cft = _fzTri(cf);
+  final fw = qft.union(cft).isEmpty ? 0.0 : qft.intersection(cft).length / qft.union(cft).length.toDouble();
+  return 0.50 * er + 0.12 * tj + 0.13 * tr + 0.20 * pr + 0.05 * fw;
+}
+
+List<String> _fzTop5(String raw, List<String> corpus) {
+  if (raw.isEmpty || corpus.isEmpty) return [];
+  final s1 = corpus.map((m) => (m, _fzS1(raw, m))).where((p) => p.$2 > 0.05).toList()
+    ..sort((a, b) => b.$2.compareTo(a.$2));
+  final shortlist = s1.take(60).map((p) => p.$1).toList();
+  final s2 = shortlist.map((m) => (m, _fzS2(raw, m))).toList()
+    ..sort((a, b) => b.$2.compareTo(a.$2));
+  return s2.take(5).map((p) => p.$1).toList();
+}
+
+// ─── Supplier Card Image Import (OCR → review → write) ───────────────────────
+
+enum _SupCardStep { reading, review, importing }
+
+class _SupCardImportDialog extends StatefulWidget {
+  final html.File file;
+  final VoidCallback onImported;
+  const _SupCardImportDialog({required this.file, required this.onImported});
+  @override
+  State<_SupCardImportDialog> createState() => _SupCardImportDialogState();
+}
+
+class _SupCardImportDialogState extends State<_SupCardImportDialog> {
+  _SupCardStep _step = _SupCardStep.reading;
+  String? _error;
+
+  // Editable supplier fields
+  final _nameCtrl    = TextEditingController();
+  final _addrCtrl    = TextEditingController();
+  final _cityCtrl    = TextEditingController();
+  final _phoneCtrl   = TextEditingController();
+  final _waCtrl      = TextEditingController();
+  final _emailCtrl   = TextEditingController();
+  final _codeCtrl    = TextEditingController();
+
+  // Editable company list
+  List<TextEditingController> _compCtrls = [];
+  final _newCompCtrl = TextEditingController();
+
+  @override
+  void initState() { super.initState(); _ocr(); }
+
+  @override
+  void dispose() {
+    for (final c in [_nameCtrl,_addrCtrl,_cityCtrl,_phoneCtrl,_waCtrl,_emailCtrl,_codeCtrl,_newCompCtrl]) c.dispose();
+    for (final c in _compCtrls) c.dispose();
+    super.dispose();
+  }
+
+  Future<Uint8List> _readBytes(html.File f) async {
+    final r = html.FileReader(); r.readAsDataUrl(f); await r.onLoad.first;
+    return base64Decode((r.result as String).split(',').last);
+  }
+
+  String _mimeFor(String ext) => switch (ext) {
+    'jpg' || 'jpeg' => 'image/jpeg',
+    'png'           => 'image/png',
+    'webp'          => 'image/webp',
+    'heic' || 'heif'=> 'image/heic',
+    'gif'           => 'image/gif',
+    _               => 'image/jpeg',
+  };
+
+  String _geminiText(String body) {
+    try {
+      final data = jsonDecode(body) as Map<String, dynamic>;
+      final cands = data['candidates'] as List<dynamic>?;
+      if (cands == null || cands.isEmpty) return '';
+      final content = (cands[0] as Map<String, dynamic>)['content'] as Map<String, dynamic>?;
+      final parts = content?['parts'] as List<dynamic>?;
+      final out = parts?.where((p) => (p as Map<String, dynamic>)['thought'] != true).toList();
+      return out?.isNotEmpty == true ? (out![0] as Map<String, dynamic>)['text'] as String? ?? '' : '';
+    } catch (_) { return ''; }
+  }
+
+  Future<void> _ocr() async {
+    try {
+      final ext = widget.file.name.toLowerCase().split('.').last;
+      final bytes = await _readBytes(widget.file);
+      final b64 = base64Encode(bytes);
+      const prompt =
+          'This is a pharma supplier business card or company list image.\n'
+          'Extract the following and return ONLY a JSON object (no markdown fences, no extra text):\n\n'
+          '{\n'
+          '  "supplier_name": "firm/distributor/stockist name at the top",\n'
+          '  "address": "full street address if visible",\n'
+          '  "city": "city name only",\n'
+          '  "phone": "phone/landline numbers (comma-separated if multiple)",\n'
+          '  "whatsapp": "mobile/WhatsApp numbers (comma-separated if multiple)",\n'
+          '  "email": "email address",\n'
+          '  "supplier_code": "any short code like G-1, S-02 etc",\n'
+          '  "companies": ["NAME1", "NAME2", ...]\n'
+          '}\n\n'
+          'For "companies": extract every pharma company/brand name from the bulleted/starred list.\n'
+          'CRITICAL: Strip any bracketed text — keep ONLY the company name before the bracket.\n'
+          'Examples: "ABBOTT [DIGENE, CREMAFFIN]" → "ABBOTT", "DR. REDDY\'S [ZEDEX]" → "DR. REDDY\'S".\n'
+          'Lines with no brackets: store as-is. Use empty string "" for missing scalar fields. companies=[] if none found.';
+      final resp = await http.post(
+        Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$geminiApiKey'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'contents': [{'parts': [
+            {'inline_data': {'mime_type': _mimeFor(ext), 'data': b64}},
+            {'text': prompt},
+          ]}],
+          'generationConfig': {'temperature': 0.1, 'maxOutputTokens': 2048},
+        }),
+      ).timeout(const Duration(seconds: 60));
+      if (resp.statusCode != 200) throw Exception('Gemini error (HTTP ${resp.statusCode})');
+      final txt = _geminiText(resp.body);
+      final jm = RegExp(r'\{[\s\S]*\}').firstMatch(txt);
+      if (jm == null) throw Exception('Could not parse OCR response');
+      final dec = jsonDecode(jm.group(0)!) as Map<String, dynamic>;
+      String s(String k) => (dec[k] as String? ?? '').trim();
+      final companies = (dec['companies'] as List<dynamic>? ?? [])
+          .map((e) => e.toString().trim())
+          .where((e) => e.isNotEmpty)
+          .toList();
+      if (mounted) setState(() {
+        _nameCtrl.text  = s('supplier_name');
+        _addrCtrl.text  = s('address');
+        _cityCtrl.text  = s('city');
+        _phoneCtrl.text = s('phone');
+        _waCtrl.text    = s('whatsapp');
+        _emailCtrl.text = s('email');
+        _codeCtrl.text  = s('supplier_code');
+        _compCtrls = companies.map((c) => TextEditingController(text: c)).toList();
+        _step = _SupCardStep.review;
+      });
+    } catch (e) {
+      if (mounted) setState(() => _error = e.toString().replaceFirst('Exception: ', ''));
+    }
+  }
+
+  Future<void> _doImport() async {
+    final name = _nameCtrl.text.trim();
+    if (name.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Supplier name is required'),
+        backgroundColor: Color(0xFFDC2626),
+      ));
+      return;
+    }
+    setState(() => _step = _SupCardStep.importing);
+    try {
+      final client = Supabase.instance.client;
+
+      // 1. Insert supplier_profiles row
+      final rec = <String, dynamic>{
+        'supplier_name': name,
+        'status': 'approved',
+        'approved': true,
+        'is_deleted': false,
+      };
+      if (_addrCtrl.text.trim().isNotEmpty) rec['street_address'] = _addrCtrl.text.trim();
+      if (_cityCtrl.text.trim().isNotEmpty) rec['city'] = _cityCtrl.text.trim();
+      if (_phoneCtrl.text.trim().isNotEmpty) rec['contact_no'] = _phoneCtrl.text.trim();
+      if (_waCtrl.text.trim().isNotEmpty) rec['whatsapp_no'] = _waCtrl.text.trim();
+      if (_emailCtrl.text.trim().isNotEmpty) rec['email'] = _emailCtrl.text.trim();
+      if (_codeCtrl.text.trim().isNotEmpty) rec['supplier_code'] = _codeCtrl.text.trim();
+
+      final inserted = await client.from('supplier_profiles').insert(rec).select('id').single();
+      final supplierId = inserted['id'] as String;
+
+      // 2. Fetch company master for fuzzy matching (once)
+      final companyRows = await client.from('company').select('company_name');
+      final corpus = (companyRows as List<dynamic>)
+          .map((r) => ((r as Map<String, dynamic>)['company_name'] as String? ?? '').trim())
+          .where((s) => s.isNotEmpty)
+          .toList();
+
+      // 3. Insert supplier_company rows with fuzzy-matched company_1..5
+      final companies = _compCtrls.map((c) => c.text.trim()).where((s) => s.isNotEmpty).toList();
+      if (companies.isNotEmpty) {
+        final rows = companies.map((co) {
+          final top = _fzTop5(co, corpus);
+          String? n(int i) => i < top.length && top[i].isNotEmpty ? top[i] : null;
+          return <String, dynamic>{
+            'supplier_id': supplierId,
+            'supplier_company': co,
+            'company_1': n(0), 'company_2': n(1), 'company_3': n(2),
+            'company_4': n(3), 'company_5': n(4),
+          };
+        }).toList();
+        await client.from('supplier_company').insert(rows);
+      }
+
+      if (mounted) {
+        Navigator.of(context).pop();
+        widget.onImported();
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Imported $name with ${companies.length} compan${companies.length == 1 ? 'y' : 'ies'}'),
+          backgroundColor: const Color(0xFF1B7A43),
+          duration: const Duration(seconds: 5),
+        ));
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _step = _SupCardStep.review);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Import failed: $e'),
+          backgroundColor: const Color(0xFFDC2626),
+        ));
+      }
+    }
+  }
+
+  Widget _field(String label, TextEditingController ctrl, {int maxLines = 1}) =>
+      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(label, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
+            color: Color(0xFF6B7280), letterSpacing: 0.3)),
+        const SizedBox(height: 4),
+        TextField(
+          controller: ctrl,
+          maxLines: maxLines,
+          style: const TextStyle(fontSize: 13, color: Color(0xFF111827)),
+          decoration: InputDecoration(
+            filled: true, fillColor: const Color(0xFFF5F6F8),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+            enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+            focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                borderSide: const BorderSide(color: Color(0xFF1B7A43), width: 1.5)),
+          ),
+        ),
+        const SizedBox(height: 10),
+      ]);
+
+  @override
+  Widget build(BuildContext context) {
+    if (_error != null) {
+      return Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 400),
+          child: Padding(padding: const EdgeInsets.all(24), child: Column(mainAxisSize: MainAxisSize.min, children: [
+            const Icon(Icons.error_outline, color: Color(0xFFDC2626), size: 32),
+            const SizedBox(height: 12),
+            Text(_error!, textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 14, color: Color(0xFF374151))),
+            const SizedBox(height: 16),
+            TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Close')),
+          ]))),
+      );
+    }
+
+    if (_step == _SupCardStep.reading || _step == _SupCardStep.importing) {
+      return Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 360),
+          child: Padding(padding: const EdgeInsets.all(32), child: Column(mainAxisSize: MainAxisSize.min, children: [
+            const CircularProgressIndicator(color: Color(0xFF1B7A43), strokeWidth: 2),
+            const SizedBox(height: 16),
+            Text(_step == _SupCardStep.reading ? 'Reading image with Gemini…' : 'Importing supplier…',
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 14, color: Color(0xFF6B7280))),
+          ]))),
+      );
+    }
+
+    // Review screen
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: 640, maxHeight: MediaQuery.of(context).size.height * 0.9),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+          // Header
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 20, 16, 0),
+            child: Row(children: [
+              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Text('Import from Image — Review',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+                const SizedBox(height: 2),
+                Text(widget.file.name,
+                    style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+              ])),
+              IconButton(icon: const Icon(Icons.close, size: 20), onPressed: () => Navigator.of(context).pop(),
+                  padding: EdgeInsets.zero, constraints: const BoxConstraints()),
+            ]),
+          ),
+          const SizedBox(height: 12),
+          const Divider(height: 1, color: Color(0xFFE5E7EB)),
+          // Body
+          Flexible(child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(24, 16, 24, 8),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              // Supplier details
+              const Text('SUPPLIER DETAILS', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700,
+                  color: Color(0xFF6B7280), letterSpacing: 0.5)),
+              const SizedBox(height: 10),
+              _field('Supplier Name *', _nameCtrl),
+              _field('Address', _addrCtrl, maxLines: 2),
+              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Expanded(child: _field('City', _cityCtrl)),
+                const SizedBox(width: 12),
+                Expanded(child: _field('Supplier Code', _codeCtrl)),
+              ]),
+              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Expanded(child: _field('Phone', _phoneCtrl)),
+                const SizedBox(width: 12),
+                Expanded(child: _field('WhatsApp / Mobile', _waCtrl)),
+              ]),
+              _field('Email', _emailCtrl),
+              const SizedBox(height: 4),
+              const Divider(color: Color(0xFFE5E7EB)),
+              const SizedBox(height: 10),
+              // Company list
+              Row(children: [
+                const Expanded(child: Text('COMPANY LIST', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700,
+                    color: Color(0xFF6B7280), letterSpacing: 0.5))),
+                Text('${_compCtrls.length} compan${_compCtrls.length == 1 ? 'y' : 'ies'}',
+                    style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
+              ]),
+              const SizedBox(height: 10),
+              if (_compCtrls.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.only(bottom: 8),
+                  child: Text('No companies extracted. Add manually below.',
+                      style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
+                ),
+              ...List.generate(_compCtrls.length, (i) => Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Row(children: [
+                  Expanded(child: TextField(
+                    controller: _compCtrls[i],
+                    style: const TextStyle(fontSize: 13, color: Color(0xFF111827)),
+                    decoration: InputDecoration(
+                      filled: true, fillColor: const Color(0xFFF5F6F8),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                          borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+                      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                          borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+                      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                          borderSide: const BorderSide(color: Color(0xFF1B7A43), width: 1.5)),
+                    ),
+                  )),
+                  const SizedBox(width: 6),
+                  IconButton(
+                    icon: const Icon(Icons.remove_circle_outline, size: 18, color: Color(0xFFDC2626)),
+                    onPressed: () => setState(() { _compCtrls[i].dispose(); _compCtrls.removeAt(i); }),
+                    padding: EdgeInsets.zero, constraints: const BoxConstraints(),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ]),
+              )),
+              const SizedBox(height: 6),
+              // Add company row
+              Row(children: [
+                Expanded(child: TextField(
+                  controller: _newCompCtrl,
+                  style: const TextStyle(fontSize: 13),
+                  decoration: InputDecoration(
+                    hintText: 'Add company…',
+                    hintStyle: const TextStyle(color: Color(0xFF9CA3AF)),
+                    filled: true, fillColor: const Color(0xFFF5F6F8),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                        borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+                    enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                        borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+                    focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                        borderSide: const BorderSide(color: Color(0xFF1B7A43), width: 1.5)),
+                  ),
+                  onSubmitted: (v) {
+                    final s = v.trim();
+                    if (s.isNotEmpty) setState(() { _compCtrls.add(TextEditingController(text: s)); _newCompCtrl.clear(); });
+                  },
+                )),
+                const SizedBox(width: 6),
+                IconButton(
+                  icon: const Icon(Icons.add_circle_outline, size: 20, color: Color(0xFF1B7A43)),
+                  onPressed: () {
+                    final s = _newCompCtrl.text.trim();
+                    if (s.isNotEmpty) setState(() { _compCtrls.add(TextEditingController(text: s)); _newCompCtrl.clear(); });
+                  },
+                  padding: EdgeInsets.zero, constraints: const BoxConstraints(),
+                ),
+              ]),
+              const SizedBox(height: 16),
+            ]),
+          )),
+          const Divider(height: 1, color: Color(0xFFE5E7EB)),
+          // Footer
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+            child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('Cancel', style: TextStyle(color: Color(0xFF6B7280))),
+              ),
+              const SizedBox(width: 8),
+              FilledButton(
+                onPressed: _doImport,
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFF1B7A43),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                ),
+                child: const Text('Import', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+              ),
+            ]),
+          ),
         ]),
       ),
     );

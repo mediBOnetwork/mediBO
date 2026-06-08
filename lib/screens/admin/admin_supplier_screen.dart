@@ -967,6 +967,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         ),
       if (_spnSupplierId == row.id)
         _SpnInlineSection(
+                key: ValueKey('spn_${row.id}'),
                 supplierId: row.id,
                 supplierName: row.supplierName,
                 onRegister: (id, cb) => _spnCallbacks[id] = cb,
@@ -1061,6 +1062,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
             if (_spnSupplierId == row.id) ...[
               const Divider(height: 1, color: Color(0xFFE5E7EB)),
               _SpnInlineSection(
+                key: ValueKey('spn_${row.id}'),
                 supplierId: row.id,
                 supplierName: row.supplierName,
                 onRegister: (id, cb) => _spnCallbacks[id] = cb,
@@ -3690,6 +3692,7 @@ class _SpnInlineSection extends StatefulWidget {
   final void Function(String, void Function(Map<String, dynamic>)) onRegister;
   final void Function(String) onUnregister;
   const _SpnInlineSection({
+    super.key,
     required this.supplierId,
     required this.supplierName,
     required this.onRegister,
@@ -3721,6 +3724,7 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
   bool _loading = true;
   bool _loadCancelled = false;
   final Map<String, String?> _values = {};
+  int _changeCounter = 0;
 
   @override
   void initState() {
@@ -3786,6 +3790,7 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
           .select('id')
           .timeout(const Duration(seconds: 8));
       RenderLog.write('spn_writefield_after_await', res.isEmpty ? 'EMPTY_0_ROWS' : 'OK_${res.length}');
+      RenderLog.write('spn_write_done', '$changedField=$changedVal rows=${res.length}@${DateTime.now().millisecondsSinceEpoch}');
       if (res.isNotEmpty) {
         Supabase.instance.client
             .rpc('recompute_supplier_points', params: {'p_id': id})
@@ -3888,7 +3893,9 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
                           value: _values[col.$2],
                           options: _spnOptions[col.$2]!,
                           onPick: (field, val) {
-                            RenderLog.write('spn_dd_changed', '$field=$val');
+                            _changeCounter++;
+                            RenderLog.write('spn_change_count', _changeCounter.toString());
+                            RenderLog.write('spn_change_last', '$field=$val@${DateTime.now().millisecondsSinceEpoch}');
                             setState(() => _values[field] = val);
                             _writeField(field, val);
                           },

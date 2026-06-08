@@ -150,6 +150,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   String? _spnSupplierId;
   final Set<String> _expandedLeads = {};
   final Map<String, int> _companyCounts = {};
+  final Map<String, Map<String, dynamic>> _spnCache = {};
   final ScrollController _scrollCtrl = ScrollController();
   final List<RealtimeChannel> _channels = [];
   Timer? _debounce;
@@ -173,7 +174,29 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   void _subscribeRealtime() {
     final client = Supabase.instance.client;
     final ts = DateTime.now().millisecondsSinceEpoch;
-    for (final table in ['supplier_profiles', 'supplier_orders', 'supplier_leads']) {
+
+    // Single-binding channel for supplier_profiles: UPDATE → surgical patch;
+    // INSERT/DELETE → full debounced reload.
+    RenderLog.write('rt_supplier_profiles', 1);
+    final spCh = client
+        .channel('admin_supplier_profiles')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'supplier_profiles',
+          callback: (payload) {
+            if (payload.eventType == PostgresChangeEvent.update) {
+              _patchSupplierRow(payload.newRecord);
+            } else {
+              _debouncedLoad();
+            }
+          },
+        )
+        .subscribe();
+    _channels.add(spCh);
+
+    // Separate channels for other tables (single-binding each).
+    for (final table in ['supplier_orders', 'supplier_leads']) {
       final ch = client
           .channel('admin_sup_${table}_$ts')
           .onPostgresChanges(
@@ -185,6 +208,30 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           .subscribe();
       _channels.add(ch);
     }
+  }
+
+  static const _spnPatchKeys = [
+    'margin', 'cd_condition', 'behaviour', 'payment_type', 'payment_term',
+    'margin_points', 'cd_points', 'behaviour_points', 'payment_term_points',
+    'status', 'supplier_name',
+  ];
+
+  void _patchSupplierRow(Map<String, dynamic> newRow) {
+    final id = newRow['id'] as String?;
+    if (id == null || !mounted) return;
+    final idx = _suppliers.indexWhere((s) => s.id == id);
+    if (idx >= 0) {
+      for (final k in _spnPatchKeys) {
+        if (newRow.containsKey(k)) _suppliers[idx].rawData[k] = newRow[k];
+      }
+    }
+    // New map reference each time → didUpdateWidget detects change by identity.
+    final patch = <String, dynamic>{};
+    for (final k in _spnPatchKeys) {
+      patch[k] = newRow[k];
+    }
+    _spnCache[id] = patch;
+    if (mounted) setState(() {});
   }
 
   void _debouncedLoad() {
@@ -920,7 +967,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           onCompanyAdded: () => _reloadCompanyCount(row.id),
         ),
       if (_spnSupplierId == row.id)
-        _SpnInlineSection(supplierId: row.id, supplierName: row.supplierName),
+        _SpnInlineSection(supplierId: row.id, supplierName: row.supplierName, realtimeData: _spnCache[row.id]),
       if (isExpanded) _buildDetails(row.rawData, lpad: 28, rpad: 0),
     ]);
   }
@@ -1009,7 +1056,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
             ],
             if (_spnSupplierId == row.id) ...[
               const Divider(height: 1, color: Color(0xFFE5E7EB)),
-              _SpnInlineSection(supplierId: row.id, supplierName: row.supplierName),
+              _SpnInlineSection(supplierId: row.id, supplierName: row.supplierName, realtimeData: _spnCache[row.id]),
             ],
             if (isExpanded) ...[
               const Divider(height: 1, color: Color(0xFFE5E7EB)),
@@ -3631,7 +3678,8 @@ class _CompanyCell extends StatelessWidget {
 class _SpnInlineSection extends StatefulWidget {
   final String supplierId;
   final String supplierName;
-  const _SpnInlineSection({required this.supplierId, required this.supplierName});
+  final Map<String, dynamic>? realtimeData;
+  const _SpnInlineSection({required this.supplierId, required this.supplierName, this.realtimeData});
 
   @override
   State<_SpnInlineSection> createState() => _SpnInlineSectionState();
@@ -3659,6 +3707,21 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
   void initState() {
     super.initState();
     _load();
+  }
+
+  @override
+  void didUpdateWidget(_SpnInlineSection old) {
+    super.didUpdateWidget(old);
+    // New map reference signals a realtime patch from the parent's channel.
+    if (widget.realtimeData != null && !identical(widget.realtimeData, old.realtimeData)) {
+      setState(() {
+        for (final col in _spnCols) {
+          if (widget.realtimeData!.containsKey(col.$2)) {
+            _values[col.$2] = widget.realtimeData![col.$2] as String?;
+          }
+        }
+      });
+    }
   }
 
   Future<void> _load() async {

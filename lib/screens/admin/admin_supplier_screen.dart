@@ -349,24 +349,6 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   }
 
   Future<void> _deleteSupplier(_SupRow row) async {
-    final name = row.supplierName.isNotEmpty ? row.supplierName : row.contactName;
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        title: Text('Delete $name?', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
-        content: const Text('This will remove their supplier profile.', style: TextStyle(fontSize: 13, color: Color(0xFF374151))),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: FilledButton.styleFrom(backgroundColor: const Color(0xFFDC2626)),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
-    );
-    if (confirm != true) return;
     try {
       final client = Supabase.instance.client;
       final adminEmail = client.auth.currentUser?.email ?? 'admin';

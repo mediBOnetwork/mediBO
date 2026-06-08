@@ -3273,31 +3273,24 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                 ]),
               ),
               const Divider(height: 1, color: Color(0xFFBFDBFE)),
-              // ── Empty state ──────────────────────────────────────────────────
-              if (_rows.isEmpty && !_showAddForm)
-                const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                  child: Text('No companies linked yet.',
-                      style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
-                ),
-              // ── Grid ─────────────────────────────────────────────────────────
-              if (_rows.isNotEmpty)
-                Listener(
-                  onPointerSignal: (e) {
-                    if (e is PointerScrollEvent) {
-                      final outer = PrimaryScrollController.of(context);
-                      if (outer.hasClients) {
-                        final dy = e.scrollDelta.dy;
-                        final next = (outer.offset + dy).clamp(0.0, outer.position.maxScrollExtent);
-                        outer.jumpTo(next);
-                      }
+              // ── Grid (always shown: header + rows or empty message) ──────────
+              Listener(
+                onPointerSignal: (e) {
+                  if (e is PointerScrollEvent) {
+                    final outer = PrimaryScrollController.of(context);
+                    if (outer.hasClients) {
+                      final dy = e.scrollDelta.dy;
+                      final next = (outer.offset + dy).clamp(0.0, outer.position.maxScrollExtent);
+                      outer.jumpTo(next);
                     }
-                  },
-                  child: SingleChildScrollView(
+                  }
+                },
+                child: SingleChildScrollView(
                   scrollDirection: Axis.horizontal,
                   child: Padding(
                     padding: const EdgeInsets.symmetric(vertical: 4),
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      // Fixed 6-column header — always visible
                       Padding(
                         padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
                         child: Row(children: [
@@ -3315,6 +3308,14 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                         ]),
                       ),
                       const Divider(height: 1, color: Color(0xFFDBEAFE)),
+                      // Empty state row
+                      if (_rows.isEmpty && !_showAddForm)
+                        const Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+                          child: Text('No companies linked yet.',
+                              style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
+                        ),
+                      // Data rows
                       for (int ri = 0; ri < _rows.length; ri++) ...[
                         Padding(
                           padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
@@ -3338,8 +3339,8 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                       ],
                     ]),
                   ),
-                  ), // SingleChildScrollView
-                ), // Listener
+                ), // SingleChildScrollView
+              ), // Listener
               // ── Add-row form ─────────────────────────────────────────────────
               if (_showAddForm)
                 Padding(

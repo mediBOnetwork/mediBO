@@ -3770,15 +3770,30 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
   }
 
   Future<void> _saveField(String field, String? value) async {
-    if (mounted) setState(() => _values[field] = value?.isEmpty == true ? null : value);
+    final writeVal = value?.isEmpty == true ? null : value;
+    if (mounted) setState(() => _values[field] = writeVal);
     try {
       final client = Supabase.instance.client;
-      await client.from('supplier_profiles')
-          .update({field: value?.isEmpty == true ? null : value})
-          .eq('id', widget.supplierId);
-      client.rpc('recompute_supplier_points', params: {'p_id': widget.supplierId})
-          .then((_) {}).catchError((_) {});
-    } catch (_) {}
+      final result = await client
+          .from('supplier_profiles')
+          .update({field: writeVal})
+          .eq('id', widget.supplierId)
+          .select('id');
+      if ((result as List).isEmpty) {
+        // UPDATE matched 0 rows — RLS blocked or wrong id; reload from DB.
+        RenderLog.write('spn_write_fail', 1);
+        _load();
+        return;
+      }
+      RenderLog.write('spn_write_ok', 1);
+      client
+          .rpc('recompute_supplier_points', params: {'p_id': widget.supplierId})
+          .then((_) {})
+          .catchError((_) {});
+    } catch (e) {
+      RenderLog.write('spn_write_fail', 1);
+      _load(); // revert optimistic update from DB truth
+    }
   }
 
   Widget _hdr(String label) => Expanded(

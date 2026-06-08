@@ -3770,31 +3770,22 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
     }
   }
 
-  Future<void> _writeField() async {
-    if (_supplierId.isEmpty) {
-      RenderLog.write('spn_save_error', 'NULL_ID');
-      return;
-    }
-    // Snapshot values at call time — independent of any later setState.
-    final id          = _supplierId;
-    final margin      = _values['margin'];
-    final cdCondition = _values['cd_condition'];
-    final behaviour   = _values['behaviour'];
-    final paymentType = _values['payment_term'];
-    RenderLog.write('spn_save_id_used', id);
+  Future<void> _writeField([String? changedField, String? changedVal]) async {
+    RenderLog.write('spn_writefield_entered', changedField ?? 'none');
+    final id = _supplierId;
+    RenderLog.write('spn_writefield_id', id.isEmpty ? 'EMPTY' : id);
+    if (id.isEmpty) { RenderLog.write('spn_writefield_dead', 'EMPTY_ID'); return; }
+    final dbCol = (changedField == 'payment_term') ? 'payment_type' : (changedField ?? 'margin');
+    final val   = changedVal ?? _values[changedField ?? 'margin'];
     try {
+      RenderLog.write('spn_writefield_before_await', '1');
       final res = await Supabase.instance.client
           .from('supplier_profiles')
-          .update({
-            'margin':       margin,
-            'cd_condition': cdCondition,
-            'behaviour':    behaviour,
-            'payment_type': paymentType,
-          })
+          .update({dbCol: val})
           .eq('id', id)
           .select('id')
           .timeout(const Duration(seconds: 8));
-      RenderLog.write('spn_save_result', res.isEmpty ? 'EMPTY_0' : 'OK_${res.length}');
+      RenderLog.write('spn_writefield_after_await', res.isEmpty ? 'EMPTY_0_ROWS' : 'OK_${res.length}');
       if (res.isNotEmpty) {
         Supabase.instance.client
             .rpc('recompute_supplier_points', params: {'p_id': id})
@@ -3806,7 +3797,7 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
         backgroundColor: Color(res.isEmpty ? 0xFF991B1B : 0xFF1B7A43),
         duration: const Duration(milliseconds: 800)));
     } catch (e) {
-      RenderLog.write('spn_save_error', e.toString());
+      RenderLog.write('spn_writefield_exception', e.toString());
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text('Save error: $e'),
         backgroundColor: const Color(0xFF991B1B)));
@@ -3896,13 +3887,16 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
                           value: _values[col.$2],
                           options: List<String>.from(_spnOptions[col.$2]!),
                           onChanged: (v) {
-                            setState(() => _values[col.$2] = v?.isEmpty == true ? null : v);
-                            _writeField();
+                            final cleaned = v?.isEmpty == true ? null : v;
+                            RenderLog.write('spn_onchange_fired', '${col.$2}=${cleaned ?? "null"}');
+                            setState(() => _values[col.$2] = cleaned);
+                            _writeField(col.$2, cleaned);
                           },
                           onClear: (_values[col.$2] != null && _values[col.$2]!.isNotEmpty)
                               ? () {
+                                  RenderLog.write('spn_onchange_fired', '${col.$2}=CLEAR');
                                   setState(() => _values[col.$2] = null);
-                                  _writeField();
+                                  _writeField(col.$2, null);
                                 }
                               : null,
                         )),

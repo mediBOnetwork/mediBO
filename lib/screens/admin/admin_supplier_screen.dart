@@ -202,7 +202,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   Future<void> _reloadCompanyCount(String supplierId) async {
     try {
       final rows = await Supabase.instance.client
-          .from('supplier_company_terms')
+          .from('supplier_company')
           .select('supplier_id')
           .eq('supplier_id', supplierId);
       if (mounted) setState(() => _companyCounts[supplierId] = (rows as List).length);
@@ -223,7 +223,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
             .catchError((_) => <dynamic>[]),
         client.from('supplier_profiles').select().eq('is_deleted', true)
             .order('deleted_at', ascending: false).catchError((_) => <dynamic>[]),
-        client.from('supplier_company_terms').select('supplier_id')
+        client.from('supplier_company').select('supplier_id')
             .catchError((_) => <dynamic>[]),
       ]);
 
@@ -2433,7 +2433,7 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
     final String prompt;
     if (isSCT) {
       prompt =
-          'Map each column to the correct supplier_company_terms field.\n\n'
+          'Map each column to the correct supplier_company field.\n\n'
           'Fields: supplier_name (required — Firm/Supplier/Distributor name), '
           'company_name (required — Pharma company/brand name), '
           'margin (discount %, trade margin), cd_condition (CD/cash discount), '
@@ -2681,31 +2681,7 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
         supplierMap[(r['supplier_name'] as String).toLowerCase()] = r['id'] as String;
       }
 
-      // Resolve company names → IDs (via pharma_companies + company_aliases)
-      final companyMap = <String, String>{};
-      final existingCos = await Supabase.instance.client
-          .from('pharma_companies').select('id, canonical_name').inFilter('canonical_name', companyNames);
-      for (final r in existingCos as List<dynamic>) {
-        companyMap[(r['canonical_name'] as String).toLowerCase()] = r['id'] as String;
-      }
-      // Check aliases for remaining
-      final unmatchedByName = companyNames.where((n) => !companyMap.containsKey(n.toLowerCase())).toList();
-      if (unmatchedByName.isNotEmpty) {
-        final aliasRows = await Supabase.instance.client
-            .from('company_aliases').select('company_id, alias_name').inFilter('alias_name', unmatchedByName);
-        for (final r in aliasRows as List<dynamic>) {
-          companyMap[(r['alias_name'] as String).toLowerCase()] = r['company_id'] as String;
-        }
-      }
-      // Create pharma_companies entries for any still-missing companies
-      final stillMissing = companyNames.where((n) => !companyMap.containsKey(n.toLowerCase())).toList();
-      for (final name in stillMissing) {
-        final newCo = await Supabase.instance.client
-            .from('pharma_companies').insert({'canonical_name': name}).select('id').single();
-        companyMap[name.toLowerCase()] = newCo['id'] as String;
-      }
-
-      // Build insert rows
+      // Build insert rows — company stored as plain text in supplier_company column
       final toInsert = <Map<String, dynamic>>[];
       int skipped = 0;
       for (final row in _dataRows) {
@@ -2713,18 +2689,16 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
         final companyName  = rowVal(row, 'company_name');
         if (supplierName.isEmpty || companyName.isEmpty) { skipped++; continue; }
         final supplierId = supplierMap[supplierName.toLowerCase()];
-        final companyId  = companyMap[companyName.toLowerCase()];
         if (supplierId == null) { skipped++; continue; } // supplier not in DB
-        if (companyId == null)  { skipped++; continue; }
-        final rec = <String, dynamic>{'supplier_id': supplierId, 'company_id': companyId};
-        for (final f in ['margin', 'cd_condition', 'payment_type', 'deal', 'status']) {
+        final rec = <String, dynamic>{'supplier_id': supplierId, 'supplier_company': companyName};
+        for (final f in ['margin', 'cd_condition', 'payment_type', 'deal']) {
           final v = rowVal(row, f);
           if (v.isNotEmpty) rec[f] = v;
         }
         toInsert.add(rec);
       }
       if (toInsert.isNotEmpty) {
-        await Supabase.instance.client.from('supplier_company_terms').insert(toInsert);
+        await Supabase.instance.client.from('supplier_company').insert(toInsert);
       }
       if (mounted) {
         Navigator.of(context).pop();
@@ -2822,7 +2796,7 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
                   const SizedBox(width: 4),
                   Expanded(child: _DestTab(
                     label: "Supplier's Company",
-                    sublabel: '→ supplier_company_terms',
+                    sublabel: '→ supplier_company',
                     selected: isSCT,
                     onTap: () {
                       if (!isSCT) {
@@ -2986,7 +2960,7 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
                 }),
                 const SizedBox(height: 8),
                 Text(isSCT
-                    ? '${_dataRows.length} row${_dataRows.length == 1 ? '' : 's'} will be imported into supplier_company_terms'
+                    ? '${_dataRows.length} row${_dataRows.length == 1 ? '' : 's'} will be imported into supplier_company'
                     : '${_dataRows.length} row${_dataRows.length == 1 ? '' : 's'} will be imported as approved suppliers',
                     style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
               ]),
@@ -3107,7 +3081,7 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
     try {
       final client = Supabase.instance.client;
       final rows = await client
-          .from('supplier_company_terms')
+          .from('supplier_company')
           .select('id, supplier_company, company_1, company_2, company_3, company_4, company_5, margin, cd_condition, payment_type, deal')
           .eq('supplier_id', widget.supplierId)
           .order('created_at');
@@ -3136,7 +3110,7 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
     if (raw.isEmpty) return;
     setState(() => _saving = true);
     try {
-      await Supabase.instance.client.from('supplier_company_terms').insert({
+      await Supabase.instance.client.from('supplier_company').insert({
         'supplier_id': widget.supplierId,
         'supplier_company': raw,
       });
@@ -3153,7 +3127,7 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
     final v = (value == null || value.isEmpty) ? null : value;
     try {
       await Supabase.instance.client
-          .from('supplier_company_terms')
+          .from('supplier_company')
           .update({col: v}).eq('id', rowId);
       final idx = _rows.indexWhere((r) => r['id'] == rowId);
       if (idx >= 0 && mounted) setState(() => _rows[idx][col] = v);
@@ -3248,7 +3222,7 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
         if (raw.isEmpty) continue;
         final top = _top5(raw);
         String? n(int i) => i < top.length && top[i].isNotEmpty ? top[i] : null;
-        await client.from('supplier_company_terms').update({
+        await client.from('supplier_company').update({
           'company_1': n(0), 'company_2': n(1), 'company_3': n(2),
           'company_4': n(3), 'company_5': n(4),
         }).eq('id', row['id'] as String);

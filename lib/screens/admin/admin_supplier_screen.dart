@@ -2947,30 +2947,31 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
 
   Future<void> _load() async {
     if (mounted) setState(() => _loading = true);
+    // Fetch supplier_company rows — isolated so any error here is visible, not silently swallowed
     try {
-      final client = Supabase.instance.client;
-      final rows = await client
+      final rows = await Supabase.instance.client
           .from('supplier_company')
           .select('id, supplier_company, company_1, company_2, company_3, company_4, company_5, margin, cd_condition, payment_type, deal')
           .eq('supplier_id', widget.supplierId)
           .order('created_at');
-
-      if (_medMarketers.isEmpty) {
-        final meds = await client.rpc('get_distinct_marketers');
-        final list = (meds as List)
-            .map((m) => ((m as Map)['get_distinct_marketers'] as String? ?? '').trim())
-            .where((m) => m.isNotEmpty)
-            .toList();
-        list.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
-        _medMarketers = list;
-      }
-
       if (mounted) setState(() {
         _rows = (rows as List).map((r) => Map<String, dynamic>.from(r as Map)).toList();
         _loading = false;
       });
     } catch (_) {
       if (mounted) setState(() => _loading = false);
+    }
+    // Load medicine marketers separately — failure here must not affect row display
+    if (_medMarketers.isEmpty) {
+      try {
+        final meds = await Supabase.instance.client.rpc('get_distinct_marketers');
+        final list = (meds as List)
+            .map((m) => ((m as Map)['get_distinct_marketers'] as String? ?? '').trim())
+            .where((m) => m.isNotEmpty)
+            .toList();
+        list.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+        if (mounted) setState(() => _medMarketers = list);
+      } catch (_) {}
     }
   }
 

@@ -3244,6 +3244,15 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                             onChanged: (v) => _mapped
                                 ? setState(() => _rows[ri][col] = (v == null || v.isEmpty) ? null : v)
                                 : _updateCell(_rows[ri]['id'] as String, col, v),
+                            onClear: (_rows[ri][col] != null && (_rows[ri][col] as String).isNotEmpty)
+                                ? () {
+                                    if (_mapped) {
+                                      setState(() => _rows[ri][col] = null);
+                                    } else {
+                                      _updateCell(_rows[ri]['id'] as String, col, null);
+                                    }
+                                  }
+                                : null,
                           )),
                         ],
                         const SizedBox(width: 6),
@@ -3321,7 +3330,8 @@ class _CompanyCell extends StatelessWidget {
   final String? value;
   final List<String> options;
   final ValueChanged<String?> onChanged;
-  const _CompanyCell({this.value, required this.options, required this.onChanged});
+  final VoidCallback? onClear;
+  const _CompanyCell({this.value, required this.options, required this.onChanged, this.onClear});
 
   @override
   Widget build(BuildContext context) {
@@ -3335,7 +3345,7 @@ class _CompanyCell extends StatelessWidget {
         if (result != null) onChanged(result.isEmpty ? null : result);
       },
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+        padding: const EdgeInsets.only(left: 8, top: 7, bottom: 7, right: 4),
         decoration: BoxDecoration(
           color: filled ? const Color(0xFFECFDF5) : Colors.white,
           borderRadius: BorderRadius.circular(6),
@@ -3348,6 +3358,15 @@ class _CompanyCell extends StatelessWidget {
                 color: filled ? const Color(0xFF065F46) : const Color(0xFF9CA3AF)),
             overflow: TextOverflow.ellipsis, maxLines: 1,
           )),
+          if (filled && onClear != null)
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: onClear,
+              child: const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 2),
+                child: Icon(Icons.close, size: 11, color: Color(0xFF9CA3AF)),
+              ),
+            ),
           const Icon(Icons.arrow_drop_down, size: 14, color: Color(0xFF9CA3AF)),
         ]),
       ),

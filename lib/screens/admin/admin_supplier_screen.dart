@@ -3714,7 +3714,6 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
 
   bool _loading = true;
   bool _loadCancelled = false;
-  bool _submitting = false;
   final Map<String, String?> _values = {};
 
   @override
@@ -3771,12 +3770,8 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
     }
   }
 
-  Future<void> _submitAll() async {
-    if (_submitting || !mounted) return;
-    setState(() => _submitting = true);
-    // Debug: surface supplierId validity and value state to render-log.
-    RenderLog.write('spn_submit_id_len', widget.supplierId.length);
-    RenderLog.write('spn_submit_margin_set', _values['margin'] != null ? 1 : 0);
+  Future<void> _saveOnChange() async {
+    if (!mounted) return;
     try {
       final client = Supabase.instance.client;
       final result = await client
@@ -3810,8 +3805,6 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
         content: Text('Save failed — try again'),
         backgroundColor: Color(0xFF991B1B)));
-    } finally {
-      if (mounted) setState(() => _submitting = false);
     }
   }
 
@@ -3826,7 +3819,6 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
   Widget build(BuildContext context) {
     RenderLog.write('spn_panel', 1);
     RenderLog.write('spn_dropdowns', 4);
-    RenderLog.write('spn_submit', 1);
     return Container(
       decoration: const BoxDecoration(
         color: Color(0xFFF0F7FF),
@@ -3886,8 +3878,6 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
                         const SizedBox(width: 4),
                         _hdr(col.$1),
                       ],
-                      const SizedBox(width: 4),
-                      const SizedBox(width: 72), // submit button placeholder
                       const SizedBox(width: 8),
                     ]),
                   ),
@@ -3900,37 +3890,18 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
                         Expanded(child: _CompanyCell(
                           value: _values[col.$2],
                           options: List<String>.from(_spnOptions[col.$2]!),
-                          onChanged: (v) => setState(() =>
-                              _values[col.$2] = v?.isEmpty == true ? null : v),
+                          onChanged: (v) {
+                            setState(() => _values[col.$2] = v?.isEmpty == true ? null : v);
+                            _saveOnChange();
+                          },
                           onClear: (_values[col.$2] != null && _values[col.$2]!.isNotEmpty)
-                              ? () => setState(() => _values[col.$2] = null)
+                              ? () {
+                                  setState(() => _values[col.$2] = null);
+                                  _saveOnChange();
+                                }
                               : null,
                         )),
                       ],
-                      const SizedBox(width: 4),
-                      SizedBox(
-                        width: 72,
-                        child: Center(
-                          child: _submitting
-                              ? const SizedBox(width: 20, height: 20,
-                                  child: CircularProgressIndicator(
-                                      color: Color(0xFF1B7A43), strokeWidth: 2))
-                              : GestureDetector(
-                                  onTap: _submitAll,
-                                  child: Container(
-                                    height: 36,
-                                    decoration: BoxDecoration(
-                                      color: const Color(0xFF1B7A43),
-                                      borderRadius: BorderRadius.circular(8),
-                                    ),
-                                    alignment: Alignment.center,
-                                    child: const Text('Submit',
-                                        style: TextStyle(color: Colors.white,
-                                            fontSize: 12, fontWeight: FontWeight.w600)),
-                                  ),
-                                ),
-                        ),
-                      ),
                       const SizedBox(width: 8),
                     ]),
                   ),

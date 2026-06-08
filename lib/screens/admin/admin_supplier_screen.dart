@@ -124,7 +124,8 @@ class _LeadItem {
 
 // ── Tab enum ──────────────────────────────────────────────────────────────────
 
-enum _SupFilter { suppliers, orders, pending, leads }
+enum _SupFilter  { suppliers, orders, pending, leads }
+enum _SupSortMode { spnDesc, nameAsc }
 
 // ── Screen ────────────────────────────────────────────────────────────────────
 
@@ -144,6 +145,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   bool _deletedExpanded = false;
   bool _loading = true;
   _SupFilter _filter = _SupFilter.suppliers;
+  _SupSortMode _sortMode = _SupSortMode.spnDesc;
   // Supplier detail expand — only one supplier open at a time.
   String? _expandedSupplierId;
   // Companies section — only one supplier open at a time; mutually exclusive with detail.
@@ -231,6 +233,19 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     if (id == _spnSupplierId) return;
     _spnCallbacks[id]?.call(newRow);
     if (mounted) setState(() {});
+  }
+
+  void _applySort() {
+    if (_sortMode == _SupSortMode.spnDesc) {
+      _suppliers.sort((a, b) {
+        final aSpn = (a.rawData['SPN'] as num?)?.toDouble() ?? -1;
+        final bSpn = (b.rawData['SPN'] as num?)?.toDouble() ?? -1;
+        return bSpn.compareTo(aSpn); // descending
+      });
+    } else {
+      _suppliers.sort((a, b) =>
+          a.supplierName.toLowerCase().compareTo(b.supplierName.toLowerCase()));
+    }
   }
 
   void _debouncedLoad() {
@@ -341,7 +356,9 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
             ..clear()
             ..addAll(newCounts);
           _loading     = false;
+          _applySort();
         });
+        RenderLog.write('supplier_sort_default', 'spn_desc');
       }
     } catch (e) {
       if (mounted) setState(() => _loading = false);
@@ -721,7 +738,51 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   // ═══════════════════════════════════════════════════════════════════════════
 
   Widget _buildSuppliersView(bool isDesktop) {
+    final pad = isDesktop ? 28.0 : 16.0;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Padding(
+        padding: EdgeInsets.fromLTRB(pad, 10, pad, 4),
+        child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+          const Text('Sort:', style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+          const SizedBox(width: 6),
+          Container(
+            height: 32,
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0xFFE5E7EB)),
+            ),
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<_SupSortMode>(
+                value: _sortMode,
+                isDense: true,
+                icon: const Icon(Icons.unfold_more, size: 14, color: Color(0xFF6B7280)),
+                style: const TextStyle(fontSize: 12, color: Color(0xFF111827)),
+                items: const [
+                  DropdownMenuItem(
+                    value: _SupSortMode.spnDesc,
+                    child: Text('SPN (High→Low)'),
+                  ),
+                  DropdownMenuItem(
+                    value: _SupSortMode.nameAsc,
+                    child: Text('Name (A–Z)'),
+                  ),
+                ],
+                onChanged: (mode) {
+                  if (mode == null || mode == _sortMode) return;
+                  setState(() {
+                    _sortMode = mode;
+                    _applySort();
+                  });
+                  RenderLog.write('supplier_sort_mode',
+                      mode == _SupSortMode.spnDesc ? 'spn_desc' : 'name_asc');
+                },
+              ),
+            ),
+          ),
+        ]),
+      ),
       if (_suppliers.isEmpty)
         _emptyState('0 approved suppliers')
       else ...[

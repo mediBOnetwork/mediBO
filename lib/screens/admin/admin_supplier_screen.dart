@@ -3712,6 +3712,9 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
     'payment_term': ['cash','credit'],
   };
 
+  // Frozen at initState — never re-derived from widget after that.
+  late final String _supplierId;
+
   bool _loading = true;
   bool _loadCancelled = false;
   final Map<String, String?> _values = {};
@@ -3719,47 +3722,41 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
   @override
   void initState() {
     super.initState();
-    widget.onRegister(widget.supplierId, _applyPatch);
+    _supplierId = widget.supplierId;
+    widget.onRegister(_supplierId, _applyPatch);
     _load();
   }
 
   @override
   void dispose() {
-    widget.onUnregister(widget.supplierId);
+    widget.onUnregister(_supplierId);
     super.dispose();
   }
 
-  // Called directly by parent's _patchSupplierRow on every realtime UPDATE.
+  // Called by parent on every realtime UPDATE — only update points, never overwrite user-selected values.
   void _applyPatch(Map<String, dynamic> patch) {
     if (!mounted) return;
-    _loadCancelled = true; // prevent stale _load() from overwriting fresh realtime data
-    setState(() {
-      _loading = false;
-      for (final col in _spnCols) {
-        if (patch.containsKey(col.$2)) {
-          _values[col.$2] = patch[col.$2] as String?;
-        }
-      }
-    });
+    _loadCancelled = true;
+    setState(() { _loading = false; });
   }
 
   Future<void> _load() async {
-    _loadCancelled = false; // reset so each explicit reload can complete
+    _loadCancelled = false;
     if (mounted) setState(() => _loading = true);
     try {
-      final cols = _spnCols.map((c) => c.$2).join(', ');
       final rows = await Supabase.instance.client
           .from('supplier_profiles')
-          .select(cols)
-          .eq('id', widget.supplierId)
+          .select('margin, cd_condition, behaviour, payment_type')
+          .eq('id', _supplierId)
           .limit(1);
       if (_loadCancelled) return;
       if (mounted && (rows as List).isNotEmpty) {
         final row = rows.first as Map<String, dynamic>;
         setState(() {
-          for (final col in _spnCols) {
-            _values[col.$2] = row[col.$2] as String?;
-          }
+          _values['margin']       = row['margin'] as String?;
+          _values['cd_condition'] = row['cd_condition'] as String?;
+          _values['behaviour']    = row['behaviour'] as String?;
+          _values['payment_term'] = row['payment_type'] as String?; // DB col payment_type → dropdown key payment_term
           _loading = false;
         });
       } else {
@@ -3771,18 +3768,30 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
   }
 
   Future<void> _saveOnChange() async {
+    if (_supplierId.isEmpty) {
+      RenderLog.write('spn_write_fail', 1);
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Save failed — try again'),
+        backgroundColor: Color(0xFF991B1B)));
+      return;
+    }
     if (!mounted) return;
+    // Capture values synchronously before any await.
+    final margin      = _values['margin'];
+    final cdCondition = _values['cd_condition'];
+    final behaviour   = _values['behaviour'];
+    final paymentType = _values['payment_term']; // dropdown key payment_term → DB col payment_type
     try {
       final client = Supabase.instance.client;
       final result = await client
           .from('supplier_profiles')
           .update({
-            'margin':       _values['margin'],
-            'cd_condition': _values['cd_condition'],
-            'behaviour':    _values['behaviour'],
-            'payment_type': _values['payment_term'], // payment_term dropdown → payment_type column
+            'margin':       margin,
+            'cd_condition': cdCondition,
+            'behaviour':    behaviour,
+            'payment_type': paymentType,
           })
-          .eq('id', widget.supplierId)
+          .eq('id', _supplierId)
           .select('id');
       if (!mounted) return;
       if ((result as List).isEmpty) {
@@ -3796,7 +3805,7 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
           content: Text('Saved ✓'),
           backgroundColor: Color(0xFF1B7A43)));
         client
-            .rpc('recompute_supplier_points', params: {'p_id': widget.supplierId})
+            .rpc('recompute_supplier_points', params: {'p_id': _supplierId})
             .then((_) {})
             .catchError((_) {});
       }

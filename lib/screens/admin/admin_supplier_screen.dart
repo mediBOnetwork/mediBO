@@ -161,7 +161,10 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   }
 
   @override
+  OverlayEntry? _spnOverlay;
+
   void dispose() {
+    _spnOverlay?.remove();
     _debounce?.cancel();
     for (final ch in _channels) ch.unsubscribe();
     _channels.clear();
@@ -366,16 +369,12 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     }
   }
 
-  // ── SPN anchored dropdown (2-step: pick field → edit value) ─────────────────
+  // ── SPN anchored dropdown (overlay — boxed horizontal options) ───────────────
 
-  static const _spnFields = [
-    ('Margin',        'margin'),
-    ('CD Condition',  'cd_condition'),
-    ('Behaviour',     'behaviour'),
-    ('Payment Term',  'payment_term'),
-  ];
+  void _openSpn(BuildContext btnCtx, String supplierId) {
+    _spnOverlay?.remove();
+    _spnOverlay = null;
 
-  Future<void> _openSpn(BuildContext btnCtx, String supplierId) async {
     final box    = btnCtx.findRenderObject()! as RenderBox;
     final origin = box.localToGlobal(Offset.zero);
     final btnSz  = box.size;
@@ -383,65 +382,24 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
 
     RenderLog.write('spn_dropdown_open', 1);
 
-    final menuPos = RelativeRect.fromLTRB(
-      origin.dx,
-      origin.dy + btnSz.height + 4,
-      screen.width - origin.dx - btnSz.width,
-      4,
-    );
-
-    // Step 1 — pick field
-    final picked = await showMenu<(String, String)>(
-      context: context,
-      position: menuPos,
-      constraints: const BoxConstraints(minWidth: 200),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(8),
-        side: const BorderSide(color: Color(0xFFE5E7EB)),
+    _spnOverlay = OverlayEntry(
+      builder: (_) => _SpnDropdown(
+        supplierId: supplierId,
+        anchorLeft: origin.dx,
+        anchorTop:  origin.dy + btnSz.height + 4,
+        screenWidth: screen.width,
+        onClose: () { _spnOverlay?.remove(); _spnOverlay = null; },
+        onSaved: () {
+          _spnOverlay?.remove(); _spnOverlay = null;
+          if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Supplier terms updated.'),
+            backgroundColor: Color(0xFF1B7A43),
+            duration: Duration(seconds: 2),
+          ));
+        },
       ),
-      elevation: 4,
-      color: Colors.white,
-      items: [
-        for (final (label, field) in _spnFields)
-          PopupMenuItem<(String, String)>(
-            value: (label, field),
-            padding: EdgeInsets.zero,
-            height: 44,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Text(label, style: const TextStyle(
-                  fontSize: 13, fontWeight: FontWeight.w500, color: Color(0xFF111827))),
-            ),
-          ),
-      ],
     );
-
-    if (picked == null || !mounted) return;
-    final (label, field) = picked;
-
-    // Step 2 — edit value (anchored at same position)
-    final saved = await showMenu<bool>(
-      context: context,
-      position: menuPos,
-      constraints: const BoxConstraints(minWidth: 240, maxWidth: 280),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(8),
-        side: const BorderSide(color: Color(0xFFE5E7EB)),
-      ),
-      elevation: 4,
-      color: Colors.white,
-      items: [
-        _SpnInputEntry(supplierId: supplierId, field: field, label: label),
-      ],
-    );
-
-    if (saved == true && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Supplier terms updated.'),
-        backgroundColor: Color(0xFF1B7A43),
-        duration: Duration(seconds: 2),
-      ));
-    }
+    Overlay.of(context).insert(_spnOverlay!);
   }
 
   // ── Permanent hard-delete one supplier ──────────────────────────────────────
@@ -3688,33 +3646,50 @@ class _CompanyCell extends StatelessWidget {
   }
 }
 
-// ── SPN inline edit entry (step 2 of the anchored dropdown) ──────────────────
+// ── SPN anchored overlay dropdown ────────────────────────────────────────────
 
-class _SpnInputEntry extends PopupMenuEntry<bool> {
+class _SpnDropdown extends StatefulWidget {
   final String supplierId;
-  final String field;
-  final String label;
-  const _SpnInputEntry({required this.supplierId, required this.field, required this.label});
+  final double anchorLeft;
+  final double anchorTop;
+  final double screenWidth;
+  final VoidCallback onClose;
+  final VoidCallback onSaved;
+
+  const _SpnDropdown({
+    required this.supplierId,
+    required this.anchorLeft,
+    required this.anchorTop,
+    required this.screenWidth,
+    required this.onClose,
+    required this.onSaved,
+  });
 
   @override
-  double get height => 128;
-
-  @override
-  bool represents(bool? value) => false;
-
-  @override
-  State<_SpnInputEntry> createState() => _SpnInputEntryState();
+  State<_SpnDropdown> createState() => _SpnDropdownState();
 }
 
-class _SpnInputEntryState extends State<_SpnInputEntry> {
+class _SpnDropdownState extends State<_SpnDropdown> {
+  static const _fields = [
+    ('Margin',       'margin'),
+    ('CD Condition', 'cd_condition'),
+    ('Behaviour',    'behaviour'),
+    ('Payment Term', 'payment_term'),
+  ];
+
+  static const double _panelW = 448.0;
+
+  String? _pickedLabel;
+  String? _pickedField;
   final _ctrl = TextEditingController();
-  bool _loading = true;
+  bool _loading = false;
   bool _saving  = false;
 
-  @override
-  void initState() {
-    super.initState();
-    _load();
+  double get _left {
+    final clamped = widget.anchorLeft + _panelW > widget.screenWidth
+        ? widget.screenWidth - _panelW - 8
+        : widget.anchorLeft;
+    return clamped < 8 ? 8 : clamped;
   }
 
   @override
@@ -3723,33 +3698,32 @@ class _SpnInputEntryState extends State<_SpnInputEntry> {
     super.dispose();
   }
 
-  Future<void> _load() async {
+  Future<void> _pickField(String label, String field) async {
+    setState(() { _pickedLabel = label; _pickedField = field; _loading = true; });
     try {
       final rows = await Supabase.instance.client
           .from('supplier_profiles')
-          .select(widget.field)
+          .select(field)
           .eq('id', widget.supplierId)
           .limit(1);
       if (mounted && rows.isNotEmpty) {
-        _ctrl.text = (rows.first[widget.field] as String?) ?? '';
+        _ctrl.text = (rows.first[field] as String?) ?? '';
       }
     } catch (_) {}
     if (mounted) setState(() => _loading = false);
   }
 
   Future<void> _save() async {
+    if (_pickedField == null) return;
     setState(() => _saving = true);
     try {
       final client = Supabase.instance.client;
-      // 1. Persist the edited field
-      await client
-          .from('supplier_profiles')
-          .update({widget.field: _ctrl.text.trim()})
+      await client.from('supplier_profiles')
+          .update({_pickedField!: _ctrl.text.trim()})
           .eq('id', widget.supplierId);
-      // 2. Recompute all *_points columns server-side (fire-and-forget; won't block pop)
       client.rpc('recompute_supplier_points', params: {'p_id': widget.supplierId})
           .then((_) {}).catchError((_) {});
-      if (mounted) Navigator.pop(context, true);
+      widget.onSaved();
     } catch (_) {
       if (mounted) setState(() => _saving = false);
     }
@@ -3757,56 +3731,146 @@ class _SpnInputEntryState extends State<_SpnInputEntry> {
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      width: 248,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
-        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(widget.label,
-              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
-                  color: Color(0xFF6B7280), letterSpacing: 0.3)),
-          const SizedBox(height: 6),
-          if (_loading)
-            const SizedBox(height: 36, child: Center(
-              child: SizedBox(width: 16, height: 16,
-                child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF1B7A43)))))
-          else
-            TextField(
-              controller: _ctrl,
-              autofocus: true,
-              style: const TextStyle(fontSize: 13),
-              decoration: InputDecoration(
-                isDense: true,
-                contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(6),
-                    borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
-                enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6),
-                    borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
-                focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6),
-                    borderSide: const BorderSide(color: Color(0xFF1B7A43))),
-                filled: true, fillColor: const Color(0xFFF9FAFB),
+    return Stack(children: [
+      // Barrier — outside tap closes
+      Positioned.fill(
+        child: GestureDetector(
+          onTap: widget.onClose,
+          behavior: HitTestBehavior.opaque,
+          child: const ColoredBox(color: Colors.transparent),
+        ),
+      ),
+      // Panel — stops tap propagation to barrier
+      Positioned(
+        left: _left,
+        top: widget.anchorTop,
+        child: GestureDetector(
+          onTap: () {},
+          child: Material(
+            elevation: 4,
+            borderRadius: BorderRadius.circular(8),
+            color: Colors.white,
+            child: Container(
+              width: _panelW,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFFE5E7EB)),
               ),
-              onSubmitted: (_) => _save(),
-            ),
-          const SizedBox(height: 8),
-          Align(
-            alignment: Alignment.centerRight,
-            child: SizedBox(
-              height: 28,
-              child: FilledButton(
-                onPressed: _saving ? null : _save,
-                style: FilledButton.styleFrom(
-                  backgroundColor: const Color(0xFF1B7A43),
-                  padding: const EdgeInsets.symmetric(horizontal: 14),
-                ),
-                child: _saving
-                    ? const SizedBox(width: 12, height: 12,
-                        child: CircularProgressIndicator(strokeWidth: 1.5, color: Colors.white))
-                    : const Text('Save', style: TextStyle(fontSize: 12)),
-              ),
+              child: _pickedField == null ? _buildStep1() : _buildStep2(),
             ),
           ),
-        ]),
+        ),
+      ),
+    ]);
+  }
+
+  Widget _buildStep1() {
+    RenderLog.write('spn_option_boxes', _fields.length);
+    return Row(children: [
+      for (int i = 0; i < _fields.length; i++) ...[
+        if (i > 0) const SizedBox(width: 8),
+        Expanded(child: _SpnFieldBox(
+          label: _fields[i].$1,
+          onTap: () => _pickField(_fields[i].$1, _fields[i].$2),
+        )),
+      ],
+    ]);
+  }
+
+  Widget _buildStep2() {
+    return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(children: [
+        GestureDetector(
+          onTap: () => setState(() { _pickedLabel = null; _pickedField = null; _ctrl.clear(); }),
+          child: const Icon(Icons.arrow_back_ios, size: 13, color: Color(0xFF6B7280)),
+        ),
+        const SizedBox(width: 6),
+        Text(_pickedLabel ?? '', style: const TextStyle(
+            fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
+      ]),
+      const SizedBox(height: 8),
+      if (_loading)
+        const SizedBox(height: 36, child: Center(
+          child: SizedBox(width: 16, height: 16,
+            child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF1B7A43)))))
+      else
+        TextField(
+          controller: _ctrl,
+          autofocus: true,
+          style: const TextStyle(fontSize: 13),
+          decoration: InputDecoration(
+            isDense: true,
+            contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(6),
+                borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+            enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6),
+                borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+            focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6),
+                borderSide: const BorderSide(color: Color(0xFF1B7A43))),
+            filled: true, fillColor: const Color(0xFFF9FAFB),
+          ),
+          onSubmitted: (_) => _save(),
+        ),
+      const SizedBox(height: 8),
+      Align(
+        alignment: Alignment.centerRight,
+        child: SizedBox(
+          height: 28,
+          child: FilledButton(
+            onPressed: _saving ? null : _save,
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFF1B7A43),
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+            ),
+            child: _saving
+                ? const SizedBox(width: 12, height: 12,
+                    child: CircularProgressIndicator(strokeWidth: 1.5, color: Colors.white))
+                : const Text('Save', style: TextStyle(fontSize: 12)),
+          ),
+        ),
+      ),
+    ]);
+  }
+}
+
+// ── SPN field option box (matches _CompanyCell visual style) ─────────────────
+
+class _SpnFieldBox extends StatefulWidget {
+  final String label;
+  final VoidCallback onTap;
+  const _SpnFieldBox({required this.label, required this.onTap});
+  @override
+  State<_SpnFieldBox> createState() => _SpnFieldBoxState();
+}
+
+class _SpnFieldBoxState extends State<_SpnFieldBox> {
+  bool _hovered = false;
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit:  (_) => setState(() => _hovered = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 100),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 9),
+          decoration: BoxDecoration(
+            color: _hovered ? const Color(0xFFF0F9FF) : Colors.white,
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(
+                color: _hovered ? const Color(0xFF93C5FD) : const Color(0xFFE5E7EB)),
+          ),
+          child: Text(widget.label,
+            textAlign: TextAlign.center,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+                fontSize: 12, fontWeight: FontWeight.w500, color: Color(0xFF111827)),
+          ),
+        ),
       ),
     );
   }

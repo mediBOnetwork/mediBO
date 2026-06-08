@@ -3203,19 +3203,19 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                   Padding(
                     padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
                     child: Row(children: [
-                      _hdr('SUPPLIER COMPANY', 26),
+                      _hdr('SUPPLIER COMPANY', 18),
                       const SizedBox(width: 4),
-                      _hdr('COMPANY 1', 12),
+                      _hdr('COMPANY 1', 10),
                       const SizedBox(width: 4),
-                      _hdr('COMPANY 2', 12),
+                      _hdr('COMPANY 2', 10),
                       const SizedBox(width: 4),
-                      _hdr('COMPANY 3', 12),
+                      _hdr('COMPANY 3', 10),
                       const SizedBox(width: 4),
-                      _hdr('COMPANY 4', 12),
+                      _hdr('COMPANY 4', 10),
                       const SizedBox(width: 4),
-                      _hdr('COMPANY 5', 12),
+                      _hdr('COMPANY 5', 10),
                       const SizedBox(width: 6),
-                      const SizedBox(width: 88),
+                      const SizedBox(width: 120),
                     ]),
                   ),
                   const Divider(height: 1, color: Color(0xFFDBEAFE)),
@@ -3231,14 +3231,14 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                     Padding(
                       padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
                       child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-                        Expanded(flex: 26, child: Text(
+                        Expanded(flex: 18, child: Text(
                           _rows[ri]['supplier_company'] as String? ?? '—',
                           style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
-                          maxLines: 1, overflow: TextOverflow.ellipsis,
+                          maxLines: 2, overflow: TextOverflow.ellipsis,
                         )),
                         for (final col in ['company_1','company_2','company_3','company_4','company_5']) ...[
                           const SizedBox(width: 4),
-                          Expanded(flex: 12, child: _CompanyCell(
+                          Expanded(flex: 10, child: _CompanyCell(
                             value: _rows[ri][col] as String?,
                             options: _medMarketers,
                             onChanged: (v) => _mapped
@@ -3366,17 +3366,17 @@ class _RowTrimButtons extends StatelessWidget {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        width: 22,
-        height: 22,
+        width: 18,
+        height: 20,
         alignment: Alignment.center,
         decoration: BoxDecoration(
           color: danger ? const Color(0xFFFEE2E2) : const Color(0xFFF3F4F6),
-          borderRadius: BorderRadius.circular(4),
+          borderRadius: BorderRadius.circular(3),
           border: Border.all(color: danger ? const Color(0xFFFCA5A5) : const Color(0xFFD1D5DB)),
         ),
         child: Text(label,
           style: TextStyle(
-            fontSize: 10, fontWeight: FontWeight.w600,
+            fontSize: 9, fontWeight: FontWeight.w700,
             color: danger ? const Color(0xFF991B1B) : const Color(0xFF374151),
           )),
       ),
@@ -3385,14 +3385,14 @@ class _RowTrimButtons extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // 6 pills × 18px + 5 gaps × 2px = 108 + 10 = 118px → fits in SizedBox(120)
     return SizedBox(
-      width: 88,
+      width: 120,
       child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
         for (int n = 1; n <= 5; n++) ...[
           _pill('$n', onTap: () => onTrim(n)),
-          if (n < 5) const SizedBox(width: 3),
+          const SizedBox(width: 2),
         ],
-        const SizedBox(width: 3),
         _pill('X', onTap: () => onTrim(0), danger: true),
       ]),
     );

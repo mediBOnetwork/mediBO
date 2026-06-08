@@ -2931,29 +2931,35 @@ class _CompaniesInlineSection extends StatefulWidget {
 }
 
 class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
+  static final _companyCols = List.generate(30, (i) => 'company_${i + 1}');
+
   bool _loading = true;
   bool _refreshing = false;
   bool _mapped = false;
+  int _needsReview = 0;
+  Set<int> _flaggedRows = {};
   List<Map<String, dynamic>> _rows = [];
   List<String> _medMarketers = [];
   List<String> _companyCorpus = [];
   bool _showAddForm = false;
   bool _saving = false;
   final _supplierCompanyCtrl = TextEditingController();
+  final _scrollCtrl = ScrollController();
 
   @override
   void initState() { super.initState(); _load(); }
 
   @override
-  void dispose() { _supplierCompanyCtrl.dispose(); super.dispose(); }
+  void dispose() { _supplierCompanyCtrl.dispose(); _scrollCtrl.dispose(); super.dispose(); }
 
   Future<void> _load() async {
     if (mounted) setState(() => _loading = true);
     // Fetch supplier_company rows — isolated so any error here is visible, not silently swallowed
     try {
+      final colList = _companyCols.join(', ');
       final rows = await Supabase.instance.client
           .from('supplier_company')
-          .select('id, supplier_company, company_1, company_2, company_3, company_4, company_5, margin, cd_condition, payment_type, deal')
+          .select('id, supplier_company, $colList, margin, cd_condition, payment_type, deal')
           .eq('supplier_id', widget.supplierId)
           .order('created_at');
       if (mounted) setState(() {
@@ -3074,53 +3080,89 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
     return 0.50 * er + 0.12 * tj + 0.13 * tr + 0.20 * pr + 0.05 * fw;
   }
 
-  List<String> _top5(String raw) {
-    if (raw.isEmpty || _medMarketers.isEmpty) return [];
-    final s1 = _medMarketers.map((m) => (m, _s1(raw, m))).where((p) => p.$2 > 0.05).toList()
+  // Local shortlist: top 30 candidates from corpus via 2-stage fuzzy
+  List<String> _candidateShortlist(String raw, List<String> corpus) {
+    if (raw.isEmpty || corpus.isEmpty) return [];
+    final s1r = corpus.map((m) => (m, _s1(raw, m))).where((p) => p.$2 > 0.04).toList()
       ..sort((a, b) => b.$2.compareTo(a.$2));
-    final shortlist = s1.take(60).map((p) => p.$1).toList();
-    final s2 = shortlist.map((m) => (m, _s2(raw, m))).toList()
+    final shortlist = s1r.take(80).map((p) => p.$1).toList();
+    final s2r = shortlist.map((m) => (m, _s2(raw, m))).toList()
       ..sort((a, b) => b.$2.compareTo(a.$2));
-    return s2.take(5).map((p) => p.$1).toList();
+    return s2r.take(30).map((p) => p.$1).toList();
   }
 
-  List<String> _top5corpus(String raw, List<String> corpus) {
-    if (raw.isEmpty || corpus.isEmpty) return [];
-    final s1 = corpus.map((m) => (m, _s1(raw, m))).where((p) => p.$2 > 0.05).toList()
-      ..sort((a, b) => b.$2.compareTo(a.$2));
-    final shortlist = s1.take(60).map((p) => p.$1).toList();
-    final s2 = shortlist.map((m) => (m, _s2(raw, m))).toList()
-      ..sort((a, b) => b.$2.compareTo(a.$2));
-    return s2.take(5).map((p) => p.$1).toList();
+  // Gemini: from candidates keep only same corporate group
+  Future<List<String>?> _geminiGroupFilter(String supplier, List<String> candidates) async {
+    final prompt =
+        'The supplier stocks "$supplier". From this candidate list, return ONLY the names that '
+        'genuinely belong to the SAME corporate group/parent company. Drop unrelated ones.\n'
+        'Candidates: ${jsonEncode(candidates)}\n'
+        'Return strict JSON: {"matches":[...exact strings from the list only...]}';
+    try {
+      final resp = await http.post(
+        Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$geminiApiKey'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'contents': [{'parts': [{'text': prompt}]}],
+          'generationConfig': {'responseMimeType': 'application/json'},
+        }),
+      ).timeout(const Duration(seconds: 30));
+      if (resp.statusCode != 200) return null;
+      final body = jsonDecode(resp.body) as Map<String, dynamic>;
+      final text = ((body['candidates'] as List?)?.firstOrNull
+          ?['content']?['parts'] as List?)?.firstOrNull?['text'] as String? ?? '';
+      if (text.isEmpty) return null;
+      final parsed = jsonDecode(text) as Map<String, dynamic>;
+      final matches = (parsed['matches'] as List?)?.map((e) => e.toString()).toList() ?? [];
+      final cset = candidates.toSet();
+      return matches.where((m) => cset.contains(m)).toList();
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<void> _mapCompanies() async {
     if (_rows.isEmpty) return;
-    setState(() => _refreshing = true);
+    setState(() { _refreshing = true; _needsReview = 0; _flaggedRows = {}; });
     try {
       if (_companyCorpus.isEmpty) {
-        final res = await Supabase.instance.client
-            .from('company')
-            .select('company_name');
-        final list = (res as List)
+        final res = await Supabase.instance.client.from('company').select('company_name');
+        _companyCorpus = (res as List)
             .map((r) => ((r as Map)['company_name'] as String? ?? '').trim())
             .where((s) => s.isNotEmpty)
-            .toList();
-        list.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
-        _companyCorpus = list;
+            .toList()
+          ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
       }
-      final updated = _rows.map((row) {
+      final updated = _rows.map((r) => Map<String, dynamic>.from(r)).toList();
+      int flagged = 0;
+      final flaggedSet = <int>{};
+
+      for (int ri = 0; ri < updated.length; ri++) {
+        final row = updated[ri];
         final raw = (row['supplier_company'] as String? ?? '').trim();
-        final top = _top5corpus(raw, _companyCorpus);
-        String? n(int i) => i < top.length && top[i].isNotEmpty ? top[i] : null;
-        return Map<String, dynamic>.from(row)
-          ..['company_1'] = n(0)
-          ..['company_2'] = n(1)
-          ..['company_3'] = n(2)
-          ..['company_4'] = n(3)
-          ..['company_5'] = n(4);
-      }).toList();
-      if (mounted) setState(() { _rows = updated; _mapped = true; });
+        if (raw.isEmpty) continue;
+        // Skip rows already saved (have at least one non-null company col)
+        final alreadyFilled = _companyCols.any((c) => row[c] != null && (row[c] as String).isNotEmpty);
+        if (alreadyFilled) continue;
+
+        final candidates = _candidateShortlist(raw, _companyCorpus);
+        if (candidates.isEmpty) { flagged++; flaggedSet.add(ri); continue; }
+
+        final matches = await _geminiGroupFilter(raw, candidates);
+        if (matches == null || matches.isEmpty) { flagged++; flaggedSet.add(ri); continue; }
+
+        final fill = matches.take(30).toList();
+        for (int ci = 0; ci < _companyCols.length; ci++) {
+          row[_companyCols[ci]] = ci < fill.length ? fill[ci] : null;
+        }
+      }
+
+      if (mounted) setState(() {
+        _rows = updated;
+        _mapped = true;
+        _needsReview = flagged;
+        _flaggedRows = flaggedSet;
+      });
     } finally {
       if (mounted) setState(() => _refreshing = false);
     }
@@ -3131,16 +3173,12 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
     try {
       final client = Supabase.instance.client;
       for (final row in _rows) {
-        await client.from('supplier_company').update({
-          'company_1': row['company_1'],
-          'company_2': row['company_2'],
-          'company_3': row['company_3'],
-          'company_4': row['company_4'],
-          'company_5': row['company_5'],
-        }).eq('id', row['id'] as String);
+        final update = <String, dynamic>{};
+        for (final col in _companyCols) { update[col] = row[col]; }
+        await client.from('supplier_company').update(update).eq('id', row['id'] as String);
       }
       if (mounted) {
-        setState(() => _mapped = false);
+        setState(() { _mapped = false; _needsReview = 0; _flaggedRows = {}; });
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text('Saved.'),
           backgroundColor: Color(0xFF1B7A43),
@@ -3195,81 +3233,113 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                 ]),
               ),
               const Divider(height: 1, color: Color(0xFFBFDBFE)),
-              // ── Grid (always shown: header + rows or empty message) ──────────
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 4),
-                child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                  // Fixed 6-column header — always visible
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
+              // ── Needs-review banner ──────────────────────────────────────────
+              if (_needsReview > 0)
+                Container(
+                  color: const Color(0xFFFEF3C7),
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                  child: Row(children: [
+                    const Icon(Icons.flag, size: 14, color: Color(0xFFD97706)),
+                    const SizedBox(width: 6),
+                    Text('Needs review (${ _needsReview }) — flagged rows could not be matched by Gemini.',
+                        style: const TextStyle(fontSize: 12, color: Color(0xFF92400E))),
+                  ]),
+                ),
+              // ── Grid: frozen SUPPLIER COMPANY + scrollable Company 1-30 ─────
+              if (_rows.isEmpty && !_showAddForm)
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                  child: Text('No companies linked yet.',
+                      style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
+                )
+              else
+                Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                  // Header row
+                  Container(
+                    color: const Color(0xFFF0F7FF),
                     child: Row(children: [
-                      _hdr('SUPPLIER COMPANY', 16),
-                      const SizedBox(width: 4),
-                      _hdr('COMPANY 1', 9),
-                      const SizedBox(width: 4),
-                      _hdr('COMPANY 2', 9),
-                      const SizedBox(width: 4),
-                      _hdr('COMPANY 3', 9),
-                      const SizedBox(width: 4),
-                      _hdr('COMPANY 4', 9),
-                      const SizedBox(width: 4),
-                      _hdr('COMPANY 5', 9),
-                      const SizedBox(width: 6),
-                      const SizedBox(width: 168),
+                      SizedBox(
+                        width: 190,
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(14, 7, 8, 7),
+                          child: Text('SUPPLIER COMPANY', style: const TextStyle(
+                              fontSize: 10, fontWeight: FontWeight.w700,
+                              color: Color(0xFF6B7280), letterSpacing: 0.4)),
+                        ),
+                      ),
+                      Expanded(child: SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        controller: _scrollCtrl,
+                        child: Row(children: [
+                          for (int i = 1; i <= 30; i++) ...[
+                            const SizedBox(width: 4),
+                            SizedBox(width: 120, child: Text('COMPANY $i', style: const TextStyle(
+                                fontSize: 10, fontWeight: FontWeight.w700,
+                                color: Color(0xFF6B7280), letterSpacing: 0.4),
+                              overflow: TextOverflow.ellipsis)),
+                          ],
+                          const SizedBox(width: 8),
+                        ]),
+                      )),
                     ]),
                   ),
                   const Divider(height: 1, color: Color(0xFFDBEAFE)),
-                  // Empty state row
-                  if (_rows.isEmpty && !_showAddForm)
-                    const Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 12, vertical: 14),
-                      child: Text('No companies linked yet.',
-                          style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
-                    ),
                   // Data rows
                   for (int ri = 0; ri < _rows.length; ri++) ...[
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
-                      child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-                        Expanded(flex: 16, child: Text(
-                          _rows[ri]['supplier_company'] as String? ?? '—',
-                          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
-                          maxLines: 2, overflow: TextOverflow.ellipsis,
-                        )),
-                        for (final col in ['company_1','company_2','company_3','company_4','company_5']) ...[
-                          const SizedBox(width: 4),
-                          Expanded(flex: 9, child: _CompanyCell(
-                            value: _rows[ri][col] as String?,
-                            options: _medMarketers,
-                            onChanged: (v) => _mapped
-                                ? setState(() => _rows[ri][col] = (v == null || v.isEmpty) ? null : v)
-                                : _updateCell(_rows[ri]['id'] as String, col, v),
-                            onClear: (_rows[ri][col] != null && (_rows[ri][col] as String).isNotEmpty)
-                                ? () {
-                                    if (_mapped) {
-                                      setState(() => _rows[ri][col] = null);
-                                    } else {
-                                      _updateCell(_rows[ri]['id'] as String, col, null);
-                                    }
-                                  }
-                                : null,
-                          )),
-                        ],
-                        const SizedBox(width: 6),
-                        _RowTrimButtons(
-                          onTrim: (keep) => setState(() {
-                            final cols = ['company_1','company_2','company_3','company_4','company_5'];
-                            for (int ci = 0; ci < cols.length; ci++) {
-                              if (keep == 0 || ci >= keep) _rows[ri][cols[ci]] = null;
-                            }
-                          }),
+                    IntrinsicHeight(
+                      child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                        // Frozen: supplier company name
+                        Container(
+                          width: 190,
+                          color: _flaggedRows.contains(ri) ? const Color(0xFFFFFBEB) : null,
+                          padding: const EdgeInsets.fromLTRB(14, 6, 8, 6),
+                          child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+                            if (_flaggedRows.contains(ri)) ...[
+                              const Icon(Icons.flag, size: 11, color: Color(0xFFF59E0B)),
+                              const SizedBox(width: 4),
+                            ],
+                            Expanded(child: Text(
+                              _rows[ri]['supplier_company'] as String? ?? '—',
+                              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
+                              maxLines: 2, overflow: TextOverflow.ellipsis,
+                            )),
+                          ]),
                         ),
+                        // Scrollable: Company 1-30
+                        Expanded(child: SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          controller: _scrollCtrl,
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 6),
+                            child: Row(children: [
+                              for (final col in _companyCols) ...[
+                                const SizedBox(width: 4),
+                                SizedBox(width: 120, child: _CompanyCell(
+                                  value: _rows[ri][col] as String?,
+                                  options: _medMarketers,
+                                  onChanged: (v) => _mapped
+                                      ? setState(() => _rows[ri][col] = (v == null || v.isEmpty) ? null : v)
+                                      : _updateCell(_rows[ri]['id'] as String, col, v),
+                                  onClear: (_rows[ri][col] != null && (_rows[ri][col] as String).isNotEmpty)
+                                      ? () {
+                                          if (_mapped) {
+                                            setState(() => _rows[ri][col] = null);
+                                          } else {
+                                            _updateCell(_rows[ri]['id'] as String, col, null);
+                                          }
+                                        }
+                                      : null,
+                                )),
+                              ],
+                              const SizedBox(width: 8),
+                            ]),
+                          ),
+                        )),
                       ]),
                     ),
                     if (ri < _rows.length - 1) const Divider(height: 1, color: Color(0xFFEFF6FF)),
                   ],
                 ]),
-              ),
               // ── Add-row form ─────────────────────────────────────────────────
               if (_showAddForm)
                 Padding(

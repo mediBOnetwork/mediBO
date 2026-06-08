@@ -888,6 +888,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       if (_companiesSupplierId == row.id)
         _CompaniesInlineSection(
           supplierId: row.id,
+          supplierName: row.supplierName,
           onCompanyAdded: () => _reloadCompanyCount(row.id),
         ),
       if (isExpanded) _buildDetails(row.rawData, lpad: 28, rpad: 0),
@@ -958,6 +959,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
               const Divider(height: 1, color: Color(0xFFE5E7EB)),
               _CompaniesInlineSection(
                 supplierId: row.id,
+                supplierName: row.supplierName,
                 onCompanyAdded: () => _reloadCompanyCount(row.id),
               ),
             ],
@@ -2923,8 +2925,9 @@ class _SupplierCompaniesButton extends StatelessWidget {
 
 class _CompaniesInlineSection extends StatefulWidget {
   final String supplierId;
+  final String supplierName;
   final VoidCallback onCompanyAdded;
-  const _CompaniesInlineSection({required this.supplierId, required this.onCompanyAdded});
+  const _CompaniesInlineSection({required this.supplierId, required this.supplierName, required this.onCompanyAdded});
 
   @override
   State<_CompaniesInlineSection> createState() => _CompaniesInlineSectionState();
@@ -2990,6 +2993,7 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
     try {
       await Supabase.instance.client.from('supplier_company').insert({
         'supplier_id': widget.supplierId,
+        'supplier_name': widget.supplierName,
         'supplier_company': raw,
       });
       _supplierCompanyCtrl.clear();
@@ -3816,6 +3820,7 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
           String? n(int i) => i < top.length && top[i].isNotEmpty ? top[i] : null;
           return <String, dynamic>{
             'supplier_id': supplierId,
+            'supplier_name': name,
             'supplier_company': co,
             'company_1': n(0), 'company_2': n(1), 'company_3': n(2),
             'company_4': n(3), 'company_5': n(4),

@@ -3718,6 +3718,10 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
     'payment_term': ['cash','credit'],
   };
 
+  // Survives state recreation: user-picked values keyed by supplierId.
+  // Cleared on dispose so stale values don't leak when panel is closed/reopened.
+  static final Map<String, Map<String, String?>> _userCache = {};
+
   // Frozen at initState — never re-derived from widget after that.
   late final String _supplierId;
 
@@ -3730,6 +3734,10 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
   void initState() {
     super.initState();
     _supplierId = widget.supplierId;
+    // Restore any user-picked values from before state recreation.
+    if (_userCache.containsKey(_supplierId)) {
+      _values.addAll(_userCache[_supplierId]!);
+    }
     widget.onRegister(_supplierId, _applyPatch);
     _load();
   }
@@ -3737,6 +3745,7 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
   @override
   void dispose() {
     widget.onUnregister(_supplierId);
+    _userCache.remove(_supplierId); // clean up when panel is closed
     super.dispose();
   }
 
@@ -3759,11 +3768,13 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
       if (_loadCancelled) return;
       if (mounted && (rows as List).isNotEmpty) {
         final row = rows.first as Map<String, dynamic>;
+        // User-cached values take precedence — never overwrite a user pick with a stale DB reload.
+        final cached = _userCache[_supplierId] ?? {};
         setState(() {
-          _values['margin']       = row['margin'] as String?;
-          _values['cd_condition'] = row['cd_condition'] as String?;
-          _values['behaviour']    = row['behaviour'] as String?;
-          _values['payment_term'] = row['payment_type'] as String?; // DB col payment_type → dropdown key payment_term
+          _values['margin']       = cached['margin']       ?? row['margin'] as String?;
+          _values['cd_condition'] = cached['cd_condition'] ?? row['cd_condition'] as String?;
+          _values['behaviour']    = cached['behaviour']    ?? row['behaviour'] as String?;
+          _values['payment_term'] = cached['payment_term'] ?? row['payment_type'] as String?;
           _loading = false;
         });
       } else {
@@ -3896,6 +3907,8 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
                             _changeCounter++;
                             RenderLog.write('spn_change_count', _changeCounter.toString());
                             RenderLog.write('spn_change_last', '$field=$val@${DateTime.now().millisecondsSinceEpoch}');
+                            // Cache the pick so it survives state recreation.
+                            (_userCache[_supplierId] ??= {})[field] = val;
                             setState(() => _values[field] = val);
                             _writeField(field, val);
                           },

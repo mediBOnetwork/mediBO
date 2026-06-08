@@ -3103,11 +3103,12 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
     }
   }
 
-  Widget _hdr(String label, double w) => SizedBox(
-    width: w,
+  Widget _hdr(String label, int flex) => Expanded(
+    flex: flex,
     child: Text(label, style: const TextStyle(
         fontSize: 10, fontWeight: FontWeight.w700,
-        color: Color(0xFF6B7280), letterSpacing: 0.4)),
+        color: Color(0xFF6B7280), letterSpacing: 0.4),
+      overflow: TextOverflow.ellipsis),
   );
 
   @override
@@ -3144,73 +3145,58 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
               ),
               const Divider(height: 1, color: Color(0xFFBFDBFE)),
               // ── Grid (always shown: header + rows or empty message) ──────────
-              Listener(
-                onPointerSignal: (e) {
-                  if (e is PointerScrollEvent) {
-                    final outer = PrimaryScrollController.of(context);
-                    if (outer.hasClients) {
-                      final dy = e.scrollDelta.dy;
-                      final next = (outer.offset + dy).clamp(0.0, outer.position.maxScrollExtent);
-                      outer.jumpTo(next);
-                    }
-                  }
-                },
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 4),
-                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      // Fixed 6-column header — always visible
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
-                        child: Row(children: [
-                          _hdr('SUPPLIER COMPANY', 260),
-                          const SizedBox(width: 4),
-                          _hdr('COMPANY 1', 130),
-                          const SizedBox(width: 4),
-                          _hdr('COMPANY 2', 130),
-                          const SizedBox(width: 4),
-                          _hdr('COMPANY 3', 130),
-                          const SizedBox(width: 4),
-                          _hdr('COMPANY 4', 130),
-                          const SizedBox(width: 4),
-                          _hdr('COMPANY 5', 130),
-                        ]),
-                      ),
-                      const Divider(height: 1, color: Color(0xFFDBEAFE)),
-                      // Empty state row
-                      if (_rows.isEmpty && !_showAddForm)
-                        const Padding(
-                          padding: EdgeInsets.symmetric(horizontal: 12, vertical: 14),
-                          child: Text('No companies linked yet.',
-                              style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
-                        ),
-                      // Data rows
-                      for (int ri = 0; ri < _rows.length; ri++) ...[
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-                          child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-                            SizedBox(width: 260, child: Text(
-                              _rows[ri]['supplier_company'] as String? ?? '—',
-                              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
-                              maxLines: 1, overflow: TextOverflow.ellipsis,
-                            )),
-                            for (final col in ['company_1','company_2','company_3','company_4','company_5']) ...[
-                              const SizedBox(width: 4),
-                              _CompanyCell(
-                                value: _rows[ri][col] as String?,
-                                options: _medMarketers,
-                                onChanged: (v) => _updateCell(_rows[ri]['id'] as String, col, v),
-                              ),
-                            ],
-                          ]),
-                        ),
-                        if (ri < _rows.length - 1) const Divider(height: 1, color: Color(0xFFEFF6FF)),
-                      ],
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                  // Fixed 6-column header — always visible
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
+                    child: Row(children: [
+                      _hdr('SUPPLIER COMPANY', 26),
+                      const SizedBox(width: 4),
+                      _hdr('COMPANY 1', 14),
+                      const SizedBox(width: 4),
+                      _hdr('COMPANY 2', 14),
+                      const SizedBox(width: 4),
+                      _hdr('COMPANY 3', 14),
+                      const SizedBox(width: 4),
+                      _hdr('COMPANY 4', 14),
+                      const SizedBox(width: 4),
+                      _hdr('COMPANY 5', 14),
                     ]),
                   ),
-                ), // SingleChildScrollView
-              ), // Listener
+                  const Divider(height: 1, color: Color(0xFFDBEAFE)),
+                  // Empty state row
+                  if (_rows.isEmpty && !_showAddForm)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+                      child: Text('No companies linked yet.',
+                          style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
+                    ),
+                  // Data rows
+                  for (int ri = 0; ri < _rows.length; ri++) ...[
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
+                      child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+                        Expanded(flex: 26, child: Text(
+                          _rows[ri]['supplier_company'] as String? ?? '—',
+                          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
+                          maxLines: 1, overflow: TextOverflow.ellipsis,
+                        )),
+                        for (final col in ['company_1','company_2','company_3','company_4','company_5']) ...[
+                          const SizedBox(width: 4),
+                          Expanded(flex: 14, child: _CompanyCell(
+                            value: _rows[ri][col] as String?,
+                            options: _medMarketers,
+                            onChanged: (v) => _updateCell(_rows[ri]['id'] as String, col, v),
+                          )),
+                        ],
+                      ]),
+                    ),
+                    if (ri < _rows.length - 1) const Divider(height: 1, color: Color(0xFFEFF6FF)),
+                  ],
+                ]),
+              ),
               // ── Add-row form ─────────────────────────────────────────────────
               if (_showAddForm)
                 Padding(
@@ -3285,7 +3271,6 @@ class _CompanyCell extends StatelessWidget {
         if (result != null) onChanged(result.isEmpty ? null : result);
       },
       child: Container(
-        width: 130,
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
         decoration: BoxDecoration(
           color: filled ? const Color(0xFFECFDF5) : Colors.white,

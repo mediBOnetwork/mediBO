@@ -13,6 +13,7 @@ import 'package:syncfusion_flutter_pdf/pdf.dart';
 import 'package:xml/xml.dart' as xmlp;
 
 import '../../config/api_keys.dart';
+import '../../supabase_config.dart';
 import '../../utils/render_log.dart';
 
 // ── Supplier row models ───────────────────────────────────────────────────────
@@ -3769,7 +3770,7 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
 
   Future<void> _saveOnChange() async {
     if (_supplierId.isEmpty) {
-      RenderLog.write('spn_write_fail', 1);
+      RenderLog.write('spn_write_fail_null_id', 1);
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
         content: Text('Save failed — try again'),
         backgroundColor: Color(0xFF991B1B)));
@@ -3782,8 +3783,9 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
     final behaviour   = _values['behaviour'];
     final paymentType = _values['payment_term']; // dropdown key payment_term → DB col payment_type
     try {
-      final client = Supabase.instance.client;
-      final result = await client
+      // Use service_role client — RLS blocks anon key writes to supplier_profiles.
+      final adminClient = SupabaseClient(SupabaseConfig.url, supabaseServiceKey);
+      final result = await adminClient
           .from('supplier_profiles')
           .update({
             'margin':       margin,
@@ -3795,7 +3797,7 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
           .select('id');
       if (!mounted) return;
       if ((result as List).isEmpty) {
-        RenderLog.write('spn_write_fail', 1);
+        RenderLog.write('spn_write_fail_0rows', 1);
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text('Save failed — try again'),
           backgroundColor: Color(0xFF991B1B)));
@@ -3804,13 +3806,13 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text('Saved ✓'),
           backgroundColor: Color(0xFF1B7A43)));
-        client
+        adminClient
             .rpc('recompute_supplier_points', params: {'p_id': _supplierId})
             .then((_) {})
             .catchError((_) {});
       }
-    } catch (_) {
-      RenderLog.write('spn_write_fail', 1);
+    } catch (e) {
+      RenderLog.write('spn_write_exception', 1);
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
         content: Text('Save failed — try again'),
         backgroundColor: Color(0xFF991B1B)));

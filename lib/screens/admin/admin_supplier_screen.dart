@@ -2937,7 +2937,9 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
   static final _companyCols = List.generate(30, (i) => 'company_${i + 1}');
 
   bool _loading = true;
-  bool _refreshing = false;
+  // null = idle, 'manual' = manual fuzzy running, 'ai' = Gemini running, 'fallback' = fallback running, 'save' = saving
+  String? _mappingMode;
+  bool get _refreshing => _mappingMode != null;
   bool _mapped = false;
   int _needsReview = 0;
   Set<int> _flaggedRows = {};
@@ -3127,7 +3129,7 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
 
   Future<void> _mapCompanies() async {
     if (_rows.isEmpty) return;
-    setState(() { _refreshing = true; _needsReview = 0; _flaggedRows = {}; });
+    setState(() { _mappingMode = 'ai'; _needsReview = 0; _flaggedRows = {}; });
     try {
       if (_companyCorpus.isEmpty) {
         final res = await Supabase.instance.client.from('company').select('company_name');
@@ -3164,13 +3166,13 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
         _flaggedRows = flaggedSet;
       });
     } finally {
-      if (mounted) setState(() => _refreshing = false);
+      if (mounted) setState(() => _mappingMode = null);
     }
   }
 
   Future<void> _mapCompaniesManual() async {
     if (_rows.isEmpty) return;
-    setState(() { _refreshing = true; _needsReview = 0; _flaggedRows = {}; });
+    setState(() { _mappingMode = 'manual'; _needsReview = 0; _flaggedRows = {}; });
     try {
       if (_companyCorpus.isEmpty) {
         final res = await Supabase.instance.client.from('company').select('company_name');
@@ -3191,12 +3193,42 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
       }
       if (mounted) setState(() { _rows = updated; _mapped = true; });
     } finally {
-      if (mounted) setState(() => _refreshing = false);
+      if (mounted) setState(() => _mappingMode = null);
+    }
+  }
+
+  // Fallback: run local fuzzy ONLY on flagged/blank rows, leave AI-matched rows untouched
+  Future<void> _matchManuallyFallback() async {
+    if (_rows.isEmpty || _flaggedRows.isEmpty) return;
+    setState(() => _mappingMode = 'fallback');
+    try {
+      if (_companyCorpus.isEmpty) {
+        final res = await Supabase.instance.client.from('company').select('company_name');
+        _companyCorpus = (res as List)
+            .map((r) => ((r as Map)['company_name'] as String? ?? '').trim())
+            .where((s) => s.isNotEmpty)
+            .toList()
+          ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+      }
+      final updated = _rows.map((r) => Map<String, dynamic>.from(r)).toList();
+      for (final ri in _flaggedRows) {
+        if (ri >= updated.length) continue;
+        final row = updated[ri];
+        final raw = (row['supplier_company'] as String? ?? '').trim();
+        if (raw.isEmpty) continue;
+        final matches = _candidateShortlist(raw, _companyCorpus);
+        for (int ci = 0; ci < _companyCols.length; ci++) {
+          row[_companyCols[ci]] = ci < matches.length ? matches[ci] : null;
+        }
+      }
+      if (mounted) setState(() { _rows = updated; _needsReview = 0; _flaggedRows = {}; });
+    } finally {
+      if (mounted) setState(() => _mappingMode = null);
     }
   }
 
   Future<void> _saveMatches() async {
-    setState(() => _refreshing = true);
+    setState(() => _mappingMode = 'save');
     try {
       final client = Supabase.instance.client;
       for (final row in _rows) {
@@ -3213,7 +3245,7 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
         ));
       }
     } finally {
-      if (mounted) setState(() => _refreshing = false);
+      if (mounted) setState(() => _mappingMode = null);
     }
   }
 
@@ -3244,25 +3276,39 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                       style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF374151))),
                   const Spacer(),
                   if (_rows.isNotEmpty) ...[
-                    if (_mapped)
+                    if (_mapped) ...[
+                      // Fallback: show only when AI left flagged rows
+                      if (_needsReview > 0)
+                        TextButton.icon(
+                          onPressed: _mappingMode != null ? null : _matchManuallyFallback,
+                          icon: _mappingMode == 'fallback'
+                              ? const SizedBox(width: 13, height: 13, child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF6B7280)))
+                              : const Icon(Icons.tune, size: 15),
+                          label: Text(_mappingMode == 'fallback' ? 'Matching…' : 'Match Manually',
+                              style: const TextStyle(fontSize: 12)),
+                          style: TextButton.styleFrom(
+                              foregroundColor: const Color(0xFF6B7280),
+                              visualDensity: VisualDensity.compact),
+                        ),
+                      if (_needsReview > 0) const SizedBox(width: 4),
                       TextButton.icon(
-                        onPressed: _refreshing ? null : _saveMatches,
-                        icon: _refreshing
+                        onPressed: _mappingMode != null ? null : _saveMatches,
+                        icon: _mappingMode == 'save'
                             ? const SizedBox(width: 13, height: 13, child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF1B7A43)))
                             : const Icon(Icons.save_outlined, size: 15),
-                        label: Text(_refreshing ? 'Saving…' : 'Save',
+                        label: Text(_mappingMode == 'save' ? 'Saving…' : 'Save',
                             style: const TextStyle(fontSize: 12)),
                         style: TextButton.styleFrom(
                             foregroundColor: const Color(0xFF1B7A43),
                             visualDensity: VisualDensity.compact),
-                      )
-                    else ...[
+                      ),
+                    ] else ...[
                       TextButton.icon(
-                        onPressed: _refreshing ? null : _mapCompaniesManual,
-                        icon: _refreshing
+                        onPressed: _mappingMode != null ? null : _mapCompaniesManual,
+                        icon: _mappingMode == 'manual'
                             ? const SizedBox(width: 13, height: 13, child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF6B7280)))
                             : const Icon(Icons.tune, size: 15),
-                        label: Text(_refreshing ? 'Matching…' : 'Map Companies Manually',
+                        label: Text(_mappingMode == 'manual' ? 'Matching…' : 'Map Companies Manually',
                             style: const TextStyle(fontSize: 12)),
                         style: TextButton.styleFrom(
                             foregroundColor: const Color(0xFF6B7280),
@@ -3270,11 +3316,11 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                       ),
                       const SizedBox(width: 4),
                       TextButton.icon(
-                        onPressed: _refreshing ? null : _mapCompanies,
-                        icon: _refreshing
+                        onPressed: _mappingMode != null ? null : _mapCompanies,
+                        icon: _mappingMode == 'ai'
                             ? const SizedBox(width: 13, height: 13, child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF2563EB)))
                             : const Icon(Icons.auto_awesome, size: 15),
-                        label: Text(_refreshing ? 'Matching…' : 'Map Companies by AI',
+                        label: Text(_mappingMode == 'ai' ? 'Matching…' : 'Map Companies by AI',
                             style: const TextStyle(fontSize: 12)),
                         style: TextButton.styleFrom(
                             foregroundColor: const Color(0xFF2563EB),

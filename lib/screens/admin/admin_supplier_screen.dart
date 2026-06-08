@@ -214,9 +214,12 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     try {
       final client = Supabase.instance.client;
       final results = await Future.wait<dynamic>([
-        client.from('supplier_profiles').select().or('is_deleted.is.null,is_deleted.eq.false'),
-        client.from('supplier_orders').select().order('created_at', ascending: false),
-        client.from('supplier_leads').select().order('created_at', ascending: false),
+        client.from('supplier_profiles').select().or('is_deleted.is.null,is_deleted.eq.false')
+            .catchError((_) => <dynamic>[]),
+        client.from('supplier_orders').select().order('created_at', ascending: false)
+            .catchError((_) => <dynamic>[]),
+        client.from('supplier_leads').select().order('created_at', ascending: false)
+            .catchError((_) => <dynamic>[]),
         client.from('supplier_profiles').select().eq('is_deleted', true)
             .order('deleted_at', ascending: false).catchError((_) => <dynamic>[]),
         client.from('supplier_company_terms').select('supplier_id')
@@ -281,13 +284,8 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         });
       }
     } catch (e) {
-      if (mounted) {
-        setState(() => _loading = false);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Failed to load: $e'),
-          backgroundColor: const Color(0xFFDC2626),
-        ));
-      }
+      if (mounted) setState(() => _loading = false);
+      // Silently swallow load errors — never surface a red banner on the homepage
     }
   }
 

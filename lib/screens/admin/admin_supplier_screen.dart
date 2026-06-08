@@ -3744,6 +3744,7 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
   }
 
   Future<void> _load() async {
+    _loadCancelled = false; // reset so each explicit reload can complete
     if (mounted) setState(() => _loading = true);
     try {
       final cols = _spnCols.map((c) => c.$2).join(', ');
@@ -3807,6 +3808,7 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
   Widget build(BuildContext context) {
     RenderLog.write('spn_panel', 1);
     RenderLog.write('spn_dropdowns', 4);
+    RenderLog.write('spn_update_policy', 1);
     return Container(
       decoration: const BoxDecoration(
         color: Color(0xFFF0F7FF),

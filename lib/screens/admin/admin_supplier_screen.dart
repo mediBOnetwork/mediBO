@@ -3168,6 +3168,33 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
     }
   }
 
+  Future<void> _mapCompaniesManual() async {
+    if (_rows.isEmpty) return;
+    setState(() { _refreshing = true; _needsReview = 0; _flaggedRows = {}; });
+    try {
+      if (_companyCorpus.isEmpty) {
+        final res = await Supabase.instance.client.from('company').select('company_name');
+        _companyCorpus = (res as List)
+            .map((r) => ((r as Map)['company_name'] as String? ?? '').trim())
+            .where((s) => s.isNotEmpty)
+            .toList()
+          ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+      }
+      final updated = _rows.map((r) => Map<String, dynamic>.from(r)).toList();
+      for (final row in updated) {
+        final raw = (row['supplier_company'] as String? ?? '').trim();
+        if (raw.isEmpty) continue;
+        final matches = _candidateShortlist(raw, _companyCorpus);
+        for (int ci = 0; ci < _companyCols.length; ci++) {
+          row[_companyCols[ci]] = ci < matches.length ? matches[ci] : null;
+        }
+      }
+      if (mounted) setState(() { _rows = updated; _mapped = true; });
+    } finally {
+      if (mounted) setState(() => _refreshing = false);
+    }
+  }
+
   Future<void> _saveMatches() async {
     setState(() => _refreshing = true);
     try {
@@ -3216,20 +3243,45 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                   const Text("Supplier's Companies",
                       style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF374151))),
                   const Spacer(),
-                  if (_rows.isNotEmpty)
-                    TextButton.icon(
-                      onPressed: _refreshing ? null : (_mapped ? _saveMatches : _mapCompanies),
-                      icon: _refreshing
-                          ? const SizedBox(width: 13, height: 13, child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF2563EB)))
-                          : Icon(_mapped ? Icons.save_outlined : Icons.auto_awesome, size: 15),
-                      label: Text(
-                        _refreshing ? 'Matching…' : (_mapped ? 'Save' : 'Map Companies'),
-                        style: const TextStyle(fontSize: 12),
+                  if (_rows.isNotEmpty) ...[
+                    if (_mapped)
+                      TextButton.icon(
+                        onPressed: _refreshing ? null : _saveMatches,
+                        icon: _refreshing
+                            ? const SizedBox(width: 13, height: 13, child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF1B7A43)))
+                            : const Icon(Icons.save_outlined, size: 15),
+                        label: Text(_refreshing ? 'Saving…' : 'Save',
+                            style: const TextStyle(fontSize: 12)),
+                        style: TextButton.styleFrom(
+                            foregroundColor: const Color(0xFF1B7A43),
+                            visualDensity: VisualDensity.compact),
+                      )
+                    else ...[
+                      TextButton.icon(
+                        onPressed: _refreshing ? null : _mapCompaniesManual,
+                        icon: _refreshing
+                            ? const SizedBox(width: 13, height: 13, child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF6B7280)))
+                            : const Icon(Icons.tune, size: 15),
+                        label: Text(_refreshing ? 'Matching…' : 'Map Companies Manually',
+                            style: const TextStyle(fontSize: 12)),
+                        style: TextButton.styleFrom(
+                            foregroundColor: const Color(0xFF6B7280),
+                            visualDensity: VisualDensity.compact),
                       ),
-                      style: TextButton.styleFrom(
-                          foregroundColor: _mapped ? const Color(0xFF1B7A43) : const Color(0xFF2563EB),
-                          visualDensity: VisualDensity.compact),
-                    ),
+                      const SizedBox(width: 4),
+                      TextButton.icon(
+                        onPressed: _refreshing ? null : _mapCompanies,
+                        icon: _refreshing
+                            ? const SizedBox(width: 13, height: 13, child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF2563EB)))
+                            : const Icon(Icons.auto_awesome, size: 15),
+                        label: Text(_refreshing ? 'Matching…' : 'Map Companies by AI',
+                            style: const TextStyle(fontSize: 12)),
+                        style: TextButton.styleFrom(
+                            foregroundColor: const Color(0xFF2563EB),
+                            visualDensity: VisualDensity.compact),
+                      ),
+                    ],
+                  ],
                 ]),
               ),
               const Divider(height: 1, color: Color(0xFFBFDBFE)),

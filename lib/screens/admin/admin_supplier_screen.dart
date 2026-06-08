@@ -3402,37 +3402,40 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                       const Divider(height: 1, color: Color(0xFFDBEAFE)),
                       // Data cells
                       for (int ri = 0; ri < _rows.length; ri++) ...[
-                        Container(
+                        SizedBox(
                           height: 44,
-                          color: _flaggedRows.contains(ri) ? const Color(0xFFFFFBEB) : null,
-                          alignment: Alignment.centerLeft,
-                          padding: const EdgeInsets.fromLTRB(8, 0, 8, 0),
-                          child: Row(children: [
-                            GestureDetector(
-                              onTap: _openSpn,
-                              child: Container(
-                                width: 30, height: 20,
-                                alignment: Alignment.center,
-                                decoration: BoxDecoration(
-                                  color: Colors.white,
-                                  borderRadius: BorderRadius.circular(4),
-                                  border: Border.all(color: const Color(0xFFD1D5DB)),
+                          child: ColoredBox(
+                            color: _flaggedRows.contains(ri) ? const Color(0xFFFFFBEB) : Colors.transparent,
+                            child: Padding(
+                              padding: const EdgeInsets.fromLTRB(8, 0, 8, 0),
+                              child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+                                GestureDetector(
+                                  onTap: _openSpn,
+                                  child: Container(
+                                    width: 30, height: 20,
+                                    alignment: Alignment.center,
+                                    decoration: BoxDecoration(
+                                      color: Colors.white,
+                                      borderRadius: BorderRadius.circular(4),
+                                      border: Border.all(color: const Color(0xFFD1D5DB)),
+                                    ),
+                                    child: const Text('SPN', style: TextStyle(
+                                        fontSize: 8, fontWeight: FontWeight.w700, color: Color(0xFF374151))),
+                                  ),
                                 ),
-                                child: const Text('SPN', style: TextStyle(
-                                    fontSize: 8, fontWeight: FontWeight.w700, color: Color(0xFF374151))),
-                              ),
+                                const SizedBox(width: 6),
+                                if (_flaggedRows.contains(ri)) ...[
+                                  const Icon(Icons.flag, size: 11, color: Color(0xFFF59E0B)),
+                                  const SizedBox(width: 4),
+                                ],
+                                Expanded(child: Text(
+                                  _rows[ri]['supplier_company'] as String? ?? '—',
+                                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
+                                  maxLines: 1, overflow: TextOverflow.ellipsis,
+                                )),
+                              ]),
                             ),
-                            const SizedBox(width: 6),
-                            if (_flaggedRows.contains(ri)) ...[
-                              const Icon(Icons.flag, size: 11, color: Color(0xFFF59E0B)),
-                              const SizedBox(width: 4),
-                            ],
-                            Expanded(child: Text(
-                              _rows[ri]['supplier_company'] as String? ?? '—',
-                              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
-                              maxLines: 1, overflow: TextOverflow.ellipsis,
-                            )),
-                          ]),
+                          ),
                         ),
                         if (ri < _rows.length - 1) const Divider(height: 1, color: Color(0xFFEFF6FF)),
                       ],

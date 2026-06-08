@@ -3366,6 +3366,28 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
     } catch (_) {}
   }
 
+  // ── Company corpus: service_role fetch so RLS never blocks it ────────────────
+  Future<void> _ensureCorpus() async {
+    if (_companyCorpus.isNotEmpty) return;
+    try {
+      final resp = await http.get(
+        Uri.parse('${SupabaseConfig.url}/rest/v1/company?select=company_name&order=company_name'),
+        headers: {
+          'apikey': supabaseServiceKey,
+          'Authorization': 'Bearer $supabaseServiceKey',
+        },
+      );
+      if (resp.statusCode == 200) {
+        final rows = jsonDecode(resp.body) as List;
+        _companyCorpus = rows
+            .map((r) => ((r as Map)['company_name'] as String? ?? '').trim())
+            .where((s) => s.isNotEmpty)
+            .toList()
+          ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+      }
+    } catch (_) {}
+  }
+
   // ── 2-stage fuzzy matcher (trigram → DL, same weights as bulk_upload) ────────
   String _normS(String s) =>
       s.toLowerCase().replaceAll(RegExp(r'[^a-z0-9\s]'), ' ').trim().replaceAll(RegExp(r'\s+'), ' ');
@@ -3448,13 +3470,20 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
   // Gemini: from candidates keep only same corporate group
   Future<List<String>?> _geminiGroupFilter(String supplier, List<String> candidates) async {
     final prompt =
-        'The supplier stocks "$supplier". From this candidate list, return ONLY the names that '
-        'genuinely belong to the SAME corporate group/parent company. Drop unrelated ones.\n'
+        'You are a pharmaceutical company name matcher.\n'
+        'The supplier works with "$supplier".\n'
+        'From the candidate list below, select ONLY the entries that belong to the same '
+        'corporate group or parent company as "$supplier".\n'
+        'STRICT RULES — violating any rule makes the response invalid:\n'
+        '  1. Return ONLY strings that appear VERBATIM in the candidates list.\n'
+        '  2. Do NOT generate, invent, paraphrase, or modify any names.\n'
+        '  3. If no candidates match, return {"matches":[]}.\n'
         'Candidates: ${jsonEncode(candidates)}\n'
-        'Return strict JSON: {"matches":[...exact strings from the list only...]}';
+        'Respond with ONLY this JSON (no explanation, no markdown): '
+        '{"matches":[...exact verbatim strings from candidates only...]}';
     try {
       final resp = await http.post(
-        Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$geminiApiKey'),
+        Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=$geminiApiKey'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
           'contents': [{'parts': [{'text': prompt}]}],
@@ -3467,9 +3496,11 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
           ?['content']?['parts'] as List?)?.firstOrNull?['text'] as String? ?? '';
       if (text.isEmpty) return null;
       final parsed = jsonDecode(text) as Map<String, dynamic>;
-      final matches = (parsed['matches'] as List?)?.map((e) => e.toString()).toList() ?? [];
+      final rawMatches = (parsed['matches'] as List?)?.map((e) => e.toString()).toList() ?? [];
+      // Hard filter: only strings present verbatim in BOTH the shortlist AND the full corpus
       final cset = candidates.toSet();
-      return matches.where((m) => cset.contains(m)).toList();
+      final corpusSet = _companyCorpus.toSet();
+      return rawMatches.where((m) => cset.contains(m) && corpusSet.contains(m)).toList();
     } catch (_) {
       return null;
     }
@@ -3479,14 +3510,7 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
     if (_rows.isEmpty) return;
     setState(() { _mappingMode = 'ai'; _needsReview = 0; _flaggedRows = {}; });
     try {
-      if (_companyCorpus.isEmpty) {
-        final res = await Supabase.instance.client.from('company').select('company_name');
-        _companyCorpus = (res as List)
-            .map((r) => ((r as Map)['company_name'] as String? ?? '').trim())
-            .where((s) => s.isNotEmpty)
-            .toList()
-          ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
-      }
+      await _ensureCorpus();
       final updated = _rows.map((r) => Map<String, dynamic>.from(r)).toList();
       int flagged = 0;
       final flaggedSet = <int>{};
@@ -3522,23 +3546,23 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
     if (_rows.isEmpty) return;
     setState(() { _mappingMode = 'manual'; _needsReview = 0; _flaggedRows = {}; });
     try {
-      if (_companyCorpus.isEmpty) {
-        final res = await Supabase.instance.client.from('company').select('company_name');
-        _companyCorpus = (res as List)
-            .map((r) => ((r as Map)['company_name'] as String? ?? '').trim())
-            .where((s) => s.isNotEmpty)
-            .toList()
-          ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
-      }
+      await _ensureCorpus();
+      final corpusSet = _companyCorpus.toSet();
       final updated = _rows.map((r) => Map<String, dynamic>.from(r)).toList();
+      int writeCount = 0;
       for (final row in updated) {
         final raw = (row['supplier_company'] as String? ?? '').trim();
         if (raw.isEmpty) continue;
-        final matches = _candidateShortlist(raw, _companyCorpus);
+        // Only keep matches that are confirmed in the corpus set (belt+suspenders)
+        final matches = _candidateShortlist(raw, _companyCorpus)
+            .where((m) => corpusSet.contains(m))
+            .toList();
+        if (matches.isNotEmpty) writeCount++;
         for (int ci = 0; ci < _companyCols.length; ci++) {
           row[_companyCols[ci]] = ci < matches.length ? matches[ci] : null;
         }
       }
+      RenderLog.write('company_map_written', writeCount);
       if (mounted) setState(() { _rows = updated; _mapped = true; });
     } finally {
       if (mounted) setState(() => _mappingMode = null);
@@ -3550,21 +3574,17 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
     if (_rows.isEmpty || _flaggedRows.isEmpty) return;
     setState(() => _mappingMode = 'fallback');
     try {
-      if (_companyCorpus.isEmpty) {
-        final res = await Supabase.instance.client.from('company').select('company_name');
-        _companyCorpus = (res as List)
-            .map((r) => ((r as Map)['company_name'] as String? ?? '').trim())
-            .where((s) => s.isNotEmpty)
-            .toList()
-          ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
-      }
+      await _ensureCorpus();
+      final corpusSet = _companyCorpus.toSet();
       final updated = _rows.map((r) => Map<String, dynamic>.from(r)).toList();
       for (final ri in _flaggedRows) {
         if (ri >= updated.length) continue;
         final row = updated[ri];
         final raw = (row['supplier_company'] as String? ?? '').trim();
         if (raw.isEmpty) continue;
-        final matches = _candidateShortlist(raw, _companyCorpus);
+        final matches = _candidateShortlist(raw, _companyCorpus)
+            .where((m) => corpusSet.contains(m))
+            .toList();
         for (int ci = 0; ci < _companyCols.length; ci++) {
           row[_companyCols[ci]] = ci < matches.length ? matches[ci] : null;
         }

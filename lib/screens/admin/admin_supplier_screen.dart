@@ -150,7 +150,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   String? _spnSupplierId;
   final Set<String> _expandedLeads = {};
   final Map<String, int> _companyCounts = {};
-  final Map<String, Map<String, dynamic>> _spnCache = {};
+  final Map<String, void Function(Map<String, dynamic>)> _spnCallbacks = {};
   final ScrollController _scrollCtrl = ScrollController();
   final List<RealtimeChannel> _channels = [];
   Timer? _debounce;
@@ -225,12 +225,8 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         if (newRow.containsKey(k)) _suppliers[idx].rawData[k] = newRow[k];
       }
     }
-    // New map reference each time → didUpdateWidget detects change by identity.
-    final patch = <String, dynamic>{};
-    for (final k in _spnPatchKeys) {
-      patch[k] = newRow[k];
-    }
-    _spnCache[id] = patch;
+    // Direct callback to any open SPN panel for this supplier.
+    _spnCallbacks[id]?.call(newRow);
     if (mounted) setState(() {});
   }
 
@@ -967,7 +963,12 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           onCompanyAdded: () => _reloadCompanyCount(row.id),
         ),
       if (_spnSupplierId == row.id)
-        _SpnInlineSection(supplierId: row.id, supplierName: row.supplierName, realtimeData: _spnCache[row.id]),
+        _SpnInlineSection(
+                supplierId: row.id,
+                supplierName: row.supplierName,
+                onRegister: (id, cb) => _spnCallbacks[id] = cb,
+                onUnregister: (id) => _spnCallbacks.remove(id),
+              ),
       if (isExpanded) _buildDetails(row.rawData, lpad: 28, rpad: 0),
     ]);
   }
@@ -1056,7 +1057,12 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
             ],
             if (_spnSupplierId == row.id) ...[
               const Divider(height: 1, color: Color(0xFFE5E7EB)),
-              _SpnInlineSection(supplierId: row.id, supplierName: row.supplierName, realtimeData: _spnCache[row.id]),
+              _SpnInlineSection(
+                supplierId: row.id,
+                supplierName: row.supplierName,
+                onRegister: (id, cb) => _spnCallbacks[id] = cb,
+                onUnregister: (id) => _spnCallbacks.remove(id),
+              ),
             ],
             if (isExpanded) ...[
               const Divider(height: 1, color: Color(0xFFE5E7EB)),
@@ -3678,8 +3684,14 @@ class _CompanyCell extends StatelessWidget {
 class _SpnInlineSection extends StatefulWidget {
   final String supplierId;
   final String supplierName;
-  final Map<String, dynamic>? realtimeData;
-  const _SpnInlineSection({required this.supplierId, required this.supplierName, this.realtimeData});
+  final void Function(String, void Function(Map<String, dynamic>)) onRegister;
+  final void Function(String) onUnregister;
+  const _SpnInlineSection({
+    required this.supplierId,
+    required this.supplierName,
+    required this.onRegister,
+    required this.onUnregister,
+  });
 
   @override
   State<_SpnInlineSection> createState() => _SpnInlineSectionState();
@@ -3701,27 +3713,34 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
   };
 
   bool _loading = true;
+  bool _loadCancelled = false;
   final Map<String, String?> _values = {};
 
   @override
   void initState() {
     super.initState();
+    widget.onRegister(widget.supplierId, _applyPatch);
     _load();
   }
 
   @override
-  void didUpdateWidget(_SpnInlineSection old) {
-    super.didUpdateWidget(old);
-    // New map reference signals a realtime patch from the parent's channel.
-    if (widget.realtimeData != null && !identical(widget.realtimeData, old.realtimeData)) {
-      setState(() {
-        for (final col in _spnCols) {
-          if (widget.realtimeData!.containsKey(col.$2)) {
-            _values[col.$2] = widget.realtimeData![col.$2] as String?;
-          }
+  void dispose() {
+    widget.onUnregister(widget.supplierId);
+    super.dispose();
+  }
+
+  // Called directly by parent's _patchSupplierRow on every realtime UPDATE.
+  void _applyPatch(Map<String, dynamic> patch) {
+    if (!mounted) return;
+    _loadCancelled = true; // prevent stale _load() from overwriting fresh realtime data
+    setState(() {
+      _loading = false;
+      for (final col in _spnCols) {
+        if (patch.containsKey(col.$2)) {
+          _values[col.$2] = patch[col.$2] as String?;
         }
-      });
-    }
+      }
+    });
   }
 
   Future<void> _load() async {
@@ -3733,6 +3752,7 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
           .select(cols)
           .eq('id', widget.supplierId)
           .limit(1);
+      if (_loadCancelled) return;
       if (mounted && (rows as List).isNotEmpty) {
         final row = rows.first as Map<String, dynamic>;
         setState(() {

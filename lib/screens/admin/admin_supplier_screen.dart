@@ -3252,7 +3252,7 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                 Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   // ── Frozen left pane ───────────────────────────────────────
                   SizedBox(
-                    width: 190,
+                    width: 320,
                     child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
                       // Header cell
                       Container(
@@ -3281,7 +3281,7 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                             Expanded(child: Text(
                               _rows[ri]['supplier_company'] as String? ?? '—',
                               style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
-                              maxLines: 2, overflow: TextOverflow.ellipsis,
+                              maxLines: 1, overflow: TextOverflow.ellipsis,
                             )),
                           ]),
                         ),
@@ -3301,7 +3301,7 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                         child: Row(children: [
                           for (int i = 1; i <= 30; i++) ...[
                             const SizedBox(width: 4),
-                            SizedBox(width: 120, child: Text('COMPANY $i', style: const TextStyle(
+                            SizedBox(width: 220, child: Text('COMPANY $i', style: const TextStyle(
                                 fontSize: 10, fontWeight: FontWeight.w700,
                                 color: Color(0xFF6B7280), letterSpacing: 0.4),
                               overflow: TextOverflow.ellipsis)),
@@ -3317,7 +3317,7 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                           child: Row(children: [
                             for (final col in _companyCols) ...[
                               const SizedBox(width: 4),
-                              SizedBox(width: 120, child: _CompanyCell(
+                              SizedBox(width: 220, child: _CompanyCell(
                                 value: _rows[ri][col] as String?,
                                 options: _medMarketers,
                                 onChanged: (v) => _mapped

@@ -3714,6 +3714,7 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
 
   bool _loading = true;
   bool _loadCancelled = false;
+  bool _submitting = false;
   final Map<String, String?> _values = {};
 
   @override
@@ -3770,30 +3771,44 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
     }
   }
 
-  Future<void> _saveField(String field, String? value) async {
-    final writeVal = value?.isEmpty == true ? null : value;
-    if (mounted) setState(() => _values[field] = writeVal);
+  Future<void> _submitAll() async {
+    if (_submitting || !mounted) return;
+    setState(() => _submitting = true);
     try {
       final client = Supabase.instance.client;
       final result = await client
           .from('supplier_profiles')
-          .update({field: writeVal})
+          .update({
+            'margin':       _values['margin'],
+            'cd_condition': _values['cd_condition'],
+            'behaviour':    _values['behaviour'],
+            'payment_type': _values['payment_term'], // payment_term dropdown → payment_type column
+          })
           .eq('id', widget.supplierId)
           .select('id');
+      if (!mounted) return;
       if ((result as List).isEmpty) {
-        // UPDATE matched 0 rows — RLS blocked or wrong id; reload from DB.
         RenderLog.write('spn_write_fail', 1);
-        _load();
-        return;
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Save failed — try again'),
+          backgroundColor: Color(0xFF991B1B)));
+      } else {
+        RenderLog.write('spn_write_ok', 1);
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Saved ✓'),
+          backgroundColor: Color(0xFF1B7A43)));
+        client
+            .rpc('recompute_supplier_points', params: {'p_id': widget.supplierId})
+            .then((_) {})
+            .catchError((_) {});
       }
-      RenderLog.write('spn_write_ok', 1);
-      client
-          .rpc('recompute_supplier_points', params: {'p_id': widget.supplierId})
-          .then((_) {})
-          .catchError((_) {});
-    } catch (e) {
+    } catch (_) {
       RenderLog.write('spn_write_fail', 1);
-      _load(); // revert optimistic update from DB truth
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Save failed — try again'),
+        backgroundColor: Color(0xFF991B1B)));
+    } finally {
+      if (mounted) setState(() => _submitting = false);
     }
   }
 
@@ -3808,7 +3823,7 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
   Widget build(BuildContext context) {
     RenderLog.write('spn_panel', 1);
     RenderLog.write('spn_dropdowns', 4);
-    RenderLog.write('spn_update_policy', 1);
+    RenderLog.write('spn_submit', 1);
     return Container(
       decoration: const BoxDecoration(
         color: Color(0xFFF0F7FF),
@@ -3868,6 +3883,8 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
                         const SizedBox(width: 4),
                         _hdr(col.$1),
                       ],
+                      const SizedBox(width: 4),
+                      const SizedBox(width: 72), // submit button placeholder
                       const SizedBox(width: 8),
                     ]),
                   ),
@@ -3880,12 +3897,37 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
                         Expanded(child: _CompanyCell(
                           value: _values[col.$2],
                           options: List<String>.from(_spnOptions[col.$2]!),
-                          onChanged: (v) => _saveField(col.$2, v),
+                          onChanged: (v) => setState(() =>
+                              _values[col.$2] = v?.isEmpty == true ? null : v),
                           onClear: (_values[col.$2] != null && _values[col.$2]!.isNotEmpty)
-                              ? () => _saveField(col.$2, null)
+                              ? () => setState(() => _values[col.$2] = null)
                               : null,
                         )),
                       ],
+                      const SizedBox(width: 4),
+                      SizedBox(
+                        width: 72,
+                        child: Center(
+                          child: _submitting
+                              ? const SizedBox(width: 20, height: 20,
+                                  child: CircularProgressIndicator(
+                                      color: Color(0xFF1B7A43), strokeWidth: 2))
+                              : GestureDetector(
+                                  onTap: _submitAll,
+                                  child: Container(
+                                    height: 36,
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF1B7A43),
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    alignment: Alignment.center,
+                                    child: const Text('Submit',
+                                        style: TextStyle(color: Colors.white,
+                                            fontSize: 12, fontWeight: FontWeight.w600)),
+                                  ),
+                                ),
+                        ),
+                      ),
                       const SizedBox(width: 8),
                     ]),
                   ),

@@ -5,6 +5,7 @@ import 'dart:html' as html;
 import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -3189,7 +3190,18 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                 ),
               // ── Grid ─────────────────────────────────────────────────────────
               if (_rows.isNotEmpty)
-                SingleChildScrollView(
+                Listener(
+                  onPointerSignal: (e) {
+                    if (e is PointerScrollEvent) {
+                      final outer = PrimaryScrollController.of(context);
+                      if (outer.hasClients) {
+                        final dy = e.scrollDelta.dy;
+                        final next = (outer.offset + dy).clamp(0.0, outer.position.maxScrollExtent);
+                        outer.jumpTo(next);
+                      }
+                    }
+                  },
+                  child: SingleChildScrollView(
                   scrollDirection: Axis.horizontal,
                   child: Padding(
                     padding: const EdgeInsets.symmetric(vertical: 4),
@@ -3234,7 +3246,8 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                       ],
                     ]),
                   ),
-                ),
+                  ), // SingleChildScrollView
+                ), // Listener
               // ── Add-row form ─────────────────────────────────────────────────
               if (_showAddForm)
                 Padding(

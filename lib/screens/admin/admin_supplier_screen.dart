@@ -3740,10 +3740,15 @@ class _SpnInputEntryState extends State<_SpnInputEntry> {
   Future<void> _save() async {
     setState(() => _saving = true);
     try {
-      await Supabase.instance.client
+      final client = Supabase.instance.client;
+      // 1. Persist the edited field
+      await client
           .from('supplier_profiles')
           .update({widget.field: _ctrl.text.trim()})
           .eq('id', widget.supplierId);
+      // 2. Recompute all *_points columns server-side (fire-and-forget; won't block pop)
+      client.rpc('recompute_supplier_points', params: {'p_id': widget.supplierId})
+          .then((_) {}).catchError((_) {});
       if (mounted) Navigator.pop(context, true);
     } catch (_) {
       if (mounted) setState(() => _saving = false);

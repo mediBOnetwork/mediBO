@@ -3768,23 +3768,20 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
     }
   }
 
-  Future<void> _saveOnChange() async {
+  Future<void> _writeField() async {
     if (_supplierId.isEmpty) {
-      RenderLog.write('spn_write_fail_null_id', 1);
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Save failed — try again'),
-        backgroundColor: Color(0xFF991B1B)));
+      RenderLog.write('spn_save_error', 'NULL_ID');
       return;
     }
-    if (!mounted) return;
-    // Capture values synchronously before any await.
+    // Snapshot values at call time — independent of any later setState.
+    final id          = _supplierId;
     final margin      = _values['margin'];
     final cdCondition = _values['cd_condition'];
     final behaviour   = _values['behaviour'];
-    final paymentType = _values['payment_term']; // dropdown key payment_term → DB col payment_type
-    RenderLog.write('spn_save_id_used', _supplierId);
+    final paymentType = _values['payment_term'];
+    RenderLog.write('spn_save_id_used', id);
     try {
-      final result = await Supabase.instance.client
+      final res = await Supabase.instance.client
           .from('supplier_profiles')
           .update({
             'margin':       margin,
@@ -3792,28 +3789,24 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
             'behaviour':    behaviour,
             'payment_type': paymentType,
           })
-          .eq('id', _supplierId)
-          .select('id');
-      if (!mounted) return;
-      if ((result as List).isEmpty) {
-        RenderLog.write('spn_save_result', 'EMPTY_0_ROWS');
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Save failed — try again'),
-          backgroundColor: Color(0xFF991B1B)));
-      } else {
-        RenderLog.write('spn_save_result', 'OK_${result.length}_rows');
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Saved ✓'),
-          backgroundColor: Color(0xFF1B7A43)));
+          .eq('id', id)
+          .select('id')
+          .timeout(const Duration(seconds: 8));
+      RenderLog.write('spn_save_result', res.isEmpty ? 'EMPTY_0' : 'OK_${res.length}');
+      if (res.isNotEmpty) {
         Supabase.instance.client
-            .rpc('recompute_supplier_points', params: {'p_id': _supplierId})
+            .rpc('recompute_supplier_points', params: {'p_id': id})
             .then((_) {})
             .catchError((_) {});
       }
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(res.isEmpty ? 'Save failed — try again' : 'Saved ✓'),
+        backgroundColor: Color(res.isEmpty ? 0xFF991B1B : 0xFF1B7A43),
+        duration: const Duration(milliseconds: 800)));
     } catch (e) {
       RenderLog.write('spn_save_error', e.toString());
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Save error: ${e.toString()}'),
+        content: Text('Save error: $e'),
         backgroundColor: const Color(0xFF991B1B)));
     }
   }
@@ -3902,12 +3895,12 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
                           options: List<String>.from(_spnOptions[col.$2]!),
                           onChanged: (v) {
                             setState(() => _values[col.$2] = v?.isEmpty == true ? null : v);
-                            _saveOnChange();
+                            _writeField();
                           },
                           onClear: (_values[col.$2] != null && _values[col.$2]!.isNotEmpty)
                               ? () {
                                   setState(() => _values[col.$2] = null);
-                                  _saveOnChange();
+                                  _writeField();
                                 }
                               : null,
                         )),

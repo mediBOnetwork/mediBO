@@ -3645,20 +3645,20 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
     ('PAYMENT TERM', 'payment_term'),
   ];
 
+  static const _spnOptions = {
+    'margin':       ['1','2','3','4','5','6','7','8'],
+    'cd_condition': ['NO CONDITION','2K+ Bill','3K+ Bill'],
+    'behaviour':    ['1','2','3','4','5','6','7','8','9','10'],
+    'payment_term': ['cash','credit'],
+  };
+
   bool _loading = true;
-  late final Map<String, TextEditingController> _ctrls;
+  final Map<String, String?> _values = {};
 
   @override
   void initState() {
     super.initState();
-    _ctrls = { for (final c in _spnCols) c.$2: TextEditingController() };
     _load();
-  }
-
-  @override
-  void dispose() {
-    for (final c in _ctrls.values) c.dispose();
-    super.dispose();
   }
 
   Future<void> _load() async {
@@ -3674,7 +3674,7 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
         final row = rows.first as Map<String, dynamic>;
         setState(() {
           for (final col in _spnCols) {
-            _ctrls[col.$2]!.text = row[col.$2] as String? ?? '';
+            _values[col.$2] = row[col.$2] as String?;
           }
           _loading = false;
         });
@@ -3686,12 +3686,12 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
     }
   }
 
-  Future<void> _saveField(String field) async {
-    final value = _ctrls[field]!.text.trim();
+  Future<void> _saveField(String field, String? value) async {
+    if (mounted) setState(() => _values[field] = value?.isEmpty == true ? null : value);
     try {
       final client = Supabase.instance.client;
       await client.from('supplier_profiles')
-          .update({field: value.isEmpty ? null : value})
+          .update({field: value?.isEmpty == true ? null : value})
           .eq('id', widget.supplierId);
       client.rpc('recompute_supplier_points', params: {'p_id': widget.supplierId})
           .then((_) {}).catchError((_) {});
@@ -3708,6 +3708,7 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
   @override
   Widget build(BuildContext context) {
     RenderLog.write('spn_panel', 1);
+    RenderLog.write('spn_dropdowns', 4);
     return Container(
       decoration: const BoxDecoration(
         color: Color(0xFFF0F7FF),
@@ -3776,9 +3777,13 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
                     child: Row(children: [
                       for (final col in _spnCols) ...[
                         const SizedBox(width: 4),
-                        Expanded(child: _SpnCell(
-                          ctrl: _ctrls[col.$2]!,
-                          onSave: () => _saveField(col.$2),
+                        Expanded(child: _CompanyCell(
+                          value: _values[col.$2],
+                          options: List<String>.from(_spnOptions[col.$2]!),
+                          onChanged: (v) => _saveField(col.$2, v),
+                          onClear: (_values[col.$2] != null && _values[col.$2]!.isNotEmpty)
+                              ? () => _saveField(col.$2, null)
+                              : null,
                         )),
                       ],
                       const SizedBox(width: 8),
@@ -3787,80 +3792,6 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
                 ])),
               ]),
             ]),
-    );
-  }
-}
-
-// ── SPN editable cell (mirrors _CompanyCell box decoration) ──────────────────
-
-class _SpnCell extends StatefulWidget {
-  final TextEditingController ctrl;
-  final Future<void> Function() onSave;
-  const _SpnCell({required this.ctrl, required this.onSave});
-
-  @override
-  State<_SpnCell> createState() => _SpnCellState();
-}
-
-class _SpnCellState extends State<_SpnCell> {
-  bool _saving = false;
-  late final FocusNode _focus;
-
-  @override
-  void initState() {
-    super.initState();
-    _focus = FocusNode()..addListener(() {
-      if (!_focus.hasFocus) _doSave();
-    });
-  }
-
-  @override
-  void dispose() {
-    _focus.dispose();
-    super.dispose();
-  }
-
-  Future<void> _doSave() async {
-    if (_saving) return;
-    if (mounted) setState(() => _saving = true);
-    await widget.onSave();
-    if (mounted) setState(() => _saving = false);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final filled = widget.ctrl.text.isNotEmpty;
-    return Container(
-      margin: const EdgeInsets.symmetric(vertical: 8),
-      child: _saving
-          ? Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
-              decoration: BoxDecoration(
-                color: filled ? const Color(0xFFECFDF5) : Colors.white,
-                borderRadius: BorderRadius.circular(6),
-                border: Border.all(color: filled ? const Color(0xFF6EE7B7) : const Color(0xFFE5E7EB)),
-              ),
-              child: const Row(children: [
-                SizedBox(width: 12, height: 12,
-                  child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF1B7A43))),
-              ]),
-            )
-          : TextField(
-              controller: widget.ctrl,
-              focusNode: _focus,
-              style: TextStyle(fontSize: 11, color: filled ? const Color(0xFF065F46) : const Color(0xFF111827)),
-              decoration: InputDecoration(
-                isDense: true,
-                contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
-                enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6),
-                    borderSide: BorderSide(color: filled ? const Color(0xFF6EE7B7) : const Color(0xFFE5E7EB))),
-                focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6),
-                    borderSide: const BorderSide(color: Color(0xFF1B7A43))),
-                filled: true,
-                fillColor: filled ? const Color(0xFFECFDF5) : Colors.white,
-              ),
-              onSubmitted: (_) => _doSave(),
-            ),
     );
   }
 }

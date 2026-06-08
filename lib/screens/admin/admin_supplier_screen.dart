@@ -383,6 +383,104 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     }
   }
 
+  // ── Permanent hard-delete one supplier ──────────────────────────────────────
+
+  Future<void> _permanentDeleteSupplier(Map<String, dynamic> deletedRow) async {
+    final snap        = deletedRow['deleted_snapshot'] as Map<String, dynamic>? ?? deletedRow;
+    final name        = (snap['supplier_name'] as String? ?? deletedRow['supplier_name'] as String? ?? 'this supplier').trim();
+    final displayName = name.isNotEmpty ? name : 'this supplier';
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        title: Text('Permanently delete $displayName?',
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+        content: const Text('This cannot be undone.',
+            style: TextStyle(fontSize: 13, color: Color(0xFF374151))),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: FilledButton.styleFrom(backgroundColor: const Color(0xFFDC2626)),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    try {
+      await Supabase.instance.client
+          .from('supplier_profiles')
+          .delete()
+          .eq('id', deletedRow['id'] as String)
+          .eq('is_deleted', true);
+      _load(showSpinner: false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('$displayName permanently deleted.'),
+          backgroundColor: const Color(0xFFDC2626),
+          duration: const Duration(seconds: 3),
+        ));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Delete failed: $e'),
+          backgroundColor: const Color(0xFFDC2626),
+        ));
+      }
+    }
+  }
+
+  // ── Permanent hard-delete ALL recently-deleted suppliers ─────────────────────
+
+  Future<void> _clearAllDeleted() async {
+    final count = _deletedRows.length;
+    if (count == 0) return;
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        title: const Text('Permanently delete all?',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+        content: Text('Permanently delete all $count recently-deleted supplier${count == 1 ? '' : 's'}? This cannot be undone.',
+            style: const TextStyle(fontSize: 13, color: Color(0xFF374151))),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: FilledButton.styleFrom(backgroundColor: const Color(0xFFDC2626)),
+            child: const Text('Delete All'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    try {
+      await Supabase.instance.client
+          .from('supplier_profiles')
+          .delete()
+          .eq('is_deleted', true);
+      _load(showSpinner: false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('$count supplier${count == 1 ? '' : 's'} permanently deleted.'),
+          backgroundColor: const Color(0xFFDC2626),
+          duration: const Duration(seconds: 3),
+        ));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Clear all failed: $e'),
+          backgroundColor: const Color(0xFFDC2626),
+        ));
+      }
+    }
+  }
+
   // ── Restore soft-deleted supplier ───────────────────────────────────────────
 
   Future<void> _restoreSupplier(Map<String, dynamic> deletedRow) async {
@@ -624,6 +722,13 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                   'Recently Deleted (${_deletedRows.length})',
                   style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF374151)),
                 ),
+                const Spacer(),
+                if (_deletedRows.isNotEmpty)
+                  GestureDetector(
+                    onTap: _clearAllDeleted,
+                    child: const Text('Clear All',
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFFDC2626))),
+                  ),
               ]),
             ),
           ),
@@ -697,6 +802,21 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
               ),
               child: const Text('Restore',
                   style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF1B7A43))),
+            ),
+          ),
+          const SizedBox(width: 8),
+          InkWell(
+            onTap: () => _permanentDeleteSupplier(row),
+            borderRadius: BorderRadius.circular(6),
+            mouseCursor: SystemMouseCursors.click,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: const Color(0xFFDC2626)),
+              ),
+              child: const Text('Delete',
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFFDC2626))),
             ),
           ),
         ]),

@@ -226,7 +226,9 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         if (newRow.containsKey(k)) _suppliers[idx].rawData[k] = newRow[k];
       }
     }
-    // Direct callback to any open SPN panel for this supplier.
+    // If this echo is for the currently-open SPN panel, skip the callback and
+    // parent rebuild — the user's local _values are source of truth while editing.
+    if (id == _spnSupplierId) return;
     _spnCallbacks[id]?.call(newRow);
     if (mounted) setState(() {});
   }

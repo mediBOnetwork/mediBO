@@ -125347,7 +125347,8 @@ aQR(a){var s,r,q,p,o=this,n=A.B(a.i(0,"id"))
 if(n==null||o.c==null)return
 s=B.b.Gi(o.d,new A.aVH(n))
 if(s>=0)for(r=0;r<11;++r){q=B.acY[r]
-if(a.p(0,q))o.d[s].b.h(0,q,a.i(0,q))}p=o.ch.i(0,n)
+if(a.p(0,q))o.d[s].b.h(0,q,a.i(0,q))}if(n===o.at)return
+p=o.ch.i(0,n)
 if(p!=null)p.$1(a)
 if(o.c!=null)o.q(new A.aVI())},
 a5L(){var s=this.cy

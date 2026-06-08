@@ -34,8 +34,8 @@ class _SupRow {
   String get paymentTerm    => (rawData['payment_term']   as String? ?? '').trim();
   String get city           => (rawData['city']           as String? ?? '').trim();
   String get state          => (rawData['state']          as String? ?? '').trim();
-  String get status         =>  rawData['status']         as String? ?? 'approved';
-  bool   get isSuspended    => status == 'suspended';
+  String get status         =>  rawData['status']         as String? ?? 'Active';
+  bool   get isSuspended    => status == 'Suspended';
 }
 
 class _PendingRow {
@@ -354,7 +354,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   Future<void> _approvePending(_PendingRow row) async {
     await Supabase.instance.client.from('supplier_profiles').update({
       'approved':    true,
-      'status':      'approved',
+      'status':      'Active',
       'approved_at': DateTime.now().toUtc().toIso8601String(),
       'approved_by': 'admin',
     }).eq('id', row.id);
@@ -391,7 +391,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     );
     if (confirm != true) return;
     try {
-      await Supabase.instance.client.from('supplier_profiles').update({'status': 'suspended'}).eq('id', row.id);
+      await Supabase.instance.client.from('supplier_profiles').update({'status': 'Suspended'}).eq('id', row.id);
       _load(showSpinner: false);
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Suspend failed: $e'), backgroundColor: const Color(0xFFDC2626)));
@@ -400,7 +400,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
 
   Future<void> _reactivateSupplier(_SupRow row) async {
     try {
-      await Supabase.instance.client.from('supplier_profiles').update({'status': 'approved'}).eq('id', row.id);
+      await Supabase.instance.client.from('supplier_profiles').update({'status': 'Active'}).eq('id', row.id);
       _load(showSpinner: false);
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Reactivate failed: $e'), backgroundColor: const Color(0xFFDC2626)));
@@ -1734,14 +1734,18 @@ class _StatusBadge extends StatelessWidget {
     final String label;
     final IconData icon;
     switch (status) {
-      case 'suspended':
-        color = const Color(0xFFDC2626); label = 'Suspended'; icon = Icons.block_outlined;
+      case 'Suspended':
+        color = const Color(0xFFD97706); label = 'Suspended'; icon = Icons.block_outlined;
         break;
-      case 'approved':
-        color = const Color(0xFF1B7A43); label = 'Active'; icon = Icons.verified_outlined;
+      case 'Blocked':
+        color = const Color(0xFFDC2626); label = 'Blocked'; icon = Icons.block;
         break;
+      case 'Inactive':
+        color = const Color(0xFF6B7280); label = 'Inactive'; icon = Icons.pause_circle_outline;
+        break;
+      case 'Active':
       default:
-        color = const Color(0xFFD97706); label = status.isNotEmpty ? status : 'Active'; icon = Icons.info_outline;
+        color = const Color(0xFF1B7A43); label = 'Active'; icon = Icons.verified_outlined;
     }
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
@@ -1775,18 +1779,12 @@ class _StatusPill extends StatefulWidget {
 }
 
 class _StatusPillState extends State<_StatusPill> {
-  static const _options = ['approved', 'inactive', 'suspended', 'blocked'];
-  static const _labels  = {
-    'approved':  'Active',
-    'inactive':  'Inactive',
-    'suspended': 'Suspended',
-    'blocked':   'Blocked',
-  };
+  static const _options = ['Active', 'Inactive', 'Suspended', 'Blocked'];
   static const _colors  = {
-    'approved':  Color(0xFF1B7A43),
-    'inactive':  Color(0xFF6B7280),
-    'suspended': Color(0xFFD97706),
-    'blocked':   Color(0xFFDC2626),
+    'Active':    Color(0xFF1B7A43),
+    'Inactive':  Color(0xFF6B7280),
+    'Suspended': Color(0xFFD97706),
+    'Blocked':   Color(0xFFDC2626),
   };
 
   late String _selected;
@@ -1798,7 +1796,7 @@ class _StatusPillState extends State<_StatusPill> {
   }
 
   Color get _color => _colors[_selected] ?? const Color(0xFF6B7280);
-  String get _label => _labels[_selected] ?? _selected;
+  String get _label => _selected.isNotEmpty ? _selected : 'Active';
 
   Future<void> _write(String newStatus) async {
     RenderLog.write('status_pill_write', '$_selected→$newStatus');
@@ -1842,14 +1840,13 @@ class _StatusPillState extends State<_StatusPill> {
       },
       itemBuilder: (_) => _options.map((opt) {
         final c = _colors[opt] ?? const Color(0xFF6B7280);
-        final l = _labels[opt] ?? opt;
         return PopupMenuItem<String>(
           value: opt,
           height: 36,
           child: Row(children: [
             Container(width: 8, height: 8, decoration: BoxDecoration(color: c, shape: BoxShape.circle)),
             const SizedBox(width: 8),
-            Text(l, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: c)),
+            Text(opt, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: c)),
           ]),
         );
       }).toList(),
@@ -2797,7 +2794,7 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
         if (name.isEmpty || seen.contains(name.toLowerCase())) continue;
         seen.add(name.toLowerCase());
         if (supplierMap.containsKey(name.toLowerCase())) continue;
-        final rec = <String, dynamic>{'supplier_name': name, 'status': 'approved', 'approved': true, 'is_deleted': false};
+        final rec = <String, dynamic>{'supplier_name': name, 'status': 'Active', 'approved': true, 'is_deleted': false};
         for (final f in allProfileFields.where((f) => f != 'supplier_name' && f != 'company_name')) {
           final v = rowVal(row, f);
           if (v.isNotEmpty) rec[f] = v;
@@ -4423,7 +4420,7 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
       // 1. Insert supplier_profiles row
       final rec = <String, dynamic>{
         'supplier_name': name,
-        'status': 'approved',
+        'status': 'Active',
         'approved': true,
         'is_deleted': false,
       };

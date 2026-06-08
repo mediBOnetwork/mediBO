@@ -3113,13 +3113,11 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
           .order('created_at');
 
       if (_medMarketers.isEmpty) {
-        final meds = await client.from('MEDICINE').select('marketer').limit(30000);
-        final seen = <String>{};
-        final list = <String>[];
-        for (final r in meds as List) {
-          final m = ((r as Map)['marketer'] as String? ?? '').trim();
-          if (m.isNotEmpty && seen.add(m.toLowerCase())) list.add(m);
-        }
+        final meds = await client.rpc('get_distinct_marketers');
+        final list = (meds as List)
+            .map((m) => (m as String? ?? '').trim())
+            .where((m) => m.isNotEmpty)
+            .toList();
         list.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
         _medMarketers = list;
       }

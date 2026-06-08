@@ -2962,7 +2962,7 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
       final colList = _companyCols.join(', ');
       final rows = await Supabase.instance.client
           .from('supplier_company')
-          .select('id, supplier_company, $colList, margin, cd_condition, payment_type, deal')
+          .select('id, supplier_company, supplier_name, $colList')
           .eq('supplier_id', widget.supplierId)
           .order('created_at');
       if (mounted) setState(() {

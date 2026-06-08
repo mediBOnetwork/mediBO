@@ -127476,7 +127476,7 @@ n=B.b.bb($.amq(),", ")
 j=$.aI().b
 j===$&&A.a()
 s=6
-return A.j(j.aY("supplier_company").iG(0,"id, supplier_company, "+A.k(n)+", margin, cd_condition, payment_type, deal").bJ("supplier_id",o.a.c).amJ(0,"created_at"),$async$ny)
+return A.j(j.aY("supplier_company").iG(0,"id, supplier_company, supplier_name, "+A.k(n)).bJ("supplier_id",o.a.c).amJ(0,"created_at"),$async$ny)
 case 6:m=b
 if(o.c!=null)o.t(new A.b_T(o,m))
 q=1

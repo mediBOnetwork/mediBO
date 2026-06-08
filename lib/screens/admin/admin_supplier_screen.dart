@@ -937,15 +937,17 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                   ),
                 ),
                 const SizedBox(width: 10),
-                _StatusBadge(status: row.status),
+                _StatusPill(
+                  key: ValueKey('status_${row.id}'),
+                  supplierId: row.id,
+                  initialStatus: row.status,
+                  onStatusChanged: (newStatus) {
+                    row.rawData['status'] = newStatus;
+                    if (mounted) setState(() {});
+                  },
+                ),
                 const SizedBox(width: 14),
                 _actionBtn('Edit', const Color(0xFF1B7A43), () => _editSupplier(row)),
-                const SizedBox(width: 6),
-                _actionBtn(
-                  row.isSuspended ? 'Reactivate' : 'Suspend',
-                  row.isSuspended ? const Color(0xFF1B7A43) : const Color(0xFFD97706),
-                  () => row.isSuspended ? _reactivateSupplier(row) : _suspendSupplier(row),
-                ),
                 const SizedBox(width: 6),
                 _actionBtn('Delete', const Color(0xFFDC2626), () => _deleteSupplier(row)),
                 const SizedBox(width: 10),
@@ -982,7 +984,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: row.isSuspended ? const Color(0xFFFECACA) : const Color(0xFFE5E7EB)),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(12),
@@ -1021,7 +1023,15 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                     ),
                   ),
                   const SizedBox(width: 6),
-                  _StatusBadge(status: row.status),
+                  _StatusPill(
+                    key: ValueKey('status_${row.id}'),
+                    supplierId: row.id,
+                    initialStatus: row.status,
+                    onStatusChanged: (newStatus) {
+                      row.rawData['status'] = newStatus;
+                      if (mounted) setState(() {});
+                    },
+                  ),
                   const SizedBox(width: 4),
                   AnimatedRotation(
                     turns: isExpanded ? 0.5 : 0.0,
@@ -1039,13 +1049,8 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                 ]),
                 const SizedBox(height: 12),
                 Wrap(spacing: 8, runSpacing: 6, children: [
-                  _actionBtn('Edit',        const Color(0xFF1B7A43),  () => _editSupplier(row)),
-                  _actionBtn(
-                    row.isSuspended ? 'Reactivate' : 'Suspend',
-                    row.isSuspended ? const Color(0xFF1B7A43) : const Color(0xFFD97706),
-                    () => row.isSuspended ? _reactivateSupplier(row) : _suspendSupplier(row),
-                  ),
-                  _actionBtn('Delete',      const Color(0xFFDC2626),  () => _deleteSupplier(row)),
+                  _actionBtn('Edit',   const Color(0xFF1B7A43), () => _editSupplier(row)),
+                  _actionBtn('Delete', const Color(0xFFDC2626), () => _deleteSupplier(row)),
                 ]),
               ]),
             ),
@@ -1749,6 +1754,118 @@ class _StatusBadge extends StatelessWidget {
         Icon(icon, size: 11, color: color), const SizedBox(width: 3),
         Text(label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: color)),
       ]),
+    );
+  }
+}
+
+// ── Status pill (inline dropdown) ────────────────────────────────────────────
+
+class _StatusPill extends StatefulWidget {
+  final String supplierId;
+  final String initialStatus;
+  final void Function(String) onStatusChanged;
+  const _StatusPill({
+    super.key,
+    required this.supplierId,
+    required this.initialStatus,
+    required this.onStatusChanged,
+  });
+  @override
+  State<_StatusPill> createState() => _StatusPillState();
+}
+
+class _StatusPillState extends State<_StatusPill> {
+  static const _options = ['approved', 'inactive', 'suspended', 'blocked'];
+  static const _labels  = {
+    'approved':  'Active',
+    'inactive':  'Inactive',
+    'suspended': 'Suspended',
+    'blocked':   'Blocked',
+  };
+  static const _colors  = {
+    'approved':  Color(0xFF1B7A43),
+    'inactive':  Color(0xFF6B7280),
+    'suspended': Color(0xFFD97706),
+    'blocked':   Color(0xFFDC2626),
+  };
+
+  late String _selected;
+
+  @override
+  void initState() {
+    super.initState();
+    _selected = widget.initialStatus;
+  }
+
+  Color get _color => _colors[_selected] ?? const Color(0xFF6B7280);
+  String get _label => _labels[_selected] ?? _selected;
+
+  Future<void> _write(String newStatus) async {
+    RenderLog.write('status_pill_write', '$_selected→$newStatus');
+    try {
+      final res = await Supabase.instance.client
+          .from('supplier_profiles')
+          .update({'status': newStatus})
+          .eq('id', widget.supplierId)
+          .select('id')
+          .timeout(const Duration(seconds: 8));
+      RenderLog.write('status_pill_result', res.isEmpty ? 'EMPTY' : 'OK');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(res.isEmpty ? 'Save failed — try again' : 'Status updated ✓'),
+          backgroundColor: Color(res.isEmpty ? 0xFF991B1B : 0xFF1B7A43),
+          duration: const Duration(milliseconds: 800),
+        ));
+      }
+    } catch (e) {
+      RenderLog.write('status_pill_error', e.toString());
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Error: $e'), backgroundColor: const Color(0xFF991B1B)));
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    RenderLog.write('status_pill_rendered', _selected);
+    return PopupMenuButton<String>(
+      initialValue: _selected,
+      tooltip: '',
+      padding: EdgeInsets.zero,
+      position: PopupMenuPosition.under,
+      onSelected: (val) {
+        if (val == _selected) return;
+        setState(() => _selected = val);
+        widget.onStatusChanged(val);
+        _write(val);
+      },
+      itemBuilder: (_) => _options.map((opt) {
+        final c = _colors[opt] ?? const Color(0xFF6B7280);
+        final l = _labels[opt] ?? opt;
+        return PopupMenuItem<String>(
+          value: opt,
+          height: 36,
+          child: Row(children: [
+            Container(width: 8, height: 8, decoration: BoxDecoration(color: c, shape: BoxShape.circle)),
+            const SizedBox(width: 8),
+            Text(l, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: c)),
+          ]),
+        );
+      }).toList(),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+        decoration: BoxDecoration(
+          color: _color.withValues(alpha: 0.1),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: _color.withValues(alpha: 0.3)),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(Icons.arrow_drop_down, size: 12, color: _color),
+          const SizedBox(width: 2),
+          Text(_label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _color)),
+        ]),
+      ),
     );
   }
 }

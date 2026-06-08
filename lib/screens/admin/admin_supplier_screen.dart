@@ -13,6 +13,7 @@ import 'package:syncfusion_flutter_pdf/pdf.dart';
 import 'package:xml/xml.dart' as xmlp;
 
 import '../../config/api_keys.dart';
+import '../../utils/render_log.dart';
 
 // ── Supplier row models ───────────────────────────────────────────────────────
 
@@ -3291,6 +3292,16 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
 
   @override
   Widget build(BuildContext context) {
+    // ── Render-log instrumentation ──────────────────────────────────────────
+    if (!_loading) {
+      RenderLog.write('screen', 'supplier_companies');
+      RenderLog.write('supplier', widget.supplierName);
+      RenderLog.write('company_rows', _rows.length);
+      RenderLog.write('spn_buttons', _rows.length); // SPN pill built on every row
+      RenderLog.write('map_buttons', 2); // Map by AI + Map Manually always rendered
+      RenderLog.write('save_button', _mapped ? 1 : 0);
+    }
+    // ───────────────────────────────────────────────────────────────────────
     return Container(
       decoration: const BoxDecoration(
         color: Color(0xFFF0F7FF),

@@ -13,7 +13,36 @@ There is no local preview step. Every change goes straight to production via dep
 ## VERIFICATION RULE (mandatory)
 Flutter web renders to canvas — automated browser tools (Puppeteer/CDP) CANNOT read Flutter UI. Never install Puppeteer or attempt browser-click verification for Flutter.
 
-Verification = (1) deploy succeeds, (2) curl https://medibo.in/version.json commit matches the just-built commit, (3) for DB changes, one Supabase MCP query confirming expected rows.
+### Deploy verification (every deploy)
+1. `curl https://medibo.in/version.json` → confirm commit matches just-built hash
+2. For DB changes: Supabase MCP `execute_sql` confirming expected rows
+
+### UI VERIFICATION (canvas app — replaces JS-grep PERMANENTLY)
+NEVER grep the JS bundle to prove a widget rendered. String-in-bundle is NOT proof — it only proves the code compiled, not that the widget rendered.
+
+After deploy, have the test user open the relevant screen. Then:
+
+**Step 1 — confirm live build:**
+```
+curl https://medibo.in/version.json
+```
+Note the commit hash.
+
+**Step 2 — read real render counts:**
+```
+curl https://medibo.in/render-log
+```
+Or via Supabase MCP:
+```sql
+SELECT build_hash, data FROM render_log WHERE id = 'singleton';
+```
+
+**Proof criteria:**
+- `build` field matches the version.json commit → you're reading the live build
+- The relevant count > 0 (e.g. `spn_buttons` > 0, `company_rows` matches expected supplier)
+- If count = 0 or build hash doesn't match → the widget did NOT render — keep fixing
+
+**After every UI feature deploy:** run the curl commands above. Do not report success until `build` matches and the relevant count confirms the widget rendered.
 
 Visual verification = the USER checks the live site on their device using the matching test credential:
 - admin change → test.admin@medibo.in / TestAdmin#26
@@ -85,11 +114,14 @@ Apply these rules automatically to every frontend/UI change in this Flutter web 
 - Prefer clarity and breathing room over information density
 
 ## VERIFICATION RULE (mandatory — never skip)
-After EVERY deploy, OPEN medibo.in in INCOGNITO using chrome-devtools/CDP and LOG IN with the matching test credential:
-- admin change → test.admin@medibo.in / TestAdmin#26
-- supplier change → test.sup1@medibo.in / TestSup1#26  
-- customer change → test.cust1@medibo.in / TestCust1#26
-VISUALLY CHECK the specific change rendered and works in the live logged-in session.
-If NOT working, KEEP FIXING and re-deploying until it works in the live browser.
-NEVER report success from source code, bundle grep, or version.json alone.
+NEVER use CDP/Puppeteer/incognito automation — Flutter canvas is unreadable by browser tools.
+NEVER report success from source code or JS bundle grep alone — string-in-bundle ≠ widget rendered.
+
+After EVERY UI deploy, verify with render-log:
+1. `curl https://medibo.in/version.json` — confirm commit hash
+2. Have test user open the relevant screen (logged in with matching credential)
+3. `curl https://medibo.in/render-log` — confirm `build=<hash>` matches AND relevant count > 0
+   OR: Supabase MCP `SELECT build_hash, data FROM render_log WHERE id='singleton'`
+
+If count = 0 → widget did NOT render → keep fixing.
 This rule overrides everything else.

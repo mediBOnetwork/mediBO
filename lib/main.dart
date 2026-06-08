@@ -1,8 +1,13 @@
+import 'dart:convert';
+// ignore: avoid_web_libraries_in_flutter
+import 'dart:html' as html;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_web_plugins/url_strategy.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'app_state.dart';
+import 'utils/render_log.dart';
 import 'models/cart_model.dart';
 import 'screens/auth/login_screen.dart';
 import 'screens/home_shell.dart';
@@ -21,6 +26,17 @@ Future<void> main() async {
     url: SupabaseConfig.url,
     anonKey: SupabaseConfig.anonKey,
   );
+
+  // Boot render-log: fetch version.json (already live, ~0ms) and record build hash.
+  try {
+    final raw = await html.HttpRequest.getString('/version.json');
+    final info = jsonDecode(raw) as Map<String, dynamic>;
+    RenderLog.setBuildHash(info['commit'] as String? ?? 'unknown');
+  } catch (_) {
+    RenderLog.setBuildHash('unknown');
+  }
+  RenderLog.write('screen', 'boot');
+
   runApp(const PharmaB2BApp());
 }
 

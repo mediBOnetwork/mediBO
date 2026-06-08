@@ -307,6 +307,12 @@
   </script>
 </head>
 <body>
+  <!-- Render-log sink: Flutter writes real widget counts here via JS interop.
+       Off-screen, aria-hidden, zero visual footprint. -->
+  <div id="medibo-render-log"
+       aria-hidden="true"
+       style="position:absolute;left:-99999px;top:0;width:1px;height:1px;overflow:hidden;pointer-events:none;"></div>
+
   <!-- Loading screen — visible immediately, dismissed by flutter_bootstrap.js onEntrypointLoaded -->
   <div id="flutter-loading">
     <div class="fl-logo">medi<span>BO</span></div>

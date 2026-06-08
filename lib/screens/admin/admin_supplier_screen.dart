@@ -146,6 +146,8 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   bool _loading = true;
   _SupFilter _filter = _SupFilter.suppliers;
   _SupSortMode _sortMode = _SupSortMode.spnDesc;
+  bool _hasPendingChanges = false;
+  bool _refreshLoading = false;
   // Supplier detail expand — only one supplier open at a time.
   String? _expandedSupplierId;
   // Companies section — only one supplier open at a time; mutually exclusive with detail.
@@ -245,6 +247,26 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     } else {
       _suppliers.sort((a, b) =>
           a.supplierName.toLowerCase().compareTo(b.supplierName.toLowerCase()));
+    }
+  }
+
+  Future<void> _refreshSuppliers({bool isSave = false}) async {
+    if (_refreshLoading) return;
+    if (mounted) setState(() => _refreshLoading = true);
+    if (isSave) {
+      RenderLog.write('save_clicked', '1');
+    } else {
+      RenderLog.write('refresh_clicked', '1');
+    }
+    await _load(showSpinner: false);
+    if (mounted) {
+      setState(() {
+        _hasPendingChanges = false;
+        _refreshLoading = false;
+      });
+      RenderLog.write('supabase_refetched', _suppliers.length.toString());
+      if (isSave) RenderLog.write('save_committed', '1');
+      RenderLog.write('list_rebuilt', _suppliers.length.toString());
     }
   }
 
@@ -743,6 +765,8 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       Padding(
         padding: EdgeInsets.fromLTRB(pad, 10, pad, 4),
         child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+          _buildRefreshButton(),
+          const SizedBox(width: 12),
           const Text('Sort:', style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
           const SizedBox(width: 6),
           Container(
@@ -793,6 +817,53 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       _buildDeletedSection(isDesktop),
       const SizedBox(height: 32),
     ]);
+  }
+
+  Widget _buildRefreshButton() {
+    RenderLog.write('button_rendered', _hasPendingChanges ? 'pending' : 'idle');
+    final isPending = _hasPendingChanges;
+    final bgColor    = isPending ? const Color(0xFF1B7A43) : Colors.white;
+    final textColor  = isPending ? Colors.white : const Color(0xFF374151);
+    final borderColor = isPending ? const Color(0xFF1B7A43) : const Color(0xFFE5E7EB);
+    final label = isPending ? 'Save Changes' : 'Refresh';
+    final icon  = isPending ? Icons.save_outlined : Icons.refresh;
+
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: _refreshLoading ? null : () => _refreshSuppliers(isSave: isPending),
+        child: Container(
+          height: 32,
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          decoration: BoxDecoration(
+            color: bgColor,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: borderColor),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.06),
+                blurRadius: 4,
+                offset: const Offset(0, 1),
+              ),
+            ],
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            if (_refreshLoading)
+              SizedBox(
+                width: 12, height: 12,
+                child: CircularProgressIndicator(
+                  strokeWidth: 1.5,
+                  color: isPending ? Colors.white : const Color(0xFF6B7280),
+                ),
+              )
+            else
+              Icon(icon, size: 14, color: textColor),
+            const SizedBox(width: 5),
+            Text(label, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: textColor)),
+          ]),
+        ),
+      ),
+    );
   }
 
   Widget _buildDeletedSection(bool isDesktop) {
@@ -1004,7 +1075,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                   initialStatus: row.status,
                   onStatusChanged: (newStatus) {
                     row.rawData['status'] = newStatus;
-                    if (mounted) setState(() {});
+                    if (mounted) setState(() { _hasPendingChanges = true; });
                   },
                 ),
                 const SizedBox(width: 14),
@@ -1090,7 +1161,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                     initialStatus: row.status,
                     onStatusChanged: (newStatus) {
                       row.rawData['status'] = newStatus;
-                      if (mounted) setState(() {});
+                      if (mounted) setState(() { _hasPendingChanges = true; });
                     },
                   ),
                   const SizedBox(width: 4),

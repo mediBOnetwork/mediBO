@@ -366,6 +366,22 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     }
   }
 
+  // ── SPN (Supplier Profile Notes) editor ─────────────────────────────────────
+
+  Future<void> _openSpn(String supplierId) async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (_) => _SpnEditorDialog(supplierId: supplierId),
+    );
+    if (result == true && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Supplier terms updated.'),
+        backgroundColor: Color(0xFF1B7A43),
+        duration: Duration(seconds: 2),
+      ));
+    }
+  }
+
   // ── Permanent hard-delete one supplier ──────────────────────────────────────
 
   Future<void> _permanentDeleteSupplier(Map<String, dynamic> deletedRow) async {
@@ -856,6 +872,23 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
                 GestureDetector(
+                  onTap: () => _openSpn(row.id),
+                  child: Builder(builder: (_) {
+                    RenderLog.write('spn_button_header', 1);
+                    return Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(5),
+                        border: Border.all(color: const Color(0xFFD1D5DB)),
+                      ),
+                      child: const Text('SPN', style: TextStyle(
+                          fontSize: 10, fontWeight: FontWeight.w700, color: Color(0xFF374151))),
+                    );
+                  }),
+                ),
+                const SizedBox(width: 8),
+                GestureDetector(
                   onTap: () => _toggleCompanies(row.id),
                   behavior: HitTestBehavior.opaque,
                   child: _SupplierCompaniesButton(
@@ -919,6 +952,20 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                       style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF111827)),
                       overflow: TextOverflow.ellipsis)),
                   const SizedBox(width: 8),
+                  GestureDetector(
+                    onTap: () => _openSpn(row.id),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(5),
+                        border: Border.all(color: const Color(0xFFD1D5DB)),
+                      ),
+                      child: const Text('SPN', style: TextStyle(
+                          fontSize: 10, fontWeight: FontWeight.w700, color: Color(0xFF374151))),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
                   GestureDetector(
                     onTap: () => _toggleCompanies(row.id),
                     behavior: HitTestBehavior.opaque,
@@ -3268,20 +3315,6 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
     }
   }
 
-  Future<void> _openSpn() async {
-    final result = await showDialog<bool>(
-      context: context,
-      builder: (_) => _SpnEditorDialog(supplierId: widget.supplierId),
-    );
-    if (result == true && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Supplier terms updated.'),
-        backgroundColor: Color(0xFF1B7A43),
-        duration: Duration(seconds: 2),
-      ));
-    }
-  }
-
   Widget _hdr(String label, int flex) => Expanded(
     flex: flex,
     child: Text(label, style: const TextStyle(
@@ -3297,7 +3330,7 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
       RenderLog.write('screen', 'supplier_companies');
       RenderLog.write('supplier', widget.supplierName);
       RenderLog.write('company_rows', _rows.length);
-      RenderLog.write('spn_buttons', _rows.length); // SPN pill built on every row
+      RenderLog.write('spn_buttons', 0); // SPN moved to supplier header row
       RenderLog.write('map_buttons', 2); // Map by AI + Map Manually always rendered
       RenderLog.write('save_button', _mapped ? 1 : 0);
     }
@@ -3420,21 +3453,6 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                             child: Padding(
                               padding: const EdgeInsets.fromLTRB(8, 0, 8, 0),
                               child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-                                GestureDetector(
-                                  onTap: _openSpn,
-                                  child: Container(
-                                    width: 30, height: 20,
-                                    alignment: Alignment.center,
-                                    decoration: BoxDecoration(
-                                      color: Colors.white,
-                                      borderRadius: BorderRadius.circular(4),
-                                      border: Border.all(color: const Color(0xFFD1D5DB)),
-                                    ),
-                                    child: const Text('SPN', style: TextStyle(
-                                        fontSize: 8, fontWeight: FontWeight.w700, color: Color(0xFF374151))),
-                                  ),
-                                ),
-                                const SizedBox(width: 6),
                                 if (_flaggedRows.contains(ri)) ...[
                                   const Icon(Icons.flag, size: 11, color: Color(0xFFF59E0B)),
                                   const SizedBox(width: 4),

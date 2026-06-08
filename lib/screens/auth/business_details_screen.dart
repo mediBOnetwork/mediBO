@@ -277,7 +277,7 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
   }
 
   Future<void> _saveCompany() async {
-    await Supabase.instance.client.from('company_registrations').insert({
+    await Supabase.instance.client.from('company_profiles').insert({
       'user_id': widget.userId,
       'company_name': _coNameCtrl.text.trim(),
       'contact_person': _coContactCtrl.text.trim(),

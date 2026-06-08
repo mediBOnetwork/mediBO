@@ -256,7 +256,7 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
         .onPostgresChanges(
           event: PostgresChangeEvent.insert,
           schema: 'public',
-          table: 'company_registrations',
+          table: 'company_profiles',
           callback: (payload) {
             final rec = Map<String, dynamic>.from(payload.newRecord);
             if (rec.isEmpty) return;

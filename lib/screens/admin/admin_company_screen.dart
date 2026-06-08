@@ -31,7 +31,7 @@ class _AdminCompanyScreenState extends State<AdminCompanyScreen> with SingleTick
     setState(() => _loading = true);
     try {
       final rows = await Supabase.instance.client
-          .from('company_registrations')
+          .from('company_profiles')
           .select()
           .eq('is_deleted', false)
           .order('submitted_at', ascending: false) as List;
@@ -50,7 +50,7 @@ class _AdminCompanyScreenState extends State<AdminCompanyScreen> with SingleTick
 
   Future<void> _review(Map<String, dynamic> row, String status) async {
     final adminEmail = Supabase.instance.client.auth.currentUser?.id ?? '';
-    await Supabase.instance.client.from('company_registrations').update({
+    await Supabase.instance.client.from('company_profiles').update({
       'status': status,
       'reviewed_by': adminEmail,
       'reviewed_at': DateTime.now().toUtc().toIso8601String(),

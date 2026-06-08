@@ -121086,7 +121086,7 @@ aVs(){var s=Date.now(),r=$.aI().b
 r===$&&A.a()
 r=r.ax
 r===$&&A.a()
-this.Q=r.oY(0,"admin_new_co_"+s,B.dy).r5(new A.aRM(this),B.i6,"public","company_registrations").mA(0)},
+this.Q=r.oY(0,"admin_new_co_"+s,B.dy).r5(new A.aRM(this),B.i6,"public","company_profiles").mA(0)},
 aVt(){var s=Date.now(),r=$.aI().b
 r===$&&A.a()
 r=r.ax
@@ -121701,7 +121701,7 @@ p=4
 k=$.aI().b
 k===$&&A.a()
 s=7
-return A.j(k.aY("company_registrations").fc(0).bJ("is_deleted",!1).hT(0,"submitted_at",!1),$async$yc)
+return A.j(k.aY("company_profiles").fc(0).bJ("is_deleted",!1).hT(0,"submitted_at",!1),$async$yc)
 case 7:m=b
 l=A.dg(m,!0,t.P)
 if(n.c==null){s=1
@@ -121730,7 +121730,7 @@ o=p==null?null:p.a
 if(o==null)o=""
 p=t.z
 s=2
-return A.j(n.aY("company_registrations").bN(0,A.H(["status",b,"reviewed_by",o,"reviewed_at",new A.cx(Date.now(),0,!1).om().iA()],p,p)).bJ("id",J.n(a,"id")),$async$yd)
+return A.j(n.aY("company_profiles").bN(0,A.H(["status",b,"reviewed_by",o,"reviewed_at",new A.cx(Date.now(),0,!1).om().iA()],p,p)).bJ("id",J.n(a,"id")),$async$yd)
 case 2:s=3
 return A.j(q.yc(),$async$yd)
 case 3:return A.t(null,r)}})
@@ -128633,7 +128633,7 @@ LA(){var s=0,r=A.v(t.H),q=this,p,o,n,m,l,k,j,i,h,g,f,e,d
 var $async$LA=A.w(function(a,b){if(a===1)return A.r(b,r)
 for(;;)switch(s){case 0:d=$.aI().b
 d===$&&A.a()
-d=d.aY("company_registrations")
+d=d.aY("company_profiles")
 p=q.a.c
 o=B.c.N(q.x2.a.a)
 n=B.c.N(q.xr.a.a)

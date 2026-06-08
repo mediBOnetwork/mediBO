@@ -2611,14 +2611,8 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
       }
       final profilesSkipped = distinctNames.length - profilesInserted;
 
-      int scAttempted = 0;
+      int scInserted = 0;
       if (hasCompanyCol) {
-        setState(() { _statusMsg = 'Matching companies…'; });
-        final companyRows = await client.from('company').select('company_name');
-        final corpus = (companyRows as List<dynamic>)
-            .map((r) => ((r as Map<String, dynamic>)['company_name'] as String? ?? '').trim())
-            .where((s) => s.isNotEmpty).toList();
-
         final scRows = <Map<String, dynamic>>[];
         for (final row in _dataRows) {
           final supplierName = rowVal(row, 'supplier_name');
@@ -2626,12 +2620,9 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
           if (supplierName.isEmpty || companyName.isEmpty) continue;
           final supplierId = supplierMap[supplierName.toLowerCase()];
           if (supplierId == null) continue;
-          final top = _fzTop5(companyName, corpus);
-          String? n(int i) => i < top.length && top[i].isNotEmpty ? top[i] : null;
-          scRows.add({'supplier_id': supplierId, 'supplier_company': companyName,
-            'company_1': n(0), 'company_2': n(1), 'company_3': n(2), 'company_4': n(3), 'company_5': n(4)});
+          scRows.add({'supplier_id': supplierId, 'supplier_company': companyName});
         }
-        scAttempted = scRows.length;
+        scInserted = scRows.length;
         for (int i = 0; i < scRows.length; i += 500) {
           final chunk = scRows.sublist(i, (i + 500).clamp(0, scRows.length));
           await client.from('supplier_company')
@@ -2645,7 +2636,7 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
         final parts = <String>[];
         parts.add('$profilesInserted new supplier${profilesInserted == 1 ? "" : "s"}');
         if (profilesSkipped > 0) parts.add('$profilesSkipped already existed');
-        if (hasCompanyCol) parts.add('$scAttempted company row${scAttempted == 1 ? "" : "s"} (dupes auto-skipped)');
+        if (hasCompanyCol) parts.add('$scInserted company row${scInserted == 1 ? "" : "s"} saved (company_1–5 empty, fill via Refresh)');
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text('Imported: ${parts.join(" · ")}'),
           backgroundColor: const Color(0xFF1B7A43), duration: const Duration(seconds: 6),

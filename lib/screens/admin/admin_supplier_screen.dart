@@ -3227,17 +3227,35 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
     }
   }
 
+  // Left-pack: drop nulls/empties, re-fill from company_1, trailing → null
+  void _packRow(Map<String, dynamic> row) {
+    final vals = _companyCols
+        .map((c) => row[c] as String?)
+        .where((v) => v != null && v.isNotEmpty)
+        .toList();
+    for (int ci = 0; ci < _companyCols.length; ci++) {
+      row[_companyCols[ci]] = ci < vals.length ? vals[ci] : null;
+    }
+  }
+
   Future<void> _saveMatches() async {
     setState(() => _mappingMode = 'save');
     try {
       final client = Supabase.instance.client;
-      for (final row in _rows) {
+      final packed = _rows.map((r) => Map<String, dynamic>.from(r)).toList();
+      for (final row in packed) { _packRow(row); }
+      for (final row in packed) {
         final update = <String, dynamic>{};
         for (final col in _companyCols) { update[col] = row[col]; }
         await client.from('supplier_company').update(update).eq('id', row['id'] as String);
       }
       if (mounted) {
-        setState(() { _mapped = false; _needsReview = 0; _flaggedRows = {}; });
+        setState(() {
+          _rows = packed;
+          _mapped = false;
+          _needsReview = 0;
+          _flaggedRows = {};
+        });
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text('Saved.'),
           backgroundColor: Color(0xFF1B7A43),

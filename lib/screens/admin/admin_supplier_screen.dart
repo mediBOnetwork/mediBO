@@ -3783,8 +3783,7 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
     final behaviour   = _values['behaviour'];
     final paymentType = _values['payment_term']; // dropdown key payment_term → DB col payment_type
     try {
-      // Use service_role client — RLS blocks anon key writes to supplier_profiles.
-      final adminClient = SupabaseClient(SupabaseConfig.url, supabaseServiceKey);
+      final adminClient = Supabase.instance.client;
       final result = await adminClient
           .from('supplier_profiles')
           .update({

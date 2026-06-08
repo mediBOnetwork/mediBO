@@ -3164,17 +3164,17 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                       Padding(
                         padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
                         child: Row(children: [
-                          _hdr('SUPPLIER COMPANY', 172),
+                          _hdr('SUPPLIER COMPANY', 260),
                           const SizedBox(width: 4),
-                          _hdr('COMPANY 1', 156),
+                          _hdr('COMPANY 1', 130),
                           const SizedBox(width: 4),
-                          _hdr('COMPANY 2', 156),
+                          _hdr('COMPANY 2', 130),
                           const SizedBox(width: 4),
-                          _hdr('COMPANY 3', 156),
+                          _hdr('COMPANY 3', 130),
                           const SizedBox(width: 4),
-                          _hdr('COMPANY 4', 156),
+                          _hdr('COMPANY 4', 130),
                           const SizedBox(width: 4),
-                          _hdr('COMPANY 5', 156),
+                          _hdr('COMPANY 5', 130),
                         ]),
                       ),
                       const Divider(height: 1, color: Color(0xFFDBEAFE)),
@@ -3190,10 +3190,10 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                         Padding(
                           padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
                           child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-                            SizedBox(width: 172, child: Text(
+                            SizedBox(width: 260, child: Text(
                               _rows[ri]['supplier_company'] as String? ?? '—',
                               style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
-                              maxLines: 2, overflow: TextOverflow.ellipsis,
+                              maxLines: 1, overflow: TextOverflow.ellipsis,
                             )),
                             for (final col in ['company_1','company_2','company_3','company_4','company_5']) ...[
                               const SizedBox(width: 4),
@@ -3285,7 +3285,7 @@ class _CompanyCell extends StatelessWidget {
         if (result != null) onChanged(result.isEmpty ? null : result);
       },
       child: Container(
-        width: 152,
+        width: 130,
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
         decoration: BoxDecoration(
           color: filled ? const Color(0xFFECFDF5) : Colors.white,

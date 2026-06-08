@@ -3245,7 +3245,7 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                         style: const TextStyle(fontSize: 12, color: Color(0xFF92400E))),
                   ]),
                 ),
-              // ── Grid: frozen SUPPLIER COMPANY + scrollable Company 1-30 ─────
+              // ── Grid: frozen left column + single shared horizontal scroll ──
               if (_rows.isEmpty && !_showAddForm)
                 const Padding(
                   padding: EdgeInsets.symmetric(horizontal: 14, vertical: 14),
@@ -3253,47 +3253,31 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                       style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
                 )
               else
-                Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                  // Header row
-                  Container(
-                    color: const Color(0xFFF0F7FF),
-                    child: Row(children: [
-                      SizedBox(
-                        width: 190,
-                        child: Padding(
-                          padding: const EdgeInsets.fromLTRB(14, 7, 8, 7),
-                          child: Text('SUPPLIER COMPANY', style: const TextStyle(
-                              fontSize: 10, fontWeight: FontWeight.w700,
-                              color: Color(0xFF6B7280), letterSpacing: 0.4)),
-                        ),
+                Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  // ── Frozen left pane ───────────────────────────────────────
+                  SizedBox(
+                    width: 190,
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                      // Header cell
+                      Container(
+                        height: 32,
+                        color: const Color(0xFFF0F7FF),
+                        alignment: Alignment.centerLeft,
+                        padding: const EdgeInsets.fromLTRB(14, 0, 8, 0),
+                        child: const Text('SUPPLIER COMPANY', style: TextStyle(
+                            fontSize: 10, fontWeight: FontWeight.w700,
+                            color: Color(0xFF6B7280), letterSpacing: 0.4),
+                          overflow: TextOverflow.ellipsis),
                       ),
-                      Expanded(child: SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        controller: _scrollCtrl,
-                        child: Row(children: [
-                          for (int i = 1; i <= 30; i++) ...[
-                            const SizedBox(width: 4),
-                            SizedBox(width: 120, child: Text('COMPANY $i', style: const TextStyle(
-                                fontSize: 10, fontWeight: FontWeight.w700,
-                                color: Color(0xFF6B7280), letterSpacing: 0.4),
-                              overflow: TextOverflow.ellipsis)),
-                          ],
-                          const SizedBox(width: 8),
-                        ]),
-                      )),
-                    ]),
-                  ),
-                  const Divider(height: 1, color: Color(0xFFDBEAFE)),
-                  // Data rows
-                  for (int ri = 0; ri < _rows.length; ri++) ...[
-                    IntrinsicHeight(
-                      child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                        // Frozen: supplier company name
+                      const Divider(height: 1, color: Color(0xFFDBEAFE)),
+                      // Data cells
+                      for (int ri = 0; ri < _rows.length; ri++) ...[
                         Container(
-                          width: 190,
+                          height: 44,
                           color: _flaggedRows.contains(ri) ? const Color(0xFFFFFBEB) : null,
-                          padding: const EdgeInsets.fromLTRB(14, 6, 8, 6),
-                          child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+                          alignment: Alignment.centerLeft,
+                          padding: const EdgeInsets.fromLTRB(14, 0, 8, 0),
+                          child: Row(children: [
                             if (_flaggedRows.contains(ri)) ...[
                               const Icon(Icons.flag, size: 11, color: Color(0xFFF59E0B)),
                               const SizedBox(width: 4),
@@ -3305,40 +3289,62 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                             )),
                           ]),
                         ),
-                        // Scrollable: Company 1-30
-                        Expanded(child: SingleChildScrollView(
-                          scrollDirection: Axis.horizontal,
-                          controller: _scrollCtrl,
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 6),
-                            child: Row(children: [
-                              for (final col in _companyCols) ...[
-                                const SizedBox(width: 4),
-                                SizedBox(width: 120, child: _CompanyCell(
-                                  value: _rows[ri][col] as String?,
-                                  options: _medMarketers,
-                                  onChanged: (v) => _mapped
-                                      ? setState(() => _rows[ri][col] = (v == null || v.isEmpty) ? null : v)
-                                      : _updateCell(_rows[ri]['id'] as String, col, v),
-                                  onClear: (_rows[ri][col] != null && (_rows[ri][col] as String).isNotEmpty)
-                                      ? () {
-                                          if (_mapped) {
-                                            setState(() => _rows[ri][col] = null);
-                                          } else {
-                                            _updateCell(_rows[ri]['id'] as String, col, null);
-                                          }
+                        if (ri < _rows.length - 1) const Divider(height: 1, color: Color(0xFFEFF6FF)),
+                      ],
+                    ]),
+                  ),
+                  // ── Single shared horizontal scroll (header + all rows) ────
+                  Expanded(child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    controller: _scrollCtrl,
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      // Header row
+                      Container(
+                        height: 32,
+                        color: const Color(0xFFF0F7FF),
+                        child: Row(children: [
+                          for (int i = 1; i <= 30; i++) ...[
+                            const SizedBox(width: 4),
+                            SizedBox(width: 120, child: Text('COMPANY $i', style: const TextStyle(
+                                fontSize: 10, fontWeight: FontWeight.w700,
+                                color: Color(0xFF6B7280), letterSpacing: 0.4),
+                              overflow: TextOverflow.ellipsis)),
+                          ],
+                          const SizedBox(width: 8),
+                        ]),
+                      ),
+                      const Divider(height: 1, color: Color(0xFFDBEAFE)),
+                      // Data rows — same 44px height, aligned with frozen pane
+                      for (int ri = 0; ri < _rows.length; ri++) ...[
+                        SizedBox(
+                          height: 44,
+                          child: Row(children: [
+                            for (final col in _companyCols) ...[
+                              const SizedBox(width: 4),
+                              SizedBox(width: 120, child: _CompanyCell(
+                                value: _rows[ri][col] as String?,
+                                options: _medMarketers,
+                                onChanged: (v) => _mapped
+                                    ? setState(() => _rows[ri][col] = (v == null || v.isEmpty) ? null : v)
+                                    : _updateCell(_rows[ri]['id'] as String, col, v),
+                                onClear: (_rows[ri][col] != null && (_rows[ri][col] as String).isNotEmpty)
+                                    ? () {
+                                        if (_mapped) {
+                                          setState(() => _rows[ri][col] = null);
+                                        } else {
+                                          _updateCell(_rows[ri]['id'] as String, col, null);
                                         }
-                                      : null,
-                                )),
-                              ],
-                              const SizedBox(width: 8),
-                            ]),
-                          ),
-                        )),
-                      ]),
-                    ),
-                    if (ri < _rows.length - 1) const Divider(height: 1, color: Color(0xFFEFF6FF)),
-                  ],
+                                      }
+                                    : null,
+                              )),
+                            ],
+                            const SizedBox(width: 8),
+                          ]),
+                        ),
+                        if (ri < _rows.length - 1) const Divider(height: 1, color: Color(0xFFEFF6FF)),
+                      ],
+                    ]),
+                  )),
                 ]),
               // ── Add-row form ─────────────────────────────────────────────────
               if (_showAddForm)

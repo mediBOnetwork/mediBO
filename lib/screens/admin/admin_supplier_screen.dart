@@ -3883,22 +3883,15 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
                     child: Row(children: [
                       for (final col in _spnCols) ...[
                         const SizedBox(width: 4),
-                        Expanded(child: _CompanyCell(
+                        Expanded(child: _SpnDropdown(
+                          field: col.$2,
                           value: _values[col.$2],
-                          options: List<String>.from(_spnOptions[col.$2]!),
-                          onChanged: (v) {
-                            final cleaned = v?.isEmpty == true ? null : v;
-                            RenderLog.write('spn_onchange_fired', '${col.$2}=${cleaned ?? "null"}');
-                            setState(() => _values[col.$2] = cleaned);
-                            _writeField(col.$2, cleaned);
+                          options: _spnOptions[col.$2]!,
+                          onPick: (field, val) {
+                            RenderLog.write('spn_dd_changed', '$field=$val');
+                            setState(() => _values[field] = val);
+                            _writeField(field, val);
                           },
-                          onClear: (_values[col.$2] != null && _values[col.$2]!.isNotEmpty)
-                              ? () {
-                                  RenderLog.write('spn_onchange_fired', '${col.$2}=CLEAR');
-                                  setState(() => _values[col.$2] = null);
-                                  _writeField(col.$2, null);
-                                }
-                              : null,
                         )),
                       ],
                       const SizedBox(width: 8),
@@ -3907,6 +3900,46 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
                 ])),
               ]),
             ]),
+    );
+  }
+}
+
+// ── SPN inline DropdownButton (replaces dialog-based _CompanyCell for SPN) ────
+
+class _SpnDropdown extends StatelessWidget {
+  final String field;
+  final String? value;
+  final List<String> options;
+  final void Function(String field, String? val) onPick;
+  const _SpnDropdown({required this.field, required this.value, required this.options, required this.onPick});
+
+  @override
+  Widget build(BuildContext context) {
+    final filled = value != null && value!.isNotEmpty;
+    return Container(
+      height: 36,
+      padding: const EdgeInsets.symmetric(horizontal: 6),
+      decoration: BoxDecoration(
+        color: filled ? const Color(0xFFECFDF5) : Colors.white,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: filled ? const Color(0xFF6EE7B7) : const Color(0xFFE5E7EB)),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          value: value,
+          hint: const Text('—', style: TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
+          isExpanded: true,
+          isDense: true,
+          style: const TextStyle(fontSize: 11, color: Color(0xFF065F46)),
+          icon: const Icon(Icons.expand_more, size: 14, color: Color(0xFF6B7280)),
+          items: [
+            const DropdownMenuItem<String>(value: null, child: Text('—', style: TextStyle(fontSize: 11, color: Color(0xFF9CA3AF)))),
+            for (final opt in options)
+              DropdownMenuItem<String>(value: opt, child: Text(opt, style: const TextStyle(fontSize: 11, color: Color(0xFF111827)))),
+          ],
+          onChanged: (val) => onPick(field, val),
+        ),
+      ),
     );
   }
 }

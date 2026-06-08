@@ -3345,7 +3345,7 @@ class _CompanyCell extends StatelessWidget {
         if (result != null) onChanged(result.isEmpty ? null : result);
       },
       child: Container(
-        padding: const EdgeInsets.only(left: 8, top: 7, bottom: 7, right: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
         decoration: BoxDecoration(
           color: filled ? const Color(0xFFECFDF5) : Colors.white,
           borderRadius: BorderRadius.circular(6),
@@ -3363,11 +3363,10 @@ class _CompanyCell extends StatelessWidget {
               behavior: HitTestBehavior.opaque,
               onTap: onClear,
               child: const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 2),
-                child: Icon(Icons.close, size: 11, color: Color(0xFF9CA3AF)),
+                padding: EdgeInsets.only(left: 4),
+                child: Icon(Icons.close, size: 12, color: Color(0xFF111827)),
               ),
             ),
-          const Icon(Icons.arrow_drop_down, size: 14, color: Color(0xFF9CA3AF)),
         ]),
       ),
     );

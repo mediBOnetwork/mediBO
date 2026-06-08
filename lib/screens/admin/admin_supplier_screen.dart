@@ -3115,7 +3115,7 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
       if (_medMarketers.isEmpty) {
         final meds = await client.rpc('get_distinct_marketers');
         final list = (meds as List)
-            .map((m) => (m as String? ?? '').trim())
+            .map((m) => ((m as Map)['get_distinct_marketers'] as String? ?? '').trim())
             .where((m) => m.isNotEmpty)
             .toList();
         list.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));

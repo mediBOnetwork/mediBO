@@ -147,6 +147,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   String? _expandedSupplierId;
   // Companies section — only one supplier open at a time; mutually exclusive with detail.
   String? _companiesSupplierId;
+  String? _spnSupplierId;
   final Set<String> _expandedLeads = {};
   final Map<String, int> _companyCounts = {};
   final ScrollController _scrollCtrl = ScrollController();
@@ -161,10 +162,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   }
 
   @override
-  OverlayEntry? _spnOverlay;
-
   void dispose() {
-    _spnOverlay?.remove();
     _debounce?.cancel();
     for (final ch in _channels) ch.unsubscribe();
     _channels.clear();
@@ -196,10 +194,21 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
 
   void _toggleCompanies(String id) => setState(() {
     if (_companiesSupplierId == id) {
-      _companiesSupplierId = null; // close
+      _companiesSupplierId = null;
     } else {
       _companiesSupplierId = id;
-      _expandedSupplierId  = null; // close detail when companies opens
+      _expandedSupplierId  = null;
+      _spnSupplierId       = null;
+    }
+  });
+
+  void _toggleSpn(String id) => setState(() {
+    if (_spnSupplierId == id) {
+      _spnSupplierId = null;
+    } else {
+      _spnSupplierId       = id;
+      _expandedSupplierId  = null;
+      _companiesSupplierId = null;
     }
   });
 
@@ -367,39 +376,6 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Delete failed: $e'), backgroundColor: const Color(0xFFDC2626)));
     }
-  }
-
-  // ── SPN anchored dropdown (overlay — boxed horizontal options) ───────────────
-
-  void _openSpn(BuildContext btnCtx, String supplierId) {
-    _spnOverlay?.remove();
-    _spnOverlay = null;
-
-    final box    = btnCtx.findRenderObject()! as RenderBox;
-    final origin = box.localToGlobal(Offset.zero);
-    final btnSz  = box.size;
-    final screen = MediaQuery.sizeOf(context);
-
-    RenderLog.write('spn_dropdown_open', 1);
-
-    _spnOverlay = OverlayEntry(
-      builder: (_) => _SpnDropdown(
-        supplierId: supplierId,
-        anchorLeft: origin.dx,
-        anchorTop:  origin.dy + btnSz.height + 4,
-        screenWidth: screen.width,
-        onClose: () { _spnOverlay?.remove(); _spnOverlay = null; },
-        onSaved: () {
-          _spnOverlay?.remove(); _spnOverlay = null;
-          if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('Supplier terms updated.'),
-            backgroundColor: Color(0xFF1B7A43),
-            duration: Duration(seconds: 2),
-          ));
-        },
-      ),
-    );
-    Overlay.of(context).insert(_spnOverlay!);
   }
 
   // ── Permanent hard-delete one supplier ──────────────────────────────────────
@@ -575,10 +551,11 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
 
   void _toggleExpand(String key) => setState(() {
     if (_expandedSupplierId == key) {
-      _expandedSupplierId = null; // close
+      _expandedSupplierId = null;
     } else {
       _expandedSupplierId  = key;
-      _companiesSupplierId = null; // close companies when detail opens
+      _companiesSupplierId = null;
+      _spnSupplierId       = null;
     }
   });
 
@@ -664,7 +641,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       child: GestureDetector(
         onTap: () {
           if (_scrollCtrl.hasClients) _scrollCtrl.jumpTo(0);
-          setState(() { _filter = f; _expandedSupplierId = null; _companiesSupplierId = null; });
+          setState(() { _filter = f; _expandedSupplierId = null; _companiesSupplierId = null; _spnSupplierId = null; });
         },
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 150),
@@ -891,22 +868,19 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
             SizedBox(width: 360, child: Row(
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
-                Builder(builder: (btnCtx) {
-                  RenderLog.write('spn_button_header', 1);
-                  return GestureDetector(
-                    onTap: () => _openSpn(btnCtx, row.id),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(5),
-                        border: Border.all(color: const Color(0xFFD1D5DB)),
-                      ),
-                      child: const Text('SPN', style: TextStyle(
-                          fontSize: 10, fontWeight: FontWeight.w700, color: Color(0xFF374151))),
+                GestureDetector(
+                  onTap: () => _toggleSpn(row.id),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: _spnSupplierId == row.id ? const Color(0xFFDBEAFE) : Colors.white,
+                      borderRadius: BorderRadius.circular(5),
+                      border: Border.all(color: _spnSupplierId == row.id ? const Color(0xFF93C5FD) : const Color(0xFFD1D5DB)),
                     ),
-                  );
-                }),
+                    child: const Text('SPN', style: TextStyle(
+                        fontSize: 10, fontWeight: FontWeight.w700, color: Color(0xFF374151))),
+                  ),
+                ),
                 const SizedBox(width: 8),
                 GestureDetector(
                   onTap: () => _toggleCompanies(row.id),
@@ -945,6 +919,8 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           supplierName: row.supplierName,
           onCompanyAdded: () => _reloadCompanyCount(row.id),
         ),
+      if (_spnSupplierId == row.id)
+        _SpnInlineSection(supplierId: row.id, supplierName: row.supplierName),
       if (isExpanded) _buildDetails(row.rawData, lpad: 28, rpad: 0),
     ]);
   }
@@ -972,19 +948,19 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                       style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF111827)),
                       overflow: TextOverflow.ellipsis)),
                   const SizedBox(width: 8),
-                  Builder(builder: (btnCtx) => GestureDetector(
-                    onTap: () => _openSpn(btnCtx, row.id),
+                  GestureDetector(
+                    onTap: () => _toggleSpn(row.id),
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                       decoration: BoxDecoration(
-                        color: Colors.white,
+                        color: _spnSupplierId == row.id ? const Color(0xFFDBEAFE) : Colors.white,
                         borderRadius: BorderRadius.circular(5),
-                        border: Border.all(color: const Color(0xFFD1D5DB)),
+                        border: Border.all(color: _spnSupplierId == row.id ? const Color(0xFF93C5FD) : const Color(0xFFD1D5DB)),
                       ),
                       child: const Text('SPN', style: TextStyle(
                           fontSize: 10, fontWeight: FontWeight.w700, color: Color(0xFF374151))),
                     ),
-                  )),
+                  ),
                   const SizedBox(width: 6),
                   GestureDetector(
                     onTap: () => _toggleCompanies(row.id),
@@ -1030,6 +1006,10 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                 supplierName: row.supplierName,
                 onCompanyAdded: () => _reloadCompanyCount(row.id),
               ),
+            ],
+            if (_spnSupplierId == row.id) ...[
+              const Divider(height: 1, color: Color(0xFFE5E7EB)),
+              _SpnInlineSection(supplierId: row.id, supplierName: row.supplierName),
             ],
             if (isExpanded) ...[
               const Divider(height: 1, color: Color(0xFFE5E7EB)),
@@ -3646,232 +3626,241 @@ class _CompanyCell extends StatelessWidget {
   }
 }
 
-// ── SPN anchored overlay dropdown ────────────────────────────────────────────
+// ── SPN inline section (mirrors Companies grid, 4 fixed columns) ─────────────
 
-class _SpnDropdown extends StatefulWidget {
+class _SpnInlineSection extends StatefulWidget {
   final String supplierId;
-  final double anchorLeft;
-  final double anchorTop;
-  final double screenWidth;
-  final VoidCallback onClose;
-  final VoidCallback onSaved;
-
-  const _SpnDropdown({
-    required this.supplierId,
-    required this.anchorLeft,
-    required this.anchorTop,
-    required this.screenWidth,
-    required this.onClose,
-    required this.onSaved,
-  });
+  final String supplierName;
+  const _SpnInlineSection({required this.supplierId, required this.supplierName});
 
   @override
-  State<_SpnDropdown> createState() => _SpnDropdownState();
+  State<_SpnInlineSection> createState() => _SpnInlineSectionState();
 }
 
-class _SpnDropdownState extends State<_SpnDropdown> {
-  static const _fields = [
-    ('Margin',       'margin'),
-    ('CD Condition', 'cd_condition'),
-    ('Behaviour',    'behaviour'),
-    ('Payment Term', 'payment_term'),
+class _SpnInlineSectionState extends State<_SpnInlineSection> {
+  static const _spnCols = [
+    ('MARGIN',       'margin'),
+    ('CD CONDITION', 'cd_condition'),
+    ('BEHAVIOUR',    'behaviour'),
+    ('PAYMENT TERM', 'payment_term'),
   ];
 
-  static const double _panelW = 448.0;
+  bool _loading = true;
+  late final Map<String, TextEditingController> _ctrls;
 
-  String? _pickedLabel;
-  String? _pickedField;
-  final _ctrl = TextEditingController();
-  bool _loading = false;
-  bool _saving  = false;
-
-  double get _left {
-    final clamped = widget.anchorLeft + _panelW > widget.screenWidth
-        ? widget.screenWidth - _panelW - 8
-        : widget.anchorLeft;
-    return clamped < 8 ? 8 : clamped;
+  @override
+  void initState() {
+    super.initState();
+    _ctrls = { for (final c in _spnCols) c.$2: TextEditingController() };
+    _load();
   }
 
   @override
   void dispose() {
-    _ctrl.dispose();
+    for (final c in _ctrls.values) c.dispose();
     super.dispose();
   }
 
-  Future<void> _pickField(String label, String field) async {
-    setState(() { _pickedLabel = label; _pickedField = field; _loading = true; });
+  Future<void> _load() async {
+    if (mounted) setState(() => _loading = true);
     try {
+      final cols = _spnCols.map((c) => c.$2).join(', ');
       final rows = await Supabase.instance.client
           .from('supplier_profiles')
-          .select(field)
+          .select(cols)
           .eq('id', widget.supplierId)
           .limit(1);
-      if (mounted && rows.isNotEmpty) {
-        _ctrl.text = (rows.first[field] as String?) ?? '';
+      if (mounted && (rows as List).isNotEmpty) {
+        final row = rows.first as Map<String, dynamic>;
+        setState(() {
+          for (final col in _spnCols) {
+            _ctrls[col.$2]!.text = row[col.$2] as String? ?? '';
+          }
+          _loading = false;
+        });
+      } else {
+        if (mounted) setState(() => _loading = false);
       }
-    } catch (_) {}
-    if (mounted) setState(() => _loading = false);
-  }
-
-  Future<void> _save() async {
-    if (_pickedField == null) return;
-    setState(() => _saving = true);
-    try {
-      final client = Supabase.instance.client;
-      await client.from('supplier_profiles')
-          .update({_pickedField!: _ctrl.text.trim()})
-          .eq('id', widget.supplierId);
-      client.rpc('recompute_supplier_points', params: {'p_id': widget.supplierId})
-          .then((_) {}).catchError((_) {});
-      widget.onSaved();
     } catch (_) {
-      if (mounted) setState(() => _saving = false);
+      if (mounted) setState(() => _loading = false);
     }
   }
 
+  Future<void> _saveField(String field) async {
+    final value = _ctrls[field]!.text.trim();
+    try {
+      final client = Supabase.instance.client;
+      await client.from('supplier_profiles')
+          .update({field: value.isEmpty ? null : value})
+          .eq('id', widget.supplierId);
+      client.rpc('recompute_supplier_points', params: {'p_id': widget.supplierId})
+          .then((_) {}).catchError((_) {});
+    } catch (_) {}
+  }
+
+  Widget _hdr(String label) => Expanded(
+    child: Text(label, style: const TextStyle(
+        fontSize: 10, fontWeight: FontWeight.w700,
+        color: Color(0xFF6B7280), letterSpacing: 0.4),
+      overflow: TextOverflow.ellipsis),
+  );
+
   @override
   Widget build(BuildContext context) {
-    return Stack(children: [
-      // Barrier — outside tap closes
-      Positioned.fill(
-        child: GestureDetector(
-          onTap: widget.onClose,
-          behavior: HitTestBehavior.opaque,
-          child: const ColoredBox(color: Colors.transparent),
-        ),
+    RenderLog.write('spn_panel', 1);
+    return Container(
+      decoration: const BoxDecoration(
+        color: Color(0xFFF0F7FF),
+        border: Border(top: BorderSide(color: Color(0xFFBFDBFE)), bottom: BorderSide(color: Color(0xFFBFDBFE))),
       ),
-      // Panel — stops tap propagation to barrier
-      Positioned(
-        left: _left,
-        top: widget.anchorTop,
-        child: GestureDetector(
-          onTap: () {},
-          child: Material(
-            elevation: 4,
-            borderRadius: BorderRadius.circular(8),
-            color: Colors.white,
-            child: Container(
-              width: _panelW,
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: const Color(0xFFE5E7EB)),
+      child: _loading
+          ? const Padding(padding: EdgeInsets.all(20),
+              child: Center(child: CircularProgressIndicator(color: Color(0xFF1B7A43), strokeWidth: 2)))
+          : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(14, 10, 8, 6),
+                child: Row(children: [
+                  const Text('Supplier Points — Terms',
+                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF374151))),
+                ]),
               ),
-              child: _pickedField == null ? _buildStep1() : _buildStep2(),
-            ),
-          ),
-        ),
-      ),
-    ]);
-  }
-
-  Widget _buildStep1() {
-    RenderLog.write('spn_option_boxes', _fields.length);
-    return Row(children: [
-      for (int i = 0; i < _fields.length; i++) ...[
-        if (i > 0) const SizedBox(width: 8),
-        Expanded(child: _SpnFieldBox(
-          label: _fields[i].$1,
-          onTap: () => _pickField(_fields[i].$1, _fields[i].$2),
-        )),
-      ],
-    ]);
-  }
-
-  Widget _buildStep2() {
-    return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Row(children: [
-        GestureDetector(
-          onTap: () => setState(() { _pickedLabel = null; _pickedField = null; _ctrl.clear(); }),
-          child: const Icon(Icons.arrow_back_ios, size: 13, color: Color(0xFF6B7280)),
-        ),
-        const SizedBox(width: 6),
-        Text(_pickedLabel ?? '', style: const TextStyle(
-            fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
-      ]),
-      const SizedBox(height: 8),
-      if (_loading)
-        const SizedBox(height: 36, child: Center(
-          child: SizedBox(width: 16, height: 16,
-            child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF1B7A43)))))
-      else
-        TextField(
-          controller: _ctrl,
-          autofocus: true,
-          style: const TextStyle(fontSize: 13),
-          decoration: InputDecoration(
-            isDense: true,
-            contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(6),
-                borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
-            enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6),
-                borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
-            focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6),
-                borderSide: const BorderSide(color: Color(0xFF1B7A43))),
-            filled: true, fillColor: const Color(0xFFF9FAFB),
-          ),
-          onSubmitted: (_) => _save(),
-        ),
-      const SizedBox(height: 8),
-      Align(
-        alignment: Alignment.centerRight,
-        child: SizedBox(
-          height: 28,
-          child: FilledButton(
-            onPressed: _saving ? null : _save,
-            style: FilledButton.styleFrom(
-              backgroundColor: const Color(0xFF1B7A43),
-              padding: const EdgeInsets.symmetric(horizontal: 14),
-            ),
-            child: _saving
-                ? const SizedBox(width: 12, height: 12,
-                    child: CircularProgressIndicator(strokeWidth: 1.5, color: Colors.white))
-                : const Text('Save', style: TextStyle(fontSize: 12)),
-          ),
-        ),
-      ),
-    ]);
+              const Divider(height: 1, color: Color(0xFFBFDBFE)),
+              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                // ── Frozen left pane ─────────────────────────────────────────
+                SizedBox(
+                  width: 320,
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                    Container(
+                      height: 32,
+                      color: const Color(0xFFF0F7FF),
+                      alignment: Alignment.centerLeft,
+                      padding: const EdgeInsets.fromLTRB(14, 0, 8, 0),
+                      child: const Text('SUPPLIER', style: TextStyle(
+                          fontSize: 10, fontWeight: FontWeight.w700,
+                          color: Color(0xFF6B7280), letterSpacing: 0.4),
+                        overflow: TextOverflow.ellipsis),
+                    ),
+                    const Divider(height: 1, color: Color(0xFFDBEAFE)),
+                    SizedBox(
+                      height: 52,
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(8, 0, 8, 0),
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            widget.supplierName,
+                            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
+                            maxLines: 1, overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ]),
+                ),
+                // ── 4 fixed columns (full width, no scroll) ──────────────────
+                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Container(
+                    height: 32,
+                    color: const Color(0xFFF0F7FF),
+                    child: Row(children: [
+                      for (final col in _spnCols) ...[
+                        const SizedBox(width: 4),
+                        _hdr(col.$1),
+                      ],
+                      const SizedBox(width: 8),
+                    ]),
+                  ),
+                  const Divider(height: 1, color: Color(0xFFDBEAFE)),
+                  SizedBox(
+                    height: 52,
+                    child: Row(children: [
+                      for (final col in _spnCols) ...[
+                        const SizedBox(width: 4),
+                        Expanded(child: _SpnCell(
+                          ctrl: _ctrls[col.$2]!,
+                          onSave: () => _saveField(col.$2),
+                        )),
+                      ],
+                      const SizedBox(width: 8),
+                    ]),
+                  ),
+                ])),
+              ]),
+            ]),
+    );
   }
 }
 
-// ── SPN field option box (matches _CompanyCell visual style) ─────────────────
+// ── SPN editable cell (mirrors _CompanyCell box decoration) ──────────────────
 
-class _SpnFieldBox extends StatefulWidget {
-  final String label;
-  final VoidCallback onTap;
-  const _SpnFieldBox({required this.label, required this.onTap});
+class _SpnCell extends StatefulWidget {
+  final TextEditingController ctrl;
+  final Future<void> Function() onSave;
+  const _SpnCell({required this.ctrl, required this.onSave});
+
   @override
-  State<_SpnFieldBox> createState() => _SpnFieldBoxState();
+  State<_SpnCell> createState() => _SpnCellState();
 }
 
-class _SpnFieldBoxState extends State<_SpnFieldBox> {
-  bool _hovered = false;
+class _SpnCellState extends State<_SpnCell> {
+  bool _saving = false;
+  late final FocusNode _focus;
+
+  @override
+  void initState() {
+    super.initState();
+    _focus = FocusNode()..addListener(() {
+      if (!_focus.hasFocus) _doSave();
+    });
+  }
+
+  @override
+  void dispose() {
+    _focus.dispose();
+    super.dispose();
+  }
+
+  Future<void> _doSave() async {
+    if (_saving) return;
+    if (mounted) setState(() => _saving = true);
+    await widget.onSave();
+    if (mounted) setState(() => _saving = false);
+  }
+
   @override
   Widget build(BuildContext context) {
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hovered = true),
-      onExit:  (_) => setState(() => _hovered = false),
-      child: GestureDetector(
-        onTap: widget.onTap,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 100),
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 9),
-          decoration: BoxDecoration(
-            color: _hovered ? const Color(0xFFF0F9FF) : Colors.white,
-            borderRadius: BorderRadius.circular(6),
-            border: Border.all(
-                color: _hovered ? const Color(0xFF93C5FD) : const Color(0xFFE5E7EB)),
-          ),
-          child: Text(widget.label,
-            textAlign: TextAlign.center,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-                fontSize: 12, fontWeight: FontWeight.w500, color: Color(0xFF111827)),
-          ),
-        ),
-      ),
+    final filled = widget.ctrl.text.isNotEmpty;
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      child: _saving
+          ? Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+              decoration: BoxDecoration(
+                color: filled ? const Color(0xFFECFDF5) : Colors.white,
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: filled ? const Color(0xFF6EE7B7) : const Color(0xFFE5E7EB)),
+              ),
+              child: const Row(children: [
+                SizedBox(width: 12, height: 12,
+                  child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF1B7A43))),
+              ]),
+            )
+          : TextField(
+              controller: widget.ctrl,
+              focusNode: _focus,
+              style: TextStyle(fontSize: 11, color: filled ? const Color(0xFF065F46) : const Color(0xFF111827)),
+              decoration: InputDecoration(
+                isDense: true,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+                enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6),
+                    borderSide: BorderSide(color: filled ? const Color(0xFF6EE7B7) : const Color(0xFFE5E7EB))),
+                focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6),
+                    borderSide: const BorderSide(color: Color(0xFF1B7A43))),
+                filled: true,
+                fillColor: filled ? const Color(0xFFECFDF5) : Colors.white,
+              ),
+              onSubmitted: (_) => _doSave(),
+            ),
     );
   }
 }

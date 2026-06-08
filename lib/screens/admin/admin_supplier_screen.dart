@@ -3366,23 +3366,27 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
     } catch (_) {}
   }
 
-  // ── Company corpus: service_role fetch so RLS never blocks it ────────────────
+  // ── Company corpus: paginated fetch to get all rows (Supabase caps at 1000/page) ──
   Future<void> _ensureCorpus() async {
     if (_companyCorpus.isNotEmpty) return;
     try {
-      final resp = await http.get(
-        Uri.parse('${SupabaseConfig.url}/rest/v1/company?select=company_name&order=company_name'),
-        headers: {
-          'apikey': supabaseServiceKey,
-          'Authorization': 'Bearer $supabaseServiceKey',
-        },
-      );
-      if (resp.statusCode == 200) {
-        final rows = jsonDecode(resp.body) as List;
-        _companyCorpus = rows
+      final allNames = <String>[];
+      // Fetch in 1000-row pages until the page comes back short
+      for (int from = 0; from <= 10000; from += 1000) {
+        final res = await Supabase.instance.client
+            .from('company')
+            .select('company_name')
+            .order('company_name')
+            .range(from, from + 999);
+        final page = (res as List)
             .map((r) => ((r as Map)['company_name'] as String? ?? '').trim())
             .where((s) => s.isNotEmpty)
-            .toList()
+            .toList();
+        allNames.addAll(page);
+        if (page.length < 1000) break; // last page
+      }
+      if (allNames.isNotEmpty) {
+        _companyCorpus = allNames
           ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
       }
     } catch (_) {}

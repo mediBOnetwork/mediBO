@@ -970,8 +970,6 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                 key: ValueKey('spn_${row.id}'),
                 supplierId: row.id,
                 supplierName: row.supplierName,
-                onRegister: (id, cb) => _spnCallbacks[id] = cb,
-                onUnregister: (id) => _spnCallbacks.remove(id),
               ),
       if (isExpanded) _buildDetails(row.rawData, lpad: 28, rpad: 0),
     ]);
@@ -1065,8 +1063,6 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                 key: ValueKey('spn_${row.id}'),
                 supplierId: row.id,
                 supplierName: row.supplierName,
-                onRegister: (id, cb) => _spnCallbacks[id] = cb,
-                onUnregister: (id) => _spnCallbacks.remove(id),
               ),
             ],
             if (isExpanded) ...[
@@ -3689,14 +3685,10 @@ class _CompanyCell extends StatelessWidget {
 class _SpnInlineSection extends StatefulWidget {
   final String supplierId;
   final String supplierName;
-  final void Function(String, void Function(Map<String, dynamic>)) onRegister;
-  final void Function(String) onUnregister;
   const _SpnInlineSection({
     super.key,
     required this.supplierId,
     required this.supplierName,
-    required this.onRegister,
-    required this.onUnregister,
   });
 
   @override
@@ -3738,22 +3730,15 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
     if (_userCache.containsKey(_supplierId)) {
       _values.addAll(_userCache[_supplierId]!);
     }
-    widget.onRegister(_supplierId, _applyPatch);
+    // Do NOT register with realtime callbacks — the SPN panel is the sole writer
+    // and must never rebuild from its own UPDATE echoes.
     _load();
   }
 
   @override
   void dispose() {
-    widget.onUnregister(_supplierId);
     _userCache.remove(_supplierId); // clean up when panel is closed
     super.dispose();
-  }
-
-  // Called by parent on every realtime UPDATE — only update points, never overwrite user-selected values.
-  void _applyPatch(Map<String, dynamic> patch) {
-    if (!mounted) return;
-    _loadCancelled = true;
-    setState(() { _loading = false; });
   }
 
   Future<void> _load() async {
@@ -3900,16 +3885,15 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
                       for (final col in _spnCols) ...[
                         const SizedBox(width: 4),
                         Expanded(child: _SpnDropdown(
+                          key: ValueKey('${_supplierId}_${col.$2}'),
                           field: col.$2,
-                          value: _values[col.$2],
+                          initialValue: _values[col.$2],
                           options: _spnOptions[col.$2]!,
                           onPick: (field, val) {
                             _changeCounter++;
                             RenderLog.write('spn_change_count', _changeCounter.toString());
                             RenderLog.write('spn_change_last', '$field=$val@${DateTime.now().millisecondsSinceEpoch}');
-                            // Cache the pick so it survives state recreation.
                             (_userCache[_supplierId] ??= {})[field] = val;
-                            setState(() => _values[field] = val);
                             _writeField(field, val);
                           },
                         )),
@@ -3924,18 +3908,31 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
   }
 }
 
-// ── SPN inline DropdownButton (replaces dialog-based _CompanyCell for SPN) ────
+// ── SPN inline DropdownButton — StatefulWidget so parent rebuilds never reset value ──
 
-class _SpnDropdown extends StatelessWidget {
+class _SpnDropdown extends StatefulWidget {
   final String field;
-  final String? value;
+  final String? initialValue;
   final List<String> options;
   final void Function(String field, String? val) onPick;
-  const _SpnDropdown({required this.field, required this.value, required this.options, required this.onPick});
+  const _SpnDropdown({super.key, required this.field, required this.initialValue, required this.options, required this.onPick});
+
+  @override
+  State<_SpnDropdown> createState() => _SpnDropdownState();
+}
+
+class _SpnDropdownState extends State<_SpnDropdown> {
+  String? _selected;
+
+  @override
+  void initState() {
+    super.initState();
+    _selected = widget.initialValue;
+  }
 
   @override
   Widget build(BuildContext context) {
-    final filled = value != null && value!.isNotEmpty;
+    final filled = _selected != null && _selected!.isNotEmpty;
     return Container(
       height: 36,
       padding: const EdgeInsets.symmetric(horizontal: 6),
@@ -3946,7 +3943,7 @@ class _SpnDropdown extends StatelessWidget {
       ),
       child: DropdownButtonHideUnderline(
         child: DropdownButton<String>(
-          value: value,
+          value: _selected,
           hint: const Text('—', style: TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
           isExpanded: true,
           isDense: true,
@@ -3954,10 +3951,13 @@ class _SpnDropdown extends StatelessWidget {
           icon: const Icon(Icons.expand_more, size: 14, color: Color(0xFF6B7280)),
           items: [
             const DropdownMenuItem<String>(value: null, child: Text('—', style: TextStyle(fontSize: 11, color: Color(0xFF9CA3AF)))),
-            for (final opt in options)
+            for (final opt in widget.options)
               DropdownMenuItem<String>(value: opt, child: Text(opt, style: const TextStyle(fontSize: 11, color: Color(0xFF111827)))),
           ],
-          onChanged: (val) => onPick(field, val),
+          onChanged: (val) {
+            setState(() => _selected = val);
+            widget.onPick(widget.field, val);
+          },
         ),
       ),
     );

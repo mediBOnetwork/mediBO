@@ -3205,15 +3205,17 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                     child: Row(children: [
                       _hdr('SUPPLIER COMPANY', 26),
                       const SizedBox(width: 4),
-                      _hdr('COMPANY 1', 14),
+                      _hdr('COMPANY 1', 12),
                       const SizedBox(width: 4),
-                      _hdr('COMPANY 2', 14),
+                      _hdr('COMPANY 2', 12),
                       const SizedBox(width: 4),
-                      _hdr('COMPANY 3', 14),
+                      _hdr('COMPANY 3', 12),
                       const SizedBox(width: 4),
-                      _hdr('COMPANY 4', 14),
+                      _hdr('COMPANY 4', 12),
                       const SizedBox(width: 4),
-                      _hdr('COMPANY 5', 14),
+                      _hdr('COMPANY 5', 12),
+                      const SizedBox(width: 6),
+                      const SizedBox(width: 88),
                     ]),
                   ),
                   const Divider(height: 1, color: Color(0xFFDBEAFE)),
@@ -3236,17 +3238,23 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                         )),
                         for (final col in ['company_1','company_2','company_3','company_4','company_5']) ...[
                           const SizedBox(width: 4),
-                          Expanded(flex: 14, child: _CompanyCell(
+                          Expanded(flex: 12, child: _CompanyCell(
                             value: _rows[ri][col] as String?,
                             options: _medMarketers,
                             onChanged: (v) => _mapped
                                 ? setState(() => _rows[ri][col] = (v == null || v.isEmpty) ? null : v)
                                 : _updateCell(_rows[ri]['id'] as String, col, v),
-                            onClear: (_rows[ri][col] != null && (_rows[ri][col] as String).isNotEmpty)
-                                ? () => setState(() => _rows[ri][col] = null)
-                                : null,
                           )),
                         ],
+                        const SizedBox(width: 6),
+                        _RowTrimButtons(
+                          onTrim: (keep) => setState(() {
+                            final cols = ['company_1','company_2','company_3','company_4','company_5'];
+                            for (int ci = 0; ci < cols.length; ci++) {
+                              if (keep == 0 || ci >= keep) _rows[ri][cols[ci]] = null;
+                            }
+                          }),
+                        ),
                       ]),
                     ),
                     if (ri < _rows.length - 1) const Divider(height: 1, color: Color(0xFFEFF6FF)),
@@ -3313,8 +3321,7 @@ class _CompanyCell extends StatelessWidget {
   final String? value;
   final List<String> options;
   final ValueChanged<String?> onChanged;
-  final VoidCallback? onClear;
-  const _CompanyCell({this.value, required this.options, required this.onChanged, this.onClear});
+  const _CompanyCell({this.value, required this.options, required this.onChanged});
 
   @override
   Widget build(BuildContext context) {
@@ -3328,7 +3335,7 @@ class _CompanyCell extends StatelessWidget {
         if (result != null) onChanged(result.isEmpty ? null : result);
       },
       child: Container(
-        padding: EdgeInsets.only(left: 8, top: 7, bottom: 7, right: filled && onClear != null ? 2 : 8),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
         decoration: BoxDecoration(
           color: filled ? const Color(0xFFECFDF5) : Colors.white,
           borderRadius: BorderRadius.circular(6),
@@ -3341,18 +3348,53 @@ class _CompanyCell extends StatelessWidget {
                 color: filled ? const Color(0xFF065F46) : const Color(0xFF9CA3AF)),
             overflow: TextOverflow.ellipsis, maxLines: 1,
           )),
-          if (filled && onClear != null)
-            GestureDetector(
-              onTap: onClear,
-              child: const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 2),
-                child: Icon(Icons.close, size: 12, color: Color(0xFF6EE7B7)),
-              ),
-            )
-          else
-            const Icon(Icons.arrow_drop_down, size: 14, color: Color(0xFF9CA3AF)),
+          const Icon(Icons.arrow_drop_down, size: 14, color: Color(0xFF9CA3AF)),
         ]),
       ),
+    );
+  }
+}
+
+// ── Per-row keep-N / clear-all trim buttons [1][2][3][4][5][X] ───────────────
+
+class _RowTrimButtons extends StatelessWidget {
+  // onTrim(keep): keep=1..5 means keep first N cols; keep=0 means clear all
+  final ValueChanged<int> onTrim;
+  const _RowTrimButtons({required this.onTrim});
+
+  Widget _pill(String label, {required VoidCallback onTap, bool danger = false}) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 22,
+        height: 22,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: danger ? const Color(0xFFFEE2E2) : const Color(0xFFF3F4F6),
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(color: danger ? const Color(0xFFFCA5A5) : const Color(0xFFD1D5DB)),
+        ),
+        child: Text(label,
+          style: TextStyle(
+            fontSize: 10, fontWeight: FontWeight.w600,
+            color: danger ? const Color(0xFF991B1B) : const Color(0xFF374151),
+          )),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 88,
+      child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+        for (int n = 1; n <= 5; n++) ...[
+          _pill('$n', onTap: () => onTrim(n)),
+          if (n < 5) const SizedBox(width: 3),
+        ],
+        const SizedBox(width: 3),
+        _pill('X', onTap: () => onTrim(0), danger: true),
+      ]),
     );
   }
 }

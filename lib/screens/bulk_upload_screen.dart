@@ -554,7 +554,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
           // Shared scale: targetH / median line height. One value for all rows
           // so every row's handwriting appears the same size.
           // Long names overflow → right-edge fade in _lineItemCrop handles them.
-          const targetHeightPx = 40.0;
+          const targetHeightPx = 46.0;
 
           final lineHeights = rows
               .where((r) => r.lineBbox != null)
@@ -1049,32 +1049,29 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       final imgData = ctx.getImageData(0, 0, outW, outH);
       final data = imgData.data;
 
-      // ── FIX B: Soft-fade erase outside the safe band ────────────────────────
-      // Band top/bot use midpoint clamp (same logic as before).
-      // Instead of hard alpha=0, we paint WHITE pixels: fully white outside the
-      // band, then a smooth gradient over the last 9px transition zone so ink
-      // fades out rather than being sliced.  The PNG is opaque white everywhere
-      // outside — no transparency artefacts.
+      // ── Hard-cut erase outside midpoint-clamped band ────────────────────────
+      // No gradient fades — clean hard white cut at the band boundaries.
+      // This prevents white misty strips washing into the handwriting.
       {
         final lineH = lineBbox.height;
-        final pad6  = lineH * 0.06;
+        final pad12 = lineH * 0.12; // 12% padding each side
 
         final double safeTopFrac;
         if (prevLineBbox != null) {
           final midAbove = (prevLineBbox.bottom + lineBbox.top) / 2.0;
-          final inner    = lineBbox.top - pad6;
+          final inner    = lineBbox.top - pad12;
           safeTopFrac    = inner < midAbove ? midAbove : inner;
         } else {
-          safeTopFrac = lineBbox.top - pad6;
+          safeTopFrac = lineBbox.top - pad12;
         }
 
         final double safeBotFrac;
         if (nextLineBbox != null) {
           final midBelow = (lineBbox.bottom + nextLineBbox.top) / 2.0;
-          final inner    = lineBbox.bottom + pad6;
+          final inner    = lineBbox.bottom + pad12;
           safeBotFrac    = inner > midBelow ? midBelow : inner;
         } else {
-          safeBotFrac = lineBbox.bottom + pad6;
+          safeBotFrac = lineBbox.bottom + pad12;
         }
 
         final safeTopOut = ((safeTopFrac * srcH - srcTop) / actualSrcH * outH)
@@ -1082,47 +1079,51 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         final safeBotOut = ((safeBotFrac * srcH - srcTop) / actualSrcH * outH)
             .clamp(0.0, outH.toDouble()).round();
 
-        // Left band: pixels left of name start (serial numbers).
+        // Left band: hard-erase pixels before name start (serial numbers).
         final nameLeftOut = ((nameBbox.left * srcW - srcXStart) / srcRegionW * outW - leftPadPx)
             .clamp(0.0, outW.toDouble()).round();
 
-        const fadeZone = 9; // px over which ink fades to white at band edges
-
         for (int py = 0; py < outH; py++) {
-          // Compute how much white to blend for this row (0.0 = keep ink, 1.0 = pure white).
-          double whiteBlend;
-          if (py < safeTopOut) {
-            whiteBlend = 1.0; // fully outside top — pure white
-          } else if (py >= safeBotOut) {
-            whiteBlend = 1.0; // fully outside bottom — pure white
-          } else {
-            // Inside safe band: fade near top edge
-            final distFromTop = py - safeTopOut;
-            final distFromBot = safeBotOut - 1 - py;
-            final minDist = distFromTop < distFromBot ? distFromTop : distFromBot;
-            if (minDist < fadeZone) {
-              // smoothstep fade: 0 at band edge → 1 inside
-              final tFade = minDist / fadeZone.toDouble();
-              final tSmooth = tFade * tFade * (3.0 - 2.0 * tFade);
-              whiteBlend = 1.0 - tSmooth; // near edge → more white
-            } else {
-              whiteBlend = 0.0; // fully inside — keep ink
-            }
-          }
-
+          final outsideBand = py < safeTopOut || py >= safeBotOut;
           for (int px = 0; px < outW; px++) {
-            final idx = (py * outW + px) * 4;
-            // Left-band erase (serial numbers) — always hard white, no fade needed.
-            final effectiveBlend = (px < nameLeftOut) ? 1.0 : whiteBlend;
-            if (effectiveBlend > 0.0) {
-              // Blend pixel toward white: v_out = v_in + blend*(255 - v_in)
-              final blend255 = (effectiveBlend * 255.0).round().clamp(0, 255);
-              data[idx]     = (data[idx]     + (255 - data[idx])     * blend255 ~/ 255).clamp(0, 255);
-              data[idx + 1] = (data[idx + 1] + (255 - data[idx + 1]) * blend255 ~/ 255).clamp(0, 255);
-              data[idx + 2] = (data[idx + 2] + (255 - data[idx + 2]) * blend255 ~/ 255).clamp(0, 255);
-              // alpha stays 255 (opaque)
+            if (outsideBand || px < nameLeftOut) {
+              final idx = (py * outW + px) * 4;
+              data[idx] = 255; data[idx + 1] = 255; data[idx + 2] = 255;
             }
           }
+        }
+      }
+
+      // ── Adaptive contrast: gradient-black ink after resize ───────────────────
+      // Downscaling grays strokes; apply per-crop auto-levels AFTER the resize
+      // so both faint-pencil and bold-pen crops come out gradient-black on white.
+      // inkLevel = P4, paperLevel = P90 (per-crop, never fixed thresholds).
+      // smoothstep(t) maps ink→near-black, paper→white with anti-aliased ramp.
+      {
+        final n = outW * outH;
+        final hist = List<int>.filled(256, 0);
+        for (int i = 0; i < data.length; i += 4) {
+          hist[(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2])
+              .round().clamp(0, 255)]++;
+        }
+        int inkLevel = 0, paperLevel = 255, cumul = 0;
+        bool inkSet = false;
+        for (int v = 0; v < 256; v++) {
+          cumul += hist[v];
+          if (!inkSet && cumul >= n * 0.04) { inkLevel = v; inkSet = true; }
+          if (cumul >= n * 0.90)            { paperLevel = v; break; }
+        }
+        // Skip enhancement on blank crops (no real ink/paper contrast).
+        if ((paperLevel - inkLevel) >= 20) {
+          final invRange = 1.0 / (paperLevel - inkLevel);
+          for (int i = 0; i < data.length; i += 4) {
+            final luma = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+            final t    = ((luma - inkLevel) * invRange).clamp(0.0, 1.0);
+            final out  = (t * t * (3.0 - 2.0 * t) * 255.0).round().clamp(0, 255);
+            data[i] = out; data[i + 1] = out; data[i + 2] = out; data[i + 3] = 255;
+          }
+        } else {
+          for (int i = 3; i < data.length; i += 4) data[i] = 255;
         }
       }
 

@@ -477,44 +477,52 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       });
 
       final rows = <_MatchRow>[];
-      // Each extracted item owns its box_2d: [ymin,xmin,ymax,xmax] 0–1000.
-      // y-range = full line (used for vertical clamp between adjacent rows).
-      // x-range = brand-name only (drives the crop thumbnail width).
-      // No index shifting needed — each item's box belongs to that item.
+      // box_2d     = full line extent (all words, used for vertical clamp y-range).
+      // name_box_2d = complete multi-word product name (drives the crop thumbnail).
+      // Fallback: if name_box_2d is missing or < 15% of box_2d width, use box_2d.
       for (int i = 0; i < extracted.length; i++) {
         final item = extracted[i];
         final name = item['name']?.toString().trim() ?? '';
         final qty = (int.tryParse(item['qty']?.toString() ?? '') ?? 1).clamp(1, 99999);
         if (name.isNotEmpty) {
-          Rect? bbox;
+          Rect? lineBbox; // full-line box — vertical clamping
+          Rect? nameBbox; // name-only box — crop thumbnail
           if (origImageSize != null) {
-            final rawBox = item['box_2d'];
-            if (rawBox is List && rawBox.length == 4) {
-              final yMin = (rawBox[0] as num).toDouble() / 1000;
-              final xMin = (rawBox[1] as num).toDouble() / 1000;
-              final yMax = (rawBox[2] as num).toDouble() / 1000;
-              final xMax = (rawBox[3] as num).toDouble() / 1000;
+            Rect? parseBox(dynamic raw) {
+              if (raw is! List || raw.length != 4) return null;
+              final yMin = (raw[0] as num).toDouble() / 1000;
+              final xMin = (raw[1] as num).toDouble() / 1000;
+              final yMax = (raw[2] as num).toDouble() / 1000;
+              final xMax = (raw[3] as num).toDouble() / 1000;
               final w = (xMax - xMin).clamp(0.0, 1.0);
               final h = (yMax - yMin).clamp(0.0, 1.0);
-              if (w > 0 && h > 0) {
-                bbox = Rect.fromLTWH(xMin, yMin, w, h);
-                debugPrint('[BBox] "$name" box_2d=${rawBox} → x=$xMin y=$yMin w=$w h=$h');
-              }
+              return (w > 0 && h > 0) ? Rect.fromLTWH(xMin, yMin, w, h) : null;
             }
+            lineBbox = parseBox(item['box_2d']);
+            nameBbox = parseBox(item['name_box_2d']);
+            // Fallback: use full-line box when name box is absent or implausibly narrow.
+            if (nameBbox == null ||
+                (lineBbox != null && nameBbox.width < lineBbox.width * 0.15)) {
+              nameBbox = lineBbox;
+            }
+            debugPrint('[BBox] "$name" line=${item["box_2d"]} name=${item["name_box_2d"]} → using w=${nameBbox?.width?.toStringAsFixed(3)}');
             // Legacy: old {x,y,w,h} bbox from PDF/text path.
-            if (bbox == null) {
+            if (lineBbox == null) {
               final bm = item['bbox'] as Map<String, dynamic>?;
               if (bm != null) {
                 final bx = (bm['x'] as num?)?.toDouble() ?? 0;
                 final by = (bm['y'] as num?)?.toDouble() ?? 0;
                 final bw = (bm['w'] as num?)?.toDouble() ?? 0;
                 final bh = (bm['h'] as num?)?.toDouble() ?? 0;
-                if (bw > 0 && bh > 0) bbox = Rect.fromLTWH(bx, by, bw, bh);
+                if (bw > 0 && bh > 0) {
+                  lineBbox = Rect.fromLTWH(bx, by, bw, bh);
+                  nameBbox = lineBbox;
+                }
               }
             }
           }
-          final row = await _matchOne(name, qty, bbox: bbox);
-          row.lineBbox = bbox; // same box — y-range used for vertical clamping
+          final row = await _matchOne(name, qty, bbox: nameBbox);
+          row.lineBbox = lineBbox ?? nameBbox;
           rows.add(row);
         }
         if (!mounted) return;
@@ -1629,39 +1637,33 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
   static const _geminiImagePrompt =
       'You are reading a HANDWRITTEN medicine order list photographed at a pharmacy. '
-      'The photo may have faint ink, slight blur, glare, shadows, or an angled perspective. '
       'Extract EVERY medicine/drug name entry visible.\n\n'
-      'IGNORE: page header, shop name, date, phone number, ruled lines, '
-      'column headers (Name/Qty/Rate/MRP), totals, serial numbers.\n\n'
+      'IGNORE: page header, shop name, date, phone number, ruled lines, totals.\n\n'
       'For each handwritten medicine line return one JSON object inside "items":\n'
-      '- "name": the full medicine entry exactly as written (brand + strength + form '
-      'where present, e.g. "Augmentin 625 tab"). Partial reads OK — mark unclear '
-      'parts with "?".\n'
-      '- "qty": the ORDER quantity integer on that line (use 1 if not visible).\n'
-      '- "box_2d": [ymin, xmin, ymax, xmax] using Gemini native coordinates (0–1000).\n'
-      '  • y-range: covers the FULL line height — top of tallest letter to bottom of '
-      'lowest descender. Accurate y is critical for aligning crops between lines.\n'
-      '  • x-range: covers ONLY the brand/product name — stop xmax right after the '
-      'last letter of the brand name, BEFORE any strength ("250mg","625"), dosage '
-      'form ("tab","cap","gel","cream","inj","sachet"), or pack size ("10T","10s"). '
-      'If the brand name cannot be separated from the rest, cover the whole entry.\n\n'
-      'RULES:\n'
-      '1. One object per line — never merge two lines into one entry.\n'
-      '2. Items must be ordered top-to-bottom (ascending ymin).\n'
-      '3. NEVER return an empty items array unless the image has no medicine names.\n\n'
-      'Return ONLY valid JSON (schema enforced — no markdown, no explanation):\n'
-      '{"items": [{"name": "Augmentin 625 tab", "qty": 5, "box_2d": [120, 50, 155, 280]}, ...]}';
+      '- "name": full medicine entry as written (brand + strength + form).\n'
+      '- "qty": order quantity integer (use 1 if not visible).\n'
+      '- "box_2d": [ymin, xmin, ymax, xmax] 0-1000. Full line extent.\n'
+      '- "name_box_2d": [ymin, xmin, ymax, xmax] 0-1000. Same y as box_2d. '
+      'x covers COMPLETE product name including all descriptive words. '
+      'Include "Disintegrating Strip" in "Endosure 25mg Disintegrating Strip". '
+      'Include "Total Plus" in "Candid Total Plus tab". '
+      'Only exclude clear trailing abbreviation ("tab","cap","inj") or pack number ("10T","10s").\n\n'
+      'Return ONLY valid JSON:\n'
+      '{"items": [{"name": "Augmentin 625 tab", "qty": 5, '
+      '"box_2d": [120, 50, 155, 380], "name_box_2d": [120, 50, 155, 260]}, ...]}';
 
   static const _geminiImageFallbackPrompt =
       'This is a photo of a handwritten medicine list from a pharmacy. '
-      'Some lines may be hard to read. Extract EVERY medicine name visible.\n\n'
+      'Extract EVERY medicine name visible.\n\n'
       'For each medicine line return one object with:\n'
-      '- "name": medicine entry as best you can read (mark unclear parts with "?")\n'
+      '- "name": medicine entry as best you can read\n'
       '- "qty": order quantity integer (use 1 if not visible)\n'
-      '- "box_2d": [ymin, xmin, ymax, xmax] 0–1000. Full line y-range; '
-      'x-range covers only the brand name (stop before strength/form/pack).\n\n'
+      '- "box_2d": [ymin, xmin, ymax, xmax] 0-1000. Full line extent.\n'
+      '- "name_box_2d": [ymin, xmin, ymax, xmax] 0-1000. Same y as box_2d, '
+      'x covers every word of the complete product name (stop only before trailing tab/cap/pack).\n\n'
       'Return ONLY valid JSON:\n'
-      '{"items": [{"name": "medicine name", "qty": 1, "box_2d": [y0, x0, y1, x1]}, ...]}';
+      '{"items": [{"name": "medicine name", "qty": 1, '
+      '"box_2d": [y0, x0, y1, x1], "name_box_2d": [y0, x0, y1, xname]}, ...]}';
 
   static String _geminiTextPrompt(String content) =>
       'You are an expert Indian pharmacy procurement assistant.\n'

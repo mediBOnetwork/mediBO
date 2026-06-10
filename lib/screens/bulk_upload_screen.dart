@@ -460,25 +460,39 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       });
 
       final rows = <_MatchRow>[];
-      // The OCR model returns bboxes shifted by -1: extracted[i].bbox contains the
-      // visual coordinates of line i-1, not line i. Fix: pair row[i] with
-      // extracted[i+1].bbox so the crop image matches the medicine name on that row.
+      // Each extracted item owns its bbox — no index shifting needed.
+      // box_2d format: [ymin, xmin, ymax, xmax] normalized 0–1000 (Gemini native).
       for (int i = 0; i < extracted.length; i++) {
         final item = extracted[i];
         final name = item['name']?.toString().trim() ?? '';
         final qty = (int.tryParse(item['qty']?.toString() ?? '') ?? 1).clamp(1, 99999);
         if (name.isNotEmpty) {
-          // Use the NEXT item's bbox — that is the correct visual position for this row.
           Rect? bbox;
-          if (i + 1 < extracted.length && origImageSize != null) {
-            final bboxMap = extracted[i + 1]['bbox'] as Map<String, dynamic>?;
-            if (bboxMap != null) {
-              final bx = (bboxMap['x'] as num?)?.toDouble() ?? 0;
-              final by = (bboxMap['y'] as num?)?.toDouble() ?? 0;
-              final bw = (bboxMap['w'] as num?)?.toDouble() ?? 0;
-              final bh = (bboxMap['h'] as num?)?.toDouble() ?? 0;
-              if (bw > 0 && bh > 0) bbox = Rect.fromLTWH(bx, by, bw, bh);
-              debugPrint('[BBox] "$name" → x=$bx y=$by w=$bw h=$bh (from extracted[${i+1}])');
+          if (origImageSize != null) {
+            // Gemini native box_2d: [ymin, xmin, ymax, xmax] 0–1000.
+            final rawBox = item['box_2d'];
+            if (rawBox is List && rawBox.length == 4) {
+              final yMin = (rawBox[0] as num).toDouble() / 1000;
+              final xMin = (rawBox[1] as num).toDouble() / 1000;
+              final yMax = (rawBox[2] as num).toDouble() / 1000;
+              final xMax = (rawBox[3] as num).toDouble() / 1000;
+              final w = (xMax - xMin).clamp(0.0, 1.0);
+              final h = (yMax - yMin).clamp(0.0, 1.0);
+              if (w > 0 && h > 0) {
+                bbox = Rect.fromLTWH(xMin, yMin, w, h);
+                debugPrint('[BBox] "$name" box_2d=[${rawBox[0]},${rawBox[1]},${rawBox[2]},${rawBox[3]}] → x=$xMin y=$yMin w=$w h=$h');
+              }
+            }
+            // Legacy: old {x,y,w,h} bbox (PDFs/text) — keep working.
+            if (bbox == null) {
+              final bboxMap = item['bbox'] as Map<String, dynamic>?;
+              if (bboxMap != null) {
+                final bx = (bboxMap['x'] as num?)?.toDouble() ?? 0;
+                final by = (bboxMap['y'] as num?)?.toDouble() ?? 0;
+                final bw = (bboxMap['w'] as num?)?.toDouble() ?? 0;
+                final bh = (bboxMap['h'] as num?)?.toDouble() ?? 0;
+                if (bw > 0 && bh > 0) bbox = Rect.fromLTWH(bx, by, bw, bh);
+              }
             }
           }
           rows.add(await _matchOne(name, qty, bbox: bbox));
@@ -904,13 +918,14 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
   // No binarization, no dilation, no deskew — natural smooth anti-aliased strokes.
   Uint8List? _processOneCrop(html.ImageElement img, int srcW, int srcH, Rect bbox) {
     try {
-      // Compute crop region using shared constants (kept in sync with _lineItemCrop).
-      // Padding is expressed as a fraction of the FULL image size, not of the
-      // (potentially tiny) bbox, so every line gets a generous capture window.
-      final bLeft  = (bbox.left  - _kCropHPad).clamp(0.0, 1.0);
-      final bRight = (bbox.left  + bbox.width  + _kCropHPad).clamp(0.0, 1.0);
-      final bTop   = (bbox.top   - _kCropVPad).clamp(0.0, 1.0);
-      final bBot   = (bbox.top   + bbox.height + _kCropVPad).clamp(0.0, 1.0);
+      // Expand the Gemini box_2d bbox by a fixed ratio of its own dimensions
+      // (same formula as _lineItemCrop — must stay in sync).
+      final padH   = bbox.width  * _kCropHPadRatio;
+      final padV   = bbox.height * _kCropVPadRatio;
+      final bLeft  = (bbox.left  - padH).clamp(0.0, 1.0);
+      final bRight = (bbox.left  + bbox.width  + padH).clamp(0.0, 1.0);
+      final bTop   = (bbox.top   - padV).clamp(0.0, 1.0);
+      final bBot   = (bbox.top   + bbox.height + padV).clamp(0.0, 1.0);
       final tLeft   = bLeft * srcW;
       final tTop    = bTop  * srcH;
       final tWidth  = (bRight - bLeft) * srcW;
@@ -1191,11 +1206,18 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     }
 
     final data = jsonDecode(response.body) as Map<String, dynamic>;
+
+    // Prefer structured items returned by edge function (image path with box_2d).
+    final rawItems = data['items'];
+    if (rawItems is List && rawItems.isNotEmpty) {
+      return rawItems.cast<Map<String, dynamic>>();
+    }
+
+    // Fallback: parse JSON array from raw text (PDFs, text uploads, old format).
     final text = data['text'] as String? ?? '';
     if (text.isEmpty) return [];
     final match = RegExp(r'\[[\s\S]*\]').firstMatch(text);
     if (match == null) throw Exception('no_json_in_response');
-
     return (jsonDecode(match.group(0)!) as List).cast<Map<String, dynamic>>();
   }
 
@@ -1569,55 +1591,39 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
   static const _geminiImagePrompt =
       'You are reading a HANDWRITTEN medicine order list photographed at a pharmacy. '
-      'The photo may have faint ink, slight blur, glare, shadows, or an angled perspective — '
-      'this is normal. Your job is to extract EVERY medicine entry visible.\n\n'
-      'WHAT EACH LINE LOOKS LIKE:\n'
-      '- A medicine/brand name (e.g. "Augmentin 625", "Pan 40", "Dolo 650", "Metformin 500mg")\n'
-      '- Followed by a small quantity number (how many strips/boxes to order)\n'
-      '- Dosage forms: Tab, Cap, Syr, Inj, Drops, Gel, Cream\n'
-      '- Units: Box/B/box, Strip/S/strip, Pcs/P, Vial\n\n'
-      'IGNORE: page header, shop name, date, phone number, calendar text, ruled lines, '
-      'column headers (Name/Qty/Rate/MRP), totals.\n\n'
-      'STRICT RULES:\n'
-      '1. READ EVERY LINE that could be a medicine, even if messy/faint/smudged/unclear. '
-      'Make your best guess — DO NOT SKIP a line just because you are not 100% certain.\n'
-      '2. Partial reads are fine: write what you can see; mark unclear parts with "?".\n'
-      '3. If quantity not visible, use qty=1.\n'
-      '4. NEVER return an empty JSON array [] unless image is genuinely blank/selfie/landscape.\n'
-      '5. Return items in top-to-bottom order.\n\n'
-      'Return ONLY a valid JSON array. For each entry include a bbox that FULLY encloses '
-      'the handwritten medicine/brand NAME for that line — nothing else:\n'
-      '[{"name": "medicine name as written", "qty": 5, "bbox": {"x": 0.05, "y": 0.12, "w": 0.38, "h": 0.04}}]\n'
-      'BBOX RULES (all values 0.0–1.0 fraction of image width/height):\n'
-      '  x = slightly LEFT of the first letter (add ~2 % of image width as left margin)\n'
-      '  y = TOP of the tallest ascender of THIS line ONLY — start just above the tallest '
-      'letter (like h, d, l). Do NOT reach up into the blank inter-line gap above or into '
-      'any ink from the previous line.\n'
-      '  w = width that FULLY encompasses the COMPLETE last word/character PLUS a small '
-      'right margin (~3 % of image width) — NEVER stop early; every letter of the name '
-      'including trailing words like "Tablet", "Cap.MR", "Sachet", "Inj" must be inside '
-      'x+w. Stop well before any quantity digit or number column.\n'
-      '  h = from y down to the BOTTOM of the lowest descender of THIS line ONLY — '
-      'tightly hug just this name\'s ink strokes. Do NOT extend into the inter-line gap '
-      'below or into the next line\'s ink. On a typical handwritten pharmacy list h is '
-      'roughly 3–6 % of the image height. If h exceeds 8 % of image height the bbox '
-      'likely overlaps a neighbouring line — tighten it. '
-      'The ruled underline is OUTSIDE the bbox.';
+      'The photo may have faint ink, slight blur, glare, shadows, or an angled perspective. '
+      'Extract EVERY medicine/drug name entry visible.\n\n'
+      'IGNORE: page header, shop name, date, phone number, ruled lines, '
+      'column headers (Name/Qty/Rate/MRP), totals, serial numbers.\n\n'
+      'For each handwritten medicine line return one JSON object inside "items":\n'
+      '- "name": the medicine/brand name exactly as written, including dosage '
+      '(e.g. "Augmentin 625", "Pan 40mg", "Dolo 650"). Partial reads OK — mark '
+      'unclear parts with "?".\n'
+      '- "qty": the quantity number on that line as an integer (use 1 if not visible).\n'
+      '- "box_2d": bounding box [ymin, xmin, ymax, xmax] using Gemini\'s native '
+      'coordinate system (integers 0–1000). Enclose ONLY the medicine name text '
+      'for that line — do NOT include the quantity number column. Do NOT extend '
+      'the box into adjacent lines above or below.\n\n'
+      'RULES:\n'
+      '1. One object per handwritten line — never merge two lines.\n'
+      '2. Return items top-to-bottom (ascending ymin).\n'
+      '3. NEVER return an empty items array unless the image has absolutely no '
+      'medicine names.\n\n'
+      'Return ONLY valid JSON (no markdown fences, no explanation):\n'
+      '{"items": [{"name": "Augmentin 625", "qty": 5, '
+      '"box_2d": [120, 50, 155, 450]}, ...]}';
 
   static const _geminiImageFallbackPrompt =
-      'This is a photo of a handwritten list of medicines from a pharmacy. '
-      'Some lines may be hard to read because of faint ink, blur, or angle.\n\n'
-      'For EVERY line that has a word that could be a medicine or drug name:\n'
-      '- Write down the word(s) as best you can read them (even if uncertain).\n'
-      '- Write the number next to it if there is one; otherwise use 1.\n\n'
-      'Do NOT leave out any line just because it is unclear — include it with your best guess.\n'
-      'Do NOT return [] (empty). If you can see any words at all in the list, include them.\n\n'
-      'Respond with ONLY this JSON. The bbox must FULLY enclose this name\'s own ink — '
-      'every letter including the last word — with small left/right margins. '
-      'Vertically: start just above this line\'s tallest letter; end just below its '
-      'lowest descender. Do NOT let the bbox overlap neighbouring lines or the inter-line '
-      'gap. Typical h is 3–6 % of image height:\n'
-      '[{"name": "what you can read", "qty": 1, "bbox": {"x": 0.04, "y": 0.12, "w": 0.42, "h": 0.04}}]';
+      'This is a photo of a handwritten medicine list from a pharmacy. '
+      'Some lines may be hard to read. Extract EVERY medicine name visible.\n\n'
+      'For each medicine line return one object with:\n'
+      '- "name": medicine name as best you can read (mark unclear parts with "?")\n'
+      '- "qty": quantity number (use 1 if not visible)\n'
+      '- "box_2d": bounding box [ymin, xmin, ymax, xmax] (integers 0–1000) '
+      'enclosing just the medicine name for that line\n\n'
+      'Return ONLY valid JSON:\n'
+      '{"items": [{"name": "medicine name", "qty": 1, '
+      '"box_2d": [ymin, xmin, ymax, xmax]}, ...]}';
 
   static String _geminiTextPrompt(String content) =>
       'You are an expert Indian pharmacy procurement assistant.\n'
@@ -3348,12 +3354,11 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
   }
 }
 
-// Crop region constants — shared between _processOneCrop (canvas crop) and
-// _lineItemCrop (aspect-ratio computation). Must stay in sync.
-// Values are fractions of the FULL IMAGE dimension (not bbox dimension) so that
-// small/narrow bboxes still get enough padding to show the complete handwriting.
-const _kCropHPad = 0.04;   // 4 % of image WIDTH added on each horizontal side
-const _kCropVPad = 0.012;  // 1.2 % of image HEIGHT added on each vertical side
+// Crop padding constants — shared between _processOneCrop and _lineItemCrop.
+// Expressed as a fraction of the bbox dimension so that every line gets
+// proportional breathing room regardless of how tall or wide the bbox is.
+const _kCropHPadRatio = 0.08;  // 8 % of bbox.width per horizontal side
+const _kCropVPadRatio = 0.08;  // 8 % of bbox.height per vertical side
 
 /// Standard LINE ITEM renderer: shows the handwriting crop (constant height,
 /// proportional width, smooth black strokes, transparent background, no caption).
@@ -3378,10 +3383,12 @@ Widget _lineItemCrop(_MatchRow row, Size? imageSize, {TextStyle? fallbackStyle})
         final imgSize = imageSize;
         if (bbox != null && imgSize != null &&
             bbox.width > 0 && bbox.height > 0) {
-          final bLeft  = (bbox.left  - _kCropHPad).clamp(0.0, 1.0);
-          final bRight = (bbox.left  + bbox.width  + _kCropHPad).clamp(0.0, 1.0);
-          final bTop   = (bbox.top   - _kCropVPad).clamp(0.0, 1.0);
-          final bBot   = (bbox.top   + bbox.height + _kCropVPad).clamp(0.0, 1.0);
+          final padH   = bbox.width  * _kCropHPadRatio;
+          final padV   = bbox.height * _kCropVPadRatio;
+          final bLeft  = (bbox.left  - padH).clamp(0.0, 1.0);
+          final bRight = (bbox.left  + bbox.width  + padH).clamp(0.0, 1.0);
+          final bTop   = (bbox.top   - padV).clamp(0.0, 1.0);
+          final bBot   = (bbox.top   + bbox.height + padV).clamp(0.0, 1.0);
           final cropW  = (bRight - bLeft) * imgSize.width;
           final cropH  = (bBot   - bTop)  * imgSize.height;
           if (cropW > 0 && cropH > 0) {

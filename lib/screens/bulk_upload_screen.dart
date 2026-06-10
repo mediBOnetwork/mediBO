@@ -387,6 +387,10 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     final files = input.files;
     if (files == null || files.isEmpty) return;
 
+    // Always start fresh — clear any stale session (including old bbox coordinates)
+    // so the previous result never bleeds into the new upload's crop display.
+    await _clearSession();
+
     final file = files.first;
     setState(() {
       _step = _LoadStep.readingFile;
@@ -901,12 +905,12 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
   Uint8List? _processOneCrop(html.ImageElement img, int srcW, int srcH, Rect bbox) {
     try {
       // Compute crop region using shared constants (kept in sync with _lineItemCrop).
-      // Expand left/right so trailing/leading letters aren't clipped.
-      // Trim top slightly for neighbour-line safety; trim more from bottom for underline.
-      final bLeft  = (bbox.left  - bbox.width  * _kCropLPad).clamp(0.0, 1.0);
-      final bRight = (bbox.left  + bbox.width  + bbox.width  * _kCropRPad).clamp(0.0, 1.0);
-      final bTop   = (bbox.top   + bbox.height * _kCropVTop).clamp(0.0, 1.0);
-      final bBot   = (bbox.top   + bbox.height * (1.0 - _kCropVBot)).clamp(0.0, 1.0);
+      // Padding is expressed as a fraction of the FULL image size, not of the
+      // (potentially tiny) bbox, so every line gets a generous capture window.
+      final bLeft  = (bbox.left  - _kCropHPad).clamp(0.0, 1.0);
+      final bRight = (bbox.left  + bbox.width  + _kCropHPad).clamp(0.0, 1.0);
+      final bTop   = (bbox.top   - _kCropVPad).clamp(0.0, 1.0);
+      final bBot   = (bbox.top   + bbox.height + _kCropVPad).clamp(0.0, 1.0);
       final tLeft   = bLeft * srcW;
       final tTop    = bTop  * srcH;
       final tWidth  = (bRight - bLeft) * srcW;
@@ -3346,12 +3350,10 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
 
 // Crop region constants — shared between _processOneCrop (canvas crop) and
 // _lineItemCrop (aspect-ratio computation). Must stay in sync.
-// Horizontal: expand beyond Gemini bbox so trailing/leading letters aren't clipped.
-// Vertical: trim top for neighbour-line safety; trim more from bottom for underline.
-const _kCropLPad  = 0.02;  // expand 2 % of bbox.width LEFT of first letter
-const _kCropRPad  = 0.04;  // expand 4 % of bbox.width RIGHT past last letter
-const _kCropVTop  = 0.06;  // trim 6 % of bbox.height from TOP (neighbour-line safety)
-const _kCropVBot  = 0.14;  // trim 14 % of bbox.height from BOTTOM (underline exclusion)
+// Values are fractions of the FULL IMAGE dimension (not bbox dimension) so that
+// small/narrow bboxes still get enough padding to show the complete handwriting.
+const _kCropHPad = 0.04;   // 4 % of image WIDTH added on each horizontal side
+const _kCropVPad = 0.012;  // 1.2 % of image HEIGHT added on each vertical side
 
 /// Standard LINE ITEM renderer: shows the handwriting crop (constant height,
 /// proportional width, smooth black strokes, transparent background, no caption).
@@ -3368,18 +3370,18 @@ Widget _lineItemCrop(_MatchRow row, Size? imageSize, {TextStyle? fallbackStyle})
         final maxW =
             constraints.maxWidth.isFinite ? constraints.maxWidth : double.infinity;
 
-        // Aspect ratio from bbox using the same formula as _processOneCrop.
-        // naturalW: intrinsic width at fixedH. When naturalW > maxW, ClipRect
-        // shows the left portion at full height instead of squishing to a sliver.
+        // Compute the crop's natural aspect ratio (same formula as _processOneCrop)
+        // so the container is sized to show the full handwriting without distortion.
+        // naturalW: intrinsic pixel width at fixedH. ClipRect caps to maxW.
         double naturalW = maxW;
         final bbox = row.bbox;
         final imgSize = imageSize;
         if (bbox != null && imgSize != null &&
             bbox.width > 0 && bbox.height > 0) {
-          final bLeft  = (bbox.left  - bbox.width  * _kCropLPad).clamp(0.0, 1.0);
-          final bRight = (bbox.left  + bbox.width  + bbox.width  * _kCropRPad).clamp(0.0, 1.0);
-          final bTop   = (bbox.top   + bbox.height * _kCropVTop).clamp(0.0, 1.0);
-          final bBot   = (bbox.top   + bbox.height * (1.0 - _kCropVBot)).clamp(0.0, 1.0);
+          final bLeft  = (bbox.left  - _kCropHPad).clamp(0.0, 1.0);
+          final bRight = (bbox.left  + bbox.width  + _kCropHPad).clamp(0.0, 1.0);
+          final bTop   = (bbox.top   - _kCropVPad).clamp(0.0, 1.0);
+          final bBot   = (bbox.top   + bbox.height + _kCropVPad).clamp(0.0, 1.0);
           final cropW  = (bRight - bLeft) * imgSize.width;
           final cropH  = (bBot   - bTop)  * imgSize.height;
           if (cropW > 0 && cropH > 0) {
@@ -3401,7 +3403,7 @@ Widget _lineItemCrop(_MatchRow row, Size? imageSize, {TextStyle? fallbackStyle})
                   height: fixedH,
                   child: Image.memory(
                     row.processedCrop!,
-                    fit: BoxFit.fill,
+                    fit: BoxFit.contain,
                     gaplessPlayback: true,
                   ),
                 ),

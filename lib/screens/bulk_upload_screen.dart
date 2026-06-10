@@ -38,7 +38,8 @@ class _MatchRow {
   _MatchStatus? _preHideStatus; // saved on hide, restored on unhide
   final String _displaySku;
   final String _displayPrice;
-  final Rect? bbox;
+  final Rect? bbox;     // name_box_2d — drives the crop thumbnail
+  Rect? lineBbox;       // whole-line box_2d — used for vertical clamp calculation only
   // Handwriting crop PNG (grayscale→alpha, black ink, transparent bg).
   // Set after canvas processing in _pickAndProcess; never serialized.
   Uint8List? processedCrop;
@@ -101,7 +102,8 @@ class _MatchRow {
         'candidates': candidates.map((p) => p.toJson()).toList(),
         if (_manualProduct != null) 'manualProduct': _manualProduct!.toJson(),
         if (_previousLine1 != null) 'previousLine1': _previousLine1!.toJson(),
-        if (bbox != null) 'bbox': {'x': bbox!.left, 'y': bbox!.top, 'w': bbox!.width, 'h': bbox!.height},
+        if (bbox     != null) 'bbox':     {'x': bbox!.left,     'y': bbox!.top,     'w': bbox!.width,     'h': bbox!.height},
+        if (lineBbox != null) 'lineBbox': {'x': lineBbox!.left, 'y': lineBbox!.top, 'w': lineBbox!.width, 'h': lineBbox!.height},
       };
 
   factory _MatchRow.fromJson(Map<String, dynamic> m) {
@@ -141,6 +143,14 @@ class _MatchRow {
     if (mp != null) row._manualProduct = Product.fromJson(mp);
     final pl1 = m['previousLine1'] as Map<String, dynamic>?;
     if (pl1 != null) row._previousLine1 = Product.fromJson(pl1);
+    final lm = m['lineBbox'] as Map<String, dynamic>?;
+    if (lm != null) {
+      final lx = (lm['x'] as num?)?.toDouble() ?? 0;
+      final ly = (lm['y'] as num?)?.toDouble() ?? 0;
+      final lw = (lm['w'] as num?)?.toDouble() ?? 0;
+      final lh = (lm['h'] as num?)?.toDouble() ?? 0;
+      if (lw > 0 && lh > 0) row.lineBbox = Rect.fromLTWH(lx, ly, lw, lh);
+    }
     return row;
   }
 }
@@ -352,9 +362,16 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     final srcW = imgEl.naturalWidth;
     final srcH = imgEl.naturalHeight;
     bool anyUpdated = false;
-    for (final row in _rows) {
+    for (int ri = 0; ri < _rows.length; ri++) {
+      final row = _rows[ri];
       if (row.processedCrop == null && row.bbox != null) {
-        row.processedCrop = _processOneCrop(imgEl, srcW, srcH, row.bbox!);
+        final lb  = row.lineBbox ?? row.bbox!;
+        final prev = ri > 0 ? (_rows[ri - 1].lineBbox ?? _rows[ri - 1].bbox) : null;
+        final next = ri < _rows.length - 1 ? (_rows[ri + 1].lineBbox ?? _rows[ri + 1].bbox) : null;
+        final clampTop = prev != null ? (prev.bottom + lb.top) / 2 : null;
+        final clampBot = next != null ? (lb.bottom + next.top) / 2 : null;
+        row.processedCrop = _processOneCrop(imgEl, srcW, srcH, row.bbox!,
+            vertClampTop: clampTop, vertClampBot: clampBot);
         debugPrint('[Crop] Reprocessed "${row.lineItem}" → ${row.processedCrop?.length ?? 0} B');
         anyUpdated = true;
       }
@@ -460,8 +477,10 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       });
 
       final rows = <_MatchRow>[];
-      // Each extracted item owns its bbox — no index shifting needed.
-      // box_2d format: [ymin, xmin, ymax, xmax] normalized 0–1000 (Gemini native).
+      // Each extracted item owns its box_2d: [ymin,xmin,ymax,xmax] 0–1000.
+      // y-range = full line (used for vertical clamp between adjacent rows).
+      // x-range = brand-name only (drives the crop thumbnail width).
+      // No index shifting needed — each item's box belongs to that item.
       for (int i = 0; i < extracted.length; i++) {
         final item = extracted[i];
         final name = item['name']?.toString().trim() ?? '';
@@ -469,7 +488,6 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         if (name.isNotEmpty) {
           Rect? bbox;
           if (origImageSize != null) {
-            // Gemini native box_2d: [ymin, xmin, ymax, xmax] 0–1000.
             final rawBox = item['box_2d'];
             if (rawBox is List && rawBox.length == 4) {
               final yMin = (rawBox[0] as num).toDouble() / 1000;
@@ -480,38 +498,48 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
               final h = (yMax - yMin).clamp(0.0, 1.0);
               if (w > 0 && h > 0) {
                 bbox = Rect.fromLTWH(xMin, yMin, w, h);
-                debugPrint('[BBox] "$name" box_2d=[${rawBox[0]},${rawBox[1]},${rawBox[2]},${rawBox[3]}] → x=$xMin y=$yMin w=$w h=$h');
+                debugPrint('[BBox] "$name" box_2d=${rawBox} → x=$xMin y=$yMin w=$w h=$h');
               }
             }
-            // Legacy: old {x,y,w,h} bbox (PDFs/text) — keep working.
+            // Legacy: old {x,y,w,h} bbox from PDF/text path.
             if (bbox == null) {
-              final bboxMap = item['bbox'] as Map<String, dynamic>?;
-              if (bboxMap != null) {
-                final bx = (bboxMap['x'] as num?)?.toDouble() ?? 0;
-                final by = (bboxMap['y'] as num?)?.toDouble() ?? 0;
-                final bw = (bboxMap['w'] as num?)?.toDouble() ?? 0;
-                final bh = (bboxMap['h'] as num?)?.toDouble() ?? 0;
+              final bm = item['bbox'] as Map<String, dynamic>?;
+              if (bm != null) {
+                final bx = (bm['x'] as num?)?.toDouble() ?? 0;
+                final by = (bm['y'] as num?)?.toDouble() ?? 0;
+                final bw = (bm['w'] as num?)?.toDouble() ?? 0;
+                final bh = (bm['h'] as num?)?.toDouble() ?? 0;
                 if (bw > 0 && bh > 0) bbox = Rect.fromLTWH(bx, by, bw, bh);
               }
             }
           }
-          rows.add(await _matchOne(name, qty, bbox: bbox));
+          final row = await _matchOne(name, qty, bbox: bbox);
+          row.lineBbox = bbox; // same box — y-range used for vertical clamping
+          rows.add(row);
         }
         if (!mounted) return;
         setState(() => _matchProgress = rows.length);
       }
 
-      // Process handwriting crops: binarize + deskew + thicken each row's name region.
+      // Process handwriting crops for each row's name_box_2d region.
       if (origImageBytes != null && origImageSize != null) {
         final imgEl = await _loadImageForProcessing(origImageBytes, origMimeType);
         if (imgEl != null) {
           final srcW = imgEl.naturalWidth;
           final srcH = imgEl.naturalHeight;
-          for (final row in rows) {
-            if (row.bbox != null) {
-              row.processedCrop = _processOneCrop(imgEl, srcW, srcH, row.bbox!);
-              debugPrint('[Crop] "${row.lineItem}" → ${row.processedCrop?.length ?? 0} B');
-            }
+          for (int ri = 0; ri < rows.length; ri++) {
+            final row = rows[ri];
+            if (row.bbox == null) continue;
+            // Compute vertical clamp midpoints from whole-line boxes to prevent
+            // neighbour bleed on tightly-spaced handwritten lines.
+            final lb  = row.lineBbox ?? row.bbox!;
+            final prev = ri > 0 ? (rows[ri - 1].lineBbox ?? rows[ri - 1].bbox) : null;
+            final next = ri < rows.length - 1 ? (rows[ri + 1].lineBbox ?? rows[ri + 1].bbox) : null;
+            final clampTop = prev != null ? (prev.bottom + lb.top) / 2 : null;
+            final clampBot = next != null ? (lb.bottom + next.top) / 2 : null;
+            row.processedCrop = _processOneCrop(imgEl, srcW, srcH, row.bbox!,
+                vertClampTop: clampTop, vertClampBot: clampBot);
+            debugPrint('[Crop] "${row.lineItem}" clamp=[$clampTop,$clampBot] → ${row.processedCrop?.length ?? 0} B');
           }
         }
       }
@@ -916,16 +944,24 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
   // Crops a name-only region from the image, converts to black transparent ink.
   // No binarization, no dilation, no deskew — natural smooth anti-aliased strokes.
-  Uint8List? _processOneCrop(html.ImageElement img, int srcW, int srcH, Rect bbox) {
+  // vertClampTop/Bot: hard y-limits (normalized 0-1) computed from midpoints between
+  // adjacent lines — prevents neighbour ink from bleeding into this crop.
+  Uint8List? _processOneCrop(html.ImageElement img, int srcW, int srcH, Rect bbox,
+      {double? vertClampTop, double? vertClampBot}) {
     try {
-      // Expand the Gemini box_2d bbox by a fixed ratio of its own dimensions
-      // (same formula as _lineItemCrop — must stay in sync).
+      // Expand the bbox by a fixed ratio of its own dimensions.
+      // H-padding: 8 % each side.  V-padding: 4 % each side (tighter to avoid bleed).
+      // Must stay in sync with the aspect-ratio formula in _lineItemCrop.
       final padH   = bbox.width  * _kCropHPadRatio;
       final padV   = bbox.height * _kCropVPadRatio;
       final bLeft  = (bbox.left  - padH).clamp(0.0, 1.0);
       final bRight = (bbox.left  + bbox.width  + padH).clamp(0.0, 1.0);
-      final bTop   = (bbox.top   - padV).clamp(0.0, 1.0);
-      final bBot   = (bbox.top   + bbox.height + padV).clamp(0.0, 1.0);
+      // Apply padding then clamp to midpoint between adjacent lines.
+      double bTop  = (bbox.top   - padV).clamp(0.0, 1.0);
+      double bBot  = (bbox.top   + bbox.height + padV).clamp(0.0, 1.0);
+      if (vertClampTop != null && bTop < vertClampTop) bTop = vertClampTop;
+      if (vertClampBot != null && bBot > vertClampBot) bBot = vertClampBot;
+      if (bBot <= bTop) return null;
       final tLeft   = bLeft * srcW;
       final tTop    = bTop  * srcH;
       final tWidth  = (bRight - bLeft) * srcW;
@@ -1190,14 +1226,16 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       prompt = _geminiTextPrompt(rawContent);
     }
 
+    final Map<String, dynamic> requestBody = {
+      'image_base64': imageBase64,
+      'mime_type': mimeType,
+      'prompt': prompt,
+    };
+
     final response = await http.post(
       Uri.parse(_ocrEdgeFn),
       headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'image_base64': imageBase64,
-        'mime_type': mimeType,
-        'prompt': prompt,
-      }),
+      body: jsonEncode(requestBody),
     ).timeout(const Duration(seconds: 60));
 
     debugPrint('[OCR] HTTP ${response.statusCode} — body(200)=${response.statusCode == 200 ? response.body.substring(0, response.body.length.clamp(0, 400)) : response.body}');
@@ -1596,34 +1634,34 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       'IGNORE: page header, shop name, date, phone number, ruled lines, '
       'column headers (Name/Qty/Rate/MRP), totals, serial numbers.\n\n'
       'For each handwritten medicine line return one JSON object inside "items":\n'
-      '- "name": the medicine/brand name exactly as written, including dosage '
-      '(e.g. "Augmentin 625", "Pan 40mg", "Dolo 650"). Partial reads OK — mark '
-      'unclear parts with "?".\n'
-      '- "qty": the quantity number on that line as an integer (use 1 if not visible).\n'
-      '- "box_2d": bounding box [ymin, xmin, ymax, xmax] using Gemini\'s native '
-      'coordinate system (integers 0–1000). Enclose ONLY the medicine name text '
-      'for that line — do NOT include the quantity number column. Do NOT extend '
-      'the box into adjacent lines above or below.\n\n'
+      '- "name": the full medicine entry exactly as written (brand + strength + form '
+      'where present, e.g. "Augmentin 625 tab"). Partial reads OK — mark unclear '
+      'parts with "?".\n'
+      '- "qty": the ORDER quantity integer on that line (use 1 if not visible).\n'
+      '- "box_2d": [ymin, xmin, ymax, xmax] using Gemini native coordinates (0–1000).\n'
+      '  • y-range: covers the FULL line height — top of tallest letter to bottom of '
+      'lowest descender. Accurate y is critical for aligning crops between lines.\n'
+      '  • x-range: covers ONLY the brand/product name — stop xmax right after the '
+      'last letter of the brand name, BEFORE any strength ("250mg","625"), dosage '
+      'form ("tab","cap","gel","cream","inj","sachet"), or pack size ("10T","10s"). '
+      'If the brand name cannot be separated from the rest, cover the whole entry.\n\n'
       'RULES:\n'
-      '1. One object per handwritten line — never merge two lines.\n'
-      '2. Return items top-to-bottom (ascending ymin).\n'
-      '3. NEVER return an empty items array unless the image has absolutely no '
-      'medicine names.\n\n'
-      'Return ONLY valid JSON (no markdown fences, no explanation):\n'
-      '{"items": [{"name": "Augmentin 625", "qty": 5, '
-      '"box_2d": [120, 50, 155, 450]}, ...]}';
+      '1. One object per line — never merge two lines into one entry.\n'
+      '2. Items must be ordered top-to-bottom (ascending ymin).\n'
+      '3. NEVER return an empty items array unless the image has no medicine names.\n\n'
+      'Return ONLY valid JSON (schema enforced — no markdown, no explanation):\n'
+      '{"items": [{"name": "Augmentin 625 tab", "qty": 5, "box_2d": [120, 50, 155, 280]}, ...]}';
 
   static const _geminiImageFallbackPrompt =
       'This is a photo of a handwritten medicine list from a pharmacy. '
       'Some lines may be hard to read. Extract EVERY medicine name visible.\n\n'
       'For each medicine line return one object with:\n'
-      '- "name": medicine name as best you can read (mark unclear parts with "?")\n'
-      '- "qty": quantity number (use 1 if not visible)\n'
-      '- "box_2d": bounding box [ymin, xmin, ymax, xmax] (integers 0–1000) '
-      'enclosing just the medicine name for that line\n\n'
+      '- "name": medicine entry as best you can read (mark unclear parts with "?")\n'
+      '- "qty": order quantity integer (use 1 if not visible)\n'
+      '- "box_2d": [ymin, xmin, ymax, xmax] 0–1000. Full line y-range; '
+      'x-range covers only the brand name (stop before strength/form/pack).\n\n'
       'Return ONLY valid JSON:\n'
-      '{"items": [{"name": "medicine name", "qty": 1, '
-      '"box_2d": [ymin, xmin, ymax, xmax]}, ...]}';
+      '{"items": [{"name": "medicine name", "qty": 1, "box_2d": [y0, x0, y1, x1]}, ...]}';
 
   static String _geminiTextPrompt(String content) =>
       'You are an expert Indian pharmacy procurement assistant.\n'
@@ -3358,7 +3396,7 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
 // Expressed as a fraction of the bbox dimension so that every line gets
 // proportional breathing room regardless of how tall or wide the bbox is.
 const _kCropHPadRatio = 0.08;  // 8 % of bbox.width per horizontal side
-const _kCropVPadRatio = 0.08;  // 8 % of bbox.height per vertical side
+const _kCropVPadRatio = 0.04;  // 4 % of bbox.height per vertical side (tight to reduce bleed)
 
 /// Standard LINE ITEM renderer: shows the handwriting crop (constant height,
 /// proportional width, smooth black strokes, transparent background, no caption).
@@ -3375,24 +3413,16 @@ Widget _lineItemCrop(_MatchRow row, Size? imageSize, {TextStyle? fallbackStyle})
         final maxW =
             constraints.maxWidth.isFinite ? constraints.maxWidth : double.infinity;
 
-        // Compute the crop's natural aspect ratio (same formula as _processOneCrop)
-        // so the container is sized to show the full handwriting without distortion.
-        // naturalW: intrinsic pixel width at fixedH. ClipRect caps to maxW.
+        // Derive naturalW from the actual PNG pixel dimensions — this is exact
+        // even when vertical clamping changed the crop height vs the bbox estimate.
+        // PNG header: bytes 16-19 = width, 20-23 = height (big-endian uint32).
         double naturalW = maxW;
-        final bbox = row.bbox;
-        final imgSize = imageSize;
-        if (bbox != null && imgSize != null &&
-            bbox.width > 0 && bbox.height > 0) {
-          final padH   = bbox.width  * _kCropHPadRatio;
-          final padV   = bbox.height * _kCropVPadRatio;
-          final bLeft  = (bbox.left  - padH).clamp(0.0, 1.0);
-          final bRight = (bbox.left  + bbox.width  + padH).clamp(0.0, 1.0);
-          final bTop   = (bbox.top   - padV).clamp(0.0, 1.0);
-          final bBot   = (bbox.top   + bbox.height + padV).clamp(0.0, 1.0);
-          final cropW  = (bRight - bLeft) * imgSize.width;
-          final cropH  = (bBot   - bTop)  * imgSize.height;
-          if (cropW > 0 && cropH > 0) {
-            naturalW = fixedH * (cropW / cropH);
+        final crop = row.processedCrop!;
+        if (crop.length >= 24) {
+          final pngW = (crop[16] << 24) | (crop[17] << 16) | (crop[18] << 8) | crop[19];
+          final pngH = (crop[20] << 24) | (crop[21] << 16) | (crop[22] << 8) | crop[23];
+          if (pngW > 0 && pngH > 0) {
+            naturalW = fixedH * (pngW / pngH);
           }
         }
         final displayW = naturalW.clamp(0.0, maxW);

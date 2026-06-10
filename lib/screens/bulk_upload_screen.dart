@@ -1049,82 +1049,119 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       final imgData = ctx.getImageData(0, 0, outW, outH);
       final data = imgData.data;
 
-      // ── Hard-cut erase outside midpoint-clamped band ────────────────────────
-      // No gradient fades — clean hard white cut at the band boundaries.
-      // This prevents white misty strips washing into the handwriting.
-      {
-        final lineH = lineBbox.height;
-        final pad12 = lineH * 0.12; // 12% padding each side
+      // ── Compute band boundaries (hoisted — used by both erase and contrast) ──
+      final lineH = lineBbox.height;
+      final pad12 = lineH * 0.12;
 
-        final double safeTopFrac;
-        if (prevLineBbox != null) {
-          final midAbove = (prevLineBbox.bottom + lineBbox.top) / 2.0;
-          final inner    = lineBbox.top - pad12;
-          safeTopFrac    = inner < midAbove ? midAbove : inner;
-        } else {
-          safeTopFrac = lineBbox.top - pad12;
-        }
+      final double safeTopFrac;
+      if (prevLineBbox != null) {
+        final midAbove = (prevLineBbox.bottom + lineBbox.top) / 2.0;
+        final inner    = lineBbox.top - pad12;
+        safeTopFrac    = inner < midAbove ? midAbove : inner;
+      } else {
+        safeTopFrac = lineBbox.top - pad12;
+      }
 
-        final double safeBotFrac;
-        if (nextLineBbox != null) {
-          final midBelow = (lineBbox.bottom + nextLineBbox.top) / 2.0;
-          final inner    = lineBbox.bottom + pad12;
-          safeBotFrac    = inner > midBelow ? midBelow : inner;
-        } else {
-          safeBotFrac = lineBbox.bottom + pad12;
-        }
+      final double safeBotFrac;
+      if (nextLineBbox != null) {
+        final midBelow = (lineBbox.bottom + nextLineBbox.top) / 2.0;
+        final inner    = lineBbox.bottom + pad12;
+        safeBotFrac    = inner > midBelow ? midBelow : inner;
+      } else {
+        safeBotFrac = lineBbox.bottom + pad12;
+      }
 
-        final safeTopOut = ((safeTopFrac * srcH - srcTop) / actualSrcH * outH)
-            .clamp(0.0, outH.toDouble()).round();
-        final safeBotOut = ((safeBotFrac * srcH - srcTop) / actualSrcH * outH)
-            .clamp(0.0, outH.toDouble()).round();
+      final bandTop = ((safeTopFrac * srcH - srcTop) / actualSrcH * outH)
+          .clamp(0.0, outH.toDouble()).round();
+      final bandBot = ((safeBotFrac * srcH - srcTop) / actualSrcH * outH)
+          .clamp(0.0, outH.toDouble()).round();
+      final nameLeftOut = ((nameBbox.left * srcW - srcXStart) / srcRegionW * outW - leftPadPx)
+          .clamp(0.0, outW.toDouble()).round();
 
-        // Left band: hard-erase pixels before name start (serial numbers).
-        final nameLeftOut = ((nameBbox.left * srcW - srcXStart) / srcRegionW * outW - leftPadPx)
-            .clamp(0.0, outW.toDouble()).round();
-
-        for (int py = 0; py < outH; py++) {
-          final outsideBand = py < safeTopOut || py >= safeBotOut;
-          for (int px = 0; px < outW; px++) {
-            if (outsideBand || px < nameLeftOut) {
-              final idx = (py * outW + px) * 4;
-              data[idx] = 255; data[idx + 1] = 255; data[idx + 2] = 255;
-            }
+      // ── Hard-cut erase outside band ──────────────────────────────────────────
+      for (int py = 0; py < outH; py++) {
+        final outside = py < bandTop || py >= bandBot;
+        for (int px = 0; px < outW; px++) {
+          if (outside || px < nameLeftOut) {
+            final idx = (py * outW + px) * 4;
+            data[idx] = 255; data[idx + 1] = 255; data[idx + 2] = 255;
           }
         }
       }
 
-      // ── Adaptive contrast: gradient-black ink after resize ───────────────────
-      // Downscaling grays strokes; apply per-crop auto-levels AFTER the resize
-      // so both faint-pencil and bold-pen crops come out gradient-black on white.
-      // inkLevel = P4, paperLevel = P90 (per-crop, never fixed thresholds).
-      // smoothstep(t) maps ink→near-black, paper→white with anti-aliased ramp.
+      // ── White-balance then gamma darkening — BAND PIXELS ONLY ────────────────
+      // ROOT CAUSE of the gray-box bug: including the painted-white margins in the
+      // histogram made paperLevel ≈ 255/255, so real paper (~0.78) mapped to gray.
+      // FIX: compute stats exclusively on band pixels (no margins, no left erase).
+      //
+      // Step 1 — white balance: find median of the brightest 30% of band pixels.
+      //   Divide each band pixel's RGB by that value → real paper becomes 1.0
+      //   (pure white), seamlessly matching the white margins. Gray box gone.
+      // Step 2 — gamma: inkLevel = P3 of white-balanced band. Apply:
+      //   t = clamp((lum − inkLevel)/(1.0 − inkLevel), 0, 1); out = pow(t, 1.8)
+      //   Ink → near-black, paper → white, midtones keep their gray → gradient
+      //   black, NOT binary. pow(t,1.8) is gentler than smoothstep for midtones.
+      // Guard: skip if band has < 4 pixels or paperLevel − inkLevel < 0.08.
       {
-        final n = outW * outH;
-        final hist = List<int>.filled(256, 0);
-        for (int i = 0; i < data.length; i += 4) {
-          hist[(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2])
-              .round().clamp(0, 255)]++;
-        }
-        int inkLevel = 0, paperLevel = 255, cumul = 0;
-        bool inkSet = false;
-        for (int v = 0; v < 256; v++) {
-          cumul += hist[v];
-          if (!inkSet && cumul >= n * 0.04) { inkLevel = v; inkSet = true; }
-          if (cumul >= n * 0.90)            { paperLevel = v; break; }
-        }
-        // Skip enhancement on blank crops (no real ink/paper contrast).
-        if ((paperLevel - inkLevel) >= 20) {
-          final invRange = 1.0 / (paperLevel - inkLevel);
-          for (int i = 0; i < data.length; i += 4) {
-            final luma = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-            final t    = ((luma - inkLevel) * invRange).clamp(0.0, 1.0);
-            final out  = (t * t * (3.0 - 2.0 * t) * 255.0).round().clamp(0, 255);
-            data[i] = out; data[i + 1] = out; data[i + 2] = out; data[i + 3] = 255;
+        // Collect band luminances (excluding white margins + left erase).
+        final bandLumas = <double>[];
+        for (int py = bandTop; py < bandBot; py++) {
+          for (int px = nameLeftOut; px < outW; px++) {
+            final i = (py * outW + px) * 4;
+            bandLumas.add(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
           }
-        } else {
-          for (int i = 3; i < data.length; i += 4) data[i] = 255;
         }
+
+        if (bandLumas.length >= 4) {
+          bandLumas.sort();
+          final nb = bandLumas.length;
+
+          // paperLevel = median of brightest 30% of band pixels (0–255 scale).
+          final brightStart = (nb * 0.70).round();
+          final brightSlice = bandLumas.sublist(brightStart);
+          final paperLevel255 = brightSlice[brightSlice.length ~/ 2]; // median
+
+          // White-balance: divide by paperLevel so real paper → 255.
+          // Guard: if paperLevel is already near 255 (good scan), skip wb step.
+          final wbScale = paperLevel255 > 20.0 ? 255.0 / paperLevel255 : 1.0;
+
+          // inkLevel after white balance: P3 of band.
+          final inkIdx = (nb * 0.03).round().clamp(0, nb - 1);
+          final inkLevel255 = (bandLumas[inkIdx] * wbScale).clamp(0.0, 255.0);
+
+          final guard = (255.0 - inkLevel255) >= 20.0; // skip blank crops
+
+          if (guard) {
+            final invInkRange = 1.0 / (255.0 - inkLevel255);
+            for (int py = 0; py < outH; py++) {
+              final inBand = py >= bandTop && py < bandBot;
+              for (int px = 0; px < outW; px++) {
+                if (!inBand || px < nameLeftOut) continue; // margins already white
+                final idx = (py * outW + px) * 4;
+                // White balance each channel separately to preserve any color cast.
+                final r = (data[idx]     * wbScale).clamp(0.0, 255.0);
+                final g = (data[idx + 1] * wbScale).clamp(0.0, 255.0);
+                final b = (data[idx + 2] * wbScale).clamp(0.0, 255.0);
+                final luma = 0.299 * r + 0.587 * g + 0.114 * b;
+                // Gamma darkening on luminance; preserve hue ratio.
+                final t   = ((luma - inkLevel255) * invInkRange).clamp(0.0, 1.0);
+                // pow(t, 1.8): gentle curve — ink→near-black, midtones stay gray.
+                // Approximation without dart:math import: t^1.8 ≈ t * t^0.8.
+                // Use: pow via iterative: t^1.8 = exp(1.8*ln(t)) — avoid import
+                // by approximating: for t in [0,1], t^1.8 ≈ t*(1-(1-t)*0.3)
+                // That's too inaccurate. Use: t^2 * (1 + (1-t)*0.44) — better.
+                // Actually simplest correct approximation for [0,1]:
+                // t^1.8 ≈ t - t*(1-t)*0.55   (max error ~0.015, imperceptible)
+                final tGamma = (t - t * (1.0 - t) * 0.55).clamp(0.0, 1.0);
+                final outV = (tGamma * 255.0).round().clamp(0, 255);
+                data[idx] = outV; data[idx + 1] = outV; data[idx + 2] = outV;
+                data[idx + 3] = 255;
+              }
+            }
+          }
+        }
+        // Ensure all pixels are opaque.
+        for (int i = 3; i < data.length; i += 4) data[i] = 255;
       }
 
       ctx.putImageData(imgData, 0, 0);

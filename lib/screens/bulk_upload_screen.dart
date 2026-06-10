@@ -551,51 +551,23 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
           final srcW = imgEl.naturalWidth;
           final srcH = imgEl.naturalHeight;
 
-          // Compute one SHARED global scale so every row renders at the same
-          // apparent handwriting size, AND so even the widest name fits the column.
-          //
-          // scaleH  = targetH / medianLineHeight  (height-driven)
-          // scaleW  = (lineItemColPx − 16) / widestNameSrcPx  (width-driven)
-          // globalScale = min(scaleH, scaleW), floored so handwriting ≥ 16 px tall.
-          const targetHeightPx = 28.0;
-          const minHeightPx    = 16.0; // readability floor
-
-          // Estimate LINE ITEM column width from current screen width.
-          // flex 28 out of total 91 flex units; subtract ~48px for table margins.
-          final screenW = MediaQuery.of(context).size.width;
-          final lineItemColPx = (screenW - 48.0) * 28.0 / 91.0;
+          // Shared scale: targetH / median line height. One value for all rows
+          // so every row's handwriting appears the same size.
+          // Long names overflow → right-edge fade in _lineItemCrop handles them.
+          const targetHeightPx = 40.0;
 
           final lineHeights = rows
               .where((r) => r.lineBbox != null)
               .map((r) => r.lineBbox!.height * srcH)
               .toList()..sort();
-          final nameWidths = rows
-              .where((r) => r.bbox != null)
-              .map((r) => r.bbox!.width * srcW)
-              .toList();
 
-          double globalScale = 0.3; // fallback
+          double globalScale = 0.4; // fallback
           if (lineHeights.isNotEmpty) {
             final median = lineHeights[lineHeights.length ~/ 2];
-            if (median > 0) {
-              final scaleH = targetHeightPx / median;
-              double scaleW = scaleH; // default: no width constraint
-              if (nameWidths.isNotEmpty) {
-                final widestNameSrc = nameWidths.reduce((a, b) => a > b ? a : b);
-                if (widestNameSrc > 0) {
-                  scaleW = (lineItemColPx - 16.0) / widestNameSrc;
-                }
-              }
-              globalScale = scaleH < scaleW ? scaleH : scaleW;
-              // Floor: never shrink handwriting below minHeightPx (readability).
-              if (median > 0) {
-                final minScale = minHeightPx / median;
-                if (globalScale < minScale) globalScale = minScale;
-              }
-            }
+            if (median > 0) globalScale = targetHeightPx / median;
           }
           _cropGlobalScale = globalScale;
-          debugPrint('[Crop] globalScale=$globalScale lineItemColPx=${lineItemColPx.toStringAsFixed(0)}');
+          debugPrint('[Crop] globalScale=${globalScale.toStringAsFixed(3)} targetH=$targetHeightPx');
 
           for (int ri = 0; ri < rows.length; ri++) {
             final row = rows[ri];
@@ -1062,23 +1034,10 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
       final outH = (actualSrcH * globalScale).round().clamp(4, 300);
 
-      // ── Canvas draw + FIX A: S-curve contrast → crisp black strokes on white ──
+      // ── Canvas draw — raw pixels, no contrast enhancement ───────────────────
+      // White background so gradient-fade zones show clean white (not transparent).
       final canvas = html.CanvasElement(width: outW, height: outH);
       final ctx = canvas.context2D;
-
-      // ── FIX A: S-curve contrast enhancement → crisp black strokes on white ──
-      // We render the crop onto an opaque white background, then apply a smooth
-      // S-curve so dark ink pixels map toward pure black and light paper pixels
-      // map toward pure white.  No hard threshold → anti-aliased stroke edges
-      // stay smooth.  The PNG is opaque (alpha=255 everywhere) so the table cell
-      // background shows through the surrounding white, not through transparency.
-      //
-      // S-curve: normalise luminance between P5 (ink) and P95 (paper), then apply
-      //   t_out = t_in² * (3 − 2*t_in)   (smoothstep — smooth S, no jaggies)
-      // giving:  ink (t≈0) → t_out≈0 → pixel≈black
-      //          paper(t≈1) → t_out≈1 → pixel≈white
-
-      // Fill white background first so erased zones and border fades show white.
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(0, 0, outW.toDouble(), outH.toDouble());
       ctx.drawImageScaledFromSource(
@@ -1089,51 +1048,6 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
       final imgData = ctx.getImageData(0, 0, outW, outH);
       final data = imgData.data;
-      final n = outW * outH;
-
-      // Adaptive auto-levels: find the ACTUAL ink and paper luminance for THIS
-      // crop using histogram percentiles — faint pencil and bold pen both come
-      // out crisp black because the levels are derived from the crop itself.
-      //
-      // inkLevel  = P5  (5th percentile  — the darkest strokes in this crop)
-      // paperLevel= P90 (90th percentile — the actual paper, not extreme outliers)
-      // t = (luma − inkLevel) / (paperLevel − inkLevel), clamped 0–1
-      // out = smoothstep(t)  →  ink(t=0)→black(0), paper(t=1)→white(255), smooth ramp
-      //
-      // Key: NO cap on inkLevel — faint pencil at luma 190 gets inkLevel=190,
-      // so t=0 for that stroke → mapped to pure black.  A fixed cap (old code had
-      // clamp(0,160)) pushed faint ink to t>0, leaving it gray/washed-out.
-      final hist = List<int>.filled(256, 0);
-      for (int i = 0; i < data.length; i += 4) {
-        hist[(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2])
-            .round()
-            .clamp(0, 255)]++;
-      }
-      int inkLevel = 0, paperLevel = 255;
-      int cumul = 0;
-      bool inkSet = false;
-      for (int v = 0; v < 256; v++) {
-        cumul += hist[v];
-        if (!inkSet && cumul >= n * 0.05) { inkLevel = v; inkSet = true; }
-        if (cumul >= n * 0.90) { paperLevel = v; break; }
-      }
-      // Guard: blank/already-white crop — skip enhancement to avoid amplifying noise.
-      final range = paperLevel - inkLevel;
-      if (range >= 20) {
-        final invRange = 1.0 / range;
-        for (int i = 0; i < data.length; i += 4) {
-          final luma = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-          final t    = ((luma - inkLevel) * invRange).clamp(0.0, 1.0);
-          final tOut = t * t * (3.0 - 2.0 * t); // smoothstep — smooth, no jaggies
-          final v    = (tOut * 255.0).round().clamp(0, 255);
-          data[i] = v; data[i + 1] = v; data[i + 2] = v; data[i + 3] = 255;
-        }
-      } else {
-        // Blank crop: just make all pixels opaque (no luma remapping).
-        for (int i = 3; i < data.length; i += 4) {
-          data[i] = 255;
-        }
-      }
 
       // ── FIX B: Soft-fade erase outside the safe band ────────────────────────
       // Band top/bot use midpoint clamp (same logic as before).
@@ -1207,114 +1121,6 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
               data[idx + 1] = (data[idx + 1] + (255 - data[idx + 1]) * blend255 ~/ 255).clamp(0, 255);
               data[idx + 2] = (data[idx + 2] + (255 - data[idx + 2]) * blend255 ~/ 255).clamp(0, 255);
               // alpha stays 255 (opaque)
-            }
-          }
-        }
-      }
-
-      // ── Connected-component residue removal ─────────────────────────────────
-      // Pixels are now opaque RGB (alpha=255). "Ink" = luminance < inkLumaThresh.
-      // BFS labels each dark blob; residue blobs (off-centre or rule-shaped) are
-      // painted white.
-      const inkLumaThresh = 180; // luminance below this = ink pixel
-      // Helper: is pixel at flat-array index `i` an ink pixel?
-      // R channel == G == B after S-curve, so just check data[i*4].
-      final labels = List<int>.filled(outW * outH, -1);
-      final cArea = <int>[];
-      final cSumY = <double>[];
-      final cMinY = <int>[];
-      final cMaxY = <int>[];
-      final cMinX = <int>[];
-      final cMaxX = <int>[];
-      final bfsQ  = <int>[];
-      int nextLabel = 0;
-
-      for (int seed = 0; seed < outW * outH; seed++) {
-        if (labels[seed] != -1) continue;
-        if (data[seed * 4] >= inkLumaThresh) { labels[seed] = -2; continue; } // not ink
-        final lbl = nextLabel++;
-        cArea.add(0); cSumY.add(0.0);
-        cMinY.add(outH); cMaxY.add(0);
-        cMinX.add(outW); cMaxX.add(0);
-        bfsQ.clear();
-        labels[seed] = lbl;
-        bfsQ.add(seed);
-        int qi = 0;
-        while (qi < bfsQ.length) {
-          final idx = bfsQ[qi++];
-          final px = idx % outW;
-          final py = idx ~/ outW;
-          cArea[lbl]++;
-          cSumY[lbl] += py;
-          if (py < cMinY[lbl]) cMinY[lbl] = py;
-          if (py > cMaxY[lbl]) cMaxY[lbl] = py;
-          if (px < cMinX[lbl]) cMinX[lbl] = px;
-          if (px > cMaxX[lbl]) cMaxX[lbl] = px;
-          // 4-connected neighbours — inline to avoid closure overhead.
-          if (px > 0) {
-            final ni = idx - 1;
-            if (labels[ni] == -1) {
-              if (data[ni * 4] >= inkLumaThresh) labels[ni] = -2;
-              else { labels[ni] = lbl; bfsQ.add(ni); }
-            }
-          }
-          if (px < outW - 1) {
-            final ni = idx + 1;
-            if (labels[ni] == -1) {
-              if (data[ni * 4] >= inkLumaThresh) labels[ni] = -2;
-              else { labels[ni] = lbl; bfsQ.add(ni); }
-            }
-          }
-          if (py > 0) {
-            final ni = idx - outW;
-            if (labels[ni] == -1) {
-              if (data[ni * 4] >= inkLumaThresh) labels[ni] = -2;
-              else { labels[ni] = lbl; bfsQ.add(ni); }
-            }
-          }
-          if (py < outH - 1) {
-            final ni = idx + outW;
-            if (labels[ni] == -1) {
-              if (data[ni * 4] >= inkLumaThresh) labels[ni] = -2;
-              else { labels[ni] = lbl; bfsQ.add(ni); }
-            }
-          }
-        }
-      }
-
-      if (nextLabel > 0) {
-        // Anchor = largest component that isn't itself a horizontal rule.
-        int anchorLbl = -1, anchorArea = 0;
-        for (int l = 0; l < nextLabel; l++) {
-          if (cArea[l] < 4) continue;
-          final compW = cMaxX[l] - cMinX[l] + 1;
-          final compH = cMaxY[l] - cMinY[l] + 1;
-          final isRule = compW > outW * 0.45 && compH <= 5;
-          if (!isRule && cArea[l] > anchorArea) {
-            anchorArea = cArea[l];
-            anchorLbl = l;
-          }
-        }
-        if (anchorLbl >= 0) {
-          final anchorCY = cSumY[anchorLbl] / cArea[anchorLbl];
-          final vertTol = outH * 0.35;
-          final excl = List<bool>.filled(nextLabel, false);
-          for (int l = 0; l < nextLabel; l++) {
-            if (l == anchorLbl) continue;
-            if (cArea[l] < 4) { excl[l] = true; continue; }
-            final ccy  = cSumY[l] / cArea[l];
-            final compW = cMaxX[l] - cMinX[l] + 1;
-            final compH = cMaxY[l] - cMinY[l] + 1;
-            excl[l] = (compW > outW * 0.45 && compH <= 5) ||
-                (ccy - anchorCY).abs() > vertTol;
-          }
-          for (int idx = 0; idx < outW * outH; idx++) {
-            final l = labels[idx];
-            if (l >= 0 && excl[l]) {
-              // Paint white (residue removal — opaque PNG).
-              data[idx * 4]     = 255;
-              data[idx * 4 + 1] = 255;
-              data[idx * 4 + 2] = 255;
             }
           }
         }

@@ -3463,18 +3463,58 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
     return s2r.take(30).map((p) => p.$1).toList();
   }
 
-  // Gemini: from candidates keep only same corporate group
+  // Generic pharma tokens excluded from the significant-token guard
+  static const _genericTokens = {
+    'pharma', 'pharmaceutical', 'pharmaceuticals', 'labs', 'laboratory',
+    'laboratories', 'ltd', 'limited', 'pvt', 'private', 'life', 'sciences',
+    'science', 'healthcare', 'india', 'co', 'company', 'remedies', 'biotech',
+    'biologics', 'medical', 'medicine', 'medicines', 'corp', 'corporation',
+    'international', 'inc', 'the', 'and', 'of',
+  };
+
+  // Post-validation: returns true if candidate is genuinely the same entity as supplier.
+  // Accepts if: (a) at least one significant token (≥4 chars, not generic) is shared, OR
+  //             (b) _s2 score ≥ 0.72 (high fuzzy similarity).
+  bool _isSameCompany(String supplier, String candidate) {
+    final sup = supplier.toLowerCase();
+    final can = candidate.toLowerCase();
+    // Tokenise: split on non-alpha, drop generics, keep ≥4 char tokens
+    Set<String> sigTokens(String s) => s
+        .split(RegExp(r'[^a-z]+'))
+        .where((t) => t.length >= 4 && !_genericTokens.contains(t))
+        .toSet();
+    final supToks = sigTokens(sup);
+    final canToks = sigTokens(can);
+    if (supToks.isNotEmpty && canToks.isNotEmpty && supToks.intersection(canToks).isNotEmpty) {
+      return true;
+    }
+    // Fallback: high fuzzy score
+    return _s2(supplier, candidate) >= 0.72;
+  }
+
+  // Apply post-validation to a list of Gemini-returned matches
+  List<String> _validateMatches(String supplier, List<String> matches) =>
+      matches.where((m) => _isSameCompany(supplier, m)).toList();
+
+  static String _matchPromptRules() =>
+      'You are a strict pharmaceutical company identity matcher.\n'
+      'TASK: for each supplier_company, return ONLY the candidates that are DEFINITIVELY '
+      'the same legal entity or brand family — e.g. abbreviations (MSD = MSD Pharmaceuticals), '
+      'legal-suffix variants (Pvt Ltd / PRIVATE LIMITED / Ltd), spelling variants, or '
+      'confirmed sub-brands of the same parent (MSD Animal Health India = MSD group).\n'
+      'CRITICAL RULES — any violation makes the response invalid:\n'
+      '  1. Return ONLY strings that appear VERBATIM in the candidates list.\n'
+      '  2. EMPTY is the CORRECT answer when no candidate is definitively the same company. '
+      '     NEVER return a candidate merely because the name looks or sounds similar — '
+      '     "TORRENT" ≠ "Ascent Pharma", "PFIZER" ≠ "Farger Pvt Ltd". '
+      '     If you are not certain, return empty.\n'
+      '  3. Do NOT generate, invent, paraphrase, or modify any names.\n';
+
   // Single-row fallback (used when a batch parse fails for a specific row)
   Future<List<String>?> _geminiGroupFilter(String supplier, List<String> candidates) async {
     final prompt =
-        'You are a pharmaceutical company name matcher.\n'
-        'The supplier works with "$supplier".\n'
-        'From the candidate list below, select ONLY the entries that belong to the same '
-        'corporate group or parent company as "$supplier".\n'
-        'STRICT RULES — violating any rule makes the response invalid:\n'
-        '  1. Return ONLY strings that appear VERBATIM in the candidates list.\n'
-        '  2. Do NOT generate, invent, paraphrase, or modify any names.\n'
-        '  3. If no candidates match, return {"matches":[]}.\n'
+        '${_matchPromptRules()}'
+        'Supplier company: "$supplier"\n'
         'Candidates: ${jsonEncode(candidates)}\n'
         'Respond with ONLY this JSON (no explanation, no markdown): '
         '{"matches":[...exact verbatim strings from candidates only...]}';
@@ -3491,7 +3531,8 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
       final rawMatches = (parsed['matches'] as List?)?.map((e) => e.toString()).toList() ?? [];
       final cset = candidates.toSet();
       final corpusSet = _companyCorpus.toSet();
-      return rawMatches.where((m) => cset.contains(m) && corpusSet.contains(m)).toList();
+      final filtered = rawMatches.where((m) => cset.contains(m) && corpusSet.contains(m)).toList();
+      return _validateMatches(supplier, filtered);
     } catch (_) {
       return null;
     }
@@ -3505,16 +3546,10 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
       'candidates': entry['candidates'] as List<String>,
     }).toList();
     final prompt =
-        'You are a pharmaceutical company name matcher.\n'
-        'For each item below, select ONLY the candidate strings that belong to the same '
-        'corporate group or parent company as the supplier_company value.\n'
-        'STRICT RULES:\n'
-        '  1. Return ONLY strings that appear VERBATIM in the item\'s candidates list.\n'
-        '  2. Do NOT generate, invent, paraphrase, or modify any names.\n'
-        '  3. If no candidates match for an item, return an empty matches array.\n'
+        '${_matchPromptRules()}'
         'Items: ${jsonEncode(items)}\n'
         'Respond with ONLY this JSON (no explanation, no markdown):\n'
-        '{"items":[{"supplier_company":"<exact input value>","matches":[...verbatim candidates...]},...]}';
+        '{"items":[{"supplier_company":"<exact input value>","matches":[...verbatim candidates only, empty array if none match...]},...]}';
     try {
       final resp = await http.post(
         Uri.parse(_ocrEdgeFn),
@@ -3537,7 +3572,8 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
         if (entry.isEmpty) continue;
         final candidateSet = (entry['candidates'] as List<String>).toSet();
         final rawMatches = (item['matches'] as List?)?.map((e) => e.toString()).toList() ?? [];
-        result[sc] = rawMatches.where((m) => candidateSet.contains(m) && corpusSet.contains(m)).toList();
+        final filtered = rawMatches.where((m) => candidateSet.contains(m) && corpusSet.contains(m)).toList();
+        result[sc] = _validateMatches(sc, filtered);
       }
       return result;
     } catch (_) {

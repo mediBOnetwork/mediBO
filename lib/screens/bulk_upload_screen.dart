@@ -551,29 +551,70 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
           final srcW = imgEl.naturalWidth;
           final srcH = imgEl.naturalHeight;
 
-          // Compute one shared scale from median line height.
-          // targetHeightPx = 38 output pixels per line → same visual size for all rows.
-          const targetHeightPx = 38.0;
+          // Compute one SHARED global scale so every row renders at the same
+          // apparent handwriting size, AND so even the widest name fits the column.
+          //
+          // scaleH  = targetH / medianLineHeight  (height-driven)
+          // scaleW  = (lineItemColPx − 16) / widestNameSrcPx  (width-driven)
+          // globalScale = min(scaleH, scaleW), floored so handwriting ≥ 16 px tall.
+          const targetHeightPx = 28.0;
+          const minHeightPx    = 16.0; // readability floor
+
+          // Estimate LINE ITEM column width from current screen width.
+          // flex 28 out of total 91 flex units; subtract ~48px for table margins.
+          final screenW = MediaQuery.of(context).size.width;
+          final lineItemColPx = (screenW - 48.0) * 28.0 / 91.0;
+
           final lineHeights = rows
               .where((r) => r.lineBbox != null)
               .map((r) => r.lineBbox!.height * srcH)
               .toList()..sort();
+          final nameWidths = rows
+              .where((r) => r.bbox != null)
+              .map((r) => r.bbox!.width * srcW)
+              .toList();
+
           double globalScale = 0.3; // fallback
           if (lineHeights.isNotEmpty) {
             final median = lineHeights[lineHeights.length ~/ 2];
-            if (median > 0) globalScale = targetHeightPx / median;
+            if (median > 0) {
+              final scaleH = targetHeightPx / median;
+              double scaleW = scaleH; // default: no width constraint
+              if (nameWidths.isNotEmpty) {
+                final widestNameSrc = nameWidths.reduce((a, b) => a > b ? a : b);
+                if (widestNameSrc > 0) {
+                  scaleW = (lineItemColPx - 16.0) / widestNameSrc;
+                }
+              }
+              globalScale = scaleH < scaleW ? scaleH : scaleW;
+              // Floor: never shrink handwriting below minHeightPx (readability).
+              if (median > 0) {
+                final minScale = minHeightPx / median;
+                if (globalScale < minScale) globalScale = minScale;
+              }
+            }
           }
           _cropGlobalScale = globalScale;
-          debugPrint('[Crop] globalScale=$globalScale (median line=${lineHeights.isNotEmpty ? lineHeights[lineHeights.length ~/ 2].toStringAsFixed(1) : "?"}px)');
+          debugPrint('[Crop] globalScale=$globalScale lineItemColPx=${lineItemColPx.toStringAsFixed(0)}');
 
           for (int ri = 0; ri < rows.length; ri++) {
             final row = rows[ri];
             if (row.bbox == null) continue;
+            final lineBbox = row.lineBbox ?? row.bbox!;
+            // Adjacent line bboxes for midpoint-clamped erase band.
+            final prevLineBbox = ri > 0
+                ? (rows[ri - 1].lineBbox ?? rows[ri - 1].bbox)
+                : null;
+            final nextLineBbox = ri < rows.length - 1
+                ? (rows[ri + 1].lineBbox ?? rows[ri + 1].bbox)
+                : null;
             row.processedCrop = _processOneCrop(
               imgEl, srcW, srcH,
-              row.bbox!,               // name_box_2d → left anchor
-              row.lineBbox ?? row.bbox!, // box_2d    → vertical center
+              row.bbox!,   // name_box_2d → left anchor
+              lineBbox,    // box_2d      → vertical extent
               globalScale,
+              prevLineBbox: prevLineBbox,
+              nextLineBbox: nextLineBbox,
             );
             debugPrint('[Crop] "${row.lineItem}" → ${row.processedCrop?.length ?? 0} B');
           }
@@ -982,14 +1023,17 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
   /// renders at the same apparent height.
   ///
   /// [nameBbox]  — name_box_2d (0–1): x left-anchor, gives first letter position.
-  /// [lineBbox]  — box_2d (0–1): y-center used to vertically center the viewport.
+  /// [lineBbox]    — box_2d (0–1): this line's vertical extent.
   /// [globalScale] — pixels-per-source-pixel, same value for every row.
+  /// [prevLineBbox]/[nextLineBbox] — adjacent lines for midpoint-clamped erase.
   ///
   /// Output: height = round(actualSrcH * globalScale), width = name width at globalScale + margin.
   Uint8List? _processOneCrop(
     html.ImageElement img, int srcW, int srcH,
-    Rect nameBbox, Rect lineBbox, double globalScale,
-  ) {
+    Rect nameBbox, Rect lineBbox, double globalScale, {
+    Rect? prevLineBbox,
+    Rect? nextLineBbox,
+  }) {
     try {
       const leftPadPx = 3.0;    // output-px gap before first letter
       const rightPadPx = 16.0;  // output-px margin after name end
@@ -1079,26 +1123,51 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         data[i] = 0; data[i + 1] = 0; data[i + 2] = 0; data[i + 3] = alpha;
       }
 
-      // ── Geometric erase: blank pixels outside the line's own bbox ──────────
-      // Erase the top and bottom bands that contain adjacent-line ink, and the
-      // left band that may contain leading serial numbers.
-      // Coordinates are computed in output pixels from the same source bbox used
-      // when drawing the canvas (srcTop / actualSrcH / srcXStart / srcRegionW).
+      // ── Geometric erase: paint alpha=0 outside the safe band ───────────────
+      // Band top  = max(lineBbox.top  − 6% lineH, midpoint with line above)
+      // Band bot  = min(lineBbox.bot  + 6% lineH, midpoint with line below)
+      // This unconditionally runs for every crop — no skip path.
       {
-        // Line bbox in output-pixel coordinates relative to the crop.
-        final lineTopOut  = ((lineBbox.top  * srcH - srcTop) / actualSrcH * outH)
-            .clamp(0.0, outH.toDouble());
-        final lineBotOut  = ((lineBbox.bottom * srcH - srcTop) / actualSrcH * outH)
-            .clamp(0.0, outH.toDouble());
-        final eraseAbove  = (lineTopOut  - outH * 0.04).clamp(0.0, outH.toDouble()).round();
-        final eraseBelow  = (lineBotOut  + outH * 0.04).clamp(0.0, outH.toDouble()).round();
-        // Left band: erase pixels before the name starts (kills serial numbers).
+        final lineH = lineBbox.height; // fraction of source height (0–1)
+        final pad6  = lineH * 0.06;
+
+        // Midpoint with previous line: halfway between prevLine.bottom and this line.top.
+        final double safeTopFrac;
+        if (prevLineBbox != null) {
+          final midAbove = (prevLineBbox.bottom + lineBbox.top) / 2.0;
+          final inner    = lineBbox.top  - pad6;
+          safeTopFrac    = inner < midAbove ? midAbove : inner; // max
+        } else {
+          safeTopFrac = lineBbox.top - pad6;
+        }
+
+        // Midpoint with next line.
+        final double safeBotFrac;
+        if (nextLineBbox != null) {
+          final midBelow = (lineBbox.bottom + nextLineBbox.top) / 2.0;
+          final inner    = lineBbox.bottom + pad6;
+          safeBotFrac    = inner > midBelow ? midBelow : inner; // min
+        } else {
+          safeBotFrac = lineBbox.bottom + pad6;
+        }
+
+        // Convert safe band from source-fraction → output pixels.
+        // srcTop (source px from top of image) was already computed above.
+        final safeTopOut = ((safeTopFrac * srcH - srcTop) / actualSrcH * outH)
+            .clamp(0.0, outH.toDouble()).round();
+        final safeBotOut = ((safeBotFrac * srcH - srcTop) / actualSrcH * outH)
+            .clamp(0.0, outH.toDouble()).round();
+
+        // Left band: erase anything left of name start (kills serial numbers).
         final nameLeftOut = ((nameBbox.left * srcW - srcXStart) / srcRegionW * outW - leftPadPx)
             .clamp(0.0, outW.toDouble()).round();
+
+        // Unconditional erase — set alpha=0 for every out-of-band pixel.
         for (int py = 0; py < outH; py++) {
           for (int px = 0; px < outW; px++) {
-            final erase = py < eraseAbove || py >= eraseBelow || px < nameLeftOut;
-            if (erase) data[(py * outW + px) * 4 + 3] = 0;
+            if (py < safeTopOut || py >= safeBotOut || px < nameLeftOut) {
+              data[(py * outW + px) * 4 + 3] = 0;
+            }
           }
         }
       }

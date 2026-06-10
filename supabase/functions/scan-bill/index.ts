@@ -6,7 +6,7 @@ const cors = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-const MAX_RETRIES = 3
+const OCR_EDGE_FN = 'https://svojhmarmaijkshsbeih.supabase.co/functions/v1/gemini-ocr'
 
 /** Extract bare email from "Display Name <email@example.com>" or plain "email@example.com" */
 function extractEmail(raw: string): string {
@@ -50,14 +50,11 @@ serve(async (req) => {
       })
     }
 
-    // ── Mark scanning (trigger may have already set this, idempotent) ────────
+    // ── Mark scanning ────────────────────────────────────────────────────────
     await supabase
       .from('pending_bills')
       .update({ scan_status: 'scanning' })
       .eq('id', billId)
-
-    const geminiKey = Deno.env.get('GEMINI_API_KEY') ?? ''
-    if (!geminiKey) throw new Error('GEMINI_API_KEY secret not set')
 
     // ── Download file ────────────────────────────────────────────────────────
     const { data: blob, error: dlErr } = await supabase.storage
@@ -68,7 +65,7 @@ serve(async (req) => {
     const buf = await blob.arrayBuffer()
     const bytes = new Uint8Array(buf)
     let b64 = ''
-    const chunkSize = 8190 // must be divisible by 3 so btoa() never adds mid-string padding
+    const chunkSize = 8190 // divisible by 3 so btoa() never adds mid-string padding
     for (let i = 0; i < bytes.length; i += chunkSize) {
       b64 += btoa(String.fromCharCode(...bytes.subarray(i, i + chunkSize)))
     }
@@ -86,7 +83,7 @@ serve(async (req) => {
     const { data: suppliers } = await supabase.from('suppliers').select('id,name,gst,dl,emails')
     const suppListJson = JSON.stringify(suppliers ?? [])
 
-    // ── Build Gemini prompt ──────────────────────────────────────────────────
+    // ── Build prompt ─────────────────────────────────────────────────────────
     const prompt = `You are a supplier invoice verification system for an Indian B2B pharmacy platform.
 
 Analyse the attached bill/invoice image or PDF and return ONLY a valid JSON object (no markdown, no fences).
@@ -133,57 +130,23 @@ Return exactly this JSON shape:
   "reasoning": ""
 }`
 
-    const geminiBody = {
-      contents: [{ parts: [
-        { inline_data: { mime_type: mime, data: b64 } },
-        { text: prompt },
-      ]}],
-      generationConfig: {
-        temperature: 0.1,
-        maxOutputTokens: 4096,
-        thinkingConfig: { thinkingBudget: 0 },
-      },
+    // ── Call OCR edge function ────────────────────────────────────────────────
+    const ocrResp = await fetch(OCR_EDGE_FN, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image_base64: b64, mime_type: mime, prompt }),
+    })
+    if (!ocrResp.ok) {
+      const errText = await ocrResp.text()
+      throw new Error(`OCR function HTTP ${ocrResp.status}: ${errText}`)
     }
+    const ocrData = await ocrResp.json() as { text?: string }
+    const rawText = ocrData.text ?? ''
+    if (!rawText) throw new Error('Empty response from OCR function')
 
-    // ── Call Gemini with retries ──────────────────────────────────────────────
-    let gJson: Record<string, unknown> | null = null
-    let lastError = ''
-    // Try gemini-2.5-flash first, fall back to gemini-2.0-flash
-    const models = ['gemini-2.5-flash', 'gemini-2.0-flash']
-    outer: for (const model of models) {
-      for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-        try {
-          const gResp = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiKey}`,
-            { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(geminiBody) },
-          )
-          if (!gResp.ok) {
-            const errText = await gResp.text()
-            lastError = `Gemini ${model} HTTP ${gResp.status}: ${errText}`
-            console.error(`[scan-bill] ${lastError}`)
-            if (gResp.status === 404) break  // model not found — try next model
-            if (attempt < MAX_RETRIES) await new Promise(r => setTimeout(r, attempt * 2000))
-            continue
-          }
-          gJson = await gResp.json() as Record<string, unknown>
-          console.log(`[scan-bill] Using model: ${model}`)
-          break outer
-        } catch (e: unknown) {
-          lastError = e instanceof Error ? e.message : String(e)
-          console.error(`[scan-bill] Fetch error attempt ${attempt}: ${lastError}`)
-          if (attempt < MAX_RETRIES) await new Promise(r => setTimeout(r, attempt * 2000))
-        }
-      }
-    }
-    if (!gJson) throw new Error(lastError || 'Gemini failed after all retries')
-
-    // ── Parse Gemini response ────────────────────────────────────────────────
-    const cands = (gJson.candidates as Array<Record<string, unknown>>) ?? []
-    const parts = ((cands[0]?.content as Record<string, unknown>)?.parts ?? []) as Array<{ text?: string; thought?: boolean }>
-    const rawText = parts.filter(p => !p.thought).map(p => p.text ?? '').join('')
-
+    // ── Parse response ───────────────────────────────────────────────────────
     const jsonMatch = rawText.match(/\{[\s\S]*\}/)
-    if (!jsonMatch) throw new Error(`No JSON in Gemini response. Raw: ${rawText.slice(0, 200)}`)
+    if (!jsonMatch) throw new Error(`No JSON in OCR response. Raw: ${rawText.slice(0, 200)}`)
     const extracted = JSON.parse(jsonMatch[0]) as Record<string, unknown>
 
     const verdict: string = ['real', 'needs_approval', 'fake'].includes(extracted.verdict as string)

@@ -199,6 +199,9 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
   Uint8List? _uploadedImageBytes;
   Size? _uploadedImageSize;
   String? _uploadedMimeType;
+  // Shared crop scale: ONE value for ALL rows so every crop renders at the
+  // same apparent handwriting size. Computed from median line height after OCR.
+  double? _cropGlobalScale;
 
   // Static (session-lifetime) cache of the last uploaded image.
   // Survives State recreation caused by GlobalKey reparenting failures,
@@ -303,12 +306,14 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       final lineItemMap = (m['bulkLineItemMap'] as Map<String, dynamic>?)
               ?.map((k, v) => MapEntry(k, v as String)) ??
           {};
+      final savedScale = (m['cropGlobalScale'] as num?)?.toDouble();
       if (rows.isNotEmpty && mounted) {
         setState(() {
           _rows = rows;
           _fileName = fileName;
           _isFromFile = true;
           _bulkLineItemMap = lineItemMap;
+          if (savedScale != null) _cropGlobalScale = savedScale;
         });
         // Rehydrate image bytes: prefer static cache (survives layout reparent);
         // fall back to SharedPreferences (survives page refresh).
@@ -337,6 +342,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         'fileName': _fileName,
         'rows': _rows.map((r) => r.toJson()).toList(),
         'bulkLineItemMap': _bulkLineItemMap,
+        if (_cropGlobalScale != null) 'cropGlobalScale': _cropGlobalScale,
       }),
     );
   }
@@ -361,17 +367,25 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     if (imgEl == null || !mounted) return;
     final srcW = imgEl.naturalWidth;
     final srcH = imgEl.naturalHeight;
+    // Re-derive globalScale from restored rows if not already in state.
+    double? gs = _cropGlobalScale;
+    if (gs == null) {
+      final heights = _rows
+          .where((r) => r.lineBbox != null)
+          .map((r) => r.lineBbox!.height * srcH)
+          .toList()..sort();
+      if (heights.isNotEmpty) {
+        final median = heights[heights.length ~/ 2];
+        if (median > 0) gs = 30.0 / median;
+      }
+    }
+    if (gs == null) return;
     bool anyUpdated = false;
     for (int ri = 0; ri < _rows.length; ri++) {
       final row = _rows[ri];
       if (row.processedCrop == null && row.bbox != null) {
-        final lb  = row.lineBbox ?? row.bbox!;
-        final prev = ri > 0 ? (_rows[ri - 1].lineBbox ?? _rows[ri - 1].bbox) : null;
-        final next = ri < _rows.length - 1 ? (_rows[ri + 1].lineBbox ?? _rows[ri + 1].bbox) : null;
-        final clampTop = prev != null ? (prev.bottom + lb.top) / 2 : null;
-        final clampBot = next != null ? (lb.bottom + next.top) / 2 : null;
-        row.processedCrop = _processOneCrop(imgEl, srcW, srcH, row.bbox!,
-            vertClampTop: clampTop, vertClampBot: clampBot);
+        row.processedCrop = _processOneCrop(
+          imgEl, srcW, srcH, row.bbox!, row.lineBbox ?? row.bbox!, gs);
         debugPrint('[Crop] Reprocessed "${row.lineItem}" → ${row.processedCrop?.length ?? 0} B');
         anyUpdated = true;
       }
@@ -529,25 +543,39 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         setState(() => _matchProgress = rows.length);
       }
 
-      // Process handwriting crops for each row's name_box_2d region.
+      // Process handwriting crops at a SHARED global scale so every row's
+      // handwriting renders at the same apparent size.
       if (origImageBytes != null && origImageSize != null) {
         final imgEl = await _loadImageForProcessing(origImageBytes, origMimeType);
         if (imgEl != null) {
           final srcW = imgEl.naturalWidth;
           final srcH = imgEl.naturalHeight;
+
+          // Compute one shared scale from median line height.
+          // targetHeightPx = 30 output pixels per line → same visual size for all rows.
+          const targetHeightPx = 30.0;
+          final lineHeights = rows
+              .where((r) => r.lineBbox != null)
+              .map((r) => r.lineBbox!.height * srcH)
+              .toList()..sort();
+          double globalScale = 0.3; // fallback
+          if (lineHeights.isNotEmpty) {
+            final median = lineHeights[lineHeights.length ~/ 2];
+            if (median > 0) globalScale = targetHeightPx / median;
+          }
+          _cropGlobalScale = globalScale;
+          debugPrint('[Crop] globalScale=$globalScale (median line=${lineHeights.isNotEmpty ? lineHeights[lineHeights.length ~/ 2].toStringAsFixed(1) : "?"}px)');
+
           for (int ri = 0; ri < rows.length; ri++) {
             final row = rows[ri];
             if (row.bbox == null) continue;
-            // Compute vertical clamp midpoints from whole-line boxes to prevent
-            // neighbour bleed on tightly-spaced handwritten lines.
-            final lb  = row.lineBbox ?? row.bbox!;
-            final prev = ri > 0 ? (rows[ri - 1].lineBbox ?? rows[ri - 1].bbox) : null;
-            final next = ri < rows.length - 1 ? (rows[ri + 1].lineBbox ?? rows[ri + 1].bbox) : null;
-            final clampTop = prev != null ? (prev.bottom + lb.top) / 2 : null;
-            final clampBot = next != null ? (lb.bottom + next.top) / 2 : null;
-            row.processedCrop = _processOneCrop(imgEl, srcW, srcH, row.bbox!,
-                vertClampTop: clampTop, vertClampBot: clampBot);
-            debugPrint('[Crop] "${row.lineItem}" clamp=[$clampTop,$clampBot] → ${row.processedCrop?.length ?? 0} B');
+            row.processedCrop = _processOneCrop(
+              imgEl, srcW, srcH,
+              row.bbox!,               // name_box_2d → left anchor
+              row.lineBbox ?? row.bbox!, // box_2d    → vertical center
+              globalScale,
+            );
+            debugPrint('[Crop] "${row.lineItem}" → ${row.processedCrop?.length ?? 0} B');
           }
         }
       }
@@ -950,41 +978,52 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     }
   }
 
-  // Crops a name-only region from the image, converts to black transparent ink.
-  // No binarization, no dilation, no deskew — natural smooth anti-aliased strokes.
-  // vertClampTop/Bot: hard y-limits (normalized 0-1) computed from midpoints between
-  // adjacent lines — prevents neighbour ink from bleeding into this crop.
-  Uint8List? _processOneCrop(html.ImageElement img, int srcW, int srcH, Rect bbox,
-      {double? vertClampTop, double? vertClampBot}) {
+  /// Generates a crop PNG using a SHARED globalScale so every row's handwriting
+  /// renders at the same apparent height.
+  ///
+  /// [nameBbox]  — name_box_2d (0–1): x left-anchor, gives first letter position.
+  /// [lineBbox]  — box_2d (0–1): y-center used to vertically center the viewport.
+  /// [globalScale] — pixels-per-source-pixel, same value for every row.
+  ///
+  /// Output: height = 30 px (targetH), width = name width at globalScale + margin.
+  Uint8List? _processOneCrop(
+    html.ImageElement img, int srcW, int srcH,
+    Rect nameBbox, Rect lineBbox, double globalScale,
+  ) {
     try {
-      // Expand the bbox by a fixed ratio of its own dimensions.
-      // H-padding: 8 % each side.  V-padding: 4 % each side (tighter to avoid bleed).
-      // Must stay in sync with the aspect-ratio formula in _lineItemCrop.
-      final padH   = bbox.width  * _kCropHPadRatio;
-      final padV   = bbox.height * _kCropVPadRatio;
-      final bLeft  = (bbox.left  - padH).clamp(0.0, 1.0);
-      final bRight = (bbox.left  + bbox.width  + padH).clamp(0.0, 1.0);
-      // Apply padding then clamp to midpoint between adjacent lines.
-      double bTop  = (bbox.top   - padV).clamp(0.0, 1.0);
-      double bBot  = (bbox.top   + bbox.height + padV).clamp(0.0, 1.0);
-      if (vertClampTop != null && bTop < vertClampTop) bTop = vertClampTop;
-      if (vertClampBot != null && bBot > vertClampBot) bBot = vertClampBot;
-      if (bBot <= bTop) return null;
-      final tLeft   = bLeft * srcW;
-      final tTop    = bTop  * srcH;
-      final tWidth  = (bRight - bLeft) * srcW;
-      final tHeight = (bBot   - bTop)  * srcH;
-      if (tWidth < 6 || tHeight < 4) return null;
+      const targetH   = 30.0;   // output height (px) — constant for all rows
+      const leftPadPx = 3.0;    // output-px gap before first letter
+      const rightPadPx = 16.0;  // output-px margin after name end
 
-      // Natural source resolution — no upscaling or fixed-height normalization.
-      final outW = tWidth.round().clamp(10, 800);
-      final outH = tHeight.round().clamp(4, 200);
+      // ── Vertical region ──────────────────────────────────────────────────────
+      // Centre on the full-line bbox; height = targetH / globalScale source px.
+      final srcLineH  = targetH / globalScale;           // source rows per output px
+      final yCenterSrc = (lineBbox.top + lineBbox.height / 2) * srcH;
+      final rawSrcTop  = yCenterSrc - srcLineH / 2;
+      final srcTop     = rawSrcTop.clamp(0.0, (srcH - srcLineH).clamp(0.0, srcH.toDouble()));
+      final actualSrcH = srcLineH.clamp(1.0, srcH - srcTop);
+      if (actualSrcH < 1) return null;
 
-      // Canvas starts transparent (no fillRect white).
+      // ── Horizontal region ────────────────────────────────────────────────────
+      // Start at name xmin minus a tiny pad; width = (name width + margins)/globalScale.
+      final srcXStart = (nameBbox.left * srcW - leftPadPx / globalScale)
+          .clamp(0.0, srcW.toDouble());
+      final nameWidthSrc = nameBbox.width * srcW;
+      final outW = ((nameWidthSrc + (leftPadPx + rightPadPx) / globalScale) * globalScale)
+          .round()
+          .clamp(10, 800);
+      final srcRegionW = (outW / globalScale).clamp(1.0, srcW - srcXStart);
+
+      final outH = targetH.round().clamp(4, 60);
+
+      // ── Canvas draw ───────────────────────────────────────────────────────────
       final canvas = html.CanvasElement(width: outW, height: outH);
       final ctx = canvas.context2D;
-      ctx.drawImageScaledFromSource(img, tLeft, tTop, tWidth, tHeight, 0, 0,
-          outW.toDouble(), outH.toDouble());
+      ctx.drawImageScaledFromSource(
+        img,
+        srcXStart, srcTop, srcRegionW, actualSrcH,
+        0, 0, outW.toDouble(), outH.toDouble(),
+      );
 
       // Background-normalised ink extraction — smooth, no threshold, no speckle.
       //
@@ -1644,13 +1683,15 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       '- "qty": order quantity integer (use 1 if not visible).\n'
       '- "box_2d": [ymin, xmin, ymax, xmax] 0-1000. Full line extent.\n'
       '- "name_box_2d": [ymin, xmin, ymax, xmax] 0-1000. Same y as box_2d. '
-      'x covers COMPLETE product name including all descriptive words. '
-      'Include "Disintegrating Strip" in "Endosure 25mg Disintegrating Strip". '
-      'Include "Total Plus" in "Candid Total Plus tab". '
-      'Only exclude clear trailing abbreviation ("tab","cap","inj") or pack number ("10T","10s").\n\n'
+      'xmin = first letter of the DRUG NAME — skip any leading serial number '
+      '(e.g. "1.", "2.", "3.") before the drug name. '
+      'xmax = last letter of the complete product name including all descriptive words '
+      '(e.g. include "Disintegrating Strip" in "Endosure 25mg Disintegrating Strip", '
+      '"Total Plus" in "Candid Total Plus"). '
+      'Exclude only clear trailing abbreviation ("tab","cap","inj") or pack number ("10T","10s").\n\n'
       'Return ONLY valid JSON:\n'
       '{"items": [{"name": "Augmentin 625 tab", "qty": 5, '
-      '"box_2d": [120, 50, 155, 380], "name_box_2d": [120, 50, 155, 260]}, ...]}';
+      '"box_2d": [120, 50, 155, 380], "name_box_2d": [120, 53, 155, 260]}, ...]}';
 
   static const _geminiImageFallbackPrompt =
       'This is a photo of a handwritten medicine list from a pharmacy. '
@@ -3394,11 +3435,6 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
   }
 }
 
-// Crop padding constants — shared between _processOneCrop and _lineItemCrop.
-// Expressed as a fraction of the bbox dimension so that every line gets
-// proportional breathing room regardless of how tall or wide the bbox is.
-const _kCropHPadRatio = 0.08;  // 8 % of bbox.width per horizontal side
-const _kCropVPadRatio = 0.04;  // 4 % of bbox.height per vertical side (tight to reduce bleed)
 
 /// Standard LINE ITEM renderer: shows the handwriting crop (constant height,
 /// proportional width, smooth black strokes, transparent background, no caption).

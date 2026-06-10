@@ -1091,32 +1091,48 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       final data = imgData.data;
       final n = outW * outH;
 
-      // Build luminance histogram to find P5/P95.
+      // Adaptive auto-levels: find the ACTUAL ink and paper luminance for THIS
+      // crop using histogram percentiles — faint pencil and bold pen both come
+      // out crisp black because the levels are derived from the crop itself.
+      //
+      // inkLevel  = P5  (5th percentile  — the darkest strokes in this crop)
+      // paperLevel= P90 (90th percentile — the actual paper, not extreme outliers)
+      // t = (luma − inkLevel) / (paperLevel − inkLevel), clamped 0–1
+      // out = smoothstep(t)  →  ink(t=0)→black(0), paper(t=1)→white(255), smooth ramp
+      //
+      // Key: NO cap on inkLevel — faint pencil at luma 190 gets inkLevel=190,
+      // so t=0 for that stroke → mapped to pure black.  A fixed cap (old code had
+      // clamp(0,160)) pushed faint ink to t>0, leaving it gray/washed-out.
       final hist = List<int>.filled(256, 0);
       for (int i = 0; i < data.length; i += 4) {
-        final luma = (0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2])
+        hist[(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2])
             .round()
-            .clamp(0, 255);
-        hist[luma]++;
+            .clamp(0, 255)]++;
       }
-      int p5 = 0, p95 = 255, cumul = 0;
+      int inkLevel = 0, paperLevel = 255;
+      int cumul = 0;
+      bool inkSet = false;
       for (int v = 0; v < 256; v++) {
         cumul += hist[v];
-        if (p5 == 0 && cumul >= n * 0.05) p5 = v;
-        if (cumul >= n * 0.95) { p95 = v; break; }
+        if (!inkSet && cumul >= n * 0.05) { inkLevel = v; inkSet = true; }
+        if (cumul >= n * 0.90) { paperLevel = v; break; }
       }
-      p5  = p5.clamp(0, 160);
-      p95 = p95.clamp(p5 + 40, 255);
-      final invRange = 1.0 / (p95 - p5);
-
-      // Apply S-curve per pixel → map to opaque black/white.
-      for (int i = 0; i < data.length; i += 4) {
-        final luma = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-        final t    = ((luma - p5) * invRange).clamp(0.0, 1.0);
-        // smoothstep: smooth S-curve, no hard edges
-        final tOut = t * t * (3.0 - 2.0 * t);
-        final v    = (tOut * 255.0).round().clamp(0, 255);
-        data[i] = v; data[i + 1] = v; data[i + 2] = v; data[i + 3] = 255;
+      // Guard: blank/already-white crop — skip enhancement to avoid amplifying noise.
+      final range = paperLevel - inkLevel;
+      if (range >= 20) {
+        final invRange = 1.0 / range;
+        for (int i = 0; i < data.length; i += 4) {
+          final luma = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+          final t    = ((luma - inkLevel) * invRange).clamp(0.0, 1.0);
+          final tOut = t * t * (3.0 - 2.0 * t); // smoothstep — smooth, no jaggies
+          final v    = (tOut * 255.0).round().clamp(0, 255);
+          data[i] = v; data[i + 1] = v; data[i + 2] = v; data[i + 3] = 255;
+        }
+      } else {
+        // Blank crop: just make all pixels opaque (no luma remapping).
+        for (int i = 3; i < data.length; i += 4) {
+          data[i] = 255;
+        }
       }
 
       // ── FIX B: Soft-fade erase outside the safe band ────────────────────────

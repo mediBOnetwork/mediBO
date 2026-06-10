@@ -3429,38 +3429,48 @@ Widget _lineItemCrop(_MatchRow row, Size? imageSize, {TextStyle? fallbackStyle})
         }
         final displayW = naturalW.clamp(0.0, maxW);
 
+        // Render the crop at its NATURAL size left-anchored, then clip the
+        // right side if wider than the column.  Key constraint:
+        //   - UnconstrainedBox lets naturalW exceed the parent's maxWidth so
+        //     the image is never center-cropped by BoxFit alignment.
+        //   - BoxFit.fill fills the exact naturalW×fixedH SizedBox (no centering).
+        //   - ClipRect is applied BEFORE ShaderMask so the gradient is computed
+        //     against the visible width (displayW), not naturalW.
+        final visW = displayW; // already clamped to maxW above
         final isTruncated = naturalW > maxW;
-        Widget img = SizedBox(
-          width: naturalW,
-          height: fixedH,
-          child: Image.memory(
-            row.processedCrop!,
-            fit: BoxFit.fitHeight,
-            gaplessPlayback: true,
-          ),
-        );
-        if (isTruncated) {
-          img = ShaderMask(
-            shaderCallback: (bounds) => const LinearGradient(
-              begin: Alignment.centerLeft,
-              end: Alignment.centerRight,
-              stops: [0.75, 1.0],
-              colors: [Colors.white, Colors.transparent],
-            ).createShader(bounds),
-            blendMode: BlendMode.dstIn,
-            child: img,
-          );
-        }
-        return Align(
+
+        Widget cropWidget = UnconstrainedBox(
           alignment: Alignment.centerLeft,
-          child: ClipRect(
-            child: SizedBox(
-              width: displayW,
-              height: fixedH,
-              child: Align(alignment: Alignment.centerLeft, child: img),
+          child: SizedBox(
+            width: naturalW,
+            height: fixedH,
+            child: Image.memory(
+              row.processedCrop!,
+              fit: BoxFit.fill,
+              gaplessPlayback: true,
             ),
           ),
         );
+
+        // Clip to visible width first, then apply right-edge fade.
+        Widget clipped = ClipRect(
+          child: SizedBox(width: visW, height: fixedH, child: cropWidget),
+        );
+
+        if (isTruncated) {
+          clipped = ShaderMask(
+            shaderCallback: (bounds) => LinearGradient(
+              begin: Alignment.centerLeft,
+              end: Alignment.centerRight,
+              stops: const [0.82, 1.0],
+              colors: const [Colors.white, Colors.transparent],
+            ).createShader(Rect.fromLTWH(0, 0, visW, fixedH)),
+            blendMode: BlendMode.dstIn,
+            child: clipped,
+          );
+        }
+
+        return Align(alignment: Alignment.centerLeft, child: clipped);
       }),
     );
   }
@@ -3647,7 +3657,7 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
                 Expanded(
                   flex: 28,
                   child: SizedBox(
-                    height: 52,
+                    height: 56,
                     child: _lineItemCrop(row, widget.uploadedImageSize),
                   ),
                 ),

@@ -1161,26 +1161,32 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
       srcCtx.putImageData(srcImgData, 0, 0);
 
-      // ── Pixel-snap right edge: scan past Gemini's xmax until ink-free gap ────
-      // Gemini bboxes are approximate — the actual ink often extends beyond xmax.
-      // Scan rightward from union(nameBbox.right, lineBbox.right), stop when a
-      // continuous ink-free column gap ≥ 4% of image width is found.
-      final geminiXmaxCanvas = ((nameBbox.right > lineBbox.right
-              ? nameBbox.right
-              : lineBbox.right) *
-          srcW -
-          srcXStart).clamp(0.0, srcCanvasW.toDouble());
+      // ── Pixel-snap right edge: extend past Gemini's name xmax to true ink ────
+      // Strategy: scan from nameBbox.right up to lineBbox.right (Gemini's row
+      // boundary, which covers name + qty columns).  Stop early when a continuous
+      // ink-free gap ≥ 4 % of image width is found — that gap is the whitespace
+      // between the medicine name and the quantity column.  Cap at lineBbox.right
+      // so we never pull in content outside the row.
+      final nameXmaxCanvas = (nameBbox.right * srcW - srcXStart)
+          .clamp(0.0, srcCanvasW.toDouble());
+      final lineXmaxCanvas = (lineBbox.right * srcW - srcXStart)
+          .clamp(0.0, srcCanvasW.toDouble());
       final gapThreshCols = (0.04 * srcW).ceil().clamp(3, srcCanvasW);
       final rightPadSrcPx = (0.03 * srcW).ceil().clamp(4, srcCanvasW);
 
-      int inkRightCol = geminiXmaxCanvas.round().clamp(0, srcCanvasW - 1);
+      int inkRightCol = nameXmaxCanvas.round().clamp(0, srcCanvasW - 1);
       int consecutiveGap = 0;
-      for (int px = inkRightCol; px < srcCanvasW; px++) {
-        bool hasInk = false;
+      final scanLimit = lineXmaxCanvas.round().clamp(inkRightCol, srcCanvasW);
+      for (int px = inkRightCol; px < scanLimit; px++) {
+        // Require ≥2 ink pixels: single-pixel ruled lines are ignored.
+        int inkCount = 0;
         for (int py = srcBandTop; py < srcBandBot; py++) {
-          if (data[(py * srcCanvasW + px) * 4] < 128) { hasInk = true; break; }
+          if (data[(py * srcCanvasW + px) * 4] < 128) {
+            inkCount++;
+            if (inkCount >= 2) break;
+          }
         }
-        if (hasInk) {
+        if (inkCount >= 2) {
           inkRightCol = px;
           consecutiveGap = 0;
         } else {

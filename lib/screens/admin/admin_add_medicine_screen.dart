@@ -385,11 +385,11 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
     return (headers: List.filled(maxCols, ''), rows: allRows);
   }
 
+  static const _ocrEdgeFn =
+      'https://swojhmarmaijkshsbeih.supabase.co/functions/v1/gemini-ocr';
+
   Future<({List<String> headers, List<List<String>> rows})> _geminiTable(
       bool isImage, String mime, String b64, String pdfMime) async {
-    if (geminiApiKey.isEmpty || geminiApiKey.startsWith('YOUR_')) {
-      throw Exception('Gemini API key not configured.');
-    }
     final prompt =
         'Extract the tabular data from this file. '
         'Return ONLY a JSON object (no markdown fences):\n'
@@ -397,18 +397,19 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
         'Use empty string "" for missing headers. '
         'Include all data rows. Keep currency symbols (₹) in values as-is.';
 
-    final parts = isImage
-        ? [{'inline_data': {'mime_type': mime, 'data': b64}}, {'text': prompt}]
-        : [{'inline_data': {'mime_type': pdfMime, 'data': b64}}, {'text': prompt}];
-
     final resp = await http.post(
-      Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$geminiApiKey'),
+      Uri.parse(_ocrEdgeFn),
       headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'contents': [{'parts': parts}], 'generationConfig': {'temperature': 0.1, 'maxOutputTokens': 4096}}),
+      body: jsonEncode({
+        'image_base64': b64,
+        'mime_type': isImage ? mime : pdfMime,
+        'prompt': prompt,
+      }),
     ).timeout(const Duration(seconds: 60));
-    if (resp.statusCode != 200) throw Exception('Gemini API error (HTTP ${resp.statusCode})');
-    final txt = _geminiText(resp.body);
-    if (txt.isEmpty) throw Exception('Empty response from Gemini');
+    if (resp.statusCode != 200) throw Exception('OCR API error (HTTP ${resp.statusCode})');
+    final data = jsonDecode(resp.body) as Map<String, dynamic>;
+    final txt = data['text'] as String? ?? '';
+    if (txt.isEmpty) throw Exception('Empty response from OCR service');
     final jm = RegExp(r'\{[\s\S]*\}').firstMatch(txt);
     if (jm == null) throw Exception('Could not parse table structure from file');
     final dec = jsonDecode(jm.group(0)!) as Map<String, dynamic>;
@@ -416,18 +417,6 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
     final rows = (dec['rows'] as List<dynamic>?)
         ?.map((r) => (r as List<dynamic>).map((e) => e.toString()).toList()).toList() ?? [];
     return (headers: headers, rows: rows);
-  }
-
-  String _geminiText(String body) {
-    try {
-      final data = jsonDecode(body) as Map<String, dynamic>;
-      final cands = data['candidates'] as List<dynamic>?;
-      if (cands == null || cands.isEmpty) return '';
-      final content = (cands[0] as Map<String, dynamic>)['content'] as Map<String, dynamic>?;
-      final parts = content?['parts'] as List<dynamic>?;
-      final out = parts?.where((p) => (p as Map<String, dynamic>)['thought'] != true).toList();
-      return out?.isNotEmpty == true ? (out![0] as Map<String, dynamic>)['text'] as String? ?? '' : '';
-    } catch (_) { return ''; }
   }
 
   // ── Gemini column mapping ─────────────────────────────────────────────────────
@@ -463,12 +452,12 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
 
     try {
       final resp = await http.post(
-        Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$geminiApiKey'),
+        Uri.parse(_ocrEdgeFn),
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'contents': [{'parts': [{'text': prompt}]}], 'generationConfig': {'temperature': 0.1, 'maxOutputTokens': 1024}}),
+        body: jsonEncode({'image_base64': '', 'mime_type': 'text/plain', 'prompt': prompt}),
       ).timeout(const Duration(seconds: 30));
       if (resp.statusCode == 200) {
-        final txt = _geminiText(resp.body);
+        final txt = (jsonDecode(resp.body) as Map<String, dynamic>)['text'] as String? ?? '';
         final jm = RegExp(r'\[[\s\S]*\]').firstMatch(txt);
         if (jm != null) {
           final mappings = jsonDecode(jm.group(0)!) as List<dynamic>;

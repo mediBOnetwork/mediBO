@@ -12,9 +12,11 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart';
 import 'package:xml/xml.dart' as xmlp;
 
-import '../../config/api_keys.dart';
 import '../../supabase_config.dart';
 import '../../utils/render_log.dart';
+
+const _ocrEdgeFn =
+    'https://swojhmarmaijkshsbeih.supabase.co/functions/v1/gemini-ocr';
 
 // ── Supplier row models ───────────────────────────────────────────────────────
 
@@ -2299,13 +2301,12 @@ class _SupCsvImportDialogState extends State<_SupCsvImportDialog> {
       final idxMap = <int, String>{};
       try {
         final resp = await http.post(
-          Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$geminiApiKey'),
+          Uri.parse(_ocrEdgeFn),
           headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({'contents': [{'parts': [{'text': prompt}]}], 'generationConfig': {'temperature': 0.1, 'maxOutputTokens': 512}}),
+          body: jsonEncode({'image_base64': '', 'mime_type': 'text/plain', 'prompt': prompt}),
         ).timeout(const Duration(seconds: 20));
         if (resp.statusCode == 200) {
-          final body = jsonDecode(resp.body) as Map<String, dynamic>;
-          final txt = ((body['candidates'] as List?)?.firstOrNull?['content']?['parts'] as List?)?.firstOrNull?['text'] as String? ?? '';
+          final txt = (jsonDecode(resp.body) as Map<String, dynamic>)['text'] as String? ?? '';
           final jm = RegExp(r'\[[\s\S]*\]').firstMatch(txt);
           if (jm != null) {
             final mappings = jsonDecode(jm.group(0)!) as List<dynamic>;
@@ -2680,18 +2681,6 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
     return (headers: List.filled(maxCols, ''), rows: allRows);
   }
 
-  String _geminiResponseText(String body) {
-    try {
-      final data = jsonDecode(body) as Map<String, dynamic>;
-      final cands = data['candidates'] as List<dynamic>?;
-      if (cands == null || cands.isEmpty) return '';
-      final content = (cands[0] as Map<String, dynamic>)['content'] as Map<String, dynamic>?;
-      final parts = content?['parts'] as List<dynamic>?;
-      final out = parts?.where((p) => (p as Map<String, dynamic>)['thought'] != true).toList();
-      return out?.isNotEmpty == true ? (out![0] as Map<String, dynamic>)['text'] as String? ?? '' : '';
-    } catch (_) { return ''; }
-  }
-
   Future<({List<String> headers, List<List<String>> rows})> _geminiTable(
       bool isImage, String mime, String b64, String pdfMime) async {
     final prompt =
@@ -2699,17 +2688,18 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
         'Return ONLY a JSON object (no markdown fences):\n'
         '{"headers":["col1","col2"],"rows":[["v1","v2"],...]}\n'
         'Use empty string "" for missing headers. Include all data rows.';
-    final parts = isImage
-        ? [{'inline_data': {'mime_type': mime, 'data': b64}}, {'text': prompt}]
-        : [{'inline_data': {'mime_type': pdfMime, 'data': b64}}, {'text': prompt}];
     final resp = await http.post(
-      Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$geminiApiKey'),
+      Uri.parse(_ocrEdgeFn),
       headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'contents': [{'parts': parts}], 'generationConfig': {'temperature': 0.1, 'maxOutputTokens': 4096}}),
+      body: jsonEncode({
+        'image_base64': b64,
+        'mime_type': isImage ? mime : pdfMime,
+        'prompt': prompt,
+      }),
     ).timeout(const Duration(seconds: 60));
-    if (resp.statusCode != 200) throw Exception('Gemini API error (HTTP ${resp.statusCode})');
-    final txt = _geminiResponseText(resp.body);
-    if (txt.isEmpty) throw Exception('Empty response from Gemini');
+    if (resp.statusCode != 200) throw Exception('OCR API error (HTTP ${resp.statusCode})');
+    final txt = (jsonDecode(resp.body) as Map<String, dynamic>)['text'] as String? ?? '';
+    if (txt.isEmpty) throw Exception('Empty response from OCR service');
     final jm = RegExp(r'\{[\s\S]*\}').firstMatch(txt);
     if (jm == null) throw Exception('Could not parse table from file');
     final dec = jsonDecode(jm.group(0)!) as Map<String, dynamic>;
@@ -2769,12 +2759,12 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
     final idxMap = <int, String>{};
     try {
       final resp = await http.post(
-        Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$geminiApiKey'),
+        Uri.parse(_ocrEdgeFn),
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'contents': [{'parts': [{'text': '${basePrompt}Columns:\n${jsonEncode(entries)}\n\nReturn ONLY a JSON array: [{"index":0,"mapped_to":"supplier_name"},...]'}]}], 'generationConfig': {'temperature': 0.1, 'maxOutputTokens': 1024}}),
+        body: jsonEncode({'image_base64': '', 'mime_type': 'text/plain', 'prompt': '${basePrompt}Columns:\n${jsonEncode(entries)}\n\nReturn ONLY a JSON array: [{"index":0,"mapped_to":"supplier_name"},...]'}),
       ).timeout(const Duration(seconds: 30));
       if (resp.statusCode == 200) {
-        final txt = _geminiResponseText(resp.body);
+        final txt = (jsonDecode(resp.body) as Map<String, dynamic>)['text'] as String? ?? '';
         final jm = RegExp(r'\[[\s\S]*\]').firstMatch(txt);
         if (jm != null) {
           for (final m in jsonDecode(jm.group(0)!) as List<dynamic>) {
@@ -3487,17 +3477,12 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
         '{"matches":[...exact verbatim strings from candidates only...]}';
     try {
       final resp = await http.post(
-        Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=$geminiApiKey'),
+        Uri.parse(_ocrEdgeFn),
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'contents': [{'parts': [{'text': prompt}]}],
-          'generationConfig': {'responseMimeType': 'application/json'},
-        }),
+        body: jsonEncode({'image_base64': '', 'mime_type': 'text/plain', 'prompt': prompt}),
       ).timeout(const Duration(seconds: 30));
       if (resp.statusCode != 200) return null;
-      final body = jsonDecode(resp.body) as Map<String, dynamic>;
-      final text = ((body['candidates'] as List?)?.firstOrNull
-          ?['content']?['parts'] as List?)?.firstOrNull?['text'] as String? ?? '';
+      final text = (jsonDecode(resp.body) as Map<String, dynamic>)['text'] as String? ?? '';
       if (text.isEmpty) return null;
       final parsed = jsonDecode(text) as Map<String, dynamic>;
       final rawMatches = (parsed['matches'] as List?)?.map((e) => e.toString()).toList() ?? [];
@@ -4489,18 +4474,6 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
     _               => 'image/jpeg',
   };
 
-  String _geminiText(String body) {
-    try {
-      final data = jsonDecode(body) as Map<String, dynamic>;
-      final cands = data['candidates'] as List<dynamic>?;
-      if (cands == null || cands.isEmpty) return '';
-      final content = (cands[0] as Map<String, dynamic>)['content'] as Map<String, dynamic>?;
-      final parts = content?['parts'] as List<dynamic>?;
-      final out = parts?.where((p) => (p as Map<String, dynamic>)['thought'] != true).toList();
-      return out?.isNotEmpty == true ? (out![0] as Map<String, dynamic>)['text'] as String? ?? '' : '';
-    } catch (_) { return ''; }
-  }
-
   Future<void> _ocr() async {
     try {
       final ext = widget.file.name.toLowerCase().split('.').last;
@@ -4524,18 +4497,16 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
           'Examples: "ABBOTT [DIGENE, CREMAFFIN]" → "ABBOTT", "DR. REDDY\'S [ZEDEX]" → "DR. REDDY\'S".\n'
           'Lines with no brackets: store as-is. Use empty string "" for missing scalar fields. companies=[] if none found.';
       final resp = await http.post(
-        Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$geminiApiKey'),
+        Uri.parse(_ocrEdgeFn),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
-          'contents': [{'parts': [
-            {'inline_data': {'mime_type': _mimeFor(ext), 'data': b64}},
-            {'text': prompt},
-          ]}],
-          'generationConfig': {'temperature': 0.1, 'maxOutputTokens': 2048},
+          'image_base64': b64,
+          'mime_type': _mimeFor(ext),
+          'prompt': prompt,
         }),
       ).timeout(const Duration(seconds: 60));
-      if (resp.statusCode != 200) throw Exception('Gemini error (HTTP ${resp.statusCode})');
-      final txt = _geminiText(resp.body);
+      if (resp.statusCode != 200) throw Exception('OCR API error (HTTP ${resp.statusCode})');
+      final txt = (jsonDecode(resp.body) as Map<String, dynamic>)['text'] as String? ?? '';
       final jm = RegExp(r'\{[\s\S]*\}').firstMatch(txt);
       if (jm == null) throw Exception('Could not parse OCR response');
       final dec = jsonDecode(jm.group(0)!) as Map<String, dynamic>;

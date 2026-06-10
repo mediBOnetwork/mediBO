@@ -1097,13 +1097,6 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
   // progressively broader prompts. Network/API errors abort immediately.
   Future<List<Map<String, dynamic>>> _extractWithGeminiAI(
       String rawContent, String fileName) async {
-    if (geminiApiKey.isEmpty || geminiApiKey.startsWith('YOUR_')) {
-      debugPrint('[Gemini] API key not configured');
-      throw Exception(
-          'Gemini API key is not configured. Contact support to enable AI image processing.');
-    }
-    debugPrint('[Gemini] Key prefix: ${geminiApiKey.substring(0, geminiApiKey.length.clamp(0, 10))}…');
-
     final isImage = rawContent.startsWith('IMAGE_BYTES:');
 
     // Preprocess image once before all attempts.
@@ -1142,73 +1135,52 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     throw lastError!;
   }
 
+  static const _ocrEdgeFn =
+      'https://swojhmarmaijkshsbeih.supabase.co/functions/v1/gemini-ocr';
+
   Future<List<Map<String, dynamic>>> _callGeminiOnce(
       String rawContent, {int attempt = 0}) async {
     final isPdf = rawContent.startsWith('PDF_BYTES:');
     final isImage = rawContent.startsWith('IMAGE_BYTES:');
 
-    final List<Map<String, dynamic>> parts;
+    String imageBase64 = '';
+    String mimeType = 'text/plain';
+    String prompt;
+
     if (isImage) {
       final withoutPrefix = rawContent.substring('IMAGE_BYTES:'.length);
       final colonIdx = withoutPrefix.indexOf(':');
-      final mimeType = withoutPrefix.substring(0, colonIdx);
-      final base64Data = withoutPrefix.substring(colonIdx + 1);
-      debugPrint('[Gemini] Image upload — mime=$mimeType payload=${base64Data.length} chars attempt=$attempt');
-      // Attempts 0–1 use the detailed prompt; attempt 2 uses the broader fallback.
-      final imagePromptText =
-          attempt < 2 ? _geminiImagePrompt : _geminiImageFallbackPrompt;
-      parts = [
-        {'inline_data': {'mime_type': mimeType, 'data': base64Data}},
-        {'text': imagePromptText},
-      ];
+      mimeType = withoutPrefix.substring(0, colonIdx);
+      imageBase64 = withoutPrefix.substring(colonIdx + 1);
+      debugPrint('[OCR] Image upload — mime=$mimeType payload=${imageBase64.length} chars attempt=$attempt');
+      prompt = attempt < 2 ? _geminiImagePrompt : _geminiImageFallbackPrompt;
     } else if (isPdf) {
-      final base64Pdf = rawContent.substring('PDF_BYTES:'.length);
-      debugPrint('[Gemini] PDF upload — payload=${base64Pdf.length} chars attempt=$attempt');
-      parts = [
-        {'inline_data': {'mime_type': 'application/pdf', 'data': base64Pdf}},
-        {'text': _geminiPrompt},
-      ];
+      imageBase64 = rawContent.substring('PDF_BYTES:'.length);
+      mimeType = 'application/pdf';
+      debugPrint('[OCR] PDF upload — payload=${imageBase64.length} chars attempt=$attempt');
+      prompt = _geminiPrompt;
     } else {
-      debugPrint('[Gemini] Text upload — length=${rawContent.length} chars attempt=$attempt');
-      parts = [{'text': _geminiTextPrompt(rawContent)}];
+      debugPrint('[OCR] Text upload — length=${rawContent.length} chars attempt=$attempt');
+      prompt = _geminiTextPrompt(rawContent);
     }
 
     final response = await http.post(
-      Uri.parse(
-          'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$geminiApiKey'),
+      Uri.parse(_ocrEdgeFn),
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({
-        'contents': [
-          {'parts': parts}
-        ],
-        'generationConfig': {
-          'temperature': isImage ? 0.2 : 0.1,
-          'maxOutputTokens': isImage ? 4096 : 3000,
-        },
+        'image_base64': imageBase64,
+        'mime_type': mimeType,
+        'prompt': prompt,
       }),
     ).timeout(const Duration(seconds: 60));
 
-    debugPrint('[Gemini] HTTP ${response.statusCode} — body(200)=${response.statusCode == 200 ? response.body.substring(0, response.body.length.clamp(0, 400)) : response.body}');
+    debugPrint('[OCR] HTTP ${response.statusCode} — body(200)=${response.statusCode == 200 ? response.body.substring(0, response.body.length.clamp(0, 400)) : response.body}');
     if (response.statusCode != 200) {
-      throw Exception('Gemini API error (HTTP ${response.statusCode}). Check API key or quota.');
+      throw Exception('OCR API error (HTTP ${response.statusCode}). Please try again.');
     }
 
     final data = jsonDecode(response.body) as Map<String, dynamic>;
-    final candidates = data['candidates'] as List<dynamic>?;
-    if (candidates == null || candidates.isEmpty) {
-      // Safety block or empty response from the model.
-      debugPrint('[Gemini] No candidates in response (safety block or empty)');
-      return [];
-    }
-    final content = (candidates[0] as Map<String, dynamic>)['content'] as Map<String, dynamic>?;
-    final textParts = content?['parts'] as List<dynamic>?;
-    // Filter out thinking parts (thought=true) — keep only the actual output.
-    final outputParts = textParts
-        ?.where((p) => (p as Map<String, dynamic>)['thought'] != true)
-        .toList();
-    final text = outputParts?.isNotEmpty == true
-        ? (outputParts![0] as Map<String, dynamic>)['text'] as String? ?? ''
-        : '';
+    final text = data['text'] as String? ?? '';
     if (text.isEmpty) return [];
     final match = RegExp(r'\[[\s\S]*\]').firstMatch(text);
     if (match == null) throw Exception('no_json_in_response');
@@ -2060,32 +2032,20 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       final base64Data = canvas.toDataUrl('image/jpeg', 0.9).split(',').last;
 
       final response = await http.post(
-        Uri.parse(
-            'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$geminiApiKey'),
+        Uri.parse(_ocrEdgeFn),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
-          'contents': [
-            {'parts': [
-              {'inline_data': {'mime_type': 'image/jpeg', 'data': base64Data}},
-              {'text': 'This is a crop of ONE handwritten medicine name from a pharmacy '
-                  'order list. Read and return ONLY the medicine name as plain text. '
-                  'Best guess if unclear. No JSON, no explanation.'},
-            ]}
-          ],
-          'generationConfig': {'temperature': 0.1, 'maxOutputTokens': 50},
+          'image_base64': base64Data,
+          'mime_type': 'image/jpeg',
+          'prompt': 'This is a crop of ONE handwritten medicine name from a pharmacy '
+              'order list. Read and return ONLY the medicine name as plain text. '
+              'Best guess if unclear. No JSON, no explanation.',
         }),
       ).timeout(const Duration(seconds: 30));
 
       if (response.statusCode != 200) return null;
       final data = jsonDecode(response.body) as Map<String, dynamic>;
-      final cands = data['candidates'] as List<dynamic>?;
-      if (cands == null || cands.isEmpty) return null;
-      final cont = (cands[0] as Map<String, dynamic>)['content'] as Map<String, dynamic>?;
-      final parts = cont?['parts'] as List<dynamic>?;
-      final out = parts?.where((p) => (p as Map<String, dynamic>)['thought'] != true).toList();
-      final text = out?.isNotEmpty == true
-          ? (out![0] as Map<String, dynamic>)['text'] as String? ?? ''
-          : '';
+      final text = data['text'] as String? ?? '';
       return text.trim().isNotEmpty ? text.trim() : null;
     } catch (e) {
       debugPrint('[RetryOCR] Failed: $e');

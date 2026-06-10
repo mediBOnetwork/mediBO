@@ -4012,14 +4012,12 @@ class _CsvImportDialogState extends State<_CsvImportDialog> {
       final idxMap = <int, String>{};
       try {
         final resp = await http.post(
-          Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$geminiApiKey'),
+          Uri.parse('https://swojhmarmaijkshsbeih.supabase.co/functions/v1/gemini-ocr'),
           headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({'contents': [{'parts': [{'text': prompt}]}], 'generationConfig': {'temperature': 0.1, 'maxOutputTokens': 512}}),
+          body: jsonEncode({'image_base64': '', 'mime_type': 'text/plain', 'prompt': prompt}),
         ).timeout(const Duration(seconds: 20));
         if (resp.statusCode == 200) {
-          final body = jsonDecode(resp.body) as Map<String, dynamic>;
-          final txt = ((body['candidates'] as List?)?.firstOrNull?['content']?['parts'] as List?)
-              ?.firstOrNull?['text'] as String? ?? '';
+          final txt = (jsonDecode(resp.body) as Map<String, dynamic>)['text'] as String? ?? '';
           final jm = RegExp(r'\[[\s\S]*\]').firstMatch(txt);
           if (jm != null) {
             final mappings = jsonDecode(jm.group(0)!) as List<dynamic>;

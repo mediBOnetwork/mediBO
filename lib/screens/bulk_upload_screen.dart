@@ -1009,7 +1009,6 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
   }) {
     try {
       const leftPadPx = 3.0;    // output-px gap before first letter
-      const rightPadPx = 16.0;  // output-px margin after name end
 
       // ── Vertical region ──────────────────────────────────────────────────────
       // Use THIS line's own bbox extent + 12% padding each side.
@@ -1023,19 +1022,15 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       if (actualSrcH < 1) return null;
 
       // ── Horizontal region ────────────────────────────────────────────────────
+      // Draw from name anchor to image right edge so we can pixel-snap the
+      // true ink extent (Gemini xmax is approximate and often too narrow).
       final srcXStart = (nameBbox.left * srcW - leftPadPx / globalScale)
           .clamp(0.0, srcW.toDouble());
-      final nameWidthSrc = nameBbox.width * srcW;
-      // No 800px cap — outW must fit the full name; only the column's right-edge
-      // fade may cut long names in the display layer.
-      final outW = ((nameWidthSrc + (leftPadPx + rightPadPx) / globalScale) * globalScale)
-          .round()
-          .clamp(10, 9999);
-      final srcRegionW = (outW / globalScale).clamp(1.0, srcW - srcXStart);
+      final fullSrcRegionW = (srcW - srcXStart).clamp(1.0, srcW.toDouble());
 
       final outH = (actualSrcH * globalScale).round().clamp(4, 300);
 
-      // ── Band boundaries (fractional image coords) ────────────────────────────
+      // ── Band boundaries (fractional image coords) ─────────────────────────────
       final lineH = lineBbox.height;
       final pad12 = lineH * 0.12;
 
@@ -1057,8 +1052,8 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         safeBotFrac = lineBbox.bottom + pad12;
       }
 
-      // ── Draw at SOURCE resolution for binarization ───────────────────────────
-      final srcCanvasW = srcRegionW.round().clamp(1, 9999);
+      // ── Draw at SOURCE resolution (full right extent) for binarization ──────
+      final srcCanvasW = fullSrcRegionW.round().clamp(1, 9999);
       final srcCanvasH = actualSrcH.round().clamp(1, 300);
 
       final srcCanvas = html.CanvasElement(width: srcCanvasW, height: srcCanvasH);
@@ -1067,7 +1062,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       srcCtx.fillRect(0, 0, srcCanvasW.toDouble(), srcCanvasH.toDouble());
       srcCtx.drawImageScaledFromSource(
         img,
-        srcXStart, srcTop, srcRegionW, actualSrcH,
+        srcXStart, srcTop, fullSrcRegionW, actualSrcH,
         0, 0, srcCanvasW.toDouble(), srcCanvasH.toDouble(),
       );
 
@@ -1166,7 +1161,38 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
       srcCtx.putImageData(srcImgData, 0, 0);
 
-      // ── Cubic-downscale binarized source to output size ───────────────────────
+      // ── Pixel-snap right edge: scan past Gemini's xmax until ink-free gap ────
+      // Gemini bboxes are approximate — the actual ink often extends beyond xmax.
+      // Scan rightward from union(nameBbox.right, lineBbox.right), stop when a
+      // continuous ink-free column gap ≥ 4% of image width is found.
+      final geminiXmaxCanvas = ((nameBbox.right > lineBbox.right
+              ? nameBbox.right
+              : lineBbox.right) *
+          srcW -
+          srcXStart).clamp(0.0, srcCanvasW.toDouble());
+      final gapThreshCols = (0.04 * srcW).ceil().clamp(3, srcCanvasW);
+      final rightPadSrcPx = (0.03 * srcW).ceil().clamp(4, srcCanvasW);
+
+      int inkRightCol = geminiXmaxCanvas.round().clamp(0, srcCanvasW - 1);
+      int consecutiveGap = 0;
+      for (int px = inkRightCol; px < srcCanvasW; px++) {
+        bool hasInk = false;
+        for (int py = srcBandTop; py < srcBandBot; py++) {
+          if (data[(py * srcCanvasW + px) * 4] < 128) { hasInk = true; break; }
+        }
+        if (hasInk) {
+          inkRightCol = px;
+          consecutiveGap = 0;
+        } else {
+          consecutiveGap++;
+          if (consecutiveGap >= gapThreshCols) break;
+        }
+      }
+      // Crop right = inkRightCol + right pad, bounded by canvas width.
+      final cropSrcW = (inkRightCol + rightPadSrcPx).clamp(1, srcCanvasW);
+      final outW = (cropSrcW * globalScale).round().clamp(10, 9999);
+
+      // ── Cubic-downscale binarized crop to output size ─────────────────────────
       final canvas = html.CanvasElement(width: outW, height: outH);
       final ctx = canvas.context2D;
       ctx.fillStyle = '#ffffff';
@@ -1174,7 +1200,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       ctx.imageSmoothingEnabled = true;
       ctx.drawImageScaledFromSource(
         srcCanvas,
-        0, 0, srcCanvasW.toDouble(), srcCanvasH.toDouble(),
+        0, 0, cropSrcW.toDouble(), srcCanvasH.toDouble(),
         0, 0, outW.toDouble(), outH.toDouble(),
       );
 

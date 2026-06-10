@@ -552,8 +552,8 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
           final srcH = imgEl.naturalHeight;
 
           // Compute one shared scale from median line height.
-          // targetHeightPx = 30 output pixels per line → same visual size for all rows.
-          const targetHeightPx = 30.0;
+          // targetHeightPx = 38 output pixels per line → same visual size for all rows.
+          const targetHeightPx = 38.0;
           final lineHeights = rows
               .where((r) => r.lineBbox != null)
               .map((r) => r.lineBbox!.height * srcH)
@@ -985,36 +985,38 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
   /// [lineBbox]  — box_2d (0–1): y-center used to vertically center the viewport.
   /// [globalScale] — pixels-per-source-pixel, same value for every row.
   ///
-  /// Output: height = 30 px (targetH), width = name width at globalScale + margin.
+  /// Output: height = round(actualSrcH * globalScale), width = name width at globalScale + margin.
   Uint8List? _processOneCrop(
     html.ImageElement img, int srcW, int srcH,
     Rect nameBbox, Rect lineBbox, double globalScale,
   ) {
     try {
-      const targetH   = 30.0;   // output height (px) — constant for all rows
       const leftPadPx = 3.0;    // output-px gap before first letter
       const rightPadPx = 16.0;  // output-px margin after name end
 
       // ── Vertical region ──────────────────────────────────────────────────────
-      // Centre on the full-line bbox; height = targetH / globalScale source px.
-      final srcLineH  = targetH / globalScale;           // source rows per output px
-      final yCenterSrc = (lineBbox.top + lineBbox.height / 2) * srcH;
-      final rawSrcTop  = yCenterSrc - srcLineH / 2;
-      final srcTop     = rawSrcTop.clamp(0.0, (srcH - srcLineH).clamp(0.0, srcH.toDouble()));
-      final actualSrcH = srcLineH.clamp(1.0, srcH - srcTop);
+      // Use THIS line's own bbox extent + 12% padding each side.
+      // outH varies per row (taller lines get more pixels) but globalScale is
+      // shared, so apparent handwriting size stays constant across all rows.
+      final vPad = lineBbox.height * 0.12;
+      final srcTopRaw  = ((lineBbox.top  - vPad) * srcH).clamp(0.0, srcH.toDouble());
+      final srcBotRaw  = ((lineBbox.bottom + vPad) * srcH).clamp(0.0, srcH.toDouble());
+      final srcTop     = srcTopRaw;
+      final actualSrcH = (srcBotRaw - srcTopRaw).clamp(1.0, srcH - srcTop);
       if (actualSrcH < 1) return null;
 
       // ── Horizontal region ────────────────────────────────────────────────────
-      // Start at name xmin minus a tiny pad; width = (name width + margins)/globalScale.
       final srcXStart = (nameBbox.left * srcW - leftPadPx / globalScale)
           .clamp(0.0, srcW.toDouble());
       final nameWidthSrc = nameBbox.width * srcW;
+      // No 800px cap — outW must fit the full name; only the column's right-edge
+      // fade may cut long names in the display layer.
       final outW = ((nameWidthSrc + (leftPadPx + rightPadPx) / globalScale) * globalScale)
           .round()
-          .clamp(10, 800);
+          .clamp(10, 9999);
       final srcRegionW = (outW / globalScale).clamp(1.0, srcW - srcXStart);
 
-      final outH = targetH.round().clamp(4, 60);
+      final outH = (actualSrcH * globalScale).round().clamp(4, 300);
 
       // ── Canvas draw ───────────────────────────────────────────────────────────
       final canvas = html.CanvasElement(width: outW, height: outH);
@@ -1075,6 +1077,30 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         final inv = 1.0 - t;
         final alpha = (255.0 * inv * inv * inv).round().clamp(0, 255);
         data[i] = 0; data[i + 1] = 0; data[i + 2] = 0; data[i + 3] = alpha;
+      }
+
+      // ── Geometric erase: blank pixels outside the line's own bbox ──────────
+      // Erase the top and bottom bands that contain adjacent-line ink, and the
+      // left band that may contain leading serial numbers.
+      // Coordinates are computed in output pixels from the same source bbox used
+      // when drawing the canvas (srcTop / actualSrcH / srcXStart / srcRegionW).
+      {
+        // Line bbox in output-pixel coordinates relative to the crop.
+        final lineTopOut  = ((lineBbox.top  * srcH - srcTop) / actualSrcH * outH)
+            .clamp(0.0, outH.toDouble());
+        final lineBotOut  = ((lineBbox.bottom * srcH - srcTop) / actualSrcH * outH)
+            .clamp(0.0, outH.toDouble());
+        final eraseAbove  = (lineTopOut  - outH * 0.04).clamp(0.0, outH.toDouble()).round();
+        final eraseBelow  = (lineBotOut  + outH * 0.04).clamp(0.0, outH.toDouble()).round();
+        // Left band: erase pixels before the name starts (kills serial numbers).
+        final nameLeftOut = ((nameBbox.left * srcW - srcXStart) / srcRegionW * outW - leftPadPx)
+            .clamp(0.0, outW.toDouble()).round();
+        for (int py = 0; py < outH; py++) {
+          for (int px = 0; px < outW; px++) {
+            final erase = py < eraseAbove || py >= eraseBelow || px < nameLeftOut;
+            if (erase) data[(py * outW + px) * 4 + 3] = 0;
+          }
+        }
       }
 
       // ── Connected-component residue removal ─────────────────────────────────
@@ -3445,52 +3471,47 @@ Widget _lineItemCrop(_MatchRow row, Size? imageSize, {TextStyle? fallbackStyle})
       message: row.lineItem,
       waitDuration: const Duration(milliseconds: 400),
       child: LayoutBuilder(builder: (ctx, constraints) {
-        // maxHeight from the SizedBox(height:22/24) caller; maxWidth from Expanded.
-        final fixedH =
-            constraints.maxHeight.isFinite ? constraints.maxHeight : 22.0;
         final maxW =
             constraints.maxWidth.isFinite ? constraints.maxWidth : double.infinity;
 
-        // Derive naturalW from the actual PNG pixel dimensions — this is exact
-        // even when vertical clamping changed the crop height vs the bbox estimate.
-        // PNG header: bytes 16-19 = width, 20-23 = height (big-endian uint32).
-        double naturalW = maxW;
+        // Read native PNG pixel dimensions from header (bytes 16–19 = width, 20–23 = height).
+        // Render at NATIVE size: no scaling formula, no per-row height stretch.
+        // Because every PNG is generated at the same globalScale, native rendering
+        // gives constant apparent handwriting size across all rows automatically.
         final crop = row.processedCrop!;
+        int pngW = 0, pngH = 0;
         if (crop.length >= 24) {
-          final pngW = (crop[16] << 24) | (crop[17] << 16) | (crop[18] << 8) | crop[19];
-          final pngH = (crop[20] << 24) | (crop[21] << 16) | (crop[22] << 8) | crop[23];
-          if (pngW > 0 && pngH > 0) {
-            naturalW = fixedH * (pngW / pngH);
-          }
+          pngW = (crop[16] << 24) | (crop[17] << 16) | (crop[18] << 8) | crop[19];
+          pngH = (crop[20] << 24) | (crop[21] << 16) | (crop[22] << 8) | crop[23];
         }
-        final displayW = naturalW.clamp(0.0, maxW);
+        if (pngW <= 0 || pngH <= 0) {
+          return Text(row.lineItem, maxLines: 1, overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)));
+        }
 
-        // Render the crop at its NATURAL size left-anchored, then clip the
-        // right side if wider than the column.  Key constraint:
-        //   - UnconstrainedBox lets naturalW exceed the parent's maxWidth so
-        //     the image is never center-cropped by BoxFit alignment.
-        //   - BoxFit.fill fills the exact naturalW×fixedH SizedBox (no centering).
-        //   - ClipRect is applied BEFORE ShaderMask so the gradient is computed
-        //     against the visible width (displayW), not naturalW.
-        final visW = displayW; // already clamped to maxW above
-        final isTruncated = naturalW > maxW;
+        final nativeW = pngW.toDouble();
+        final nativeH = pngH.toDouble();
+        final visW = nativeW.clamp(0.0, maxW);
+        final isTruncated = nativeW > maxW;
 
+        // UnconstrainedBox lets the image be its native pixel width without being
+        // clamped to the column width, so left-alignment always shows the start.
         Widget cropWidget = UnconstrainedBox(
           alignment: Alignment.centerLeft,
-          child: SizedBox(
-            width: naturalW,
-            height: fixedH,
-            child: Image.memory(
-              row.processedCrop!,
-              fit: BoxFit.fill,
-              gaplessPlayback: true,
-            ),
+          child: Image.memory(
+            crop,
+            width: nativeW,
+            height: nativeH,
+            fit: BoxFit.none,
+            alignment: Alignment.centerLeft,
+            filterQuality: FilterQuality.high,
+            gaplessPlayback: true,
           ),
         );
 
-        // Clip to visible width first, then apply right-edge fade.
+        // ClipRect first, then ShaderMask fade on the right edge.
         Widget clipped = ClipRect(
-          child: SizedBox(width: visW, height: fixedH, child: cropWidget),
+          child: SizedBox(width: visW, height: nativeH, child: cropWidget),
         );
 
         if (isTruncated) {
@@ -3500,7 +3521,7 @@ Widget _lineItemCrop(_MatchRow row, Size? imageSize, {TextStyle? fallbackStyle})
               end: Alignment.centerRight,
               stops: const [0.82, 1.0],
               colors: const [Colors.white, Colors.transparent],
-            ).createShader(Rect.fromLTWH(0, 0, visW, fixedH)),
+            ).createShader(Rect.fromLTWH(0, 0, visW, nativeH)),
             blendMode: BlendMode.dstIn,
             child: clipped,
           );

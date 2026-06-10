@@ -1062,29 +1062,36 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
       final outH = (actualSrcH * globalScale).round().clamp(4, 300);
 
-      // ── Canvas draw ───────────────────────────────────────────────────────────
+      // ── Canvas draw + FIX A: S-curve contrast → crisp black strokes on white ──
       final canvas = html.CanvasElement(width: outW, height: outH);
       final ctx = canvas.context2D;
+
+      // ── FIX A: S-curve contrast enhancement → crisp black strokes on white ──
+      // We render the crop onto an opaque white background, then apply a smooth
+      // S-curve so dark ink pixels map toward pure black and light paper pixels
+      // map toward pure white.  No hard threshold → anti-aliased stroke edges
+      // stay smooth.  The PNG is opaque (alpha=255 everywhere) so the table cell
+      // background shows through the surrounding white, not through transparency.
+      //
+      // S-curve: normalise luminance between P5 (ink) and P95 (paper), then apply
+      //   t_out = t_in² * (3 − 2*t_in)   (smoothstep — smooth S, no jaggies)
+      // giving:  ink (t≈0) → t_out≈0 → pixel≈black
+      //          paper(t≈1) → t_out≈1 → pixel≈white
+
+      // Fill white background first so erased zones and border fades show white.
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, outW.toDouble(), outH.toDouble());
       ctx.drawImageScaledFromSource(
         img,
         srcXStart, srcTop, srcRegionW, actualSrcH,
         0, 0, outW.toDouble(), outH.toDouble(),
       );
 
-      // Background-normalised ink extraction — smooth, no threshold, no speckle.
-      //
-      // Simple alpha = 255-luma leaves paper (luma≈200) at alpha≈55, creating a
-      // visible gray haze.  Instead we normalise relative to the crop's own
-      // paper-white level (P95) and ink-dark level (P5), then apply a cubic
-      // falloff so paper goes fully transparent and ink stays fully opaque.
-      //
-      // Cubic (^3) keeps edges anti-aliased: a partly-transparent pixel at the
-      // ink boundary blends smoothly, so strokes look clean not dotted.
       final imgData = ctx.getImageData(0, 0, outW, outH);
       final data = imgData.data;
       final n = outW * outH;
 
-      // Build a luminance histogram (O(n), no sort needed).
+      // Build luminance histogram to find P5/P95.
       final hist = List<int>.filled(256, 0);
       for (int i = 0; i < data.length; i += 4) {
         final luma = (0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2])
@@ -1092,95 +1099,110 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
             .clamp(0, 255);
         hist[luma]++;
       }
-
-      // P5 = 5th-percentile luminance → darkest ink reference.
-      // P95 = 95th-percentile luminance → paper-white reference.
       int p5 = 0, p95 = 255, cumul = 0;
       for (int v = 0; v < 256; v++) {
         cumul += hist[v];
         if (p5 == 0 && cumul >= n * 0.05) p5 = v;
-        if (cumul >= n * 0.95) {
-          p95 = v;
-          break;
-        }
+        if (cumul >= n * 0.95) { p95 = v; break; }
       }
-      // Guard: clamp so we always have a meaningful ink→paper range (≥40 units).
       p5  = p5.clamp(0, 160);
       p95 = p95.clamp(p5 + 40, 255);
       final invRange = 1.0 / (p95 - p5);
 
-      // Map each pixel:
-      //   t=0  (luma=P5, darkest ink) → alpha=255 (fully opaque black)
-      //   t=1  (luma=P95, paper)      → alpha=0   (fully transparent)
-      //   cubic (1−t)^3 makes the paper-side of the curve drop off fast
-      //   while keeping anti-aliased ink edges smooth and solid.
+      // Apply S-curve per pixel → map to opaque black/white.
       for (int i = 0; i < data.length; i += 4) {
-        final luma =
-            0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-        final t   = ((luma - p5) * invRange).clamp(0.0, 1.0);
-        final inv = 1.0 - t;
-        final alpha = (255.0 * inv * inv * inv).round().clamp(0, 255);
-        data[i] = 0; data[i + 1] = 0; data[i + 2] = 0; data[i + 3] = alpha;
+        final luma = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+        final t    = ((luma - p5) * invRange).clamp(0.0, 1.0);
+        // smoothstep: smooth S-curve, no hard edges
+        final tOut = t * t * (3.0 - 2.0 * t);
+        final v    = (tOut * 255.0).round().clamp(0, 255);
+        data[i] = v; data[i + 1] = v; data[i + 2] = v; data[i + 3] = 255;
       }
 
-      // ── Geometric erase: paint alpha=0 outside the safe band ───────────────
-      // Band top  = max(lineBbox.top  − 6% lineH, midpoint with line above)
-      // Band bot  = min(lineBbox.bot  + 6% lineH, midpoint with line below)
-      // This unconditionally runs for every crop — no skip path.
+      // ── FIX B: Soft-fade erase outside the safe band ────────────────────────
+      // Band top/bot use midpoint clamp (same logic as before).
+      // Instead of hard alpha=0, we paint WHITE pixels: fully white outside the
+      // band, then a smooth gradient over the last 9px transition zone so ink
+      // fades out rather than being sliced.  The PNG is opaque white everywhere
+      // outside — no transparency artefacts.
       {
-        final lineH = lineBbox.height; // fraction of source height (0–1)
+        final lineH = lineBbox.height;
         final pad6  = lineH * 0.06;
 
-        // Midpoint with previous line: halfway between prevLine.bottom and this line.top.
         final double safeTopFrac;
         if (prevLineBbox != null) {
           final midAbove = (prevLineBbox.bottom + lineBbox.top) / 2.0;
-          final inner    = lineBbox.top  - pad6;
-          safeTopFrac    = inner < midAbove ? midAbove : inner; // max
+          final inner    = lineBbox.top - pad6;
+          safeTopFrac    = inner < midAbove ? midAbove : inner;
         } else {
           safeTopFrac = lineBbox.top - pad6;
         }
 
-        // Midpoint with next line.
         final double safeBotFrac;
         if (nextLineBbox != null) {
           final midBelow = (lineBbox.bottom + nextLineBbox.top) / 2.0;
           final inner    = lineBbox.bottom + pad6;
-          safeBotFrac    = inner > midBelow ? midBelow : inner; // min
+          safeBotFrac    = inner > midBelow ? midBelow : inner;
         } else {
           safeBotFrac = lineBbox.bottom + pad6;
         }
 
-        // Convert safe band from source-fraction → output pixels.
-        // srcTop (source px from top of image) was already computed above.
         final safeTopOut = ((safeTopFrac * srcH - srcTop) / actualSrcH * outH)
             .clamp(0.0, outH.toDouble()).round();
         final safeBotOut = ((safeBotFrac * srcH - srcTop) / actualSrcH * outH)
             .clamp(0.0, outH.toDouble()).round();
 
-        // Left band: erase anything left of name start (kills serial numbers).
+        // Left band: pixels left of name start (serial numbers).
         final nameLeftOut = ((nameBbox.left * srcW - srcXStart) / srcRegionW * outW - leftPadPx)
             .clamp(0.0, outW.toDouble()).round();
 
-        // Unconditional erase — set alpha=0 for every out-of-band pixel.
+        const fadeZone = 9; // px over which ink fades to white at band edges
+
         for (int py = 0; py < outH; py++) {
+          // Compute how much white to blend for this row (0.0 = keep ink, 1.0 = pure white).
+          double whiteBlend;
+          if (py < safeTopOut) {
+            whiteBlend = 1.0; // fully outside top — pure white
+          } else if (py >= safeBotOut) {
+            whiteBlend = 1.0; // fully outside bottom — pure white
+          } else {
+            // Inside safe band: fade near top edge
+            final distFromTop = py - safeTopOut;
+            final distFromBot = safeBotOut - 1 - py;
+            final minDist = distFromTop < distFromBot ? distFromTop : distFromBot;
+            if (minDist < fadeZone) {
+              // smoothstep fade: 0 at band edge → 1 inside
+              final tFade = minDist / fadeZone.toDouble();
+              final tSmooth = tFade * tFade * (3.0 - 2.0 * tFade);
+              whiteBlend = 1.0 - tSmooth; // near edge → more white
+            } else {
+              whiteBlend = 0.0; // fully inside — keep ink
+            }
+          }
+
           for (int px = 0; px < outW; px++) {
-            if (py < safeTopOut || py >= safeBotOut || px < nameLeftOut) {
-              data[(py * outW + px) * 4 + 3] = 0;
+            final idx = (py * outW + px) * 4;
+            // Left-band erase (serial numbers) — always hard white, no fade needed.
+            final effectiveBlend = (px < nameLeftOut) ? 1.0 : whiteBlend;
+            if (effectiveBlend > 0.0) {
+              // Blend pixel toward white: v_out = v_in + blend*(255 - v_in)
+              final blend255 = (effectiveBlend * 255.0).round().clamp(0, 255);
+              data[idx]     = (data[idx]     + (255 - data[idx])     * blend255 ~/ 255).clamp(0, 255);
+              data[idx + 1] = (data[idx + 1] + (255 - data[idx + 1]) * blend255 ~/ 255).clamp(0, 255);
+              data[idx + 2] = (data[idx + 2] + (255 - data[idx + 2]) * blend255 ~/ 255).clamp(0, 255);
+              // alpha stays 255 (opaque)
             }
           }
         }
       }
 
       // ── Connected-component residue removal ─────────────────────────────────
-      // BFS flood-fill labels every ink blob (4-connected, alpha > inkThresh).
-      // Then we find the dominant writing component (largest non-rule blob) and
-      // erase any other component whose vertical centroid is > 35% of the crop
-      // height away from it, plus any component that looks like a horizontal rule
-      // (very wide, very flat).  This removes neighbour-line tails and dash lines
-      // without touching the main writing — even if individual letters are
-      // disconnected they still cluster near the same y-centre.
-      const inkThresh = 15;
+      // Pixels are now opaque RGB (alpha=255). "Ink" = luminance < inkLumaThresh.
+      // BFS labels each dark blob; residue blobs (off-centre or rule-shaped) are
+      // painted white.
+      const inkLumaThresh = 180; // luminance below this = ink pixel
+      // Helper: is pixel at flat-array index `i` an ink pixel?
+      // R channel == G == B after S-curve, so just check data[i*4].
       final labels = List<int>.filled(outW * outH, -1);
       final cArea = <int>[];
       final cSumY = <double>[];
@@ -1193,7 +1215,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
       for (int seed = 0; seed < outW * outH; seed++) {
         if (labels[seed] != -1) continue;
-        if (data[seed * 4 + 3] <= inkThresh) { labels[seed] = -2; continue; }
+        if (data[seed * 4] >= inkLumaThresh) { labels[seed] = -2; continue; } // not ink
         final lbl = nextLabel++;
         cArea.add(0); cSumY.add(0.0);
         cMinY.add(outH); cMaxY.add(0);
@@ -1216,28 +1238,28 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
           if (px > 0) {
             final ni = idx - 1;
             if (labels[ni] == -1) {
-              if (data[ni * 4 + 3] <= inkThresh) labels[ni] = -2;
+              if (data[ni * 4] >= inkLumaThresh) labels[ni] = -2;
               else { labels[ni] = lbl; bfsQ.add(ni); }
             }
           }
           if (px < outW - 1) {
             final ni = idx + 1;
             if (labels[ni] == -1) {
-              if (data[ni * 4 + 3] <= inkThresh) labels[ni] = -2;
+              if (data[ni * 4] >= inkLumaThresh) labels[ni] = -2;
               else { labels[ni] = lbl; bfsQ.add(ni); }
             }
           }
           if (py > 0) {
             final ni = idx - outW;
             if (labels[ni] == -1) {
-              if (data[ni * 4 + 3] <= inkThresh) labels[ni] = -2;
+              if (data[ni * 4] >= inkLumaThresh) labels[ni] = -2;
               else { labels[ni] = lbl; bfsQ.add(ni); }
             }
           }
           if (py < outH - 1) {
             final ni = idx + outW;
             if (labels[ni] == -1) {
-              if (data[ni * 4 + 3] <= inkThresh) labels[ni] = -2;
+              if (data[ni * 4] >= inkLumaThresh) labels[ni] = -2;
               else { labels[ni] = lbl; bfsQ.add(ni); }
             }
           }
@@ -1272,7 +1294,12 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
           }
           for (int idx = 0; idx < outW * outH; idx++) {
             final l = labels[idx];
-            if (l >= 0 && excl[l]) data[idx * 4 + 3] = 0;
+            if (l >= 0 && excl[l]) {
+              // Paint white (residue removal — opaque PNG).
+              data[idx * 4]     = 255;
+              data[idx * 4 + 1] = 255;
+              data[idx * 4 + 2] = 255;
+            }
           }
         }
       }

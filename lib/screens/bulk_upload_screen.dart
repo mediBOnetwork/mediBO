@@ -456,19 +456,26 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       });
 
       final rows = <_MatchRow>[];
-      for (final item in extracted) {
+      // The OCR model returns bboxes shifted by -1: extracted[i].bbox contains the
+      // visual coordinates of line i-1, not line i. Fix: pair row[i] with
+      // extracted[i+1].bbox so the crop image matches the medicine name on that row.
+      for (int i = 0; i < extracted.length; i++) {
+        final item = extracted[i];
         final name = item['name']?.toString().trim() ?? '';
         final qty = (int.tryParse(item['qty']?.toString() ?? '') ?? 1).clamp(1, 99999);
         if (name.isNotEmpty) {
+          // Use the NEXT item's bbox — that is the correct visual position for this row.
           Rect? bbox;
-          final bboxMap = item['bbox'] as Map<String, dynamic>?;
-          if (bboxMap != null && origImageSize != null) {
-            final bx = (bboxMap['x'] as num?)?.toDouble() ?? 0;
-            final by = (bboxMap['y'] as num?)?.toDouble() ?? 0;
-            final bw = (bboxMap['w'] as num?)?.toDouble() ?? 0;
-            final bh = (bboxMap['h'] as num?)?.toDouble() ?? 0;
-            if (bw > 0 && bh > 0) bbox = Rect.fromLTWH(bx, by, bw, bh);
-            debugPrint('[BBox] "$name" → x=$bx y=$by w=$bw h=$bh');
+          if (i + 1 < extracted.length && origImageSize != null) {
+            final bboxMap = extracted[i + 1]['bbox'] as Map<String, dynamic>?;
+            if (bboxMap != null) {
+              final bx = (bboxMap['x'] as num?)?.toDouble() ?? 0;
+              final by = (bboxMap['y'] as num?)?.toDouble() ?? 0;
+              final bw = (bboxMap['w'] as num?)?.toDouble() ?? 0;
+              final bh = (bboxMap['h'] as num?)?.toDouble() ?? 0;
+              if (bw > 0 && bh > 0) bbox = Rect.fromLTWH(bx, by, bw, bh);
+              debugPrint('[BBox] "$name" → x=$bx y=$by w=$bw h=$bh (from extracted[${i+1}])');
+            }
           }
           rows.add(await _matchOne(name, qty, bbox: bbox));
         }

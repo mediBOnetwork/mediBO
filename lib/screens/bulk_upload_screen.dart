@@ -2,6 +2,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:html' as html;
+import 'dart:math' show sqrt;
 import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
@@ -1034,22 +1035,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
       final outH = (actualSrcH * globalScale).round().clamp(4, 300);
 
-      // ── Canvas draw — raw pixels, no contrast enhancement ───────────────────
-      // White background so gradient-fade zones show clean white (not transparent).
-      final canvas = html.CanvasElement(width: outW, height: outH);
-      final ctx = canvas.context2D;
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, outW.toDouble(), outH.toDouble());
-      ctx.drawImageScaledFromSource(
-        img,
-        srcXStart, srcTop, srcRegionW, actualSrcH,
-        0, 0, outW.toDouble(), outH.toDouble(),
-      );
-
-      final imgData = ctx.getImageData(0, 0, outW, outH);
-      final data = imgData.data;
-
-      // ── Compute band boundaries (hoisted — used by both erase and contrast) ──
+      // ── Band boundaries (fractional image coords) ────────────────────────────
       final lineH = lineBbox.height;
       final pad12 = lineH * 0.12;
 
@@ -1071,100 +1057,126 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         safeBotFrac = lineBbox.bottom + pad12;
       }
 
-      final bandTop = ((safeTopFrac * srcH - srcTop) / actualSrcH * outH)
-          .clamp(0.0, outH.toDouble()).round();
-      final bandBot = ((safeBotFrac * srcH - srcTop) / actualSrcH * outH)
-          .clamp(0.0, outH.toDouble()).round();
-      final nameLeftOut = ((nameBbox.left * srcW - srcXStart) / srcRegionW * outW - leftPadPx)
-          .clamp(0.0, outW.toDouble()).round();
+      // ── Draw at SOURCE resolution for binarization ───────────────────────────
+      final srcCanvasW = srcRegionW.round().clamp(1, 9999);
+      final srcCanvasH = actualSrcH.round().clamp(1, 300);
 
-      // ── Hard-cut erase outside band ──────────────────────────────────────────
-      for (int py = 0; py < outH; py++) {
-        final outside = py < bandTop || py >= bandBot;
-        for (int px = 0; px < outW; px++) {
-          if (outside || px < nameLeftOut) {
-            final idx = (py * outW + px) * 4;
-            data[idx] = 255; data[idx + 1] = 255; data[idx + 2] = 255;
+      final srcCanvas = html.CanvasElement(width: srcCanvasW, height: srcCanvasH);
+      final srcCtx = srcCanvas.context2D;
+      srcCtx.fillStyle = '#ffffff';
+      srcCtx.fillRect(0, 0, srcCanvasW.toDouble(), srcCanvasH.toDouble());
+      srcCtx.drawImageScaledFromSource(
+        img,
+        srcXStart, srcTop, srcRegionW, actualSrcH,
+        0, 0, srcCanvasW.toDouble(), srcCanvasH.toDouble(),
+      );
+
+      final srcImgData = srcCtx.getImageData(0, 0, srcCanvasW, srcCanvasH);
+      final data = srcImgData.data;
+
+      // Band + name-left boundaries in source canvas pixels
+      final srcBandTop = ((safeTopFrac * srcH - srcTop) / actualSrcH * srcCanvasH)
+          .clamp(0.0, srcCanvasH.toDouble()).round();
+      final srcBandBot = ((safeBotFrac * srcH - srcTop) / actualSrcH * srcCanvasH)
+          .clamp(0.0, srcCanvasH.toDouble()).round();
+      final srcNameLeft = (nameBbox.left * srcW - srcXStart - leftPadPx / globalScale)
+          .clamp(0.0, srcCanvasW.toDouble()).round();
+
+      // ── Sauvola adaptive binarization — BAND PIXELS ONLY ─────────────────────
+      // Eliminates gray boxes by definition: local thresholding maps every paper
+      // region to white and every stroke to black regardless of lighting.
+      final bandH = srcBandBot - srcBandTop;
+      if (bandH > 0) {
+        // Window ≈ 1/3 of band height, forced odd, minimum 5
+        int winSize = ((bandH / 3.0).round() | 1);
+        if (winSize < 5) winSize = 5;
+        if (winSize % 2 == 0) winSize++;
+        final hw = winSize >> 1;
+        const double k = 0.2;
+        const double R = 128.0;
+
+        // Grayscale array (full canvas)
+        final gray = Float64List(srcCanvasW * srcCanvasH);
+        for (int py = 0; py < srcCanvasH; py++) {
+          for (int px = 0; px < srcCanvasW; px++) {
+            final i = (py * srcCanvasW + px) * 4;
+            gray[py * srcCanvasW + px] =
+                0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
           }
         }
-      }
 
-      // ── White-balance then gamma darkening — BAND PIXELS ONLY ────────────────
-      // ROOT CAUSE of the gray-box bug: including the painted-white margins in the
-      // histogram made paperLevel ≈ 255/255, so real paper (~0.78) mapped to gray.
-      // FIX: compute stats exclusively on band pixels (no margins, no left erase).
-      //
-      // Step 1 — white balance: find median of the brightest 30% of band pixels.
-      //   Divide each band pixel's RGB by that value → real paper becomes 1.0
-      //   (pure white), seamlessly matching the white margins. Gray box gone.
-      // Step 2 — gamma: inkLevel = P3 of white-balanced band. Apply:
-      //   t = clamp((lum − inkLevel)/(1.0 − inkLevel), 0, 1); out = pow(t, 1.8)
-      //   Ink → near-black, paper → white, midtones keep their gray → gradient
-      //   black, NOT binary. pow(t,1.8) is gentler than smoothstep for midtones.
-      // Guard: skip if band has < 4 pixels or paperLevel − inkLevel < 0.08.
-      {
-        // Collect band luminances (excluding white margins + left erase).
-        final bandLumas = <double>[];
-        for (int py = bandTop; py < bandBot; py++) {
-          for (int px = nameLeftOut; px < outW; px++) {
-            final i = (py * outW + px) * 4;
-            bandLumas.add(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
+        // Integral images (size (H+1)*(W+1))
+        final W1 = srcCanvasW + 1;
+        final sat  = Float64List(W1 * (srcCanvasH + 1));
+        final sat2 = Float64List(W1 * (srcCanvasH + 1));
+        for (int y = 1; y <= srcCanvasH; y++) {
+          for (int x = 1; x <= srcCanvasW; x++) {
+            final v = gray[(y - 1) * srcCanvasW + (x - 1)];
+            sat [y * W1 + x] = v     + sat [(y-1)*W1+x] + sat [y*W1+(x-1)] - sat [(y-1)*W1+(x-1)];
+            sat2[y * W1 + x] = v * v + sat2[(y-1)*W1+x] + sat2[y*W1+(x-1)] - sat2[(y-1)*W1+(x-1)];
           }
         }
 
-        if (bandLumas.length >= 4) {
-          bandLumas.sort();
-          final nb = bandLumas.length;
+        // Count ink pixels for blank-crop guard
+        int inkPixels = 0;
+        final totalBand = bandH * (srcCanvasW - srcNameLeft).clamp(0, srcCanvasW);
 
-          // paperLevel = median of brightest 30% of band pixels (0–255 scale).
-          final brightStart = (nb * 0.70).round();
-          final brightSlice = bandLumas.sublist(brightStart);
-          final paperLevel255 = brightSlice[brightSlice.length ~/ 2]; // median
-
-          // White-balance: divide by paperLevel so real paper → 255.
-          // Guard: if paperLevel is already near 255 (good scan), skip wb step.
-          final wbScale = paperLevel255 > 20.0 ? 255.0 / paperLevel255 : 1.0;
-
-          // inkLevel after white balance: P3 of band.
-          final inkIdx = (nb * 0.03).round().clamp(0, nb - 1);
-          final inkLevel255 = (bandLumas[inkIdx] * wbScale).clamp(0.0, 255.0);
-
-          final guard = (255.0 - inkLevel255) >= 20.0; // skip blank crops
-
-          if (guard) {
-            final invInkRange = 1.0 / (255.0 - inkLevel255);
-            for (int py = 0; py < outH; py++) {
-              final inBand = py >= bandTop && py < bandBot;
-              for (int px = 0; px < outW; px++) {
-                if (!inBand || px < nameLeftOut) continue; // margins already white
-                final idx = (py * outW + px) * 4;
-                // White balance each channel separately to preserve any color cast.
-                final r = (data[idx]     * wbScale).clamp(0.0, 255.0);
-                final g = (data[idx + 1] * wbScale).clamp(0.0, 255.0);
-                final b = (data[idx + 2] * wbScale).clamp(0.0, 255.0);
-                final luma = 0.299 * r + 0.587 * g + 0.114 * b;
-                // Gamma darkening on luminance; preserve hue ratio.
-                final t   = ((luma - inkLevel255) * invInkRange).clamp(0.0, 1.0);
-                // pow(t, 1.8): gentle curve — ink→near-black, midtones stay gray.
-                // Approximation without dart:math import: t^1.8 ≈ t * t^0.8.
-                // Use: pow via iterative: t^1.8 = exp(1.8*ln(t)) — avoid import
-                // by approximating: for t in [0,1], t^1.8 ≈ t*(1-(1-t)*0.3)
-                // That's too inaccurate. Use: t^2 * (1 + (1-t)*0.44) — better.
-                // Actually simplest correct approximation for [0,1]:
-                // t^1.8 ≈ t - t*(1-t)*0.55   (max error ~0.015, imperceptible)
-                final tGamma = (t - t * (1.0 - t) * 0.55).clamp(0.0, 1.0);
-                final outV = (tGamma * 255.0).round().clamp(0, 255);
-                data[idx] = outV; data[idx + 1] = outV; data[idx + 2] = outV;
-                data[idx + 3] = 255;
-              }
+        for (int py = 0; py < srcCanvasH; py++) {
+          for (int px = 0; px < srcCanvasW; px++) {
+            final idx = (py * srcCanvasW + px) * 4;
+            // Outside band or left of name anchor → white
+            if (py < srcBandTop || py >= srcBandBot || px < srcNameLeft) {
+              data[idx] = 255; data[idx+1] = 255; data[idx+2] = 255; data[idx+3] = 255;
+              continue;
             }
+            // Sauvola local threshold
+            final x1 = (px - hw).clamp(0, srcCanvasW);
+            final x2 = (px + hw + 1).clamp(0, srcCanvasW);
+            final y1 = (py - hw).clamp(0, srcCanvasH);
+            final y2 = (py + hw + 1).clamp(0, srcCanvasH);
+            final count = (x2 - x1) * (y2 - y1);
+            if (count == 0) {
+              data[idx] = 255; data[idx+1] = 255; data[idx+2] = 255; data[idx+3] = 255;
+              continue;
+            }
+            final s  = sat [y2*W1+x2] - sat [y1*W1+x2] - sat [y2*W1+x1] + sat [y1*W1+x1];
+            final s2 = sat2[y2*W1+x2] - sat2[y1*W1+x2] - sat2[y2*W1+x1] + sat2[y1*W1+x1];
+            final mean = s / count;
+            final variance = (s2 / count - mean * mean).clamp(0.0, double.infinity);
+            final std = sqrt(variance);
+            final threshold = mean * (1.0 + k * (std / R - 1.0));
+            final isInk = gray[py * srcCanvasW + px] < threshold;
+            if (isInk) inkPixels++;
+            final outV = isInk ? 0 : 255;
+            data[idx] = outV; data[idx+1] = outV; data[idx+2] = outV; data[idx+3] = 255;
           }
         }
-        // Ensure all pixels are opaque.
-        for (int i = 3; i < data.length; i += 4) data[i] = 255;
+
+        // Blank-crop guard: < 0.5% ink pixels → output plain white
+        if (totalBand > 0 && (inkPixels / totalBand) < 0.005) {
+          for (int i = 0; i < data.length; i += 4) {
+            data[i] = 255; data[i+1] = 255; data[i+2] = 255; data[i+3] = 255;
+          }
+        }
+      } else {
+        for (int i = 0; i < data.length; i += 4) {
+          data[i] = 255; data[i+1] = 255; data[i+2] = 255; data[i+3] = 255;
+        }
       }
 
-      ctx.putImageData(imgData, 0, 0);
+      srcCtx.putImageData(srcImgData, 0, 0);
+
+      // ── Cubic-downscale binarized source to output size ───────────────────────
+      final canvas = html.CanvasElement(width: outW, height: outH);
+      final ctx = canvas.context2D;
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, outW.toDouble(), outH.toDouble());
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImageScaledFromSource(
+        srcCanvas,
+        0, 0, srcCanvasW.toDouble(), srcCanvasH.toDouble(),
+        0, 0, outW.toDouble(), outH.toDouble(),
+      );
 
       final dataUrl = canvas.toDataUrl('image/png');
       return base64Decode(dataUrl.split(',').last);

@@ -8,6 +8,7 @@ import 'package:archive/archive.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:pharma_b2b/utils/toast.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart';
 import 'package:xml/xml.dart' as xmlp;
 
@@ -359,10 +360,7 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() { _step = _ImpStep.idle; });
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(e.toString().replaceFirst('Exception: ', '')),
-        behavior: SnackBarBehavior.floating, duration: const Duration(seconds: 6),
-      ));
+      showToast(context, e.toString().replaceFirst('Exception: ', ''), duration: const Duration(seconds: 6));
     }
   }
 
@@ -511,10 +509,7 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() { _step = _ImpStep.idle; });
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(e.toString().replaceFirst('Exception: ', '')),
-        behavior: SnackBarBehavior.floating, duration: const Duration(seconds: 6),
-      ));
+      showToast(context, e.toString().replaceFirst('Exception: ', ''), duration: const Duration(seconds: 6));
     }
   }
 
@@ -522,34 +517,22 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
 
   Future<void> _confirmMapping() async {
     if (!_cols.any((c) => c.mappedTo == 'product_name')) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Map at least one column to "product_name" — it is required for matching.'),
-        behavior: SnackBarBehavior.floating,
-      ));
+      showToast(context, 'Map at least one column to "product_name" — it is required for matching.');
       return;
     }
     // Validate create_new entries
     for (final col in _cols.where((c) => c.mappedTo == 'create_new')) {
       final name = (_newColCtrls[col.fileIndex]?.text ?? '').trim();
       if (name.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Enter a name for the new column "${col.header.isNotEmpty ? col.header : "Column ${col.fileIndex + 1}"}"'),
-          behavior: SnackBarBehavior.floating,
-        ));
+        showToast(context, 'Enter a name for the new column "${col.header.isNotEmpty ? col.header : "Column ${col.fileIndex + 1}"}"');
         return;
       }
       if (!RegExp(r'^[a-z][a-z0-9_]*$').hasMatch(name)) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('"$name" is invalid — use lowercase letters, numbers, underscores, starting with a letter'),
-          behavior: SnackBarBehavior.floating,
-        ));
+        showToast(context, '"$name" is invalid — use lowercase letters, numbers, underscores, starting with a letter');
         return;
       }
       if (_kMedCols.contains(name)) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('"$name" already exists — map directly to that column instead'),
-          behavior: SnackBarBehavior.floating,
-        ));
+        showToast(context, '"$name" already exists — map directly to that column instead');
         return;
       }
       col.newColName = name;
@@ -569,10 +552,7 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
         } catch (e) {
           if (!mounted) return;
           setState(() { _step = _ImpStep.mapping; });
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text('Could not create column "${col.newColName}": ${e.toString().replaceFirst('Exception: ', '')}'),
-            behavior: SnackBarBehavior.floating, duration: const Duration(seconds: 8),
-          ));
+          showToast(context, 'Could not create column "${col.newColName}": ${e.toString().replaceFirst('Exception: ', '')}', duration: const Duration(seconds: 8));
           return;
         }
       }

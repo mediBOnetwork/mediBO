@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:pharma_b2b/utils/toast.dart';
 
 import '../app_state.dart';
 import '../models/cart_model.dart';
@@ -110,13 +111,7 @@ class _CartScreenState extends State<CartScreen> {
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text('Could not place order. Please try again.'),
-          behavior: SnackBarBehavior.floating,
-          backgroundColor: const Color(0xFFDC2626),
-        ),
-      );
+      showToast(context, 'Could not place order. Please try again.', isError: true);
     } finally {
       if (mounted) setState(() => _orderInProgress = false);
     }

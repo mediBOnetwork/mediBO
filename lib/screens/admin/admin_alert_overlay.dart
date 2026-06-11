@@ -6,6 +6,7 @@ import 'dart:js_interop';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:pharma_b2b/utils/toast.dart';
 
 // ── External JS function declarations (web only) ─────────────────────────────
 
@@ -425,10 +426,7 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
       }).then((_) {}).catchError((_) {});
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Approve failed: $e'),
-          backgroundColor: const Color(0xFFDC2626),
-        ));
+        showToast(context, 'Approve failed: $e', isError: true);
       }
     }
     _advance();
@@ -451,10 +449,7 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
       }).then((_) {}).catchError((_) {});
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Reject failed: $e'),
-          backgroundColor: const Color(0xFFDC2626),
-        ));
+        showToast(context, 'Reject failed: $e', isError: true);
       }
     }
     _advance();

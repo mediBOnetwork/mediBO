@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:pharma_b2b/utils/toast.dart';
 
 import '../../user_state.dart';
 
@@ -96,12 +97,7 @@ class _AdminAddAdminScreenState extends State<AdminAddAdminScreen> {
       await _loadAdmins();
     } catch (_) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Failed to remove admin'),
-            backgroundColor: Color(0xFFDC2626),
-          ),
-        );
+        showToast(context, 'Failed to remove admin', isError: true);
       }
     }
   }

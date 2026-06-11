@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:pharma_b2b/utils/toast.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'admin_add_medicine_screen.dart';
@@ -761,10 +762,7 @@ class _PendingBillsScreenState extends State<PendingBillsScreen> {
     } catch (e) {
       setState(() => _dismissing.remove(id));
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Dismiss failed: ${e.toString().replaceFirst('Exception: ', '')}'),
-        behavior: SnackBarBehavior.floating,
-      ));
+      showToast(context, 'Dismiss failed: ${e.toString().replaceFirst('Exception: ', '')}');
     }
   }
 
@@ -801,10 +799,7 @@ class _PendingBillsScreenState extends State<PendingBillsScreen> {
       _load();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Download failed: ${e.toString().replaceFirst('Exception: ', '')}'),
-        behavior: SnackBarBehavior.floating,
-      ));
+      showToast(context, 'Download failed: ${e.toString().replaceFirst('Exception: ', '')}');
     } finally {
       if (mounted) setState(() => _downloading.remove(id));
     }
@@ -820,10 +815,7 @@ class _PendingBillsScreenState extends State<PendingBillsScreen> {
     senderEmail = senderEmail.toLowerCase();
 
     if (supplierId == null || senderEmail.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Cannot approve: no matched supplier in scan result.'),
-        behavior: SnackBarBehavior.floating,
-      ));
+      showToast(context, 'Cannot approve: no matched supplier in scan result.');
       return;
     }
 
@@ -842,10 +834,7 @@ class _PendingBillsScreenState extends State<PendingBillsScreen> {
     } catch (e) {
       setState(() => _approving.remove(id));
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Approval failed: ${e.toString().replaceFirst('Exception: ', '')}'),
-        behavior: SnackBarBehavior.floating,
-      ));
+      showToast(context, 'Approval failed: ${e.toString().replaceFirst('Exception: ', '')}');
     }
   }
 
@@ -863,10 +852,7 @@ class _PendingBillsScreenState extends State<PendingBillsScreen> {
       }
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Cannot open file: ${e.toString().replaceFirst('Exception: ', '')}'),
-        behavior: SnackBarBehavior.floating,
-      ));
+      showToast(context, 'Cannot open file: ${e.toString().replaceFirst('Exception: ', '')}');
     } finally {
       if (mounted) setState(() => _viewing.remove(id));
     }
@@ -897,10 +883,7 @@ class _PendingBillsScreenState extends State<PendingBillsScreen> {
       });
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Retry failed: ${e.toString().replaceFirst('Exception: ', '')}'),
-        behavior: SnackBarBehavior.floating,
-      ));
+      showToast(context, 'Retry failed: ${e.toString().replaceFirst('Exception: ', '')}');
     }
   }
 

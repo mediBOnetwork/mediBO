@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:pharma_b2b/utils/toast.dart';
 
 import '../../services/fcm_service.dart';
 import '../../theme.dart';
@@ -130,10 +131,7 @@ class _AdminShellState extends State<AdminShell> {
         return;
       case 'manage_admins':
         if (!isSuperAdmin) {
-          ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(
-            content: Text('Only super-admins can manage admin accounts'),
-            backgroundColor: Color(0xFFDC2626),
-          ));
+          showToast(ctx, 'Only super-admins can manage admin accounts', isError: true);
           return;
         }
         setState(() { _view = _AdminView.section; _index = 5; });

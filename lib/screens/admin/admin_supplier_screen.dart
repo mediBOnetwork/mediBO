@@ -9,6 +9,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:pharma_b2b/utils/toast.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart';
 import 'package:xml/xml.dart' as xmlp;
 
@@ -435,7 +436,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       await Supabase.instance.client.from('supplier_profiles').update({'status': 'Suspended'}).eq('id', row.id);
       _load(showSpinner: false);
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Suspend failed: $e'), backgroundColor: const Color(0xFFDC2626)));
+      if (mounted) showToast(context, 'Suspend failed: $e', isError: true);
     }
   }
 
@@ -444,7 +445,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       await Supabase.instance.client.from('supplier_profiles').update({'status': 'Active'}).eq('id', row.id);
       _load(showSpinner: false);
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Reactivate failed: $e'), backgroundColor: const Color(0xFFDC2626)));
+      if (mounted) showToast(context, 'Reactivate failed: $e', isError: true);
     }
   }
 
@@ -459,9 +460,9 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         'deleted_snapshot': row.rawData,
       }).eq('id', row.id);
       _load(showSpinner: false);
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Supplier deleted.'), backgroundColor: Color(0xFF1B7A43)));
+      if (mounted) showToast(context, 'Supplier deleted.');
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Delete failed: $e'), backgroundColor: const Color(0xFFDC2626)));
+      if (mounted) showToast(context, 'Delete failed: $e', isError: true);
     }
   }
 
@@ -499,18 +500,11 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           .eq('is_deleted', true);
       _load(showSpinner: false);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('$displayName permanently deleted.'),
-          backgroundColor: const Color(0xFFDC2626),
-          duration: const Duration(seconds: 3),
-        ));
+        showToast(context, '$displayName permanently deleted.', isError: true, duration: const Duration(seconds: 3));
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Delete failed: $e'),
-          backgroundColor: const Color(0xFFDC2626),
-        ));
+        showToast(context, 'Delete failed: $e', isError: true);
       }
     }
   }
@@ -547,18 +541,11 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           .eq('is_deleted', true);
       _load(showSpinner: false);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('$count supplier${count == 1 ? '' : 's'} permanently deleted.'),
-          backgroundColor: const Color(0xFFDC2626),
-          duration: const Duration(seconds: 3),
-        ));
+        showToast(context, '$count supplier${count == 1 ? '' : 's'} permanently deleted.', isError: true, duration: const Duration(seconds: 3));
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Clear all failed: $e'),
-          backgroundColor: const Color(0xFFDC2626),
-        ));
+        showToast(context, 'Clear all failed: $e', isError: true);
       }
     }
   }
@@ -598,18 +585,11 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       }).eq('id', deletedRow['id'] as String);
       _load(showSpinner: false);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Supplier restored.'),
-          backgroundColor: Color(0xFF1B7A43),
-          duration: Duration(seconds: 3),
-        ));
+        showToast(context, 'Supplier restored.', duration: const Duration(seconds: 3));
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Restore failed: $e'),
-          backgroundColor: const Color(0xFFDC2626),
-        ));
+        showToast(context, 'Restore failed: $e', isError: true);
       }
     }
   }
@@ -632,7 +612,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       await Supabase.instance.client.from('supplier_orders').update({'status': status}).eq('id', orderId);
       _load(showSpinner: false);
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Update failed: $e'), backgroundColor: const Color(0xFFDC2626)));
+      if (mounted) showToast(context, 'Update failed: $e', isError: true);
     }
   }
 
@@ -1943,17 +1923,12 @@ class _StatusPillState extends State<_StatusPill> {
           .timeout(const Duration(seconds: 8));
       RenderLog.write('status_pill_result', res.isEmpty ? 'EMPTY' : 'OK');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(res.isEmpty ? 'Save failed — try again' : 'Status updated ✓'),
-          backgroundColor: Color(res.isEmpty ? 0xFF991B1B : 0xFF1B7A43),
-          duration: const Duration(milliseconds: 800),
-        ));
+        showToast(context, res.isEmpty ? 'Save failed — try again' : 'Status updated ✓', isError: res.isEmpty, duration: const Duration(milliseconds: 800));
       }
     } catch (e) {
       RenderLog.write('status_pill_error', e.toString());
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Error: $e'), backgroundColor: const Color(0xFF991B1B)));
+        showToast(context, 'Error: $e', isError: true);
       }
     }
   }
@@ -2092,7 +2067,7 @@ class _ApproveActionsState extends State<_ApproveActions> {
     if (_busy) return;
     setState(() => _busy = true);
     try { await fn(); } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Action failed: $e'), backgroundColor: const Color(0xFFDC2626)));
+      if (mounted) showToast(context, 'Action failed: $e', isError: true);
     }
     if (mounted) setState(() => _busy = false);
   }
@@ -2171,7 +2146,7 @@ class _SupplierEditDialogState extends State<_SupplierEditDialog> {
     } catch (e) {
       if (mounted) {
         setState(() => _saving = false);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Save failed: $e'), backgroundColor: const Color(0xFFDC2626)));
+        showToast(context, 'Save failed: $e', isError: true);
       }
     }
   }
@@ -2366,15 +2341,12 @@ class _SupCsvImportDialogState extends State<_SupCsvImportDialog> {
       if (mounted) {
         Navigator.of(context).pop();
         widget.onImported();
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Imported ${toInsert.length} lead${toInsert.length == 1 ? '' : 's'}'),
-          backgroundColor: const Color(0xFF1B7A43),
-        ));
+        showToast(context, 'Imported ${toInsert.length} lead${toInsert.length == 1 ? '' : 's'}');
       }
     } catch (e) {
       if (mounted) {
         setState(() { _step = _SupCsvStep.mapping; });
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Import failed: $e'), backgroundColor: const Color(0xFFDC2626)));
+        showToast(context, 'Import failed: $e', isError: true);
       }
     }
   }
@@ -2815,24 +2787,15 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
     for (final col in _cols.where((c) => c.mappedTo == 'create_new')) {
       final name = (_newColCtrls[col.index]?.text ?? '').trim();
       if (name.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Enter a name for the new column "${col.header.isNotEmpty ? col.header : "Column ${col.index + 1}"}"'),
-          behavior: SnackBarBehavior.floating,
-        ));
+        showToast(context, 'Enter a name for the new column "${col.header.isNotEmpty ? col.header : "Column ${col.index + 1}"}"');
         return;
       }
       if (!RegExp(r'^[a-z][a-z0-9_]*$').hasMatch(name)) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('"$name" is invalid — use lowercase letters, numbers, underscores, starting with a letter'),
-          behavior: SnackBarBehavior.floating,
-        ));
+        showToast(context, '"$name" is invalid — use lowercase letters, numbers, underscores, starting with a letter');
         return;
       }
       if (_profileFields.contains(name)) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('"$name" already exists — map directly to that column instead'),
-          behavior: SnackBarBehavior.floating,
-        ));
+        showToast(context, '"$name" already exists — map directly to that column instead');
         return;
       }
       col.newColName = name;
@@ -2855,10 +2818,7 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
         } catch (e) {
           if (!mounted) return;
           setState(() { _step = _SupProfStep.mapping; });
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text('Could not create column "${col.newColName}": ${e.toString().replaceFirst('Exception: ', '')}'),
-            behavior: SnackBarBehavior.floating, duration: const Duration(seconds: 8),
-          ));
+          showToast(context, 'Could not create column "${col.newColName}": ${e.toString().replaceFirst('Exception: ', '')}', duration: const Duration(seconds: 8));
           return;
         }
       }
@@ -2959,18 +2919,12 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
         parts.add('$profilesInserted new supplier${profilesInserted == 1 ? "" : "s"}');
         if (profilesSkipped > 0) parts.add('$profilesSkipped already existed');
         if (hasCompanyCol) parts.add('$scInserted company row${scInserted == 1 ? "" : "s"} saved (company_1–5 empty, fill via Refresh)');
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Imported: ${parts.join(" · ")}'),
-          backgroundColor: const Color(0xFF1B7A43), duration: const Duration(seconds: 6),
-        ));
+        showToast(context, 'Imported: ${parts.join(" · ")}', duration: const Duration(seconds: 6));
       }
     } catch (e) {
       if (mounted) {
         setState(() { _step = _SupProfStep.mapping; });
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Import failed: ${e.toString().replaceFirst("Exception: ", "")}'),
-          backgroundColor: const Color(0xFFDC2626), duration: const Duration(seconds: 8),
-        ));
+        showToast(context, 'Import failed: ${e.toString().replaceFirst("Exception: ", "")}', isError: true, duration: const Duration(seconds: 8));
       }
     }
   }
@@ -3539,11 +3493,7 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
 
       if (!mounted) return;
       if (resp.statusCode != 200) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Match failed (${resp.statusCode})'),
-          backgroundColor: const Color(0xFF991B1B),
-          duration: const Duration(seconds: 4),
-        ));
+        showToast(context, 'Match failed (${resp.statusCode})', isError: true);
         return;
       }
 
@@ -3577,18 +3527,10 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
         _needsReview = needsReview;
         _flaggedRows = flaggedSet;
       });
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('$matched matched${needsReview > 0 ? ' · $needsReview need review' : ''}'),
-        backgroundColor: needsReview > 0 ? const Color(0xFFD97706) : const Color(0xFF1B7A43),
-        duration: const Duration(seconds: 4),
-      ));
+      showToast(context, '$matched matched${needsReview > 0 ? ' · $needsReview need review' : ''}');
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Error: $e'),
-          backgroundColor: const Color(0xFF991B1B),
-          duration: const Duration(seconds: 4),
-        ));
+        showToast(context, 'Error: $e', isError: true);
       }
     } finally {
       if (mounted) setState(() { _mappingMode = null; _aiProgress = 0; _aiTotal = 0; _aiStage = null; });
@@ -3677,11 +3619,7 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
           _needsReview = 0;
           _flaggedRows = {};
         });
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Saved.'),
-          backgroundColor: Color(0xFF1B7A43),
-          duration: Duration(seconds: 3),
-        ));
+        showToast(context, 'Saved.', duration: const Duration(seconds: 3));
       }
     } finally {
       if (mounted) setState(() => _mappingMode = null);
@@ -4138,15 +4076,10 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
             .then((_) {})
             .catchError((_) {});
       }
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(res.isEmpty ? 'Save failed — try again' : 'Saved ✓'),
-        backgroundColor: Color(res.isEmpty ? 0xFF991B1B : 0xFF1B7A43),
-        duration: const Duration(milliseconds: 800)));
+      if (mounted) showToast(context, res.isEmpty ? 'Save failed — try again' : 'Saved ✓', isError: res.isEmpty, duration: const Duration(milliseconds: 800));
     } catch (e) {
       RenderLog.write('spn_writefield_exception', e.toString());
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Save error: $e'),
-        backgroundColor: const Color(0xFF991B1B)));
+      if (mounted) showToast(context, 'Save error: $e', isError: true);
     }
   }
 
@@ -4624,10 +4557,7 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
   Future<void> _doImport() async {
     final name = _nameCtrl.text.trim();
     if (name.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Supplier name is required'),
-        backgroundColor: Color(0xFFDC2626),
-      ));
+      showToast(context, 'Supplier name is required', isError: true);
       return;
     }
     setState(() => _step = _SupCardStep.importing);
@@ -4678,19 +4608,12 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
       if (mounted) {
         Navigator.of(context).pop();
         widget.onImported();
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Imported $name with ${companies.length} compan${companies.length == 1 ? 'y' : 'ies'}'),
-          backgroundColor: const Color(0xFF1B7A43),
-          duration: const Duration(seconds: 5),
-        ));
+        showToast(context, 'Imported $name with ${companies.length} compan${companies.length == 1 ? 'y' : 'ies'}', duration: const Duration(seconds: 5));
       }
     } catch (e) {
       if (mounted) {
         setState(() => _step = _SupCardStep.review);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Import failed: $e'),
-          backgroundColor: const Color(0xFFDC2626),
-        ));
+        showToast(context, 'Import failed: $e', isError: true);
       }
     }
   }

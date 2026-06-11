@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:pharma_b2b/utils/toast.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:xml/xml.dart' as xmlp;
@@ -611,13 +612,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         _bulkLineItemMap = {};
       });
       _clearSession();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(_friendlyError(e)),
-          behavior: SnackBarBehavior.floating,
-          duration: const Duration(seconds: 6),
-        ),
-      );
+      showToast(context, _friendlyError(e), duration: const Duration(seconds: 6));
     }
   }
 
@@ -1964,10 +1959,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
             .toList();
         if (!mounted) return;
         cart.addSampleItems(entries);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('${entries.length} sample items added · auto-removed in 15s'),
-          behavior: SnackBarBehavior.floating,
-        ));
+        showToast(context, '${entries.length} sample items added · auto-removed in 15s');
       } finally {
         if (mounted) setState(() => _addingToCart = false);
       }
@@ -2038,11 +2030,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       } else {
         msg = 'Cart is already up to date';
       }
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(msg),
-        backgroundColor: const Color(0xFF16A34A),
-        behavior: SnackBarBehavior.floating,
-      ));
+      showToast(context, msg);
     }
   }
 

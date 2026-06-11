@@ -6,6 +6,7 @@ import 'dart:html' as html;
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:pharma_b2b/utils/toast.dart';
 
 import '../../config/api_keys.dart';
 import '../../util.dart';
@@ -469,10 +470,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     } catch (e) {
       if (mounted) {
         setState(() => _loading = false);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Failed to load: $e'),
-          backgroundColor: const Color(0xFFDC2626),
-        ));
+        showToast(context, 'Failed to load: $e', isError: true);
       }
     }
     _loadLeads();
@@ -735,10 +733,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       _load(showSpinner: false);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Suspend failed: $e'),
-          backgroundColor: const Color(0xFFDC2626),
-        ));
+        showToast(context, 'Suspend failed: $e', isError: true);
       }
     }
   }
@@ -752,10 +747,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       _load(showSpinner: false);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Reactivate failed: $e'),
-          backgroundColor: const Color(0xFFDC2626),
-        ));
+        showToast(context, 'Reactivate failed: $e', isError: true);
       }
     }
   }
@@ -820,18 +812,11 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       }
       _load(showSpinner: false);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Customer deleted.'),
-          backgroundColor: Color(0xFF1B7A43),
-          duration: Duration(seconds: 3),
-        ));
+        showToast(context, 'Customer deleted.', duration: const Duration(seconds: 3));
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Delete failed: $e'),
-          backgroundColor: const Color(0xFFDC2626),
-        ));
+        showToast(context, 'Delete failed: $e', isError: true);
       }
     }
   }
@@ -891,20 +876,13 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       }
       _load(showSpinner: false);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(email.isNotEmpty
-              ? 'Customer restored. Magic link sent to $email.'
-              : 'Customer restored.'),
-          backgroundColor: const Color(0xFF1B7A43),
-          duration: const Duration(seconds: 4),
-        ));
+        showToast(context, email.isNotEmpty
+            ? 'Customer restored. Magic link sent to $email.'
+            : 'Customer restored.');
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Restore failed: $e'),
-          backgroundColor: const Color(0xFFDC2626),
-        ));
+        showToast(context, 'Restore failed: $e', isError: true);
       }
     }
   }
@@ -920,10 +898,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       _load();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Update failed: $e'),
-          backgroundColor: const Color(0xFFDC2626),
-        ));
+        showToast(context, 'Update failed: $e', isError: true);
       }
     }
   }
@@ -940,10 +915,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       _load(showSpinner: false);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Remove failed: $e'),
-          backgroundColor: const Color(0xFFDC2626),
-        ));
+        showToast(context, 'Remove failed: $e', isError: true);
       }
     }
   }
@@ -3224,10 +3196,7 @@ class _RegApproveActionsState extends State<_RegApproveActions> {
       await fn();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Action failed: $e'),
-          backgroundColor: const Color(0xFFDC2626),
-        ));
+        showToast(context, 'Action failed: $e', isError: true);
       }
     }
     if (mounted) setState(() => _busy = false);
@@ -3422,12 +3391,9 @@ class _AdminAddItemDialogState extends State<_AdminAddItemDialog> {
     } catch (e) {
       if (mounted) {
         setState(() => _adding = false);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(e.toString().contains('column')
-              ? 'DB migration required — run the migration SQL in Supabase Studio first'
-              : 'Failed to add item: $e'),
-          backgroundColor: const Color(0xFFDC2626),
-        ));
+        showToast(context, e.toString().contains('column')
+            ? 'DB migration required — run the migration SQL in Supabase Studio first'
+            : 'Failed to add item: $e', isError: true);
       }
     }
   }
@@ -3799,10 +3765,7 @@ class _CustomerEditDialogState extends State<_CustomerEditDialog> {
     } catch (e) {
       if (mounted) {
         setState(() => _saving = false);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Save failed: $e'),
-          backgroundColor: const Color(0xFFDC2626),
-        ));
+        showToast(context, 'Save failed: $e', isError: true);
       }
     }
   }
@@ -4088,18 +4051,12 @@ class _CsvImportDialogState extends State<_CsvImportDialog> {
       if (mounted) {
         Navigator.of(context).pop();
         widget.onImported();
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Imported ${toInsert.length} lead${toInsert.length == 1 ? '' : 's'}'),
-          backgroundColor: const Color(0xFF1B7A43),
-        ));
+        showToast(context, 'Imported ${toInsert.length} lead${toInsert.length == 1 ? '' : 's'}');
       }
     } catch (e) {
       if (mounted) {
         setState(() { _step = _CsvStep.mapping; });
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Import failed: $e'),
-          backgroundColor: const Color(0xFFDC2626),
-        ));
+        showToast(context, 'Import failed: $e', isError: true);
       }
     }
   }

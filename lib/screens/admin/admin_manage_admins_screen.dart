@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:pharma_b2b/utils/toast.dart';
 
 const _kLockedEmails = {'masteromprakashsahu@gmail.com', 'medibonetwork@gmail.com'};
 
@@ -69,9 +70,7 @@ class _AdminManageAdminsScreenState extends State<AdminManageAdminsScreen> {
       await _fetchAdmins();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Remove failed: $e'), backgroundColor: const Color(0xFFDC2626)),
-        );
+        showToast(context, 'Remove failed: $e', isError: true);
       }
     }
     if (mounted) setState(() => _removingId = null);

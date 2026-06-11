@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:pharma_b2b/utils/toast.dart';
 import '../theme.dart';
 
 class ContactScreen extends StatefulWidget {
@@ -42,9 +43,7 @@ class _ContactScreenState extends State<ContactScreen> {
     } catch (_) {
       if (!mounted) return;
       setState(() => _submitting = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Failed to send. Please try again.')),
-      );
+      showToast(context, 'Failed to send. Please try again.');
     }
   }
 

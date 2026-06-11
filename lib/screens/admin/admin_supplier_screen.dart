@@ -3281,8 +3281,9 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
   bool _mapped = false;
   int _needsReview = 0;
   Set<int> _flaggedRows = {};
-  int _aiProgress = 0; // rows processed so far during AI match
-  int _aiTotal = 0;    // total rows to process during AI match
+  int _aiProgress = 0;
+  int _aiTotal = 0;
+  String? _aiStage; // 'candidates' | 'gemini' | null
   List<Map<String, dynamic>> _rows = [];
   List<String> _medMarketers = [];
   List<String> _companyCorpus = [];
@@ -3511,175 +3512,86 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
       '  3. Do NOT generate, invent, paraphrase, or modify any names.\n';
 
   // Single-row fallback (used when a batch parse fails for a specific row)
-  Future<List<String>?> _geminiGroupFilter(String supplier, List<String> candidates) async {
-    final prompt =
-        '${_matchPromptRules()}'
-        'Supplier company: "$supplier"\n'
-        'Candidates: ${jsonEncode(candidates)}\n'
-        'Respond with ONLY this JSON (no explanation, no markdown): '
-        '{"matches":[...exact verbatim strings from candidates only...]}';
-    try {
-      final resp = await http.post(
-        Uri.parse(_ocrEdgeFn),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'image_base64': '', 'mime_type': 'text/plain', 'prompt': prompt}),
-      ).timeout(const Duration(seconds: 30));
-      if (resp.statusCode != 200) return null;
-      final text = (jsonDecode(resp.body) as Map<String, dynamic>)['text'] as String? ?? '';
-      if (text.isEmpty) return null;
-      final parsed = jsonDecode(text) as Map<String, dynamic>;
-      final rawMatches = (parsed['matches'] as List?)?.map((e) => e.toString()).toList() ?? [];
-      final cset = candidates.toSet();
-      final corpusSet = _companyCorpus.toSet();
-      final filtered = rawMatches.where((m) => cset.contains(m) && corpusSet.contains(m)).toList();
-      return _validateMatches(supplier, filtered);
-    } catch (_) {
-      return null;
-    }
-  }
-
-  // Batch Gemini call: sends up to ~10 rows per call, returns map of supplier_company → matches
-  Future<Map<String, List<String>>?> _geminiBatchFilter(
-      List<Map<String, dynamic>> batch, List<String> corpus) async {
-    final items = batch.map((entry) => {
-      'supplier_company': entry['supplier_company'] as String,
-      'candidates': entry['candidates'] as List<String>,
-    }).toList();
-    final prompt =
-        '${_matchPromptRules()}'
-        'Items: ${jsonEncode(items)}\n'
-        'Respond with ONLY this JSON (no explanation, no markdown):\n'
-        '{"items":[{"supplier_company":"<exact input value>","matches":[...verbatim candidates only, empty array if none match...]},...]}';
-    try {
-      final resp = await http.post(
-        Uri.parse(_ocrEdgeFn),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'image_base64': '', 'mime_type': 'text/plain', 'prompt': prompt}),
-      ).timeout(const Duration(seconds: 45));
-      if (resp.statusCode != 200) return null;
-      final text = (jsonDecode(resp.body) as Map<String, dynamic>)['text'] as String? ?? '';
-      if (text.isEmpty) return null;
-      final parsed = jsonDecode(text) as Map<String, dynamic>;
-      final resultItems = (parsed['items'] as List?) ?? [];
-      final corpusSet = corpus.toSet();
-      final result = <String, List<String>>{};
-      for (final item in resultItems) {
-        final sc = item['supplier_company'] as String? ?? '';
-        final entry = batch.firstWhere(
-          (e) => e['supplier_company'] == sc,
-          orElse: () => <String, dynamic>{},
-        );
-        if (entry.isEmpty) continue;
-        final candidateSet = (entry['candidates'] as List<String>).toSet();
-        final rawMatches = (item['matches'] as List?)?.map((e) => e.toString()).toList() ?? [];
-        final filtered = rawMatches.where((m) => candidateSet.contains(m) && corpusSet.contains(m)).toList();
-        result[sc] = _validateMatches(sc, filtered);
-      }
-      return result;
-    } catch (_) {
-      return null;
-    }
-  }
-
   Future<void> _mapCompanies() async {
     if (_rows.isEmpty) return;
-    final nonEmpty = _rows.where((r) => (r['supplier_company'] as String? ?? '').trim().isNotEmpty).length;
     setState(() {
       _mappingMode = 'ai';
       _needsReview = 0;
       _flaggedRows = {};
       _aiProgress = 0;
-      _aiTotal = nonEmpty;
+      _aiTotal = 0;
+      _aiStage = 'candidates';
+    });
+    // Switch to Gemini stage label after a brief delay
+    Future.delayed(const Duration(seconds: 3), () {
+      if (mounted && _mappingMode == 'ai') setState(() => _aiStage = 'gemini');
     });
     try {
-      await _ensureCorpus();
+      final token = Supabase.instance.client.auth.currentSession?.accessToken ?? '';
+      final resp = await http.post(
+        Uri.parse('https://swojhmarmaijkshsbeih.supabase.co/functions/v1/match-companies'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode({'supplier_id': widget.supplierId}),
+      ).timeout(const Duration(seconds: 90));
+
+      if (!mounted) return;
+      if (resp.statusCode != 200) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Match failed (${resp.statusCode})'),
+          backgroundColor: const Color(0xFF991B1B),
+          duration: const Duration(seconds: 4),
+        ));
+        return;
+      }
+
+      final data = jsonDecode(resp.body) as Map<String, dynamic>;
+      final items = (data['items'] as List?) ?? [];
+      final stats = (data['stats'] as Map<String, dynamic>?) ?? {};
+      final matched = stats['matched'] as int? ?? 0;
+      final needsReview = stats['needs_review'] as int? ?? 0;
+
       final updated = _rows.map((r) => Map<String, dynamic>.from(r)).toList();
-      int flagged = 0;
       final flaggedSet = <int>{};
 
-      // Build list of rows that need processing with their candidate shortlists
-      final workItems = <Map<String, dynamic>>[];
-      for (int ri = 0; ri < updated.length; ri++) {
-        final raw = (updated[ri]['supplier_company'] as String? ?? '').trim();
-        if (raw.isEmpty) continue;
-        final candidates = _candidateShortlist(raw, _companyCorpus);
-        workItems.add({'ri': ri, 'supplier_company': raw, 'candidates': candidates});
-      }
-
-      // Split into batches of 10
-      const batchSize = 10;
-      final batches = <List<Map<String, dynamic>>>[];
-      for (int i = 0; i < workItems.length; i += batchSize) {
-        batches.add(workItems.sublist(i, i + batchSize > workItems.length ? workItems.length : i + batchSize));
-      }
-
-      // Run batches with concurrency limit of 3
-      const concurrency = 3;
-      for (int bi = 0; bi < batches.length; bi += concurrency) {
-        final chunk = batches.sublist(bi, bi + concurrency > batches.length ? batches.length : bi + concurrency);
-        final futures = chunk.map((batch) async {
-          // Skip items with no candidates (flag immediately)
-          final batchWithCandidates = batch.where((e) => (e['candidates'] as List).isNotEmpty).toList();
-          final batchNoCandidates = batch.where((e) => (e['candidates'] as List).isEmpty).toList();
-
-          // Process batchWithCandidates via batch call
-          Map<String, List<String>>? batchResult;
-          if (batchWithCandidates.isNotEmpty) {
-            batchResult = await _geminiBatchFilter(batchWithCandidates, _companyCorpus);
+      for (final item in items) {
+        final scId = item['sc_id'] as String? ?? '';
+        final matches = (item['matches'] as List?)?.map((e) => e.toString()).toList() ?? [];
+        final ri = updated.indexWhere((r) => r['id'] == scId);
+        if (ri < 0) continue;
+        if (matches.isEmpty) {
+          flaggedSet.add(ri);
+        } else {
+          final fill = matches.take(30).toList();
+          for (int ci = 0; ci < _companyCols.length; ci++) {
+            updated[ri][_companyCols[ci]] = ci < fill.length ? fill[ci] : null;
           }
-
-          // Apply results row by row
-          for (final entry in batch) {
-            final ri = entry['ri'] as int;
-            final raw = entry['supplier_company'] as String;
-
-            List<String>? matches;
-            if (batchNoCandidates.any((e) => e['ri'] == ri)) {
-              matches = null; // no candidates → flag
-            } else if (batchResult != null && batchResult.containsKey(raw)) {
-              matches = batchResult[raw];
-            } else {
-              // Batch parse failed for this row — single-row fallback
-              final candidates = entry['candidates'] as List<String>;
-              matches = await _geminiGroupFilter(raw, candidates);
-            }
-
-            if (mounted) {
-              setState(() {
-                if (matches == null || matches.isEmpty) {
-                  flagged++;
-                  flaggedSet.add(ri);
-                } else {
-                  final fill = matches.take(30).toList();
-                  for (int ci = 0; ci < _companyCols.length; ci++) {
-                    updated[ri][_companyCols[ci]] = ci < fill.length ? fill[ci] : null;
-                  }
-                }
-                _rows = List.from(updated); // update grid progressively
-                _aiProgress++;
-              });
-            }
-          }
-        });
-        await Future.wait(futures);
+        }
       }
 
+      setState(() {
+        _rows = updated;
+        _mapped = true;
+        _needsReview = needsReview;
+        _flaggedRows = flaggedSet;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('$matched matched${needsReview > 0 ? ' · $needsReview need review' : ''}'),
+        backgroundColor: needsReview > 0 ? const Color(0xFFD97706) : const Color(0xFF1B7A43),
+        duration: const Duration(seconds: 4),
+      ));
+    } catch (e) {
       if (mounted) {
-        setState(() {
-          _rows = updated;
-          _mapped = true;
-          _needsReview = flagged;
-          _flaggedRows = flaggedSet;
-        });
-        final matched = workItems.length - flagged;
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Matched $matched/${workItems.length}${flagged > 0 ? ' · $flagged need review' : ''}'),
-          backgroundColor: flagged > 0 ? const Color(0xFFD97706) : const Color(0xFF1B7A43),
+          content: Text('Error: $e'),
+          backgroundColor: const Color(0xFF991B1B),
           duration: const Duration(seconds: 4),
         ));
       }
     } finally {
-      if (mounted) setState(() { _mappingMode = null; _aiProgress = 0; _aiTotal = 0; });
+      if (mounted) setState(() { _mappingMode = null; _aiProgress = 0; _aiTotal = 0; _aiStage = null; });
     }
   }
 
@@ -3869,21 +3781,23 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
               ),
               const Divider(height: 1, color: Color(0xFFBFDBFE)),
               // ── AI progress bar ──────────────────────────────────────────────
-              if (_mappingMode == 'ai' && _aiTotal > 0)
+              if (_mappingMode == 'ai')
                 Padding(
                   padding: const EdgeInsets.fromLTRB(14, 8, 14, 4),
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Row(children: [
                       const Icon(Icons.auto_awesome, size: 13, color: Color(0xFF2563EB)),
                       const SizedBox(width: 6),
-                      Text('Matching $_aiProgress/$_aiTotal',
-                          style: const TextStyle(fontSize: 12, color: Color(0xFF1E40AF), fontWeight: FontWeight.w500)),
+                      Text(
+                        _aiStage == 'gemini' ? 'Verifying with Gemini…' : 'Finding candidates…',
+                        style: const TextStyle(fontSize: 12, color: Color(0xFF1E40AF), fontWeight: FontWeight.w500),
+                      ),
                     ]),
                     const SizedBox(height: 4),
                     ClipRRect(
                       borderRadius: BorderRadius.circular(4),
                       child: LinearProgressIndicator(
-                        value: _aiTotal > 0 ? _aiProgress / _aiTotal : null,
+                        value: _aiStage == 'gemini' ? 0.6 : 0.2,
                         minHeight: 5,
                         backgroundColor: const Color(0xFFBFDBFE),
                         color: const Color(0xFF2563EB),

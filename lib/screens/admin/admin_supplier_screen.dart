@@ -1578,24 +1578,38 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
 
   Future<void> _pickAndImportSupplierProfile() async {
     final input = html.FileUploadInputElement()
-      ..accept = '.csv,.tsv,.txt,.xlsx,.xls,.ods,.docx,.pdf,.jpg,.jpeg,.png,.webp,.heic,.heif,.gif';
+      ..accept = '.csv,.tsv,.txt,.xlsx,.xls,.ods,.docx,.pdf,.jpg,.jpeg,.png,.webp,.heic,.heif,.gif'
+      ..multiple = true;
     input.click();
     await input.onChange.first;
-    final file = input.files?.first;
-    if (file == null || !mounted) return;
-    final ext = file.name.toLowerCase().split('.').last;
-    final isImage = ['jpg','jpeg','png','webp','heic','heif','gif'].contains(ext);
-    if (isImage) {
+    final files = input.files;
+    if (files == null || files.isEmpty || !mounted) return;
+
+    const imageExts = {'jpg', 'jpeg', 'png', 'webp', 'heic', 'heif', 'gif'};
+    final images = files.where((f) => imageExts.contains(f.name.toLowerCase().split('.').last)).toList();
+    final nonImages = files.where((f) => !imageExts.contains(f.name.toLowerCase().split('.').last)).toList();
+
+    if (nonImages.isNotEmpty) {
+      // Non-image: use existing single-file profile import dialog (first file only)
       showDialog(
         context: context,
         barrierDismissible: false,
-        builder: (_) => _SupCardImportDialog(file: file, onImported: () { if (mounted) _load(showSpinner: false); }),
+        builder: (_) => _SupProfileImportDialog(file: nonImages.first, onImported: () { if (mounted) _load(showSpinner: false); }),
+      );
+      return;
+    }
+
+    if (images.length == 1) {
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => _SupCardImportDialog(file: images.first, onImported: () { if (mounted) _load(showSpinner: false); }),
       );
     } else {
       showDialog(
         context: context,
         barrierDismissible: false,
-        builder: (_) => _SupProfileImportDialog(file: file, onImported: () { if (mounted) _load(showSpinner: false); }),
+        builder: (_) => _SupCardMultiImportDialog(files: images, onImported: () { if (mounted) _load(showSpinner: false); }),
       );
     }
   }
@@ -4815,6 +4829,305 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
                 ),
                 child: const Text('Import', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
               ),
+            ]),
+          ),
+        ]),
+      ),
+    );
+  }
+}
+
+// ─── Multi-Image Supplier Import (OCR each → combined review → write) ───────────
+
+class _MultiExtractedSup {
+  String name;
+  String address;
+  String city;
+  String phone;
+  String whatsapp;
+  String email;
+  String code;
+  List<String> companies;
+  bool selected;
+  _MultiExtractedSup({
+    required this.name, this.address = '', this.city = '', this.phone = '',
+    this.whatsapp = '', this.email = '', this.code = '',
+    this.companies = const [], this.selected = true,
+  });
+}
+
+enum _MultiStep { processing, review, importing }
+
+class _SupCardMultiImportDialog extends StatefulWidget {
+  final List<html.File> files;
+  final VoidCallback onImported;
+  const _SupCardMultiImportDialog({required this.files, required this.onImported});
+  @override
+  State<_SupCardMultiImportDialog> createState() => _SupCardMultiImportDialogState();
+}
+
+class _SupCardMultiImportDialogState extends State<_SupCardMultiImportDialog> {
+  _MultiStep _step = _MultiStep.processing;
+  String _progressText = '';
+  String? _error;
+  final List<_MultiExtractedSup> _extracted = [];
+
+  static const _prompt =
+      'This is a pharma supplier business card or company list image.\n'
+      'Extract the following and return ONLY a JSON object (no markdown fences, no extra text):\n\n'
+      '{\n'
+      '  "supplier_name": "firm/distributor/stockist name at the top",\n'
+      '  "address": "full street address if visible",\n'
+      '  "city": "city name only",\n'
+      '  "phone": "phone/landline numbers (comma-separated if multiple)",\n'
+      '  "whatsapp": "mobile/WhatsApp numbers (comma-separated if multiple)",\n'
+      '  "email": "email address",\n'
+      '  "supplier_code": "any short code like G-1, S-02 etc",\n'
+      '  "companies": ["NAME1", "NAME2", ...]\n'
+      '}\n\n'
+      'For "companies": extract every pharma company/brand name from the bulleted/starred list.\n'
+      'CRITICAL: Strip any bracketed text — keep ONLY the company name before the bracket.\n'
+      'Examples: "ABBOTT [DIGENE, CREMAFFIN]" → "ABBOTT", "DR. REDDY\'S [ZEDEX]" → "DR. REDDY\'S".\n'
+      'Lines with no brackets: store as-is. Use empty string "" for missing scalar fields. companies=[] if none found.';
+
+  @override
+  void initState() {
+    super.initState();
+    _processAll();
+  }
+
+  String _mimeFor(String ext) => switch (ext) {
+    'jpg' || 'jpeg' => 'image/jpeg',
+    'png'           => 'image/png',
+    'webp'          => 'image/webp',
+    'heic' || 'heif'=> 'image/heic',
+    'gif'           => 'image/gif',
+    _               => 'image/jpeg',
+  };
+
+  Future<Uint8List> _readBytes(html.File f) async {
+    final r = html.FileReader(); r.readAsDataUrl(f); await r.onLoad.first;
+    return base64Decode((r.result as String).split(',').last);
+  }
+
+  Future<void> _processAll() async {
+    final total = widget.files.length;
+    for (int i = 0; i < total; i++) {
+      if (!mounted) return;
+      setState(() => _progressText = 'Processing image ${i + 1} of $total…');
+      try {
+        final f = widget.files[i];
+        final ext = f.name.toLowerCase().split('.').last;
+        final bytes = await _readBytes(f);
+        final resp = await http.post(
+          Uri.parse(_ocrEdgeFn),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'image_base64': base64Encode(bytes),
+            'mime_type': _mimeFor(ext),
+            'prompt': _prompt,
+          }),
+        ).timeout(const Duration(seconds: 60));
+        if (resp.statusCode != 200) throw Exception('OCR error on image ${i + 1} (HTTP ${resp.statusCode})');
+        final txt = (jsonDecode(resp.body) as Map<String, dynamic>)['text'] as String? ?? '';
+        final jm = RegExp(r'\{[\s\S]*\}').firstMatch(txt);
+        if (jm != null) {
+          final dec = jsonDecode(jm.group(0)!) as Map<String, dynamic>;
+          String s(String k) => (dec[k] as String? ?? '').trim();
+          final companies = (dec['companies'] as List<dynamic>? ?? [])
+              .map((e) => e.toString().trim()).where((e) => e.isNotEmpty).toList();
+          _extracted.add(_MultiExtractedSup(
+            name: s('supplier_name'), address: s('address'), city: s('city'),
+            phone: s('phone'), whatsapp: s('whatsapp'), email: s('email'),
+            code: s('supplier_code'), companies: companies,
+          ));
+        }
+      } catch (e) {
+        // Skip failed images but continue
+      }
+    }
+    if (!mounted) return;
+    if (_extracted.isEmpty) {
+      setState(() => _error = 'Could not extract any supplier data from the selected images.');
+    } else {
+      setState(() => _step = _MultiStep.review);
+    }
+  }
+
+  Future<void> _doImport() async {
+    final toImport = _extracted.where((s) => s.selected && s.name.isNotEmpty).toList();
+    if (toImport.isEmpty) {
+      showToast(context, 'No suppliers selected to import', isError: true);
+      return;
+    }
+    setState(() => _step = _MultiStep.importing);
+    try {
+      final client = Supabase.instance.client;
+      final companyRows = await client.from('company').select('company_name');
+      final corpus = (companyRows as List<dynamic>)
+          .map((r) => ((r as Map<String, dynamic>)['company_name'] as String? ?? '').trim())
+          .where((s) => s.isNotEmpty).toList();
+
+      int imported = 0;
+      for (final sup in toImport) {
+        final rec = <String, dynamic>{
+          'supplier_name': sup.name, 'status': 'Active', 'approved': true, 'is_deleted': false,
+        };
+        if (sup.address.isNotEmpty) rec['street_address'] = sup.address;
+        if (sup.city.isNotEmpty) rec['city'] = sup.city;
+        if (sup.phone.isNotEmpty) rec['contact_no'] = sup.phone;
+        if (sup.whatsapp.isNotEmpty) rec['whatsapp_no'] = sup.whatsapp;
+        if (sup.email.isNotEmpty) rec['email'] = sup.email;
+        if (sup.code.isNotEmpty) rec['supplier_code'] = sup.code;
+        final inserted = await client.from('supplier_profiles').insert(rec).select('id').single();
+        final supplierId = inserted['id'] as String;
+        if (sup.companies.isNotEmpty) {
+          final scRows = sup.companies.map((co) {
+            final top = _fzTop5(co, corpus);
+            String? n(int i) => i < top.length && top[i].isNotEmpty ? top[i] : null;
+            return <String, dynamic>{
+              'supplier_id': supplierId, 'supplier_name': sup.name, 'supplier_company': co,
+              'company_1': n(0), 'company_2': n(1), 'company_3': n(2), 'company_4': n(3), 'company_5': n(4),
+            };
+          }).toList();
+          await client.from('supplier_company').insert(scRows);
+        }
+        imported++;
+      }
+      RenderLog.write('multi_image_ocr_imported', imported.toString());
+      if (mounted) {
+        Navigator.of(context).pop();
+        widget.onImported();
+        showToast(context, 'Imported $imported supplier${imported == 1 ? '' : 's'} from ${widget.files.length} image${widget.files.length == 1 ? '' : 's'}', duration: const Duration(seconds: 5));
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _step = _MultiStep.review);
+        showToast(context, 'Import failed: ${e.toString().replaceFirst('Exception: ', '')}', isError: true);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_error != null) {
+      return Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 400),
+          child: Padding(padding: const EdgeInsets.all(24), child: Column(mainAxisSize: MainAxisSize.min, children: [
+            const Icon(Icons.error_outline, color: Color(0xFFDC2626), size: 32),
+            const SizedBox(height: 12),
+            Text(_error!, textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 14, color: Color(0xFF374151))),
+            const SizedBox(height: 16),
+            TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Close')),
+          ]))),
+      );
+    }
+
+    if (_step == _MultiStep.processing || _step == _MultiStep.importing) {
+      return Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 360),
+          child: Padding(padding: const EdgeInsets.all(32), child: Column(mainAxisSize: MainAxisSize.min, children: [
+            const CircularProgressIndicator(color: Color(0xFF1B7A43), strokeWidth: 2),
+            const SizedBox(height: 16),
+            Text(
+              _step == _MultiStep.processing ? _progressText : 'Importing suppliers…',
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 14, color: Color(0xFF6B7280)),
+            ),
+          ]))),
+      );
+    }
+
+    // Review step
+    final selected = _extracted.where((s) => s.selected && s.name.isNotEmpty).length;
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: 600, maxHeight: MediaQuery.of(context).size.height * 0.85),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 20, 16, 0),
+            child: Row(children: [
+              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Text('Review Extracted Suppliers',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+                const SizedBox(height: 2),
+                Text('${widget.files.length} image${widget.files.length == 1 ? '' : 's'} · ${_extracted.length} supplier${_extracted.length == 1 ? '' : 's'} found',
+                    style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+              ])),
+              IconButton(icon: const Icon(Icons.close, size: 20), onPressed: () => Navigator.of(context).pop(),
+                  padding: EdgeInsets.zero, constraints: const BoxConstraints()),
+            ]),
+          ),
+          const SizedBox(height: 12),
+          const Divider(height: 1, color: Color(0xFFE5E7EB)),
+          Flexible(child: ListView.separated(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            itemCount: _extracted.length,
+            separatorBuilder: (_, __) => const SizedBox(height: 8),
+            itemBuilder: (_, i) {
+              final sup = _extracted[i];
+              return Container(
+                decoration: BoxDecoration(
+                  color: sup.selected ? const Color(0xFFF0FDF4) : const Color(0xFFF9FAFB),
+                  border: Border.all(color: sup.selected ? const Color(0xFF1B7A43) : const Color(0xFFE5E7EB)),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: CheckboxListTile(
+                  value: sup.selected,
+                  onChanged: (v) => setState(() => sup.selected = v ?? false),
+                  activeColor: const Color(0xFF1B7A43),
+                  controlAffinity: ListTileControlAffinity.leading,
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                  title: Text(
+                    sup.name.isNotEmpty ? sup.name : '(No name extracted)',
+                    style: TextStyle(
+                      fontSize: 14, fontWeight: FontWeight.w600,
+                      color: sup.name.isNotEmpty ? const Color(0xFF111827) : const Color(0xFF9CA3AF),
+                    ),
+                  ),
+                  subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    if (sup.city.isNotEmpty || sup.phone.isNotEmpty)
+                      Text(
+                        [if (sup.city.isNotEmpty) sup.city, if (sup.phone.isNotEmpty) sup.phone].join(' · '),
+                        style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+                      ),
+                    if (sup.companies.isNotEmpty)
+                      Text(
+                        '${sup.companies.length} compan${sup.companies.length == 1 ? 'y' : 'ies'}: ${sup.companies.take(3).join(', ')}${sup.companies.length > 3 ? '…' : ''}',
+                        style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+                      ),
+                  ]),
+                ),
+              );
+            },
+          )),
+          const Divider(height: 1, color: Color(0xFFE5E7EB)),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+            child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+              Text('$selected of ${_extracted.length} selected',
+                  style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+              Row(children: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('Cancel', style: TextStyle(color: Color(0xFF6B7280))),
+                ),
+                const SizedBox(width: 8),
+                FilledButton(
+                  onPressed: selected > 0 ? _doImport : null,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFF1B7A43),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                  ),
+                  child: Text('Import $selected', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                ),
+              ]),
             ]),
           ),
         ]),

@@ -3527,6 +3527,10 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
         if (ri < 0) continue;
         if (matches.isEmpty) {
           flaggedSet.add(ri);
+          // Clear any stale chips so the grid shows empty for this row
+          for (int ci = 0; ci < _companyCols.length; ci++) {
+            updated[ri][_companyCols[ci]] = null;
+          }
         } else {
           final fill = matches.take(30).toList();
           for (int ci = 0; ci < _companyCols.length; ci++) {
@@ -3798,7 +3802,7 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                       // Data cells
                       for (int ri = 0; ri < _rows.length; ri++) ...[
                         SizedBox(
-                          height: 44,
+                          height: _flaggedRows.contains(ri) ? 56.0 : 44.0,
                           child: ColoredBox(
                             color: _flaggedRows.contains(ri) ? const Color(0xFFFFFBEB) : Colors.transparent,
                             child: Padding(
@@ -3808,11 +3812,30 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                                   const Icon(Icons.flag, size: 11, color: Color(0xFFF59E0B)),
                                   const SizedBox(width: 4),
                                 ],
-                                Expanded(child: Text(
-                                  _rows[ri]['supplier_company'] as String? ?? '—',
-                                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
-                                  maxLines: 1, overflow: TextOverflow.ellipsis,
-                                )),
+                                Expanded(
+                                  child: _flaggedRows.contains(ri)
+                                    ? Column(
+                                        mainAxisAlignment: MainAxisAlignment.center,
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            _rows[ri]['supplier_company'] as String? ?? '—',
+                                            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
+                                            maxLines: 1, overflow: TextOverflow.ellipsis,
+                                          ),
+                                          const Text(
+                                            'No match in catalog — map manually',
+                                            style: TextStyle(fontSize: 10, color: Color(0xFFD97706), fontStyle: FontStyle.italic),
+                                            maxLines: 1, overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ],
+                                      )
+                                    : Text(
+                                        _rows[ri]['supplier_company'] as String? ?? '—',
+                                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
+                                        maxLines: 1, overflow: TextOverflow.ellipsis,
+                                      ),
+                                ),
                               ]),
                             ),
                           ),
@@ -3842,10 +3865,10 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                         ]),
                       ),
                       const Divider(height: 1, color: Color(0xFFDBEAFE)),
-                      // Data rows — same 44px height, aligned with frozen pane
+                      // Data rows — height matches frozen pane (56px for flagged, 44px otherwise)
                       for (int ri = 0; ri < _rows.length; ri++) ...[
                         SizedBox(
-                          height: 44,
+                          height: _flaggedRows.contains(ri) ? 56.0 : 44.0,
                           child: Row(children: [
                             for (final col in _companyCols) ...[
                               const SizedBox(width: 4),

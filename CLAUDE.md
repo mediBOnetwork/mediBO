@@ -125,3 +125,6 @@ After EVERY UI deploy, verify with render-log:
 
 If count = 0 → widget did NOT render → keep fixing.
 This rule overrides everything else.
+
+## GEMINI RULE (ABSOLUTE)
+Every AI/OCR feature uses ONLY gemini-3.5-flash on Vertex AI global endpoint (aiplatform.googleapis.com, locations/global, thinkingLevel='low', GCP_SA_KEY auth). NEVER gemini-2.5/2.0/1.5, NEVER generativelanguage.googleapis.com, NEVER API-key auth. Before writing any Gemini code, copy the exact pattern from the gemini-ocr edge function.

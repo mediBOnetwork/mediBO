@@ -4481,6 +4481,18 @@ List<String> _fzTop5(String raw, List<String> corpus) {
   return s2.take(5).map((p) => p.$1).toList();
 }
 
+// ─── Official-name record for company extraction ─────────────────────────────
+
+class _OfficialCompany {
+  final String visibleName;
+  final String confidence;
+  final TextEditingController ctrl;
+  _OfficialCompany({required this.visibleName, required String officialName, required this.confidence})
+      : ctrl = TextEditingController(text: officialName.isNotEmpty ? officialName : visibleName);
+  String get officialName => ctrl.text.trim();
+  void dispose() => ctrl.dispose();
+}
+
 // ─── Supplier Card Image Import (OCR → review → write) ───────────────────────
 
 enum _SupCardStep { reading, review, importing }
@@ -4507,7 +4519,7 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
   final _codeCtrl    = TextEditingController();
 
   // Editable company list
-  List<TextEditingController> _compCtrls = [];
+  List<_OfficialCompany> _companies = [];
   final _newCompCtrl = TextEditingController();
 
   @override
@@ -4516,7 +4528,7 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
   @override
   void dispose() {
     for (final c in [_nameCtrl,_addrCtrl,_cityCtrl,_phoneCtrl,_waCtrl,_emailCtrl,_codeCtrl,_newCompCtrl]) c.dispose();
-    for (final c in _compCtrls) c.dispose();
+    for (final c in _companies) c.dispose();
     super.dispose();
   }
 
@@ -4550,12 +4562,15 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
           '  "whatsapp": "mobile/WhatsApp numbers (comma-separated if multiple)",\n'
           '  "email": "email address",\n'
           '  "supplier_code": "any short code like G-1, S-02 etc",\n'
-          '  "companies": ["NAME1", "NAME2", ...]\n'
+          '  "companies": [{"visible_name":"text or logo seen","official_name":"Full Official Registered Indian Company Name Ltd.","confidence":"high|medium|low"}]\n'
           '}\n\n'
-          'For "companies": extract every pharma company/brand name from the bulleted/starred list.\n'
-          'CRITICAL: Strip any bracketed text — keep ONLY the company name before the bracket.\n'
-          'Examples: "ABBOTT [DIGENE, CREMAFFIN]" → "ABBOTT", "DR. REDDY\'S [ZEDEX]" → "DR. REDDY\'S".\n'
-          'Lines with no brackets: store as-is. Use empty string "" for missing scalar fields. companies=[] if none found.';
+          'For "companies": include every pharma company/brand/logo visible.\n'
+          '  visible_name = exactly what text or abbreviation appears (strip brackets: "ABBOTT [DIGENE]" → "ABBOTT").\n'
+          '  official_name = full official registered Indian company name '
+          '(e.g. BSV→Bharat Serums and Vaccines Ltd., Zydus Cadila→Zydus Lifesciences Ltd., '
+          'Sun→Sun Pharmaceutical Industries Ltd., Unique→J.B. Chemicals & Pharmaceuticals Ltd.).\n'
+          '  confidence = high if certain, medium if likely, low if guessing.\n'
+          'Use empty string "" for missing scalar fields. companies=[] if none found.';
       final resp = await http.post(
         Uri.parse(_ocrEdgeFn),
         headers: {'Content-Type': 'application/json'},
@@ -4571,10 +4586,17 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
       if (jm == null) throw Exception('Could not parse OCR response');
       final dec = jsonDecode(jm.group(0)!) as Map<String, dynamic>;
       String s(String k) => (dec[k] as String? ?? '').trim();
-      final companies = (dec['companies'] as List<dynamic>? ?? [])
-          .map((e) => e.toString().trim())
-          .where((e) => e.isNotEmpty)
-          .toList();
+      final rawCompanies = dec['companies'] as List<dynamic>? ?? [];
+      final companies = rawCompanies.map((e) {
+        if (e is Map<String, dynamic>) {
+          final v = (e['visible_name'] as String? ?? '').trim();
+          final o = (e['official_name'] as String? ?? '').trim();
+          final conf = (e['confidence'] as String? ?? 'medium').trim();
+          return _OfficialCompany(visibleName: v, officialName: o.isNotEmpty ? o : v, confidence: conf);
+        }
+        final raw = e.toString().trim();
+        return _OfficialCompany(visibleName: raw, officialName: raw, confidence: 'medium');
+      }).where((c) => c.visibleName.isNotEmpty || c.officialName.isNotEmpty).toList();
       if (mounted) setState(() {
         _nameCtrl.text  = s('supplier_name');
         _addrCtrl.text  = s('address');
@@ -4583,7 +4605,7 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
         _waCtrl.text    = s('whatsapp');
         _emailCtrl.text = s('email');
         _codeCtrl.text  = s('supplier_code');
-        _compCtrls = companies.map((c) => TextEditingController(text: c)).toList();
+        _companies = companies;
         _step = _SupCardStep.review;
       });
     } catch (e) {
@@ -4626,20 +4648,36 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
           .toList();
 
       // 3. Insert supplier_company rows with fuzzy-matched company_1..5
-      final companies = _compCtrls.map((c) => c.text.trim()).where((s) => s.isNotEmpty).toList();
+      final companies = _companies.where((c) => c.officialName.isNotEmpty).toList();
       if (companies.isNotEmpty) {
-        final rows = companies.map((co) {
-          final top = _fzTop5(co, corpus);
+        final scRows = companies.map((co) {
+          final top = _fzTop5(co.officialName, corpus);
           String? n(int i) => i < top.length && top[i].isNotEmpty ? top[i] : null;
           return <String, dynamic>{
             'supplier_id': supplierId,
             'supplier_name': name,
-            'supplier_company': co,
+            'supplier_company': co.officialName,
             'company_1': n(0), 'company_2': n(1), 'company_3': n(2),
             'company_4': n(3), 'company_5': n(4),
           };
         }).toList();
-        await client.from('supplier_company').insert(rows);
+        await client.from('supplier_company').insert(scRows);
+
+        // Upsert official names into company master + save visible aliases
+        for (final co in companies) {
+          try {
+            await client.from('company')
+                .upsert({'company_name': co.officialName}, onConflict: 'company_name');
+          } catch (_) {}
+          final alias = co.visibleName.trim();
+          final diffFromOfficial = alias.toLowerCase() != co.officialName.toLowerCase();
+          if (alias.isNotEmpty && diffFromOfficial) {
+            try {
+              await client.from('company_aliases')
+                  .insert({'official_name': co.officialName, 'alias': alias});
+            } catch (_) {} // skip duplicate aliases
+          }
+        }
       }
 
       if (mounted) {
@@ -4761,42 +4799,62 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
               Row(children: [
                 const Expanded(child: Text('COMPANY LIST', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700,
                     color: Color(0xFF6B7280), letterSpacing: 0.5))),
-                Text('${_compCtrls.length} compan${_compCtrls.length == 1 ? 'y' : 'ies'}',
+                Text('${_companies.length} compan${_companies.length == 1 ? 'y' : 'ies'}',
                     style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
               ]),
               const SizedBox(height: 10),
-              if (_compCtrls.isEmpty)
+              if (_companies.isEmpty)
                 const Padding(
                   padding: EdgeInsets.only(bottom: 8),
                   child: Text('No companies extracted. Add manually below.',
                       style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
                 ),
-              ...List.generate(_compCtrls.length, (i) => Padding(
-                padding: const EdgeInsets.only(bottom: 6),
-                child: Row(children: [
-                  Expanded(child: TextField(
-                    controller: _compCtrls[i],
-                    style: const TextStyle(fontSize: 13, color: Color(0xFF111827)),
-                    decoration: InputDecoration(
-                      filled: true, fillColor: const Color(0xFFF5F6F8),
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
-                          borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
-                      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
-                          borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
-                      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
-                          borderSide: const BorderSide(color: Color(0xFF1B7A43), width: 1.5)),
+              ...List.generate(_companies.length, (i) {
+                final co = _companies[i];
+                final isLow = co.confidence == 'low';
+                final showSub = co.visibleName.isNotEmpty &&
+                    co.visibleName.toLowerCase() != co.officialName.toLowerCase();
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+                    if (isLow) ...[
+                      const Tooltip(
+                        message: 'Low confidence — verify official name',
+                        child: Icon(Icons.circle, size: 8, color: Color(0xFFF59E0B)),
+                      ),
+                      const SizedBox(width: 6),
+                    ],
+                    Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      TextField(
+                        controller: co.ctrl,
+                        style: const TextStyle(fontSize: 13, color: Color(0xFF111827)),
+                        decoration: InputDecoration(
+                          filled: true, fillColor: const Color(0xFFF5F6F8),
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                              borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+                          enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                              borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+                          focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                              borderSide: const BorderSide(color: Color(0xFF1B7A43), width: 1.5)),
+                        ),
+                      ),
+                      if (showSub) Padding(
+                        padding: const EdgeInsets.only(top: 2, left: 2),
+                        child: Text('seen: ${co.visibleName}',
+                            style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
+                      ),
+                    ])),
+                    const SizedBox(width: 6),
+                    IconButton(
+                      icon: const Icon(Icons.remove_circle_outline, size: 18, color: Color(0xFFDC2626)),
+                      onPressed: () => setState(() { _companies[i].dispose(); _companies.removeAt(i); }),
+                      padding: EdgeInsets.zero, constraints: const BoxConstraints(),
+                      visualDensity: VisualDensity.compact,
                     ),
-                  )),
-                  const SizedBox(width: 6),
-                  IconButton(
-                    icon: const Icon(Icons.remove_circle_outline, size: 18, color: Color(0xFFDC2626)),
-                    onPressed: () => setState(() { _compCtrls[i].dispose(); _compCtrls.removeAt(i); }),
-                    padding: EdgeInsets.zero, constraints: const BoxConstraints(),
-                    visualDensity: VisualDensity.compact,
-                  ),
-                ]),
-              )),
+                  ]),
+                );
+              }),
               const SizedBox(height: 6),
               // Add company row
               Row(children: [
@@ -4817,7 +4875,10 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
                   ),
                   onSubmitted: (v) {
                     final s = v.trim();
-                    if (s.isNotEmpty) setState(() { _compCtrls.add(TextEditingController(text: s)); _newCompCtrl.clear(); });
+                    if (s.isNotEmpty) setState(() {
+                      _companies.add(_OfficialCompany(visibleName: s, officialName: s, confidence: 'high'));
+                      _newCompCtrl.clear();
+                    });
                   },
                 )),
                 const SizedBox(width: 6),
@@ -4825,7 +4886,10 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
                   icon: const Icon(Icons.add_circle_outline, size: 20, color: Color(0xFF1B7A43)),
                   onPressed: () {
                     final s = _newCompCtrl.text.trim();
-                    if (s.isNotEmpty) setState(() { _compCtrls.add(TextEditingController(text: s)); _newCompCtrl.clear(); });
+                    if (s.isNotEmpty) setState(() {
+                      _companies.add(_OfficialCompany(visibleName: s, officialName: s, confidence: 'high'));
+                      _newCompCtrl.clear();
+                    });
                   },
                   padding: EdgeInsets.zero, constraints: const BoxConstraints(),
                 ),
@@ -4870,7 +4934,7 @@ class _MultiExtractedSup {
   String whatsapp;
   String email;
   String code;
-  List<String> companies;
+  List<({String visibleName, String officialName, String confidence})> companies;
   bool selected;
   _MultiExtractedSup({
     required this.name, this.address = '', this.city = '', this.phone = '',
@@ -4906,12 +4970,15 @@ class _SupCardMultiImportDialogState extends State<_SupCardMultiImportDialog> {
       '  "whatsapp": "mobile/WhatsApp numbers (comma-separated if multiple)",\n'
       '  "email": "email address",\n'
       '  "supplier_code": "any short code like G-1, S-02 etc",\n'
-      '  "companies": ["NAME1", "NAME2", ...]\n'
+      '  "companies": [{"visible_name":"text or logo seen","official_name":"Full Official Registered Indian Company Name Ltd.","confidence":"high|medium|low"}]\n'
       '}\n\n'
-      'For "companies": extract every pharma company/brand name from the bulleted/starred list.\n'
-      'CRITICAL: Strip any bracketed text — keep ONLY the company name before the bracket.\n'
-      'Examples: "ABBOTT [DIGENE, CREMAFFIN]" → "ABBOTT", "DR. REDDY\'S [ZEDEX]" → "DR. REDDY\'S".\n'
-      'Lines with no brackets: store as-is. Use empty string "" for missing scalar fields. companies=[] if none found.';
+      'For "companies": include every pharma company/brand/logo visible.\n'
+      '  visible_name = exactly what text or abbreviation appears (strip brackets: "ABBOTT [DIGENE]" → "ABBOTT").\n'
+      '  official_name = full official registered Indian company name '
+      '(e.g. BSV→Bharat Serums and Vaccines Ltd., Zydus Cadila→Zydus Lifesciences Ltd., '
+      'Sun→Sun Pharmaceutical Industries Ltd., Unique→J.B. Chemicals & Pharmaceuticals Ltd.).\n'
+      '  confidence = high if certain, medium if likely, low if guessing.\n'
+      'Use empty string "" for missing scalar fields. companies=[] if none found.';
 
   @override
   void initState() {
@@ -4956,13 +5023,22 @@ class _SupCardMultiImportDialogState extends State<_SupCardMultiImportDialog> {
         final jm = RegExp(r'\{[\s\S]*\}').firstMatch(txt);
         if (jm != null) {
           final dec = jsonDecode(jm.group(0)!) as Map<String, dynamic>;
-          String s(String k) => (dec[k] as String? ?? '').trim();
-          final companies = (dec['companies'] as List<dynamic>? ?? [])
-              .map((e) => e.toString().trim()).where((e) => e.isNotEmpty).toList();
+          String sv(String k) => (dec[k] as String? ?? '').trim();
+          final rawCos = dec['companies'] as List<dynamic>? ?? [];
+          final companies = rawCos.map((e) {
+            if (e is Map<String, dynamic>) {
+              final v = (e['visible_name'] as String? ?? '').trim();
+              final o = (e['official_name'] as String? ?? '').trim();
+              final conf = (e['confidence'] as String? ?? 'medium').trim();
+              return (visibleName: v, officialName: o.isNotEmpty ? o : v, confidence: conf);
+            }
+            final raw = e.toString().trim();
+            return (visibleName: raw, officialName: raw, confidence: 'medium');
+          }).where((c) => c.visibleName.isNotEmpty || c.officialName.isNotEmpty).toList();
           _extracted.add(_MultiExtractedSup(
-            name: s('supplier_name'), address: s('address'), city: s('city'),
-            phone: s('phone'), whatsapp: s('whatsapp'), email: s('email'),
-            code: s('supplier_code'), companies: companies,
+            name: sv('supplier_name'), address: sv('address'), city: sv('city'),
+            phone: sv('phone'), whatsapp: sv('whatsapp'), email: sv('email'),
+            code: sv('supplier_code'), companies: companies,
           ));
         }
       } catch (e) {
@@ -5006,14 +5082,30 @@ class _SupCardMultiImportDialogState extends State<_SupCardMultiImportDialog> {
         final supplierId = inserted['id'] as String;
         if (sup.companies.isNotEmpty) {
           final scRows = sup.companies.map((co) {
-            final top = _fzTop5(co, corpus);
+            final top = _fzTop5(co.officialName, corpus);
             String? n(int i) => i < top.length && top[i].isNotEmpty ? top[i] : null;
             return <String, dynamic>{
-              'supplier_id': supplierId, 'supplier_name': sup.name, 'supplier_company': co,
+              'supplier_id': supplierId, 'supplier_name': sup.name, 'supplier_company': co.officialName,
               'company_1': n(0), 'company_2': n(1), 'company_3': n(2), 'company_4': n(3), 'company_5': n(4),
             };
           }).toList();
           await client.from('supplier_company').insert(scRows);
+          // Upsert official names into company master + save visible aliases
+          for (final co in sup.companies) {
+            if (co.officialName.isNotEmpty) {
+              try {
+                await client.from('company')
+                    .upsert({'company_name': co.officialName}, onConflict: 'company_name');
+              } catch (_) {}
+              final alias = co.visibleName.trim();
+              if (alias.isNotEmpty && alias.toLowerCase() != co.officialName.toLowerCase()) {
+                try {
+                  await client.from('company_aliases')
+                      .insert({'official_name': co.officialName, 'alias': alias});
+                } catch (_) {}
+              }
+            }
+          }
         }
         imported++;
       }
@@ -5121,7 +5213,7 @@ class _SupCardMultiImportDialogState extends State<_SupCardMultiImportDialog> {
                       ),
                     if (sup.companies.isNotEmpty)
                       Text(
-                        '${sup.companies.length} compan${sup.companies.length == 1 ? 'y' : 'ies'}: ${sup.companies.take(3).join(', ')}${sup.companies.length > 3 ? '…' : ''}',
+                        '${sup.companies.length} compan${sup.companies.length == 1 ? 'y' : 'ies'}: ${sup.companies.take(3).map((c) => c.officialName).join(', ')}${sup.companies.length > 3 ? '…' : ''}',
                         style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
                       ),
                   ]),

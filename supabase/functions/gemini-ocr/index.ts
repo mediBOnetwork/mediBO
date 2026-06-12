@@ -5,8 +5,7 @@ const cors = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-const MODEL = 'gemini-2.5-flash'
-const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`
+const MODEL = 'gemini-3.5-flash'
 
 // Company-list prompt: identifies logos and returns official registered Indian company names.
 const COMPANY_LIST_PROMPT =
@@ -19,12 +18,72 @@ const COMPANY_LIST_PROMPT =
   'If the logo cannot be confidently identified, set official_name = visible_name and confidence = low. ' +
   'Never skip a cell.'
 
+// Generate a GCP access token from a service account JSON key.
+async function getAccessToken(saJson: string): Promise<string> {
+  const sa = JSON.parse(saJson) as Record<string, string>
+  const now = Math.floor(Date.now() / 1000)
+
+  const encodeB64url = (data: string) =>
+    btoa(data).replace(/=+$/, '').replace(/\+/g, '-').replace(/\//g, '_')
+
+  const header = encodeB64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }))
+  const payload = encodeB64url(JSON.stringify({
+    iss: sa.client_email,
+    scope: 'https://www.googleapis.com/auth/cloud-platform',
+    aud: 'https://oauth2.googleapis.com/token',
+    iat: now,
+    exp: now + 3600,
+  }))
+
+  const sigInput = `${header}.${payload}`
+  const keyPem = sa.private_key
+    .replace('-----BEGIN PRIVATE KEY-----', '')
+    .replace('-----END PRIVATE KEY-----', '')
+    .replace(/\s/g, '')
+  const keyBytes = Uint8Array.from(atob(keyPem), (c) => c.charCodeAt(0))
+
+  const privateKey = await crypto.subtle.importKey(
+    'pkcs8',
+    keyBytes,
+    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  )
+
+  const sig = await crypto.subtle.sign(
+    'RSASSA-PKCS1-v1_5',
+    privateKey,
+    new TextEncoder().encode(sigInput),
+  )
+  const sigB64 = btoa(String.fromCharCode(...new Uint8Array(sig)))
+    .replace(/=+$/, '').replace(/\+/g, '-').replace(/\//g, '_')
+
+  const jwt = `${sigInput}.${sigB64}`
+
+  const tokenResp = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+      assertion: jwt,
+    }),
+  })
+  if (!tokenResp.ok) throw new Error(`Token exchange failed: ${await tokenResp.text()}`)
+  const td = await tokenResp.json() as { access_token?: string }
+  if (!td.access_token) throw new Error('No access_token in response')
+  return td.access_token
+}
+
 serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors })
 
   try {
-    const apiKey = Deno.env.get('GEMINI_API_KEY')
-    if (!apiKey) throw new Error('GEMINI_API_KEY not set')
+    const saJson = Deno.env.get('GCP_SA_KEY')
+    if (!saJson) throw new Error('GCP_SA_KEY secret not set')
+
+    const sa = JSON.parse(saJson) as Record<string, string>
+    const projectId = sa.project_id
+    if (!projectId) throw new Error('project_id missing from GCP_SA_KEY')
 
     const body = await req.json() as {
       image_base64?: string
@@ -42,28 +101,38 @@ serve(async (req: Request) => {
       })
     }
 
+    const accessToken = await getAccessToken(saJson)
+
+    const endpoint =
+      `https://aiplatform.googleapis.com/v1/projects/${projectId}/locations/global` +
+      `/publishers/google/models/${MODEL}:generateContent`
+
     const parts: unknown[] = []
     if (image_base64) {
-      parts.push({ inline_data: { mime_type, data: image_base64 } })
+      parts.push({ inlineData: { mimeType: mime_type, data: image_base64 } })
     }
     parts.push({ text: prompt })
 
     const payload = {
-      contents: [{ parts }],
+      contents: [{ role: 'user', parts }],
       generationConfig: {
-        thinkingConfig: { thinkingBudget: 1024 },
+        temperature: 0,
+        thinkingConfig: { thinkingLevel: 'low' },
       },
     }
 
-    const res = await fetch(`${API_URL}?key=${apiKey}`, {
+    const res = await fetch(endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${accessToken}`,
+      },
       body: JSON.stringify(payload),
     })
 
     if (!res.ok) {
       const errText = await res.text()
-      throw new Error(`Gemini API error ${res.status}: ${errText}`)
+      throw new Error(`Vertex AI error ${res.status}: ${errText}`)
     }
 
     const data = await res.json() as {

@@ -4491,14 +4491,12 @@ String? _fzBestMatch(String raw, List<String> corpus) {
 // ─── Resolved-company record for supplier card import ────────────────────────
 
 class _ResolvedCompany {
-  final String seen;       // verbatim OCR text
+  final String seen;       // verbatim OCR text — never modified by code
   final String confidence; // high/medium/low from OCR
-  String? matched;         // canonical name from company table (null = new)
   final TextEditingController ctrl;
-  _ResolvedCompany({required this.seen, required this.confidence, this.matched})
-      : ctrl = TextEditingController(text: matched ?? seen);
+  _ResolvedCompany({required this.seen, required this.confidence})
+      : ctrl = TextEditingController(text: seen);
   String get canonical => ctrl.text.trim();
-  bool get isNew => matched == null;
   void dispose() => ctrl.dispose();
 }
 
@@ -4597,12 +4595,7 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
       final dec = jsonDecode(jm.group(0)!) as Map<String, dynamic>;
       String s(String k) => (dec[k] as String? ?? '').trim();
       final rawCompanies = dec['companies'] as List<dynamic>? ?? [];
-      // Fetch company corpus for resolution
-      final client = Supabase.instance.client;
-      final companyRows = await client.from('company').select('company_name');
-      final corpus = (companyRows as List<dynamic>)
-          .map((r) => ((r as Map<String, dynamic>)['company_name'] as String? ?? '').trim())
-          .where((s) => s.isNotEmpty).toList();
+      // Build company list from verbatim OCR — no resolution, no lookup
       final companies = rawCompanies.map((e) {
         String seen, conf;
         if (e is Map<String, dynamic>) {
@@ -4613,8 +4606,7 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
           conf = 'medium';
         }
         if (seen.isEmpty) return null;
-        final matched = _fzBestMatch(seen, corpus);
-        return _ResolvedCompany(seen: seen, confidence: conf, matched: matched);
+        return _ResolvedCompany(seen: seen, confidence: conf);
       }).whereType<_ResolvedCompany>().toList();
       if (mounted) setState(() {
         _nameCtrl.text  = s('supplier_name');
@@ -4659,40 +4651,20 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
       final inserted = await client.from('supplier_profiles').insert(rec).select('id').single();
       final supplierId = inserted['id'] as String;
 
-      // 2. Fetch company master for fuzzy matching (once)
-      final companyRows = await client.from('company').select('company_name');
-      final corpus = (companyRows as List<dynamic>)
-          .map((r) => ((r as Map<String, dynamic>)['company_name'] as String? ?? '').trim())
-          .where((s) => s.isNotEmpty)
-          .toList();
-
-      // 3. Insert supplier_company rows with fuzzy-matched company_1..5
+      // 2. Insert supplier_company rows — store verbatim seen text, no resolution
       final companies = _companies.where((c) => c.canonical.isNotEmpty).toList();
       if (companies.isNotEmpty) {
-        // Upsert new company names verbatim (ON CONFLICT DO NOTHING via upsert)
+        // Upsert company names verbatim into master (ON CONFLICT DO NOTHING)
         for (final co in companies) {
-          if (co.isNew) {
-            try {
-              await client.from('company')
-                  .upsert({'company_name': co.canonical}, onConflict: 'company_name');
-            } catch (_) {}
-          }
+          try {
+            await client.from('company')
+                .upsert({'company_name': co.canonical}, onConflict: 'company_name');
+          } catch (_) {}
         }
-        // Rebuild corpus after potential inserts
-        final updatedRows = await client.from('company').select('company_name');
-        final updatedCorpus = (updatedRows as List<dynamic>)
-            .map((r) => ((r as Map<String, dynamic>)['company_name'] as String? ?? '').trim())
-            .where((s) => s.isNotEmpty).toList();
-        final scRows = companies.map((co) {
-          final top = _fzTop5(co.canonical, updatedCorpus);
-          String? n(int i) => i < top.length && top[i].isNotEmpty ? top[i] : null;
-          return <String, dynamic>{
-            'supplier_id': supplierId,
-            'supplier_name': name,
-            'supplier_company': co.canonical,
-            'company_1': n(0), 'company_2': n(1), 'company_3': n(2),
-            'company_4': n(3), 'company_5': n(4),
-          };
+        final scRows = companies.map((co) => <String, dynamic>{
+          'supplier_id': supplierId,
+          'supplier_name': name,
+          'supplier_company': co.canonical,
         }).toList();
         await client.from('supplier_company').insert(scRows);
       }
@@ -4828,33 +4800,17 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
                 ),
               ...List.generate(_companies.length, (i) {
                 final co = _companies[i];
-                final isLow = co.confidence == 'low';
                 return Padding(
                   padding: const EdgeInsets.only(bottom: 8),
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    // Top row: number + seen pill (right) + remove button
+                    // Top row: number (left) · seen pill (far right) · remove button
                     Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
                       Text('${i + 1}.', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: Color(0xFF9CA3AF))),
-                      const SizedBox(width: 6),
-                      if (co.isNew)
-                        Tooltip(
-                          message: 'New company — will be added to master list',
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                            decoration: BoxDecoration(color: const Color(0xFFDCFCE7), borderRadius: BorderRadius.circular(12)),
-                            child: const Text('NEW', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: Color(0xFF166534))),
-                          ),
-                        )
-                      else if (isLow)
-                        const Tooltip(
-                          message: 'Low confidence OCR — verify name',
-                          child: Icon(Icons.circle, size: 7, color: Color(0xFFF59E0B)),
-                        ),
                       const Spacer(),
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                        decoration: BoxDecoration(color: const Color(0xFFE8F0FE), borderRadius: BorderRadius.circular(16)),
-                        child: Text('seen: ${co.seen}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: Color(0xFF1A4480))),
+                        decoration: BoxDecoration(color: const Color(0xFFE6F4EA), borderRadius: BorderRadius.circular(16)),
+                        child: Text('Seen - ${co.seen}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: Color(0xFF1B7F3B))),
                       ),
                       const SizedBox(width: 4),
                       IconButton(
@@ -4865,7 +4821,7 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
                       ),
                     ]),
                     const SizedBox(height: 4),
-                    // Editable resolved name field
+                    // Editable name field — pre-filled with verbatim seen text
                     TextField(
                       controller: co.ctrl,
                       style: const TextStyle(fontSize: 13, color: Color(0xFF111827)),
@@ -5054,7 +5010,7 @@ class _SupCardMultiImportDialogState extends State<_SupCardMultiImportDialog> {
           final dec = jsonDecode(jm.group(0)!) as Map<String, dynamic>;
           String sv(String k) => (dec[k] as String? ?? '').trim();
           final rawCos = dec['companies'] as List<dynamic>? ?? [];
-          // Store seen + confidence for now; resolve against corpus after all images done
+          // Store verbatim seen text — no resolution against corpus
           final companies = rawCos.map((e) {
             String seen, conf;
             if (e is Map<String, dynamic>) {
@@ -5082,20 +5038,6 @@ class _SupCardMultiImportDialogState extends State<_SupCardMultiImportDialog> {
       setState(() => _error = 'Could not extract any supplier data from the selected images.');
       return;
     }
-    // Resolve all seen company strings against the company master
-    try {
-      setState(() => _progressText = 'Resolving company names…');
-      final client = Supabase.instance.client;
-      final companyRows = await client.from('company').select('company_name');
-      final corpus = (companyRows as List<dynamic>)
-          .map((r) => ((r as Map<String, dynamic>)['company_name'] as String? ?? '').trim())
-          .where((s) => s.isNotEmpty).toList();
-      for (final sup in _extracted) {
-        sup.companies = sup.companies.map((c) =>
-            (seen: c.seen, confidence: c.confidence, matched: _fzBestMatch(c.seen, corpus))
-        ).toList();
-      }
-    } catch (_) {}
     setState(() => _step = _MultiStep.review);
   }
 
@@ -5108,11 +5050,6 @@ class _SupCardMultiImportDialogState extends State<_SupCardMultiImportDialog> {
     setState(() => _step = _MultiStep.importing);
     try {
       final client = Supabase.instance.client;
-      final companyRows = await client.from('company').select('company_name');
-      final corpus = (companyRows as List<dynamic>)
-          .map((r) => ((r as Map<String, dynamic>)['company_name'] as String? ?? '').trim())
-          .where((s) => s.isNotEmpty).toList();
-
       int imported = 0;
       for (final sup in toImport) {
         final rec = <String, dynamic>{
@@ -5127,25 +5064,20 @@ class _SupCardMultiImportDialogState extends State<_SupCardMultiImportDialog> {
         final inserted = await client.from('supplier_profiles').insert(rec).select('id').single();
         final supplierId = inserted['id'] as String;
         if (sup.companies.isNotEmpty) {
-          // Upsert new company names verbatim
+          // Upsert verbatim names into company master
           for (final co in sup.companies) {
-            final canonical = co.matched ?? co.seen;
-            if (canonical.isNotEmpty && co.matched == null) {
+            if (co.seen.isNotEmpty) {
               try {
                 await client.from('company')
-                    .upsert({'company_name': canonical}, onConflict: 'company_name');
+                    .upsert({'company_name': co.seen}, onConflict: 'company_name');
               } catch (_) {}
             }
           }
-          final scRows = sup.companies.map((co) {
-            final canonical = co.matched ?? co.seen;
-            final top = _fzTop5(canonical, corpus);
-            String? n(int i) => i < top.length && top[i].isNotEmpty ? top[i] : null;
-            return <String, dynamic>{
-              'supplier_id': supplierId, 'supplier_name': sup.name, 'supplier_company': canonical,
-              'company_1': n(0), 'company_2': n(1), 'company_3': n(2), 'company_4': n(3), 'company_5': n(4),
-            };
-          }).toList();
+          final scRows = sup.companies
+              .where((co) => co.seen.isNotEmpty)
+              .map((co) => <String, dynamic>{
+                'supplier_id': supplierId, 'supplier_name': sup.name, 'supplier_company': co.seen,
+              }).toList();
           await client.from('supplier_company').insert(scRows);
         }
         imported++;

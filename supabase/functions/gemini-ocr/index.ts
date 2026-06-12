@@ -8,14 +8,26 @@ const cors = {
 const MODEL = 'gemini-3.5-flash'
 
 // Shared rules appended to every company-extraction prompt.
+// VERBATIM-ONLY CONTRACT — never modify this to allow name expansion or normalization.
 const COMPANY_GRID_RULES = `
-RULES FOR "companies" — GRID SCAN (CRITICAL — follow in order):
-STEP 1: Scan the entire company section and COUNT every distinct tile/cell/logo box. There may be 20–50 tiles. Hold that count.
-STEP 2: Output EXACTLY one JSON entry per tile. Your array length MUST equal your tile count. NEVER skip a tile. NEVER merge two tiles into one entry.
+
+PURE EXTRACTION CONTRACT — read before anything else:
+Your ONLY job is to copy text exactly as printed. You are a camera, not a database.
+FORBIDDEN — do any of these and the output is wrong:
+  ✗ Expanding abbreviations (GSK → GlaxoSmithKline, ALKEM → Alkem Laboratories Ltd.)
+  ✗ Adding legal suffixes not printed (Troikaa → Troikaa Pharmaceuticals Ltd.)
+  ✗ Spelling corrections (Cipla Diagnostics stays Cipla Diagnostics)
+  ✗ Substituting parent/group/acquirer/successor names
+  ✗ Applying any world knowledge about company ownership or legal names
+CORRECT: output the string exactly as it appears on the card. If it says "BIOPHAR LIFESCIENCES PVT. LTD." write that. If it says "gsk" write "gsk". If it says "Aventis" write "Aventis".
+
+RULES FOR "companies" — GRID SCAN (follow in order):
+STEP 1: COUNT every distinct tile/cell/logo box in the company section (may be 20–50). Hold that count.
+STEP 2: Output EXACTLY one JSON entry per tile. Array length MUST equal tile count. NEVER skip a tile. NEVER merge tiles.
 STEP 3 per tile:
-  seen = the VERBATIM text/abbreviation printed on the tile (strip brackets: "ABBOTT [DIGENE]" → "ABBOTT"). If the tile has no readable text, write the brand name you can visually identify from the logo. Output the text EXACTLY as it appears on the card — do NOT expand abbreviations, do NOT substitute parent/owner/successor company names, do NOT apply any corporate knowledge.
-  confidence = high if certain, medium if likely, low if the tile is unrecognizable.
-STEP 4: After writing the array, verify: array.length === tile count from STEP 1. If not, add missing entries with confidence=low.`
+  seen = text printed on the tile, copied character-for-character (strip outer brackets only: "ABBOTT [DIGENE]" → "ABBOTT"). If no text is visible, write the logo brand name you can identify — still verbatim, no expansion.
+  confidence = high if certain, medium if likely, low if unrecognizable.
+STEP 4: Verify array.length === tile count. Add missing entries with confidence=low if needed.`
 
 // Company-list-only mode prompt (mode:'company_list').
 const COMPANY_LIST_PROMPT =

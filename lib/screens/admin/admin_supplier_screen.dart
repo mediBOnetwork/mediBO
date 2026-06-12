@@ -4512,6 +4512,48 @@ class _SupCardImportDialog extends StatefulWidget {
   State<_SupCardImportDialog> createState() => _SupCardImportDialogState();
 }
 
+// Descriptor for an optional (unfilled) supplier_profiles column shown in the review modal.
+class _SupOptField {
+  final String column;
+  final String label;
+  final List<String>? options; // null = free text, non-null = dropdown choices
+  final TextEditingController ctrl;
+  String? _dropValue;
+  _SupOptField({required this.column, required this.label, this.options})
+      : ctrl = TextEditingController();
+  String get value => options != null ? (_dropValue ?? '') : ctrl.text.trim();
+  void dispose() => ctrl.dispose();
+}
+
+// All optional supplier_profiles columns (excludes OCR-filled, points, SPN, system cols).
+// Columns OCR fills: supplier_name, street_address, city, contact_no, whatsapp_no, email, supplier_code.
+List<_SupOptField> _buildOptionalFields() => [
+  _SupOptField(column: 'contact_name',   label: 'Contact Name'),
+  _SupOptField(column: 'contact_person', label: 'Contact Person'),
+  _SupOptField(column: 'phone',          label: 'Phone (alt)'),
+  _SupOptField(column: 'state',          label: 'State'),
+  _SupOptField(column: 'pin_code',       label: 'Pin Code'),
+  _SupOptField(column: 'pincode',        label: 'Pincode'),
+  _SupOptField(column: 'gstin',          label: 'GSTIN'),
+  _SupOptField(column: 'gst',            label: 'GST No.'),
+  _SupOptField(column: 'drug_license',   label: 'Drug License'),
+  _SupOptField(column: 'dl_1',           label: 'Drug License 1'),
+  _SupOptField(column: 'dl_2',           label: 'Drug License 2'),
+  _SupOptField(column: 'payment_term',   label: 'Payment Term'),
+  _SupOptField(column: 'payment_type',   label: 'Payment Type',   options: ['', 'cash', 'credit']),
+  _SupOptField(column: 'cd_condition',   label: 'CD Condition',   options: ['', 'NO CONDITION', '2K+ BILL', '3K+ BILL']),
+  _SupOptField(column: 'store_type',     label: 'Store Type'),
+  _SupOptField(column: 'stockist_type',  label: 'Stockist Type'),
+  _SupOptField(column: 'range_zone',     label: 'Range / Zone'),
+  _SupOptField(column: 'margin',         label: 'Margin'),
+  _SupOptField(column: 'behaviour',      label: 'Behaviour'),
+  _SupOptField(column: 'deal',           label: 'Deal'),
+  _SupOptField(column: 'other_contact',  label: 'Other Contact'),
+  _SupOptField(column: 'map_link',       label: 'Map Link'),
+  _SupOptField(column: 'address',        label: 'Address (alt)'),
+  _SupOptField(column: 'notes',          label: 'Notes'),
+];
+
 class _SupCardImportDialogState extends State<_SupCardImportDialog> {
   _SupCardStep _step = _SupCardStep.reading;
   String? _error;
@@ -4529,13 +4571,22 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
   List<_ResolvedCompany> _companies = [];
   final _newCompCtrl = TextEditingController();
 
+  // Optional extra fields
+  late final List<_SupOptField> _optFields;
+  bool _extraExpanded = false;
+
   @override
-  void initState() { super.initState(); _ocr(); }
+  void initState() {
+    super.initState();
+    _optFields = _buildOptionalFields();
+    _ocr();
+  }
 
   @override
   void dispose() {
     for (final c in [_nameCtrl,_addrCtrl,_cityCtrl,_phoneCtrl,_waCtrl,_emailCtrl,_codeCtrl,_newCompCtrl]) c.dispose();
     for (final c in _companies) c.dispose();
+    for (final f in _optFields) f.dispose();
     super.dispose();
   }
 
@@ -4647,6 +4698,11 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
       if (_waCtrl.text.trim().isNotEmpty) rec['whatsapp_no'] = _waCtrl.text.trim();
       if (_emailCtrl.text.trim().isNotEmpty) rec['email'] = _emailCtrl.text.trim();
       if (_codeCtrl.text.trim().isNotEmpty) rec['supplier_code'] = _codeCtrl.text.trim();
+      // Optional extra fields filled by admin
+      for (final f in _optFields) {
+        final v = f.value;
+        if (v.isNotEmpty) rec[f.column] = v;
+      }
 
       final inserted = await client.from('supplier_profiles').insert(rec).select('id').single();
       final supplierId = inserted['id'] as String;
@@ -4782,6 +4838,60 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
               ]),
               _field('Email', _emailCtrl),
               const SizedBox(height: 4),
+              const Divider(color: Color(0xFFE5E7EB)),
+              const SizedBox(height: 4),
+              // ── Optional unfilled details ──────────────────────────────────
+              InkWell(
+                onTap: () => setState(() => _extraExpanded = !_extraExpanded),
+                borderRadius: BorderRadius.circular(8),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: Row(children: [
+                    const Expanded(child: Text('Other unfilled details (optional)',
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF6B7280)))),
+                    Icon(_extraExpanded ? Icons.expand_less : Icons.expand_more,
+                        size: 18, color: const Color(0xFF9CA3AF)),
+                  ]),
+                ),
+              ),
+              if (_extraExpanded) ...[
+                const SizedBox(height: 4),
+                ...List.generate(_optFields.length, (i) {
+                  final f = _optFields[i];
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: f.options != null
+                        ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                            Text(f.label, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
+                                color: Color(0xFF6B7280), letterSpacing: 0.3)),
+                            const SizedBox(height: 4),
+                            StatefulBuilder(builder: (ctx, setSt) => DropdownButtonFormField<String>(
+                              value: f._dropValue,
+                              isExpanded: true,
+                              decoration: InputDecoration(
+                                filled: true, fillColor: const Color(0xFFF5F6F8),
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                                    borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+                                enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                                    borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+                                focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                                    borderSide: const BorderSide(color: Color(0xFF1B7A43), width: 1.5)),
+                              ),
+                              items: f.options!.map((v) => DropdownMenuItem(
+                                value: v.isEmpty ? null : v,
+                                child: Text(v.isEmpty ? '— select —' : v,
+                                    style: TextStyle(fontSize: 13,
+                                        color: v.isEmpty ? const Color(0xFF9CA3AF) : const Color(0xFF111827))),
+                              )).toList(),
+                              onChanged: (v) => setSt(() => f._dropValue = v),
+                            )),
+                          ])
+                        : _field(f.label, f.ctrl),
+                  );
+                }),
+                const SizedBox(height: 4),
+              ],
               const Divider(color: Color(0xFFE5E7EB)),
               const SizedBox(height: 10),
               // Company list

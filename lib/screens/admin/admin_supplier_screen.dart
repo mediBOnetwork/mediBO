@@ -4829,58 +4829,56 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
               ...List.generate(_companies.length, (i) {
                 final co = _companies[i];
                 final isLow = co.confidence == 'low';
-                final showSeen = !co.isNew &&
-                    co.seen.toLowerCase() != co.canonical.toLowerCase();
                 return Padding(
-                  padding: const EdgeInsets.only(bottom: 6),
-                  child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-                    if (co.isNew) ...[
-                      Tooltip(
-                        message: 'New company — will be added to master list',
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFDCFCE7),
-                            borderRadius: BorderRadius.circular(4),
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    // Top row: number + seen pill (right) + remove button
+                    Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+                      Text('${i + 1}.', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: Color(0xFF9CA3AF))),
+                      const SizedBox(width: 6),
+                      if (co.isNew)
+                        Tooltip(
+                          message: 'New company — will be added to master list',
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(color: const Color(0xFFDCFCE7), borderRadius: BorderRadius.circular(12)),
+                            child: const Text('NEW', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: Color(0xFF166534))),
                           ),
-                          child: const Text('NEW', style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: Color(0xFF166534))),
+                        )
+                      else if (isLow)
+                        const Tooltip(
+                          message: 'Low confidence OCR — verify name',
+                          child: Icon(Icons.circle, size: 7, color: Color(0xFFF59E0B)),
                         ),
+                      const Spacer(),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(color: const Color(0xFFE8F0FE), borderRadius: BorderRadius.circular(16)),
+                        child: Text('seen: ${co.seen}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: Color(0xFF1A4480))),
                       ),
-                      const SizedBox(width: 6),
-                    ] else if (isLow) ...[
-                      const Tooltip(
-                        message: 'Low confidence OCR — verify name',
-                        child: Icon(Icons.circle, size: 8, color: Color(0xFFF59E0B)),
+                      const SizedBox(width: 4),
+                      IconButton(
+                        icon: const Icon(Icons.remove_circle_outline, size: 18, color: Color(0xFFDC2626)),
+                        onPressed: () => setState(() { _companies[i].dispose(); _companies.removeAt(i); }),
+                        padding: EdgeInsets.zero, constraints: const BoxConstraints(),
+                        visualDensity: VisualDensity.compact,
                       ),
-                      const SizedBox(width: 6),
-                    ],
-                    Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      TextField(
-                        controller: co.ctrl,
-                        style: const TextStyle(fontSize: 13, color: Color(0xFF111827)),
-                        decoration: InputDecoration(
-                          filled: true, fillColor: const Color(0xFFF5F6F8),
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
-                              borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
-                          enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
-                              borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
-                          focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
-                              borderSide: const BorderSide(color: Color(0xFF1B7A43), width: 1.5)),
-                        ),
+                    ]),
+                    const SizedBox(height: 4),
+                    // Editable resolved name field
+                    TextField(
+                      controller: co.ctrl,
+                      style: const TextStyle(fontSize: 13, color: Color(0xFF111827)),
+                      decoration: InputDecoration(
+                        filled: true, fillColor: const Color(0xFFF5F6F8),
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                            borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+                        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                            borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+                        focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                            borderSide: const BorderSide(color: Color(0xFF1B7A43), width: 1.5)),
                       ),
-                      if (showSeen) Padding(
-                        padding: const EdgeInsets.only(top: 2, left: 2),
-                        child: Text('seen: ${co.seen}',
-                            style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
-                      ),
-                    ])),
-                    const SizedBox(width: 6),
-                    IconButton(
-                      icon: const Icon(Icons.remove_circle_outline, size: 18, color: Color(0xFFDC2626)),
-                      onPressed: () => setState(() { _companies[i].dispose(); _companies.removeAt(i); }),
-                      padding: EdgeInsets.zero, constraints: const BoxConstraints(),
-                      visualDensity: VisualDensity.compact,
                     ),
                   ]),
                 );

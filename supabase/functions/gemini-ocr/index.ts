@@ -7,16 +7,23 @@ const cors = {
 
 const MODEL = 'gemini-3.5-flash'
 
-// Company-list prompt: identifies logos and returns official registered Indian company names.
+// Shared rules appended to every company-extraction prompt.
+const COMPANY_GRID_RULES = `
+RULES FOR "companies" — GRID SCAN (CRITICAL — follow in order):
+STEP 1: Scan the entire company section and COUNT every distinct tile/cell/logo box. There may be 20–50 tiles. Hold that count.
+STEP 2: Output EXACTLY one JSON entry per tile. Your array length MUST equal your tile count. NEVER skip a tile. NEVER merge two tiles into one entry.
+STEP 3 per tile:
+  visible_name = the literal text/abbreviation printed on the tile (strip brackets: "ABBOTT [DIGENE]" → "ABBOTT"). If the tile has no readable text, write the brand name you can visually identify from the logo.
+  official_name = full official registered Indian company name. Known mappings: Alkem→Alkem Laboratories Ltd., Abbott→Abbott India Ltd., GSK→GlaxoSmithKline Pharmaceuticals Ltd., Lupin→Lupin Ltd., Pfizer→Pfizer Ltd., Glenmark→Glenmark Pharmaceuticals Ltd., Sun/Sun Pharma→Sun Pharmaceutical Industries Ltd., Macleods→Macleods Pharmaceuticals Ltd., Mylan/Viatris→Viatris Inc., Novartis→Novartis India Ltd., Sanofi→Sanofi India Ltd., Novo Nordisk→Novo Nordisk India Pvt. Ltd., Cipla→Cipla Ltd., Dr. Reddy's/DRL→Dr. Reddy's Laboratories Ltd., Mankind→Mankind Pharma Ltd., Zydus/Cadila→Zydus Lifesciences Ltd., BSV→Bharat Serums and Vaccines Ltd., Unique→J.B. Chemicals & Pharmaceuticals Ltd., Torrent→Torrent Pharmaceuticals Ltd., Wockhardt→Wockhardt Ltd., Emcure→Emcure Pharmaceuticals Ltd., Intas→Intas Pharmaceuticals Ltd., Ajanta→Ajanta Pharma Ltd., Aristo→Aristo Pharmaceuticals Pvt. Ltd., Himalaya→The Himalaya Drug Company, Elder→Elder Pharmaceuticals Ltd., FDC→FDC Ltd., IPCA→IPCA Laboratories Ltd., Micro Labs→Micro Labs Ltd., Medley→Medley Pharmaceuticals Ltd., Eris→Eris Lifesciences Ltd.
+  confidence = high if certain, medium if likely, low if the tile is unrecognizable.
+STEP 4: After writing the array, verify: array.length === tile count from STEP 1. If not, add missing entries with confidence=low.`
+
+// Company-list-only mode prompt (mode:'company_list').
 const COMPANY_LIST_PROMPT =
   'This image is a pharma distributor company list containing logos. ' +
-  'For EACH cell/logo: identify the company from the logo even if only a symbol or short brand name is visible, ' +
-  'and return the full official registered Indian company name ' +
-  '(e.g. BSV → Bharat Serums and Vaccines Ltd., Zydus Cadila → Zydus Lifesciences Ltd., ' +
-  'Unique logo → J.B. Chemicals & Pharmaceuticals Ltd., Sun → Sun Pharmaceutical Industries Ltd.). ' +
-  'Return strict JSON array: [{"visible_name":"...","official_name":"...","confidence":"high|medium|low"}]. ' +
-  'If the logo cannot be confidently identified, set official_name = visible_name and confidence = low. ' +
-  'Never skip a cell.'
+  'Return strict JSON array only (no other text, no markdown): ' +
+  '[{"visible_name":"...","official_name":"...","confidence":"high|medium|low"}].' +
+  COMPANY_GRID_RULES
 
 // Generate a GCP access token from a service account JSON key.
 async function getAccessToken(saJson: string): Promise<string> {
@@ -117,6 +124,7 @@ serve(async (req: Request) => {
       contents: [{ role: 'user', parts }],
       generationConfig: {
         temperature: 0,
+        maxOutputTokens: 8192,
         thinkingConfig: { thinkingLevel: 'low' },
       },
     }

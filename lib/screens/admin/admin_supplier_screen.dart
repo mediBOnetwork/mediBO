@@ -4552,8 +4552,8 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
       final bytes = await _readBytes(widget.file);
       final b64 = base64Encode(bytes);
       const prompt =
-          'This is a pharma supplier business card or company list image.\n'
-          'Extract the following and return ONLY a JSON object (no markdown fences, no extra text):\n\n'
+          'This is a pharma supplier business card or company-grid image.\n'
+          'Return ONLY a JSON object (no markdown fences, no extra text):\n\n'
           '{\n'
           '  "supplier_name": "firm/distributor/stockist name at the top",\n'
           '  "address": "full street address if visible",\n'
@@ -4562,15 +4562,27 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
           '  "whatsapp": "mobile/WhatsApp numbers (comma-separated if multiple)",\n'
           '  "email": "email address",\n'
           '  "supplier_code": "any short code like G-1, S-02 etc",\n'
-          '  "companies": [{"visible_name":"text or logo seen","official_name":"Full Official Registered Indian Company Name Ltd.","confidence":"high|medium|low"}]\n'
+          '  "companies": [{"visible_name":"...","official_name":"...","confidence":"high|medium|low"}]\n'
           '}\n\n'
-          'For "companies": include every pharma company/brand/logo visible.\n'
-          '  visible_name = exactly what text or abbreviation appears (strip brackets: "ABBOTT [DIGENE]" → "ABBOTT").\n'
-          '  official_name = full official registered Indian company name '
-          '(e.g. BSV→Bharat Serums and Vaccines Ltd., Zydus Cadila→Zydus Lifesciences Ltd., '
-          'Sun→Sun Pharmaceutical Industries Ltd., Unique→J.B. Chemicals & Pharmaceuticals Ltd.).\n'
-          '  confidence = high if certain, medium if likely, low if guessing.\n'
-          'Use empty string "" for missing scalar fields. companies=[] if none found.';
+          'RULES FOR "companies" — GRID SCAN (follow in order):\n'
+          'STEP 1: Count every distinct tile/cell/logo in the company section (may be 20–50). Hold that count.\n'
+          'STEP 2: Output EXACTLY one entry per tile. Array length MUST equal tile count. NEVER skip a tile. NEVER merge tiles.\n'
+          'STEP 3 per tile:\n'
+          '  visible_name = literal text/abbreviation on the tile (strip brackets: "ABBOTT [DIGENE]"→"ABBOTT"). If no text, write the brand name you can identify from the logo.\n'
+          '  official_name = full official registered Indian company name.\n'
+          '    Known: Alkem→Alkem Laboratories Ltd., Abbott→Abbott India Ltd., GSK→GlaxoSmithKline Pharmaceuticals Ltd.,\n'
+          '    Lupin→Lupin Ltd., Pfizer→Pfizer Ltd., Glenmark→Glenmark Pharmaceuticals Ltd.,\n'
+          '    Sun/Sun Pharma→Sun Pharmaceutical Industries Ltd., Macleods→Macleods Pharmaceuticals Ltd.,\n'
+          '    Mylan/Viatris→Viatris Inc., Novartis→Novartis India Ltd., Sanofi→Sanofi India Ltd.,\n'
+          '    Novo Nordisk→Novo Nordisk India Pvt. Ltd., Cipla→Cipla Ltd.,\n'
+          '    Dr. Reddy\'s/DRL→Dr. Reddy\'s Laboratories Ltd., Mankind→Mankind Pharma Ltd.,\n'
+          '    Zydus/Cadila→Zydus Lifesciences Ltd., BSV→Bharat Serums and Vaccines Ltd.,\n'
+          '    Torrent→Torrent Pharmaceuticals Ltd., Intas→Intas Pharmaceuticals Ltd.,\n'
+          '    Emcure→Emcure Pharmaceuticals Ltd., IPCA→IPCA Laboratories Ltd.,\n'
+          '    Micro Labs→Micro Labs Ltd., Ajanta→Ajanta Pharma Ltd., FDC→FDC Ltd.\n'
+          '  confidence = high if certain, medium if likely, low if unrecognizable.\n'
+          'STEP 4: Verify array.length === tile count. If not, add missing entries with confidence=low.\n'
+          'Use "" for missing scalar fields. companies=[] if no company section exists.';
       final resp = await http.post(
         Uri.parse(_ocrEdgeFn),
         headers: {'Content-Type': 'application/json'},
@@ -4960,8 +4972,8 @@ class _SupCardMultiImportDialogState extends State<_SupCardMultiImportDialog> {
   final List<_MultiExtractedSup> _extracted = [];
 
   static const _prompt =
-      'This is a pharma supplier business card or company list image.\n'
-      'Extract the following and return ONLY a JSON object (no markdown fences, no extra text):\n\n'
+      'This is a pharma supplier business card or company-grid image.\n'
+      'Return ONLY a JSON object (no markdown fences, no extra text):\n\n'
       '{\n'
       '  "supplier_name": "firm/distributor/stockist name at the top",\n'
       '  "address": "full street address if visible",\n'
@@ -4970,15 +4982,27 @@ class _SupCardMultiImportDialogState extends State<_SupCardMultiImportDialog> {
       '  "whatsapp": "mobile/WhatsApp numbers (comma-separated if multiple)",\n'
       '  "email": "email address",\n'
       '  "supplier_code": "any short code like G-1, S-02 etc",\n'
-      '  "companies": [{"visible_name":"text or logo seen","official_name":"Full Official Registered Indian Company Name Ltd.","confidence":"high|medium|low"}]\n'
+      '  "companies": [{"visible_name":"...","official_name":"...","confidence":"high|medium|low"}]\n'
       '}\n\n'
-      'For "companies": include every pharma company/brand/logo visible.\n'
-      '  visible_name = exactly what text or abbreviation appears (strip brackets: "ABBOTT [DIGENE]" → "ABBOTT").\n'
-      '  official_name = full official registered Indian company name '
-      '(e.g. BSV→Bharat Serums and Vaccines Ltd., Zydus Cadila→Zydus Lifesciences Ltd., '
-      'Sun→Sun Pharmaceutical Industries Ltd., Unique→J.B. Chemicals & Pharmaceuticals Ltd.).\n'
-      '  confidence = high if certain, medium if likely, low if guessing.\n'
-      'Use empty string "" for missing scalar fields. companies=[] if none found.';
+      'RULES FOR "companies" — GRID SCAN (follow in order):\n'
+      'STEP 1: Count every distinct tile/cell/logo in the company section (may be 20–50). Hold that count.\n'
+      'STEP 2: Output EXACTLY one entry per tile. Array length MUST equal tile count. NEVER skip a tile. NEVER merge tiles.\n'
+      'STEP 3 per tile:\n'
+      '  visible_name = literal text/abbreviation on the tile (strip brackets: "ABBOTT [DIGENE]"→"ABBOTT"). If no text, write the brand name you can identify from the logo.\n'
+      '  official_name = full official registered Indian company name.\n'
+      '    Known: Alkem→Alkem Laboratories Ltd., Abbott→Abbott India Ltd., GSK→GlaxoSmithKline Pharmaceuticals Ltd.,\n'
+      '    Lupin→Lupin Ltd., Pfizer→Pfizer Ltd., Glenmark→Glenmark Pharmaceuticals Ltd.,\n'
+      '    Sun/Sun Pharma→Sun Pharmaceutical Industries Ltd., Macleods→Macleods Pharmaceuticals Ltd.,\n'
+      '    Mylan/Viatris→Viatris Inc., Novartis→Novartis India Ltd., Sanofi→Sanofi India Ltd.,\n'
+      '    Novo Nordisk→Novo Nordisk India Pvt. Ltd., Cipla→Cipla Ltd.,\n'
+      '    Dr. Reddy\'s/DRL→Dr. Reddy\'s Laboratories Ltd., Mankind→Mankind Pharma Ltd.,\n'
+      '    Zydus/Cadila→Zydus Lifesciences Ltd., BSV→Bharat Serums and Vaccines Ltd.,\n'
+      '    Torrent→Torrent Pharmaceuticals Ltd., Intas→Intas Pharmaceuticals Ltd.,\n'
+      '    Emcure→Emcure Pharmaceuticals Ltd., IPCA→IPCA Laboratories Ltd.,\n'
+      '    Micro Labs→Micro Labs Ltd., Ajanta→Ajanta Pharma Ltd., FDC→FDC Ltd.\n'
+      '  confidence = high if certain, medium if likely, low if unrecognizable.\n'
+      'STEP 4: Verify array.length === tile count. If not, add missing entries with confidence=low.\n'
+      'Use "" for missing scalar fields. companies=[] if no company section exists.';
 
   @override
   void initState() {

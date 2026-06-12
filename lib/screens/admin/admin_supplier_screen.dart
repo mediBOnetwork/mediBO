@@ -4911,40 +4911,50 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
               ...List.generate(_companies.length, (i) {
                 final co = _companies[i];
                 return Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    // Top row: number (left) · seen pill (far right) · remove button
-                    Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-                      Text('${i + 1}.', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: Color(0xFF9CA3AF))),
-                      const Spacer(),
-                      Container(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+                    // Row number
+                    Text('${i + 1}.', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: Color(0xFF9CA3AF))),
+                    const SizedBox(width: 6),
+                    // Editable company name field — takes at least 50% of available width
+                    Expanded(
+                      flex: 10,
+                      child: TextField(
+                        controller: co.ctrl,
+                        style: const TextStyle(fontSize: 13, color: Color(0xFF111827)),
+                        decoration: InputDecoration(
+                          filled: true, fillColor: const Color(0xFFF5F6F8),
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                              borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+                          enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                              borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+                          focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                              borderSide: const BorderSide(color: Color(0xFF1B7A43), width: 1.5)),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    // Seen pill — shrinks/ellipsizes before the field does
+                    Flexible(
+                      flex: 7,
+                      child: Container(
                         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                         decoration: BoxDecoration(color: const Color(0xFFE6F4EA), borderRadius: BorderRadius.circular(16)),
-                        child: Text('Seen - ${co.seen}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: Color(0xFF1B7F3B))),
+                        child: Text(
+                          'Seen - ${co.seen}',
+                          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: Color(0xFF1B7F3B)),
+                          overflow: TextOverflow.ellipsis,
+                          maxLines: 1,
+                        ),
                       ),
-                      const SizedBox(width: 4),
-                      IconButton(
-                        icon: const Icon(Icons.remove_circle_outline, size: 18, color: Color(0xFFDC2626)),
-                        onPressed: () => setState(() { _companies[i].dispose(); _companies.removeAt(i); }),
-                        padding: EdgeInsets.zero, constraints: const BoxConstraints(),
-                        visualDensity: VisualDensity.compact,
-                      ),
-                    ]),
-                    const SizedBox(height: 4),
-                    // Editable name field — pre-filled with verbatim seen text
-                    TextField(
-                      controller: co.ctrl,
-                      style: const TextStyle(fontSize: 13, color: Color(0xFF111827)),
-                      decoration: InputDecoration(
-                        filled: true, fillColor: const Color(0xFFF5F6F8),
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
-                            borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
-                        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
-                            borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
-                        focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
-                            borderSide: const BorderSide(color: Color(0xFF1B7A43), width: 1.5)),
-                      ),
+                    ),
+                    // Remove button
+                    IconButton(
+                      icon: const Icon(Icons.remove_circle_outline, size: 18, color: Color(0xFFDC2626)),
+                      onPressed: () => setState(() { _companies[i].dispose(); _companies.removeAt(i); }),
+                      padding: EdgeInsets.zero, constraints: const BoxConstraints(),
+                      visualDensity: VisualDensity.compact,
                     ),
                   ]),
                 );

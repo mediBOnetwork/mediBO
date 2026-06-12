@@ -4913,21 +4913,17 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
                 return Padding(
                   padding: const EdgeInsets.only(bottom: 8),
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    // Line 1: row number · seen pill (left-aligned together)
-                    Row(children: [
-                      Text('${i + 1}.', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: Color(0xFF9CA3AF))),
-                      const SizedBox(width: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                        decoration: BoxDecoration(color: const Color(0xFFE6F4EA), borderRadius: BorderRadius.circular(16)),
-                        child: Text(
-                          'Seen - ${co.seen}',
-                          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: Color(0xFF1B7F3B)),
-                          overflow: TextOverflow.ellipsis,
-                          maxLines: 1,
-                        ),
+                    // Line 1: seen pill flush-left with the field below
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(color: const Color(0xFFE6F4EA), borderRadius: BorderRadius.circular(16)),
+                      child: Text(
+                        co.seen,
+                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: Color(0xFF1B7F3B)),
+                        overflow: TextOverflow.ellipsis,
+                        maxLines: 1,
                       ),
-                    ]),
+                    ),
                     const SizedBox(height: 4),
                     // Line 2: full-width field · gap · remove button
                     Row(crossAxisAlignment: CrossAxisAlignment.center, children: [

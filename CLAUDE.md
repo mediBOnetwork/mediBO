@@ -128,3 +128,9 @@ This rule overrides everything else.
 
 ## GEMINI RULE (ABSOLUTE)
 Every AI/OCR feature uses ONLY gemini-3.5-flash on Vertex AI global endpoint (aiplatform.googleapis.com, locations/global, thinkingLevel='low', GCP_SA_KEY auth). NEVER gemini-2.5/2.0/1.5, NEVER generativelanguage.googleapis.com, NEVER API-key auth. Before writing any Gemini code, copy the exact pattern from the gemini-ocr edge function.
+
+### GEMINI ENTITY IDENTITY RULE (never remove)
+official_name = formal legal name of EXACTLY the entity on the card. NEVER substitute a parent, acquirer, group, or successor. Expanding the same entity's abbreviation is allowed (ALKEM→Alkem Laboratories Ltd.); replacing a distinct entity is forbidden (Aventis→Sanofi India Ltd. ✗, German Remedies→Zydus Lifesciences Ltd. ✗, Cipla Diagnostics→Cipla Ltd. ✗). When in doubt, keep visible_name verbatim as official_name with confidence=low.
+
+## COMPANY NAMING RULE (ABSOLUTE)
+Gemini never generates or normalizes company names anywhere in mediBO — it extracts verbatim text only (field name: `seen`). Canonical names come exclusively from the `company` table via brand-token matching (`_fzBestMatch`). New names that don't match the corpus are inserted verbatim into the `company` table (ON CONFLICT DO NOTHING via upsert) and flagged with a NEW badge in the review UI for admin confirmation. There is no `official_name` field anywhere in the OCR pipeline — only `seen` + `confidence` from Gemini, then `matched` resolved in Flutter.

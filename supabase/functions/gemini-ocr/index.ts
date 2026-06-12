@@ -13,8 +13,7 @@ RULES FOR "companies" — GRID SCAN (CRITICAL — follow in order):
 STEP 1: Scan the entire company section and COUNT every distinct tile/cell/logo box. There may be 20–50 tiles. Hold that count.
 STEP 2: Output EXACTLY one JSON entry per tile. Your array length MUST equal your tile count. NEVER skip a tile. NEVER merge two tiles into one entry.
 STEP 3 per tile:
-  visible_name = the literal text/abbreviation printed on the tile (strip brackets: "ABBOTT [DIGENE]" → "ABBOTT"). If the tile has no readable text, write the brand name you can visually identify from the logo.
-  official_name = full official registered Indian company name. Known mappings: Alkem→Alkem Laboratories Ltd., Abbott→Abbott India Ltd., GSK→GlaxoSmithKline Pharmaceuticals Ltd., Lupin→Lupin Ltd., Pfizer→Pfizer Ltd., Glenmark→Glenmark Pharmaceuticals Ltd., Sun/Sun Pharma→Sun Pharmaceutical Industries Ltd., Macleods→Macleods Pharmaceuticals Ltd., Mylan/Viatris→Viatris Inc., Novartis→Novartis India Ltd., Sanofi→Sanofi India Ltd., Novo Nordisk→Novo Nordisk India Pvt. Ltd., Cipla→Cipla Ltd., Dr. Reddy's/DRL→Dr. Reddy's Laboratories Ltd., Mankind→Mankind Pharma Ltd., Zydus/Cadila→Zydus Lifesciences Ltd., BSV→Bharat Serums and Vaccines Ltd., Unique→J.B. Chemicals & Pharmaceuticals Ltd., Torrent→Torrent Pharmaceuticals Ltd., Wockhardt→Wockhardt Ltd., Emcure→Emcure Pharmaceuticals Ltd., Intas→Intas Pharmaceuticals Ltd., Ajanta→Ajanta Pharma Ltd., Aristo→Aristo Pharmaceuticals Pvt. Ltd., Himalaya→The Himalaya Drug Company, Elder→Elder Pharmaceuticals Ltd., FDC→FDC Ltd., IPCA→IPCA Laboratories Ltd., Micro Labs→Micro Labs Ltd., Medley→Medley Pharmaceuticals Ltd., Eris→Eris Lifesciences Ltd.
+  seen = the VERBATIM text/abbreviation printed on the tile (strip brackets: "ABBOTT [DIGENE]" → "ABBOTT"). If the tile has no readable text, write the brand name you can visually identify from the logo. Output the text EXACTLY as it appears on the card — do NOT expand abbreviations, do NOT substitute parent/owner/successor company names, do NOT apply any corporate knowledge.
   confidence = high if certain, medium if likely, low if the tile is unrecognizable.
 STEP 4: After writing the array, verify: array.length === tile count from STEP 1. If not, add missing entries with confidence=low.`
 
@@ -22,7 +21,7 @@ STEP 4: After writing the array, verify: array.length === tile count from STEP 1
 const COMPANY_LIST_PROMPT =
   'This image is a pharma distributor company list containing logos. ' +
   'Return strict JSON array only (no other text, no markdown): ' +
-  '[{"visible_name":"...","official_name":"...","confidence":"high|medium|low"}].' +
+  '[{"seen":"...","confidence":"high|medium|low"}].' +
   COMPANY_GRID_RULES
 
 // Generate a GCP access token from a service account JSON key.

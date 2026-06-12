@@ -4913,10 +4913,10 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
                 return Padding(
                   padding: const EdgeInsets.only(bottom: 8),
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    // Line 1: row number (left) · seen pill (far right)
+                    // Line 1: row number · seen pill (left-aligned together)
                     Row(children: [
                       Text('${i + 1}.', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: Color(0xFF9CA3AF))),
-                      const Spacer(),
+                      const SizedBox(width: 8),
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                         decoration: BoxDecoration(color: const Color(0xFFE6F4EA), borderRadius: BorderRadius.circular(16)),
@@ -4929,7 +4929,7 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
                       ),
                     ]),
                     const SizedBox(height: 4),
-                    // Line 2: full-width field · remove button (right, centered on field)
+                    // Line 2: full-width field · gap · remove button
                     Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
                       Expanded(
                         child: TextField(
@@ -4947,6 +4947,7 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
                           ),
                         ),
                       ),
+                      const SizedBox(width: 12),
                       IconButton(
                         icon: const Icon(Icons.remove_circle_outline, size: 18, color: Color(0xFFDC2626)),
                         onPressed: () => setState(() { _companies[i].dispose(); _companies.removeAt(i); }),

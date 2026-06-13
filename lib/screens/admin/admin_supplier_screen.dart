@@ -7,6 +7,7 @@ import 'dart:typed_data';
 import 'package:archive/archive.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:pharma_b2b/utils/toast.dart';
@@ -166,6 +167,11 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   final ScrollController _scrollCtrl = ScrollController();
   final List<RealtimeChannel> _channels = [];
   Timer? _debounce;
+
+  // ── Inquiry link state ───────────────────────────────────────────────────
+  // supplier_name → {token, status, expires_at}
+  final Map<String, Map<String, dynamic>> _inquiryLinks = {};
+  bool _inquiryLoading = false;
 
   @override
   void initState() {
@@ -745,15 +751,219 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // INQUIRY LINK ACTIONS
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  Future<void> _sendAllInquiry() async {
+    setState(() => _inquiryLoading = true);
+    try {
+      final rows = await Supabase.instance.client
+          .rpc('start_inquiry_for_suppliers') as List;
+      if (mounted) {
+        setState(() {
+          for (final r in rows) {
+            final m = Map<String, dynamic>.from(r as Map);
+            _inquiryLinks[m['supplier_name'] as String] = m;
+          }
+          _inquiryLoading = false;
+        });
+        RenderLog.write('inquiry_send_all', rows.length);
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _inquiryLoading = false);
+        showToast(context, 'Failed to generate links: $e', isError: true);
+      }
+    }
+  }
+
+  Future<void> _sendSupplierInquiry(String supplierName) async {
+    setState(() => _inquiryLoading = true);
+    try {
+      final rows = await Supabase.instance.client
+          .rpc('start_inquiry_for_suppliers',
+              params: {'p_supplier_names': [supplierName]}) as List;
+      if (mounted) {
+        setState(() {
+          for (final r in rows) {
+            final m = Map<String, dynamic>.from(r as Map);
+            _inquiryLinks[m['supplier_name'] as String] = m;
+          }
+          _inquiryLoading = false;
+        });
+        RenderLog.write('inquiry_send_supplier', supplierName);
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _inquiryLoading = false);
+        showToast(context, 'Failed: $e', isError: true);
+      }
+    }
+  }
+
+  Future<void> _sendOrderInquiry(String supplierOrderId) async {
+    setState(() => _inquiryLoading = true);
+    try {
+      final rows = await Supabase.instance.client
+          .rpc('start_inquiry_for_order',
+              params: {'p_supplier_order_id': supplierOrderId}) as List;
+      if (mounted) {
+        setState(() {
+          for (final r in rows) {
+            final m = Map<String, dynamic>.from(r as Map);
+            _inquiryLinks[m['supplier_name'] as String] = m;
+          }
+          _inquiryLoading = false;
+        });
+        RenderLog.write('inquiry_send_order', supplierOrderId.substring(0, 8));
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _inquiryLoading = false);
+        showToast(context, 'Failed: $e', isError: true);
+      }
+    }
+  }
+
+  Widget _buildInquiryLinksPanel() {
+    if (_inquiryLinks.isEmpty) return const SizedBox.shrink();
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFECFDF5),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFF6EE7B7)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          const Icon(Icons.link, size: 16, color: Color(0xFF065F46)),
+          const SizedBox(width: 8),
+          const Text('Inquiry Links — share via WhatsApp',
+              style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFF065F46))),
+          const Spacer(),
+          GestureDetector(
+            onTap: () => setState(() => _inquiryLinks.clear()),
+            child: const Icon(Icons.close, size: 16, color: Color(0xFF6B7280)),
+          ),
+        ]),
+        const SizedBox(height: 12),
+        ..._inquiryLinks.entries.map((e) {
+          final supplierName = e.key;
+          final data = e.value;
+          final token = data['token'] as String? ?? '';
+          final status = data['status'] as String? ?? 'pending';
+          final expiresAt = data['expires_at'] != null
+              ? DateTime.tryParse(data['expires_at'] as String)
+              : null;
+          final link = 'https://medibo.in/inquiry/$token';
+          final expStr = expiresAt != null
+              ? 'Expires ${expiresAt.toLocal().hour.toString().padLeft(2,'0')}:${expiresAt.toLocal().minute.toString().padLeft(2,'0')}'
+              : '';
+          return Container(
+            margin: const EdgeInsets.only(bottom: 8),
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0xFFD1FAE5)),
+            ),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                Expanded(
+                  child: Text(supplierName,
+                      style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFF111827))),
+                ),
+                _InquiryStatusBadge(status: status),
+                if (expStr.isNotEmpty) ...[
+                  const SizedBox(width: 8),
+                  Text(expStr,
+                      style: const TextStyle(
+                          fontSize: 11, color: Color(0xFF6B7280))),
+                ],
+              ]),
+              const SizedBox(height: 6),
+              Row(children: [
+                Expanded(
+                  child: Text(
+                    link,
+                    style: const TextStyle(
+                        fontSize: 11,
+                        color: Color(0xFF374151),
+                        fontFamily: 'monospace'),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                GestureDetector(
+                  onTap: () {
+                    Clipboard.setData(ClipboardData(text: link));
+                    showToast(context, 'Link copied!');
+                    RenderLog.write('inquiry_link_copied', supplierName);
+                  },
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1B7A43),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: const Text('Copy',
+                        style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.white)),
+                  ),
+                ),
+              ]),
+            ]),
+          );
+        }),
+      ]),
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // SUPPLIERS TAB
   // ═══════════════════════════════════════════════════════════════════════════
 
   Widget _buildSuppliersView(bool isDesktop) {
     final pad = isDesktop ? 28.0 : 16.0;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      _buildInquiryLinksPanel(),
       Padding(
         padding: EdgeInsets.fromLTRB(pad, 10, pad, 4),
         child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+          // Send All Inquiry
+          GestureDetector(
+            onTap: _inquiryLoading ? null : _sendAllInquiry,
+            child: Container(
+              height: 32,
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFECFDF5),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFF6EE7B7)),
+              ),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                if (_inquiryLoading)
+                  const SizedBox(width: 12, height: 12,
+                      child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF1B7A43)))
+                else
+                  const Icon(Icons.send_outlined, size: 14, color: Color(0xFF1B7A43)),
+                const SizedBox(width: 5),
+                const Text('Send All Inquiry',
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF1B7A43))),
+              ]),
+            ),
+          ),
+          const SizedBox(width: 12),
           _buildRefreshButton(),
           const SizedBox(width: 12),
           const Text('Sort:', style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
@@ -1001,7 +1211,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         _th('PHONE', flex: 2),
         _th('CODE', flex: 2),
         _th('CITY', flex: 3),
-        const SizedBox(width: 360), // right action cluster placeholder
+        const SizedBox(width: 420), // right action cluster placeholder
       ]),
     );
   }
@@ -1032,7 +1242,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                 [row.city, row.state].where((s) => s.isNotEmpty).join(', ').let((s) => s.isNotEmpty ? s : '—'),
                 style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)), overflow: TextOverflow.ellipsis)),
             // ── Right action cluster (fixed 360px) — all non-data controls ──────
-            SizedBox(width: 360, child: Row(
+            SizedBox(width: 420, child: Row(
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
                 GestureDetector(
@@ -1068,6 +1278,9 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                   },
                 ),
                 const SizedBox(width: 14),
+                _actionBtn('Inquiry', const Color(0xFF2563EB),
+                    () => _sendSupplierInquiry(row.supplierName)),
+                const SizedBox(width: 6),
                 _actionBtn('Edit', const Color(0xFF1B7A43), () => _editSupplier(row)),
                 const SizedBox(width: 6),
                 _actionBtn('Delete', const Color(0xFFDC2626), () => _deleteSupplier(row)),
@@ -1170,6 +1383,8 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                 ]),
                 const SizedBox(height: 12),
                 Wrap(spacing: 8, runSpacing: 6, children: [
+                  _actionBtn('Inquiry', const Color(0xFF2563EB),
+                      () => _sendSupplierInquiry(row.supplierName)),
                   _actionBtn('Edit',   const Color(0xFF1B7A43), () => _editSupplier(row)),
                   _actionBtn('Delete', const Color(0xFFDC2626), () => _deleteSupplier(row)),
                 ]),
@@ -1208,6 +1423,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   Widget _buildOrdersView(bool isDesktop) {
     if (_orders.isEmpty) return _emptyState('0 supplier orders');
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      _buildInquiryLinksPanel(),
       if (isDesktop) _ordersTableHeader(),
       ..._orders.map((r) => isDesktop ? _desktopOrderRow(r) : _mobileOrderCard(r)),
       const SizedBox(height: 32),
@@ -1227,6 +1443,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         _th('AMOUNT', flex: 2),
         _th('STATUS', flex: 3),
         _th('DATE', flex: 3),
+        const SizedBox(width: 80),
       ]),
     );
   }
@@ -1251,6 +1468,22 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
             style: const TextStyle(fontSize: 13, color: Color(0xFF111827)))),
         Expanded(flex: 3, child: _OrderStatusActions(orderId: row.id, status: row.status, onUpdate: _updateOrderStatus)),
         Expanded(flex: 3, child: Text(dateStr, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)))),
+        SizedBox(width: 80, child: GestureDetector(
+          onTap: () => _sendOrderInquiry(row.id),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: const Color(0xFFEFF6FF),
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(color: const Color(0xFFBFDBFE)),
+            ),
+            child: const Row(mainAxisSize: MainAxisSize.min, children: [
+              Icon(Icons.send_outlined, size: 12, color: Color(0xFF2563EB)),
+              SizedBox(width: 4),
+              Text('Inquiry', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF2563EB))),
+            ]),
+          ),
+        )),
       ]),
     );
   }
@@ -1283,7 +1516,26 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           Text('₹${row.totalAmount!.toStringAsFixed(0)}', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF1B7A43))),
         ],
         const SizedBox(height: 10),
-        _OrderStatusActions(orderId: row.id, status: row.status, onUpdate: _updateOrderStatus),
+        Row(children: [
+          Expanded(child: _OrderStatusActions(orderId: row.id, status: row.status, onUpdate: _updateOrderStatus)),
+          const SizedBox(width: 8),
+          GestureDetector(
+            onTap: () => _sendOrderInquiry(row.id),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: const Color(0xFFEFF6FF),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: const Color(0xFFBFDBFE)),
+              ),
+              child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                Icon(Icons.send_outlined, size: 13, color: Color(0xFF2563EB)),
+                SizedBox(width: 4),
+                Text('Inquiry', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF2563EB))),
+              ]),
+            ),
+          ),
+        ]),
       ]),
     );
   }
@@ -6423,5 +6675,31 @@ extension _ListExt<T> on List<T> {
   T? firstWhereOrNull(bool Function(T) test) {
     for (final e in this) { if (test(e)) return e; }
     return null;
+  }
+}
+
+// ── Inquiry status badge ──────────────────────────────────────────────────────
+
+class _InquiryStatusBadge extends StatelessWidget {
+  final String status;
+  const _InquiryStatusBadge({required this.status});
+
+  @override
+  Widget build(BuildContext context) {
+    final (bg, fg, label) = switch (status) {
+      'responded'          => (const Color(0xFFD1FAE5), const Color(0xFF065F46), 'Responded'),
+      'partially_responded'=> (const Color(0xFFFEF3C7), const Color(0xFF92400E), 'Partial'),
+      'expired'            => (const Color(0xFFF3F4F6), const Color(0xFF6B7280), 'Expired'),
+      _                    => (const Color(0xFFEFF6FF), const Color(0xFF1E40AF), 'Pending'),
+    };
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Text(label,
+          style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: fg)),
+    );
   }
 }

@@ -12,6 +12,7 @@ import 'models/cart_model.dart';
 import 'screens/auth/login_screen.dart';
 import 'screens/home_shell.dart';
 import 'screens/about_screen.dart';
+import 'screens/public/inquiry_form_screen.dart';
 import 'screens/contact_screen.dart';
 import 'screens/legal_pages.dart';
 import 'supabase_config.dart';
@@ -70,6 +71,20 @@ class _PharmaB2BAppState extends State<PharmaB2BApp> {
           theme: buildTheme(),
           scrollBehavior: const SmoothScrollBehavior(),
           home: _AppRoot(auth: _auth),
+          // Public inquiry form — no auth required, handles /inquiry/<token>
+          onGenerateRoute: (settings) {
+            final name = settings.name ?? '';
+            if (name.startsWith('/inquiry/')) {
+              final token = name.substring('/inquiry/'.length).split('?').first;
+              if (token.isNotEmpty) {
+                return MaterialPageRoute(
+                  settings: settings,
+                  builder: (_) => InquiryFormScreen(token: token),
+                );
+              }
+            }
+            return null;
+          },
           // Unknown paths (e.g. /c/cardiac) fall through to home shell,
           // which reads the URL in initState and sets the correct category.
           onUnknownRoute: (_) => MaterialPageRoute(

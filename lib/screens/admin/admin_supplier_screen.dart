@@ -159,6 +159,10 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   final Set<String> _expandedLeads = {};
   final Map<String, int> _companyCounts = {};
   final Map<String, void Function(Map<String, dynamic>)> _spnCallbacks = {};
+
+  // Import Supplier popover (mirrors Clear Cart popover pattern)
+  final LayerLink _importSupplierLink = LayerLink();
+  OverlayEntry? _importSupplierOverlay;
   final ScrollController _scrollCtrl = ScrollController();
   final List<RealtimeChannel> _channels = [];
   Timer? _debounce;
@@ -667,14 +671,17 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                   style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
             ]),
           ),
-          TextButton.icon(
-            onPressed: _pickAndImportSupplierProfile,
-            icon: const Icon(Icons.upload_file_outlined, size: 16),
-            label: const Text('Import Supplier'),
-            style: TextButton.styleFrom(
-              foregroundColor: const Color(0xFF1B7A43),
-              textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          CompositedTransformTarget(
+            link: _importSupplierLink,
+            child: TextButton.icon(
+              onPressed: _pickAndImportSupplierProfile,
+              icon: const Icon(Icons.upload_file_outlined, size: 16),
+              label: const Text('Import Supplier'),
+              style: TextButton.styleFrom(
+                foregroundColor: const Color(0xFF1B7A43),
+                textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              ),
             ),
           ),
           IconButton(
@@ -1576,23 +1583,39 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     ]);
   }
 
-  Future<void> _pickAndImportSupplierProfile() async {
-    RenderLog.write('import_choice_popup_opened', 'true');
-    final choice = await showDialog<String>(
-      context: context,
-      builder: (_) => const _ImportChoiceDialog(),
-    );
-    if (!mounted) return;
-    if (choice == 'manually') {
-      RenderLog.write('manual_import_dialog_opened', 'true');
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (_) => _ManualSupplierImportDialog(onImported: () { if (mounted) _load(showSpinner: false); }),
-      );
-    } else if (choice == 'file') {
-      await _pickAndImportFile();
+  void _pickAndImportSupplierProfile() {
+    if (_importSupplierOverlay != null) {
+      _closeImportSupplierPopover();
+      return;
     }
+    RenderLog.write('import_choice_popover_opened', 'true');
+    final entry = OverlayEntry(
+      builder: (_) => _ImportSupplierPopover(
+        link: _importSupplierLink,
+        onDismissed: () { if (mounted) _closeImportSupplierPopover(); },
+        onManually: () {
+          _closeImportSupplierPopover();
+          RenderLog.write('manual_import_dialog_opened', 'true');
+          if (mounted) showDialog(
+            context: context,
+            barrierDismissible: false,
+            builder: (_) => _ManualSupplierImportDialog(
+                onImported: () { if (mounted) _load(showSpinner: false); }),
+          );
+        },
+        onFile: () {
+          _closeImportSupplierPopover();
+          if (mounted) _pickAndImportFile();
+        },
+      ),
+    );
+    _importSupplierOverlay = entry;
+    Overlay.of(context).insert(entry);
+  }
+
+  void _closeImportSupplierPopover() {
+    _importSupplierOverlay?.remove();
+    _importSupplierOverlay = null;
   }
 
   Future<void> _pickAndImportFile() async {
@@ -5357,64 +5380,176 @@ class _SupCardMultiImportDialogState extends State<_SupCardMultiImportDialog> {
   }
 }
 
-// ─── Import choice popup ──────────────────────────────────────────────────────
+// ─── Import Supplier popover (mirrors Clear Cart popover exactly) ─────────────
 
-class _ImportChoiceDialog extends StatelessWidget {
-  const _ImportChoiceDialog();
+class _ImportSupplierPopover extends StatefulWidget {
+  final LayerLink link;
+  final VoidCallback onDismissed;
+  final VoidCallback onManually;
+  final VoidCallback onFile;
+
+  const _ImportSupplierPopover({
+    required this.link,
+    required this.onDismissed,
+    required this.onManually,
+    required this.onFile,
+  });
+
+  @override
+  State<_ImportSupplierPopover> createState() => _ImportSupplierPopoverState();
+}
+
+class _ImportSupplierPopoverState extends State<_ImportSupplierPopover>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  late final Animation<double> _scale;
+  late final Animation<double> _fade;
+  bool _dismissing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 200));
+    _scale = CurvedAnimation(parent: _ctrl, curve: Curves.easeOut);
+    _fade = _ctrl;
+    _ctrl.forward();
+    RenderLog.write('import_choice_popover_rendered', 'true');
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _dismiss() async {
+    if (_dismissing) return;
+    _dismissing = true;
+    await _ctrl.animateTo(0,
+        duration: const Duration(milliseconds: 180), curve: Curves.easeIn);
+    widget.onDismissed();
+  }
+
+  Future<void> _handleManually() async {
+    if (_dismissing) return;
+    _dismissing = true;
+    await _ctrl.animateTo(0,
+        duration: const Duration(milliseconds: 140), curve: Curves.easeIn);
+    widget.onManually();
+  }
+
+  Future<void> _handleFile() async {
+    if (_dismissing) return;
+    _dismissing = true;
+    await _ctrl.animateTo(0,
+        duration: const Duration(milliseconds: 140), curve: Curves.easeIn);
+    widget.onFile();
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Dialog(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: Container(
-        width: 300,
-        padding: const EdgeInsets.all(24),
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Row(children: [
-            const Expanded(
-              child: Text('Add Supplier',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
-            ),
-            GestureDetector(
-              onTap: () => Navigator.pop(context),
-              child: const Icon(Icons.close, size: 18, color: Color(0xFF6B7280)),
-            ),
-          ]),
-          const SizedBox(height: 8),
-          const Text('How do you want to add this supplier?',
-              style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
-          const SizedBox(height: 20),
-          Row(children: [
-            Expanded(
-              child: OutlinedButton(
-                onPressed: () => Navigator.pop(context, 'manually'),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: const Color(0xFF1B7A43),
-                  side: const BorderSide(color: Color(0xFF1B7A43)),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                  padding: const EdgeInsets.symmetric(vertical: 10),
-                ),
-                child: const Text('Manually',
-                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: FilledButton(
-                onPressed: () => Navigator.pop(context, 'file'),
-                style: FilledButton.styleFrom(
-                  backgroundColor: const Color(0xFF1B7A43),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                  padding: const EdgeInsets.symmetric(vertical: 10),
-                ),
-                child: const Text('File',
-                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-              ),
-            ),
-          ]),
-        ]),
+    return Stack(children: [
+      // Tap-outside barrier (no dark scrim — matches Clear Cart)
+      Positioned.fill(
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: _dismiss,
+          child: const SizedBox.expand(),
+        ),
       ),
-    );
+      // Floating popover anchored below the Import Supplier button
+      CompositedTransformFollower(
+        link: widget.link,
+        targetAnchor: Alignment.bottomRight,
+        followerAnchor: Alignment.topRight,
+        offset: const Offset(0, 6),
+        showWhenUnlinked: false,
+        child: ScaleTransition(
+          scale: _scale,
+          alignment: Alignment.topRight,
+          child: FadeTransition(
+            opacity: _fade,
+            child: Material(
+              color: Colors.transparent,
+              elevation: 0,
+              child: Container(
+                width: 272,
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(14),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.12),
+                      blurRadius: 20,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(children: [
+                      const Expanded(
+                        child: Text(
+                          'How do you want to add this supplier?',
+                          style: TextStyle(fontSize: 13, color: Color(0xFF6B7280)),
+                        ),
+                      ),
+                      GestureDetector(
+                        onTap: _dismiss,
+                        child: const Icon(Icons.close,
+                            size: 16, color: Color(0xFF9CA3AF)),
+                      ),
+                    ]),
+                    const SizedBox(height: 12),
+                    Row(children: [
+                      Expanded(
+                        child: FilledButton(
+                          onPressed: _handleManually,
+                          style: FilledButton.styleFrom(
+                            backgroundColor: const Color(0xFFDCFCE7),
+                            foregroundColor: const Color(0xFF15803D),
+                            minimumSize: const Size(0, 44),
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(10)),
+                            elevation: 0,
+                            shadowColor: Colors.transparent,
+                          ),
+                          child: const Text('Manually',
+                              style: TextStyle(
+                                  fontSize: 13, fontWeight: FontWeight.w600)),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: FilledButton(
+                          onPressed: _handleFile,
+                          style: FilledButton.styleFrom(
+                            backgroundColor: const Color(0xFF1B7A43),
+                            foregroundColor: Colors.white,
+                            minimumSize: const Size(0, 44),
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(10)),
+                          ),
+                          child: const Text('File',
+                              style: TextStyle(
+                                  fontSize: 13, fontWeight: FontWeight.w600)),
+                        ),
+                      ),
+                    ]),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ]);
   }
 }
 

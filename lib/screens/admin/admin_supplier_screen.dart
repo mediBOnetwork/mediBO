@@ -1577,6 +1577,25 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   }
 
   Future<void> _pickAndImportSupplierProfile() async {
+    RenderLog.write('import_choice_popup_opened', 'true');
+    final choice = await showDialog<String>(
+      context: context,
+      builder: (_) => const _ImportChoiceDialog(),
+    );
+    if (!mounted) return;
+    if (choice == 'manually') {
+      RenderLog.write('manual_import_dialog_opened', 'true');
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => _ManualSupplierImportDialog(onImported: () { if (mounted) _load(showSpinner: false); }),
+      );
+    } else if (choice == 'file') {
+      await _pickAndImportFile();
+    }
+  }
+
+  Future<void> _pickAndImportFile() async {
     final input = html.FileUploadInputElement()
       ..accept = '.csv,.tsv,.txt,.xlsx,.xls,.ods,.docx,.pdf,.jpg,.jpeg,.png,.webp,.heic,.heif,.gif'
       ..multiple = true;
@@ -1590,7 +1609,6 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     final nonImages = files.where((f) => !imageExts.contains(f.name.toLowerCase().split('.').last)).toList();
 
     if (nonImages.isNotEmpty) {
-      // Non-image: use existing single-file profile import dialog (first file only)
       showDialog(
         context: context,
         barrierDismissible: false,
@@ -5335,6 +5353,903 @@ class _SupCardMultiImportDialogState extends State<_SupCardMultiImportDialog> {
           ),
         ]),
       ),
+    );
+  }
+}
+
+// ─── Import choice popup ──────────────────────────────────────────────────────
+
+class _ImportChoiceDialog extends StatelessWidget {
+  const _ImportChoiceDialog();
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Container(
+        width: 300,
+        padding: const EdgeInsets.all(24),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Row(children: [
+            const Expanded(
+              child: Text('Add Supplier',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+            ),
+            GestureDetector(
+              onTap: () => Navigator.pop(context),
+              child: const Icon(Icons.close, size: 18, color: Color(0xFF6B7280)),
+            ),
+          ]),
+          const SizedBox(height: 8),
+          const Text('How do you want to add this supplier?',
+              style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+          const SizedBox(height: 20),
+          Row(children: [
+            Expanded(
+              child: OutlinedButton(
+                onPressed: () => Navigator.pop(context, 'manually'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFF1B7A43),
+                  side: const BorderSide(color: Color(0xFF1B7A43)),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                ),
+                child: const Text('Manually',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: FilledButton(
+                onPressed: () => Navigator.pop(context, 'file'),
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFF1B7A43),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                ),
+                child: const Text('File',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+              ),
+            ),
+          ]),
+        ]),
+      ),
+    );
+  }
+}
+
+// ─── Manual supplier import — field config ────────────────────────────────────
+
+const _kFieldGroup = <String, String>{
+  'supplier_name':  'Identity & Account',
+  'contact_name':   'Identity & Account',
+  'contact_person': 'Identity & Account',
+  'supplier_code':  'Identity & Account',
+  'store_type':     'Identity & Account',
+  'stockist_type':  'Identity & Account',
+  'status':         'Identity & Account',
+  'behaviour':      'Identity & Account',
+  'whatsapp_no':    'Contact',
+  'phone':          'Contact',
+  'contact_no':     'Contact',
+  'other_contact':  'Contact',
+  'email':          'Contact',
+  'map_link':       'Contact',
+  'city':           'Location',
+  'state':          'Location',
+  'address':        'Location',
+  'street_address': 'Location',
+  'pincode':        'Location',
+  'pin_code':       'Location',
+  'payment_term':   'Business Terms',
+  'payment_type':   'Business Terms',
+  'margin':         'Business Terms',
+  'cd_condition':   'Business Terms',
+  'deal':           'Business Terms',
+  'range_zone':     'Business Terms',
+  'gstin':          'Legal & Financial',
+  'gst':            'Legal & Financial',
+  'drug_license':   'Legal & Financial',
+  'dl_1':           'Legal & Financial',
+  'dl_2':           'Legal & Financial',
+  'notes':          'Other',
+};
+
+const _kFieldLabel = <String, String>{
+  'supplier_name':  'Supplier Name',
+  'contact_name':   'Contact Name',
+  'contact_person': 'Contact Person',
+  'supplier_code':  'Supplier Code',
+  'store_type':     'Store Type',
+  'stockist_type':  'Stockist Type',
+  'status':         'Status',
+  'behaviour':      'Behaviour / Rating',
+  'whatsapp_no':    'WhatsApp Number',
+  'phone':          'Phone',
+  'contact_no':     'Phone / Landline',
+  'other_contact':  'Other Contact',
+  'email':          'Email',
+  'map_link':       'Map Link',
+  'city':           'City',
+  'state':          'State',
+  'address':        'Address',
+  'street_address': 'Street Address',
+  'pincode':        'Pincode',
+  'pin_code':       'PIN Code',
+  'payment_term':   'Payment Term',
+  'payment_type':   'Payment Type',
+  'margin':         'Margin',
+  'cd_condition':   'CD Condition',
+  'deal':           'Deal',
+  'range_zone':     'Range / Zone',
+  'gstin':          'GSTIN',
+  'gst':            'GST Number',
+  'drug_license':   'Drug License',
+  'dl_1':           'Drug License 1 (DL-1)',
+  'dl_2':           'Drug License 2 (DL-2)',
+  'notes':          'Notes',
+};
+
+const _kDropdownOptions = <String, List<String>>{
+  'status':       ['Active', 'Inactive', 'Suspended', 'Pending', 'Blocked'],
+  'payment_type': ['cash', 'credit'],
+  'cd_condition': ['NO CONDITION', '2K+ BILL', '3K+ BILL'],
+};
+
+const _kRequiredFields = {'supplier_name'};
+
+const _kAllFields = <String>[
+  'supplier_name', 'contact_name', 'contact_person', 'supplier_code',
+  'store_type', 'stockist_type', 'status', 'behaviour',
+  'whatsapp_no', 'phone', 'contact_no', 'other_contact', 'email', 'map_link',
+  'city', 'state', 'address', 'street_address', 'pincode', 'pin_code',
+  'payment_term', 'payment_type', 'margin', 'cd_condition', 'deal', 'range_zone',
+  'gstin', 'gst', 'drug_license', 'dl_1', 'dl_2',
+  'notes',
+];
+
+const _kGroupOrder = <String>[
+  'Identity & Account',
+  'Contact',
+  'Location',
+  'Business Terms',
+  'Legal & Financial',
+  'Other',
+];
+
+// ─── Manual supplier import dialog ───────────────────────────────────────────
+
+class _ManualSupplierImportDialog extends StatefulWidget {
+  final VoidCallback onImported;
+  const _ManualSupplierImportDialog({required this.onImported});
+
+  @override
+  State<_ManualSupplierImportDialog> createState() => _ManualSupplierImportDialogState();
+}
+
+class _ManualSupplierImportDialogState extends State<_ManualSupplierImportDialog> {
+  int _page = 1;
+  final Map<String, TextEditingController> _ctrl = {};
+  final Map<String, String?> _dropdownValues = {'status': 'Active'};
+  final Set<String> _expandedSections = {'Identity & Account'};
+  String? _page1Error;
+  bool _submitting = false;
+  String? _submitError;
+
+  // Page 2 — category mode
+  bool _byCategory = true;
+  List<String> _allCategories = [];
+  bool _loadingCategories = false;
+  final List<String> _selectedCategories = [];
+  final Map<String, List<String>> _categoriesCompanyList = {};
+  final Map<String, bool> _loadingCategoryCompanies = {};
+  final Map<String, Set<String>> _selectedCompaniesByCategory = {};
+
+  // Page 2 — company mode
+  List<String> _allCompanies = [];
+  bool _loadingAllCompanies = false;
+  String _companySearch = '';
+  final Set<String> _selectedCompaniesDirect = {};
+  List<Map<String, String>> _categoriesByCompanyRows = [];
+  bool _loadingCategoriesByCompany = false;
+
+  Set<String> get _unionCompanies {
+    final s = <String>{};
+    for (final cats in _selectedCompaniesByCategory.values) s.addAll(cats);
+    s.addAll(_selectedCompaniesDirect);
+    return s;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    for (final f in _kAllFields) {
+      if (!_kDropdownOptions.containsKey(f)) _ctrl[f] = TextEditingController();
+    }
+  }
+
+  @override
+  void dispose() {
+    for (final c in _ctrl.values) c.dispose();
+    super.dispose();
+  }
+
+  // ── loaders ────────────────────────────────────────────────────────────────
+
+  Future<void> _loadCategories() async {
+    if (_allCategories.isNotEmpty || _loadingCategories) return;
+    setState(() => _loadingCategories = true);
+    try {
+      final rows = await Supabase.instance.client.rpc('get_therapeutic_categories');
+      if (mounted) setState(() {
+        _allCategories = (rows as List).map((r) => r['category'] as String).toList();
+        _loadingCategories = false;
+      });
+      RenderLog.write('manual_import_categories_loaded', _allCategories.length.toString());
+    } catch (_) {
+      if (mounted) setState(() => _loadingCategories = false);
+    }
+  }
+
+  Future<void> _loadCompaniesByCategory(String cat) async {
+    if (_categoriesCompanyList.containsKey(cat) || (_loadingCategoryCompanies[cat] ?? false)) return;
+    setState(() => _loadingCategoryCompanies[cat] = true);
+    try {
+      final rows = await Supabase.instance.client
+          .rpc('get_companies_by_category', params: {'p_category': cat});
+      if (mounted) setState(() {
+        _categoriesCompanyList[cat] =
+            (rows as List).map((r) => r['company_name'] as String).toList();
+        _loadingCategoryCompanies[cat] = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _loadingCategoryCompanies[cat] = false);
+    }
+  }
+
+  Future<void> _loadAllCompanies() async {
+    if (_allCompanies.isNotEmpty || _loadingAllCompanies) return;
+    setState(() => _loadingAllCompanies = true);
+    try {
+      final rows = await Supabase.instance.client.rpc('get_all_companies');
+      if (mounted) setState(() {
+        _allCompanies = (rows as List).map((r) => r['company_name'] as String).toList();
+        _loadingAllCompanies = false;
+      });
+      RenderLog.write('manual_import_all_companies_loaded', _allCompanies.length.toString());
+    } catch (_) {
+      if (mounted) setState(() => _loadingAllCompanies = false);
+    }
+  }
+
+  Future<void> _loadCategoriesByCompany() async {
+    final companies = _selectedCompaniesDirect.toList();
+    if (companies.isEmpty) {
+      setState(() => _categoriesByCompanyRows = []);
+      return;
+    }
+    setState(() => _loadingCategoriesByCompany = true);
+    try {
+      final rows = await Supabase.instance.client
+          .rpc('get_categories_by_company', params: {'p_companies': companies});
+      if (mounted) setState(() {
+        _categoriesByCompanyRows = (rows as List).map((r) => {
+          'category': r['category'] as String,
+          'company_name': r['company_name'] as String,
+        }).toList();
+        _loadingCategoriesByCompany = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _loadingCategoriesByCompany = false);
+    }
+  }
+
+  // ── validation & submit ────────────────────────────────────────────────────
+
+  bool _validatePage1() {
+    for (final f in _kRequiredFields) {
+      final v = _kDropdownOptions.containsKey(f)
+          ? (_dropdownValues[f] ?? '')
+          : (_ctrl[f]?.text.trim() ?? '');
+      if (v.isEmpty) {
+        setState(() => _page1Error = '${_kFieldLabel[f] ?? f} is required.');
+        return false;
+      }
+    }
+    setState(() => _page1Error = null);
+    return true;
+  }
+
+  Future<void> _submit() async {
+    if (!_validatePage1()) { setState(() => _page = 1); return; }
+    setState(() { _submitting = true; _submitError = null; });
+    try {
+      final client = Supabase.instance.client;
+      final rec = <String, dynamic>{'approved': true, 'is_deleted': false};
+      for (final f in _kAllFields) {
+        if (_kDropdownOptions.containsKey(f)) {
+          final v = _dropdownValues[f];
+          if (v != null && v.isNotEmpty) rec[f] = v;
+        } else {
+          final v = _ctrl[f]?.text.trim() ?? '';
+          if (v.isNotEmpty) rec[f] = v;
+        }
+      }
+      if (!rec.containsKey('status')) rec['status'] = 'Active';
+
+      RenderLog.write('manual_import_submitting', rec['supplier_name']?.toString() ?? '');
+      final inserted = await client.from('supplier_profiles').insert(rec).select('id').single();
+      final supplierId = inserted['id'] as String;
+      final supplierName = (rec['supplier_name'] as String? ?? '').trim();
+      RenderLog.write('manual_import_supplier_inserted', supplierId);
+
+      final companies = _unionCompanies.toList();
+      if (companies.isNotEmpty) {
+        final scRows = companies.map((co) => <String, dynamic>{
+          'supplier_id': supplierId,
+          'supplier_name': supplierName,
+          'supplier_company': co,
+        }).toList();
+        await client.from('supplier_company').insert(scRows);
+        RenderLog.write('manual_import_companies_linked', companies.length.toString());
+      }
+
+      if (mounted) {
+        Navigator.of(context).pop();
+        widget.onImported();
+        showToast(context, 'Added $supplierName with ${companies.length} compan${companies.length == 1 ? 'y' : 'ies'}',
+            duration: const Duration(seconds: 5));
+      }
+    } catch (e) {
+      if (mounted) setState(() {
+        _submitting = false;
+        _submitError = e.toString().replaceFirst('Exception: ', '');
+      });
+    }
+  }
+
+  // ── build ──────────────────────────────────────────────────────────────────
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 640, maxHeight: 720),
+        child: Column(children: [
+          _buildHeader(),
+          _buildProgress(),
+          Expanded(child: _page == 1 ? _buildPage1() : _buildPage2()),
+          _buildBottomBar(),
+        ]),
+      ),
+    );
+  }
+
+  Widget _buildHeader() {
+    final title = _page == 1
+        ? 'Add Supplier Manually — Details'
+        : 'Add Supplier Manually — Companies';
+    return Container(
+      padding: const EdgeInsets.fromLTRB(20, 16, 12, 12),
+      decoration: const BoxDecoration(
+          border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB)))),
+      child: Row(children: [
+        Expanded(child: Text(title,
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827)))),
+        GestureDetector(
+          onTap: _submitting ? null : () => Navigator.of(context).pop(),
+          child: const Icon(Icons.close, size: 18, color: Color(0xFF6B7280)),
+        ),
+      ]),
+    );
+  }
+
+  Widget _buildProgress() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+      child: Row(children: [
+        _progressStep(1, 'Supplier Details'),
+        Expanded(child: Container(height: 2,
+            color: _page >= 2 ? const Color(0xFF1B7A43) : const Color(0xFFE5E7EB))),
+        _progressStep(2, 'Companies'),
+      ]),
+    );
+  }
+
+  Widget _progressStep(int n, String label) {
+    final active = _page >= n;
+    return Row(mainAxisSize: MainAxisSize.min, children: [
+      Container(
+        width: 24, height: 24,
+        decoration: BoxDecoration(
+          color: active ? const Color(0xFF1B7A43) : const Color(0xFFE5E7EB),
+          shape: BoxShape.circle,
+        ),
+        alignment: Alignment.center,
+        child: Text('$n', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700,
+            color: active ? Colors.white : const Color(0xFF9CA3AF))),
+      ),
+      const SizedBox(width: 6),
+      Text(label, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
+          color: active ? const Color(0xFF1B7A43) : const Color(0xFF9CA3AF))),
+    ]);
+  }
+
+  // ── page 1 ─────────────────────────────────────────────────────────────────
+
+  Widget _buildPage1() {
+    RenderLog.write('manual_import_page1_rendered', 'true');
+    return SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if (_page1Error != null) ...[
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFEF2F2),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0xFFFCA5A5)),
+            ),
+            child: Text(_page1Error!,
+                style: const TextStyle(fontSize: 12, color: Color(0xFFDC2626))),
+          ),
+          const SizedBox(height: 8),
+        ],
+        ..._kGroupOrder.map(_buildSection),
+      ]),
+    );
+  }
+
+  Widget _buildSection(String group) {
+    final fields = _kAllFields.where((f) => (_kFieldGroup[f] ?? 'Other') == group).toList();
+    if (fields.isEmpty) return const SizedBox.shrink();
+    final isOpen = _expandedSections.contains(group);
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(10),
+        child: Column(children: [
+          InkWell(
+            onTap: () => setState(() =>
+                isOpen ? _expandedSections.remove(group) : _expandedSections.add(group)),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              child: Row(children: [
+                Expanded(child: Text(group,
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
+                        color: Color(0xFF374151)))),
+                AnimatedRotation(
+                  turns: isOpen ? 0.5 : 0.0,
+                  duration: const Duration(milliseconds: 200),
+                  child: const Icon(Icons.expand_more, size: 18, color: Color(0xFF6B7280)),
+                ),
+              ]),
+            ),
+          ),
+          if (isOpen) ...[
+            const Divider(height: 1, color: Color(0xFFE5E7EB)),
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(children: fields.map(_buildField).toList()),
+            ),
+          ],
+        ]),
+      ),
+    );
+  }
+
+  Widget _buildField(String col) {
+    final label = _kFieldLabel[col] ?? col;
+    final required = _kRequiredFields.contains(col);
+    if (_kDropdownOptions.containsKey(col)) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 10),
+        child: DropdownButtonFormField<String>(
+          value: _dropdownValues[col],
+          decoration: InputDecoration(
+            labelText: required ? '$label *' : label,
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            isDense: true,
+          ),
+          items: [
+            if (!required)
+              const DropdownMenuItem<String>(
+                  value: null,
+                  child: Text('— none —',
+                      style: TextStyle(color: Color(0xFF9CA3AF)))),
+            ..._kDropdownOptions[col]!.map((o) =>
+                DropdownMenuItem<String>(value: o, child: Text(o))),
+          ],
+          onChanged: (v) => setState(() => _dropdownValues[col] = v),
+        ),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: TextField(
+        controller: _ctrl[col],
+        decoration: InputDecoration(
+          labelText: required ? '$label *' : label,
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          isDense: true,
+        ),
+        maxLines: (col == 'notes' || col == 'address' || col == 'street_address') ? 3 : 1,
+        style: const TextStyle(fontSize: 13),
+      ),
+    );
+  }
+
+  // ── page 2 ─────────────────────────────────────────────────────────────────
+
+  Widget _buildPage2() {
+    RenderLog.write('manual_import_page2_rendered', 'true');
+    return Column(children: [
+      Padding(
+        padding: const EdgeInsets.fromLTRB(20, 8, 20, 4),
+        child: Row(children: [
+          Expanded(child: _modeBtn('By Category', _byCategory, () {
+            setState(() => _byCategory = true);
+            _loadCategories();
+          })),
+          const SizedBox(width: 8),
+          Expanded(child: _modeBtn('By Company', !_byCategory, () {
+            setState(() => _byCategory = false);
+            _loadAllCompanies();
+          })),
+        ]),
+      ),
+      Expanded(child: _byCategory ? _buildCategoryMode() : _buildCompanyMode()),
+      _buildSelectedCompanyChips(),
+    ]);
+  }
+
+  Widget _modeBtn(String label, bool active, VoidCallback onTap) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        decoration: BoxDecoration(
+          color: active ? const Color(0xFF1B7A43) : const Color(0xFFF3F4F6),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        alignment: Alignment.center,
+        child: Text(label, style: TextStyle(
+            fontSize: 13, fontWeight: FontWeight.w600,
+            color: active ? Colors.white : const Color(0xFF374151))),
+      ),
+    );
+  }
+
+  Widget _buildCategoryMode() {
+    if (_loadingCategories) {
+      return const Center(child: CircularProgressIndicator(strokeWidth: 2));
+    }
+    if (_allCategories.isEmpty) {
+      return Center(child: TextButton(
+          onPressed: _loadCategories,
+          child: const Text('Load categories')));
+    }
+    return SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text('Select therapeutic categories:',
+            style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+        const SizedBox(height: 6),
+        Wrap(
+          spacing: 6, runSpacing: 6,
+          children: _allCategories.map((cat) {
+            final sel = _selectedCategories.contains(cat);
+            return FilterChip(
+              label: Text(cat, style: const TextStyle(fontSize: 11)),
+              selected: sel,
+              onSelected: (v) {
+                setState(() {
+                  if (v) {
+                    _selectedCategories.add(cat);
+                    _loadCompaniesByCategory(cat);
+                  } else {
+                    _selectedCategories.remove(cat);
+                    _selectedCompaniesByCategory.remove(cat);
+                  }
+                });
+              },
+              selectedColor: const Color(0xFFDCFCE7),
+              checkmarkColor: const Color(0xFF1B7A43),
+              backgroundColor: const Color(0xFFF3F4F6),
+              side: BorderSide(
+                  color: sel ? const Color(0xFF1B7A43) : const Color(0xFFD1D5DB)),
+              labelStyle: TextStyle(
+                  color: sel ? const Color(0xFF1B7A43) : const Color(0xFF374151)),
+            );
+          }).toList(),
+        ),
+        const SizedBox(height: 12),
+        ..._selectedCategories.map(_buildCategoryCompanySection),
+      ]),
+    );
+  }
+
+  Widget _buildCategoryCompanySection(String cat) {
+    final loading = _loadingCategoryCompanies[cat] ?? false;
+    final companies = _categoriesCompanyList[cat] ?? [];
+    final selected = _selectedCompaniesByCategory[cat] ?? {};
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: BoxDecoration(
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: const BoxDecoration(
+            color: Color(0xFFF9FAFB),
+            borderRadius:
+                BorderRadius.only(topLeft: Radius.circular(8), topRight: Radius.circular(8)),
+          ),
+          child: Row(children: [
+            Expanded(child: Text(cat,
+                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700,
+                    color: Color(0xFF374151)))),
+            Text('${selected.length} selected',
+                style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
+          ]),
+        ),
+        if (loading)
+          const Padding(
+              padding: EdgeInsets.all(12),
+              child: Center(child: CircularProgressIndicator(strokeWidth: 2)))
+        else if (companies.isEmpty)
+          const Padding(
+              padding: EdgeInsets.all(10),
+              child: Text('No companies found.',
+                  style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF))))
+        else
+          Padding(
+            padding: const EdgeInsets.all(10),
+            child: Wrap(
+              spacing: 6, runSpacing: 6,
+              children: companies.map((co) {
+                final isSel = selected.contains(co);
+                return FilterChip(
+                  label: Text(co, style: const TextStyle(fontSize: 11)),
+                  selected: isSel,
+                  onSelected: (v) {
+                    setState(() {
+                      final s = _selectedCompaniesByCategory[cat] ?? {};
+                      v ? s.add(co) : s.remove(co);
+                      _selectedCompaniesByCategory[cat] = s;
+                    });
+                  },
+                  selectedColor: const Color(0xFFDCFCE7),
+                  checkmarkColor: const Color(0xFF1B7A43),
+                  backgroundColor: const Color(0xFFF3F4F6),
+                  side: BorderSide(
+                      color: isSel ? const Color(0xFF1B7A43) : const Color(0xFFD1D5DB)),
+                  labelStyle: TextStyle(
+                      color: isSel ? const Color(0xFF1B7A43) : const Color(0xFF374151)),
+                );
+              }).toList(),
+            ),
+          ),
+      ]),
+    );
+  }
+
+  Widget _buildCompanyMode() {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        TextField(
+          onChanged: (v) => setState(() => _companySearch = v.toLowerCase()),
+          decoration: InputDecoration(
+            hintText: 'Search companies...',
+            prefixIcon: const Icon(Icons.search, size: 18),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            isDense: true,
+          ),
+          style: const TextStyle(fontSize: 13),
+        ),
+        const SizedBox(height: 8),
+        if (_loadingAllCompanies)
+          const Center(child: CircularProgressIndicator(strokeWidth: 2))
+        else ...[
+          Builder(builder: (_) {
+            final filtered = _allCompanies
+                .where((c) => _companySearch.isEmpty ||
+                    c.toLowerCase().contains(_companySearch))
+                .take(100)
+                .toList();
+            return Wrap(
+              spacing: 6, runSpacing: 6,
+              children: filtered.map((co) {
+                final isSel = _selectedCompaniesDirect.contains(co);
+                return FilterChip(
+                  label: Text(co, style: const TextStyle(fontSize: 11)),
+                  selected: isSel,
+                  onSelected: (v) {
+                    setState(() {
+                      v ? _selectedCompaniesDirect.add(co)
+                        : _selectedCompaniesDirect.remove(co);
+                    });
+                    _loadCategoriesByCompany();
+                  },
+                  selectedColor: const Color(0xFFDCFCE7),
+                  checkmarkColor: const Color(0xFF1B7A43),
+                  backgroundColor: const Color(0xFFF3F4F6),
+                  side: BorderSide(
+                      color: isSel ? const Color(0xFF1B7A43) : const Color(0xFFD1D5DB)),
+                  labelStyle: TextStyle(
+                      color: isSel ? const Color(0xFF1B7A43) : const Color(0xFF374151)),
+                );
+              }).toList(),
+            );
+          }),
+          if (_selectedCompaniesDirect.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            const Text('Categories covered:',
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700,
+                    color: Color(0xFF374151))),
+            const SizedBox(height: 6),
+            if (_loadingCategoriesByCompany)
+              const CircularProgressIndicator(strokeWidth: 2)
+            else
+              _buildCategoryCoverageSection(),
+          ],
+        ],
+      ]),
+    );
+  }
+
+  Widget _buildCategoryCoverageSection() {
+    if (_categoriesByCompanyRows.isEmpty) {
+      return const Text('No category data found.',
+          style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)));
+    }
+    final byCategory = <String, List<String>>{};
+    for (final row in _categoriesByCompanyRows) {
+      (byCategory[row['category']!] ??= []).add(row['company_name']!);
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: byCategory.entries.map((e) => Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(e.key, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
+              color: Color(0xFF374151))),
+          const SizedBox(height: 4),
+          Wrap(spacing: 6, runSpacing: 4, children: e.value.map((co) => Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: BoxDecoration(
+                color: const Color(0xFFDCFCE7),
+                borderRadius: BorderRadius.circular(12)),
+            child: Text(co,
+                style: const TextStyle(fontSize: 11, color: Color(0xFF15803D))),
+          )).toList()),
+        ]),
+      )).toList(),
+    );
+  }
+
+  Widget _buildSelectedCompanyChips() {
+    final union = _unionCompanies.toList()..sort();
+    return Container(
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
+      decoration: const BoxDecoration(
+          border: Border(top: BorderSide(color: Color(0xFFE5E7EB)))),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text('Selected companies (${union.length})',
+            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700,
+                color: Color(0xFF374151))),
+        if (union.isNotEmpty) ...[
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 6, runSpacing: 4,
+            children: union.map((co) => Chip(
+              label: Text(co, style: const TextStyle(fontSize: 11)),
+              deleteIcon: const Icon(Icons.close, size: 12),
+              onDeleted: () => setState(() {
+                _selectedCompaniesDirect.remove(co);
+                for (final s in _selectedCompaniesByCategory.values) s.remove(co);
+              }),
+              backgroundColor: const Color(0xFFDCFCE7),
+              side: const BorderSide(color: Color(0xFF1B7A43)),
+              labelStyle: const TextStyle(color: Color(0xFF15803D)),
+              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              padding: const EdgeInsets.symmetric(horizontal: 2),
+            )).toList(),
+          ),
+        ],
+      ]),
+    );
+  }
+
+  // ── bottom bar ─────────────────────────────────────────────────────────────
+
+  Widget _buildBottomBar() {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(20, 10, 20, 16),
+      decoration: const BoxDecoration(
+          border: Border(top: BorderSide(color: Color(0xFFE5E7EB)))),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        if (_submitError != null)
+          Container(
+            padding: const EdgeInsets.all(10),
+            margin: const EdgeInsets.only(bottom: 8),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFEF2F2),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0xFFFCA5A5)),
+            ),
+            child: Text(_submitError!,
+                style: const TextStyle(fontSize: 12, color: Color(0xFFDC2626))),
+          ),
+        Row(children: [
+          if (_page == 2) ...[
+            OutlinedButton(
+              onPressed: _submitting ? null : () => setState(() => _page = 1),
+              style: OutlinedButton.styleFrom(
+                side: const BorderSide(color: Color(0xFFD1D5DB)),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              child: const Text('← Back',
+                  style: TextStyle(color: Color(0xFF374151))),
+            ),
+            const SizedBox(width: 8),
+          ],
+          OutlinedButton(
+            onPressed: _submitting ? null : () => Navigator.of(context).pop(),
+            style: OutlinedButton.styleFrom(
+              side: const BorderSide(color: Color(0xFFD1D5DB)),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            child: const Text('Cancel',
+                style: TextStyle(color: Color(0xFF374151))),
+          ),
+          const Spacer(),
+          if (_page == 1)
+            FilledButton(
+              onPressed: () {
+                if (_validatePage1()) {
+                  setState(() { _page = 2; _page1Error = null; });
+                  _loadCategories();
+                  RenderLog.write('manual_import_page2_opened', 'true');
+                }
+              },
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFF1B7A43),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              child: const Text('Next →',
+                  style: TextStyle(fontWeight: FontWeight.w600)),
+            )
+          else
+            FilledButton(
+              onPressed: _submitting ? null : _submit,
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFF1B7A43),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              child: _submitting
+                  ? const SizedBox(width: 18, height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                  : const Text('Submit ✓',
+                      style: TextStyle(fontWeight: FontWeight.w600)),
+            ),
+        ]),
+      ]),
     );
   }
 }

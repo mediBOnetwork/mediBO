@@ -6145,33 +6145,63 @@ class _ManualSupplierImportDialogState extends State<_ManualSupplierImportDialog
 
   Widget _buildSelectedCompanyChips() {
     final union = _unionCompanies.toList()..sort();
+    RenderLog.write('manual_import_selected_summary_rendered', union.length.toString());
     return Container(
-      padding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
+      height: 52,
       decoration: const BoxDecoration(
           border: Border(top: BorderSide(color: Color(0xFFE5E7EB)))),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text('Selected companies (${union.length})',
-            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700,
-                color: Color(0xFF374151))),
-        if (union.isNotEmpty) ...[
-          const SizedBox(height: 6),
-          Wrap(
-            spacing: 6, runSpacing: 4,
-            children: union.map((co) => Chip(
-              label: Text(co, style: const TextStyle(fontSize: 11)),
-              deleteIcon: const Icon(Icons.close, size: 12),
-              onDeleted: () => setState(() {
-                _selectedCompaniesDirect.remove(co);
-                for (final s in _selectedCompaniesByCategory.values) s.remove(co);
-              }),
-              backgroundColor: const Color(0xFFDCFCE7),
-              side: const BorderSide(color: Color(0xFF1B7A43)),
-              labelStyle: const TextStyle(color: Color(0xFF15803D)),
-              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              padding: const EdgeInsets.symmetric(horizontal: 2),
-            )).toList(),
-          ),
-        ],
+      child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+        Padding(
+          padding: const EdgeInsets.only(left: 16, right: 8),
+          child: Text('Selected (${union.length})',
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700,
+                  color: Color(0xFF374151))),
+        ),
+        Expanded(
+          child: union.isEmpty
+              ? const Text('None', style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)))
+              : Stack(children: [
+                  ListView.separated(
+                    scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    itemCount: union.length,
+                    separatorBuilder: (_, __) => const SizedBox(width: 6),
+                    itemBuilder: (_, i) {
+                      final co = union[i];
+                      return Chip(
+                        label: Text(co, style: const TextStyle(fontSize: 11)),
+                        deleteIcon: const Icon(Icons.close, size: 12),
+                        onDeleted: () => setState(() {
+                          _selectedCompaniesDirect.remove(co);
+                          for (final s in _selectedCompaniesByCategory.values) s.remove(co);
+                        }),
+                        backgroundColor: const Color(0xFFDCFCE7),
+                        side: const BorderSide(color: Color(0xFF1B7A43)),
+                        labelStyle: const TextStyle(color: Color(0xFF15803D)),
+                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        padding: const EdgeInsets.symmetric(horizontal: 2),
+                      );
+                    },
+                  ),
+                  // Fade hint on right edge
+                  Positioned(
+                    right: 0, top: 0, bottom: 0,
+                    child: IgnorePointer(
+                      child: Container(
+                        width: 24,
+                        decoration: const BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.centerLeft,
+                            end: Alignment.centerRight,
+                            colors: [Colors.transparent, Colors.white],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ]),
+        ),
+        const SizedBox(width: 16),
       ]),
     );
   }

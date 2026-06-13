@@ -5536,26 +5536,30 @@ class _ManualSupplierImportDialogState extends State<_ManualSupplierImportDialog
   bool _submitting = false;
   String? _submitError;
 
-  // Page 2 — category mode
+  // Page 2
   bool _byCategory = true;
+
+  // Category mode — accordion
   List<String> _allCategories = [];
   bool _loadingCategories = false;
-  final List<String> _selectedCategories = [];
-  final Map<String, List<String>> _categoriesCompanyList = {};
-  final Map<String, bool> _loadingCategoryCompanies = {};
-  final Map<String, Set<String>> _selectedCompaniesByCategory = {};
+  String? _openCatParent;
+  final Map<String, List<String>> _catCompanyList = {};
+  final Map<String, bool> _loadingCatCompanies = {};
+  final Map<String, Set<String>> _selectedCompaniesByCat = {};
 
-  // Page 2 — company mode
+  // Company mode — accordion
   List<String> _allCompanies = [];
   bool _loadingAllCompanies = false;
   String _companySearch = '';
+  String? _openCoParent;
+  final Map<String, List<String>> _coCategories = {};
+  final Map<String, bool> _loadingCoCategories = {};
   final Set<String> _selectedCompaniesDirect = {};
-  List<Map<String, String>> _categoriesByCompanyRows = [];
-  bool _loadingCategoriesByCompany = false;
+  final Map<String, Set<String>> _selectedCategoriesByCo = {};
 
   Set<String> get _unionCompanies {
     final s = <String>{};
-    for (final cats in _selectedCompaniesByCategory.values) s.addAll(cats);
+    for (final set in _selectedCompaniesByCat.values) s.addAll(set);
     s.addAll(_selectedCompaniesDirect);
     return s;
   }
@@ -5592,18 +5596,18 @@ class _ManualSupplierImportDialogState extends State<_ManualSupplierImportDialog
   }
 
   Future<void> _loadCompaniesByCategory(String cat) async {
-    if (_categoriesCompanyList.containsKey(cat) || (_loadingCategoryCompanies[cat] ?? false)) return;
-    setState(() => _loadingCategoryCompanies[cat] = true);
+    if (_catCompanyList.containsKey(cat) || (_loadingCatCompanies[cat] ?? false)) return;
+    setState(() => _loadingCatCompanies[cat] = true);
     try {
       final rows = await Supabase.instance.client
           .rpc('get_companies_by_category', params: {'p_category': cat});
       if (mounted) setState(() {
-        _categoriesCompanyList[cat] =
+        _catCompanyList[cat] =
             (rows as List).map((r) => r['company_name'] as String).toList();
-        _loadingCategoryCompanies[cat] = false;
+        _loadingCatCompanies[cat] = false;
       });
     } catch (_) {
-      if (mounted) setState(() => _loadingCategoryCompanies[cat] = false);
+      if (mounted) setState(() => _loadingCatCompanies[cat] = false);
     }
   }
 
@@ -5622,25 +5626,18 @@ class _ManualSupplierImportDialogState extends State<_ManualSupplierImportDialog
     }
   }
 
-  Future<void> _loadCategoriesByCompany() async {
-    final companies = _selectedCompaniesDirect.toList();
-    if (companies.isEmpty) {
-      setState(() => _categoriesByCompanyRows = []);
-      return;
-    }
-    setState(() => _loadingCategoriesByCompany = true);
+  Future<void> _loadCategoriesForCompany(String co) async {
+    if (_coCategories.containsKey(co) || (_loadingCoCategories[co] ?? false)) return;
+    setState(() => _loadingCoCategories[co] = true);
     try {
       final rows = await Supabase.instance.client
-          .rpc('get_categories_by_company', params: {'p_companies': companies});
+          .rpc('get_categories_for_company', params: {'p_company': co});
       if (mounted) setState(() {
-        _categoriesByCompanyRows = (rows as List).map((r) => {
-          'category': r['category'] as String,
-          'company_name': r['company_name'] as String,
-        }).toList();
-        _loadingCategoriesByCompany = false;
+        _coCategories[co] = (rows as List).map((r) => r['category'] as String).toList();
+        _loadingCoCategories[co] = false;
       });
     } catch (_) {
-      if (mounted) setState(() => _loadingCategoriesByCompany = false);
+      if (mounted) setState(() => _loadingCoCategories[co] = false);
     }
   }
 
@@ -5894,21 +5891,23 @@ class _ManualSupplierImportDialogState extends State<_ManualSupplierImportDialog
     RenderLog.write('manual_import_page2_rendered', 'true');
     return Column(children: [
       Padding(
-        padding: const EdgeInsets.fromLTRB(20, 8, 20, 4),
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
         child: Row(children: [
           Expanded(child: _modeBtn('By Category', _byCategory, () {
-            setState(() => _byCategory = true);
+            setState(() { _byCategory = true; _openCoParent = null; });
             _loadCategories();
+            RenderLog.write('manual_import_mode_toggled', 'category');
           })),
           const SizedBox(width: 8),
           Expanded(child: _modeBtn('By Company', !_byCategory, () {
-            setState(() => _byCategory = false);
+            setState(() { _byCategory = false; _openCatParent = null; });
             _loadAllCompanies();
+            RenderLog.write('manual_import_mode_toggled', 'company');
           })),
         ]),
       ),
       Expanded(child: _byCategory ? _buildCategoryMode() : _buildCompanyMode()),
-      _buildSelectedCompanyChips(),
+      _buildSelectedCompanySummary(),
     ]);
   }
 
@@ -5930,223 +5929,290 @@ class _ManualSupplierImportDialogState extends State<_ManualSupplierImportDialog
     );
   }
 
+  // ── Category mode (parent = category, child = companies) ──────────────────
+
   Widget _buildCategoryMode() {
     if (_loadingCategories) {
       return const Center(child: CircularProgressIndicator(strokeWidth: 2));
     }
     if (_allCategories.isEmpty) {
       return Center(child: TextButton(
-          onPressed: _loadCategories,
-          child: const Text('Load categories')));
+          onPressed: _loadCategories, child: const Text('Load categories')));
     }
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Text('Select therapeutic categories:',
-            style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
-        const SizedBox(height: 6),
-        Wrap(
-          spacing: 6, runSpacing: 6,
-          children: _allCategories.map((cat) {
-            final sel = _selectedCategories.contains(cat);
-            return FilterChip(
-              label: Text(cat, style: const TextStyle(fontSize: 11)),
-              selected: sel,
-              onSelected: (v) {
-                setState(() {
-                  if (v) {
-                    _selectedCategories.add(cat);
-                    _loadCompaniesByCategory(cat);
-                  } else {
-                    _selectedCategories.remove(cat);
-                    _selectedCompaniesByCategory.remove(cat);
-                  }
-                });
-              },
-              selectedColor: const Color(0xFFDCFCE7),
-              checkmarkColor: const Color(0xFF1B7A43),
-              backgroundColor: const Color(0xFFF3F4F6),
-              side: BorderSide(
-                  color: sel ? const Color(0xFF1B7A43) : const Color(0xFFD1D5DB)),
-              labelStyle: TextStyle(
-                  color: sel ? const Color(0xFF1B7A43) : const Color(0xFF374151)),
-            );
-          }).toList(),
-        ),
-        const SizedBox(height: 12),
-        ..._selectedCategories.map(_buildCategoryCompanySection),
-      ]),
+    return ListView.builder(
+      itemCount: _allCategories.length,
+      itemBuilder: (_, i) => _buildCatRow(_allCategories[i]),
     );
   }
 
-  Widget _buildCategoryCompanySection(String cat) {
-    final loading = _loadingCategoryCompanies[cat] ?? false;
-    final companies = _categoriesCompanyList[cat] ?? [];
-    final selected = _selectedCompaniesByCategory[cat] ?? {};
-    return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      decoration: BoxDecoration(
-        border: Border.all(color: const Color(0xFFE5E7EB)),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          decoration: const BoxDecoration(
-            color: Color(0xFFF9FAFB),
-            borderRadius:
-                BorderRadius.only(topLeft: Radius.circular(8), topRight: Radius.circular(8)),
-          ),
+  Widget _buildCatRow(String cat) {
+    final isOpen = _openCatParent == cat;
+    final selCount = (_selectedCompaniesByCat[cat] ?? {}).length;
+    return Column(mainAxisSize: MainAxisSize.min, children: [
+      InkWell(
+        onTap: () {
+          setState(() {
+            if (isOpen) {
+              _openCatParent = null;
+            } else {
+              _openCatParent = cat;
+              _loadCompaniesByCategory(cat);
+              RenderLog.write('manual_import_cat_expanded', cat);
+            }
+          });
+        },
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+          color: isOpen ? const Color(0xFFF0FDF4) : Colors.white,
           child: Row(children: [
             Expanded(child: Text(cat,
-                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700,
-                    color: Color(0xFF374151)))),
-            Text('${selected.length} selected',
-                style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
+                    color: Color(0xFF111827)))),
+            if (selCount > 0) ...[
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                decoration: BoxDecoration(
+                    color: const Color(0xFFDCFCE7),
+                    borderRadius: BorderRadius.circular(10)),
+                child: Text('$selCount',
+                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700,
+                        color: Color(0xFF15803D))),
+              ),
+              const SizedBox(width: 6),
+            ],
+            AnimatedRotation(
+              turns: isOpen ? 0.25 : 0.0,
+              duration: const Duration(milliseconds: 200),
+              child: const Icon(Icons.chevron_right, size: 20, color: Color(0xFF6B7280)),
+            ),
           ]),
         ),
-        if (loading)
-          const Padding(
-              padding: EdgeInsets.all(12),
-              child: Center(child: CircularProgressIndicator(strokeWidth: 2)))
-        else if (companies.isEmpty)
-          const Padding(
-              padding: EdgeInsets.all(10),
-              child: Text('No companies found.',
-                  style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF))))
-        else
-          Padding(
-            padding: const EdgeInsets.all(10),
-            child: Wrap(
-              spacing: 6, runSpacing: 6,
-              children: companies.map((co) {
-                final isSel = selected.contains(co);
-                return FilterChip(
-                  label: Text(co, style: const TextStyle(fontSize: 11)),
-                  selected: isSel,
-                  onSelected: (v) {
-                    setState(() {
-                      final s = _selectedCompaniesByCategory[cat] ?? {};
-                      v ? s.add(co) : s.remove(co);
-                      _selectedCompaniesByCategory[cat] = s;
-                    });
-                  },
-                  selectedColor: const Color(0xFFDCFCE7),
-                  checkmarkColor: const Color(0xFF1B7A43),
-                  backgroundColor: const Color(0xFFF3F4F6),
-                  side: BorderSide(
-                      color: isSel ? const Color(0xFF1B7A43) : const Color(0xFFD1D5DB)),
-                  labelStyle: TextStyle(
-                      color: isSel ? const Color(0xFF1B7A43) : const Color(0xFF374151)),
-                );
-              }).toList(),
+      ),
+      if (isOpen) _buildCatChildPanel(cat),
+      const Divider(height: 1, color: Color(0xFFE5E7EB)),
+    ]);
+  }
+
+  Widget _buildCatChildPanel(String cat) {
+    final loading = _loadingCatCompanies[cat] ?? false;
+    final companies = _catCompanyList[cat] ?? [];
+    final selected = _selectedCompaniesByCat[cat] ?? {};
+    if (loading) {
+      return Container(
+        color: const Color(0xFFF9FAFB),
+        padding: const EdgeInsets.all(16),
+        child: const Center(child: CircularProgressIndicator(strokeWidth: 2)),
+      );
+    }
+    if (companies.isEmpty) {
+      return Container(
+        color: const Color(0xFFF9FAFB),
+        padding: const EdgeInsets.all(12),
+        child: const Text('No companies found.',
+            style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF))),
+      );
+    }
+    return Container(
+      color: const Color(0xFFF9FAFB),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: companies.map((co) {
+          final isSel = selected.contains(co);
+          return InkWell(
+            onTap: () => setState(() {
+              final s = _selectedCompaniesByCat[cat] ?? {};
+              isSel ? s.remove(co) : s.add(co);
+              _selectedCompaniesByCat[cat] = s;
+              RenderLog.write('manual_import_co_checked', co);
+            }),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(32, 11, 16, 11),
+              child: Row(children: [
+                Icon(
+                  isSel ? Icons.check_box : Icons.check_box_outline_blank,
+                  size: 18,
+                  color: isSel ? const Color(0xFF1B7A43) : const Color(0xFF9CA3AF),
+                ),
+                const SizedBox(width: 10),
+                Expanded(child: Text(co,
+                    style: TextStyle(fontSize: 13,
+                        color: isSel ? const Color(0xFF1B7A43) : const Color(0xFF374151)))),
+              ]),
             ),
-          ),
-      ]),
+          );
+        }).toList(),
+      ),
     );
   }
 
+  // ── Company mode (parent = company, child = categories) ───────────────────
+
   Widget _buildCompanyMode() {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        TextField(
+    return Column(children: [
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+        child: TextField(
           onChanged: (v) => setState(() => _companySearch = v.toLowerCase()),
           decoration: InputDecoration(
             hintText: 'Search companies...',
             prefixIcon: const Icon(Icons.search, size: 18),
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-            contentPadding:
-                const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             isDense: true,
           ),
           style: const TextStyle(fontSize: 13),
         ),
-        const SizedBox(height: 8),
-        if (_loadingAllCompanies)
-          const Center(child: CircularProgressIndicator(strokeWidth: 2))
-        else ...[
-          Builder(builder: (_) {
-            final filtered = _allCompanies
-                .where((c) => _companySearch.isEmpty ||
-                    c.toLowerCase().contains(_companySearch))
-                .take(100)
-                .toList();
-            return Wrap(
-              spacing: 6, runSpacing: 6,
-              children: filtered.map((co) {
-                final isSel = _selectedCompaniesDirect.contains(co);
-                return FilterChip(
-                  label: Text(co, style: const TextStyle(fontSize: 11)),
-                  selected: isSel,
-                  onSelected: (v) {
-                    setState(() {
-                      v ? _selectedCompaniesDirect.add(co)
-                        : _selectedCompaniesDirect.remove(co);
-                    });
-                    _loadCategoriesByCompany();
-                  },
-                  selectedColor: const Color(0xFFDCFCE7),
-                  checkmarkColor: const Color(0xFF1B7A43),
-                  backgroundColor: const Color(0xFFF3F4F6),
-                  side: BorderSide(
-                      color: isSel ? const Color(0xFF1B7A43) : const Color(0xFFD1D5DB)),
-                  labelStyle: TextStyle(
-                      color: isSel ? const Color(0xFF1B7A43) : const Color(0xFF374151)),
+      ),
+      Expanded(
+        child: _loadingAllCompanies
+            ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
+            : Builder(builder: (_) {
+                final filtered = _allCompanies
+                    .where((c) => _companySearch.isEmpty ||
+                        c.toLowerCase().contains(_companySearch))
+                    .toList();
+                return ListView.builder(
+                  itemCount: filtered.length,
+                  itemBuilder: (_, i) => _buildCoRow(filtered[i]),
                 );
-              }).toList(),
-            );
-          }),
-          if (_selectedCompaniesDirect.isNotEmpty) ...[
-            const SizedBox(height: 12),
-            const Text('Categories covered:',
-                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700,
-                    color: Color(0xFF374151))),
-            const SizedBox(height: 6),
-            if (_loadingCategoriesByCompany)
-              const CircularProgressIndicator(strokeWidth: 2)
-            else
-              _buildCategoryCoverageSection(),
-          ],
-        ],
-      ]),
-    );
+              }),
+      ),
+    ]);
   }
 
-  Widget _buildCategoryCoverageSection() {
-    if (_categoriesByCompanyRows.isEmpty) {
-      return const Text('No category data found.',
-          style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)));
-    }
-    final byCategory = <String, List<String>>{};
-    for (final row in _categoriesByCompanyRows) {
-      (byCategory[row['category']!] ??= []).add(row['company_name']!);
-    }
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: byCategory.entries.map((e) => Padding(
-        padding: const EdgeInsets.only(bottom: 8),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(e.key, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
-              color: Color(0xFF374151))),
-          const SizedBox(height: 4),
-          Wrap(spacing: 6, runSpacing: 4, children: e.value.map((co) => Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-            decoration: BoxDecoration(
-                color: const Color(0xFFDCFCE7),
-                borderRadius: BorderRadius.circular(12)),
-            child: Text(co,
-                style: const TextStyle(fontSize: 11, color: Color(0xFF15803D))),
-          )).toList()),
+  Widget _buildCoRow(String co) {
+    final isOpen = _openCoParent == co;
+    final isSel = _selectedCompaniesDirect.contains(co);
+    final catCount = (_selectedCategoriesByCo[co] ?? {}).length;
+    return Column(mainAxisSize: MainAxisSize.min, children: [
+      Container(
+        color: isOpen ? const Color(0xFFF0FDF4) : Colors.white,
+        child: Row(children: [
+          // Checkbox — select company
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => setState(() {
+              isSel
+                  ? _selectedCompaniesDirect.remove(co)
+                  : _selectedCompaniesDirect.add(co);
+              RenderLog.write('manual_import_co_selected', co);
+            }),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(14, 13, 6, 13),
+              child: Icon(
+                isSel ? Icons.check_box : Icons.check_box_outline_blank,
+                size: 20,
+                color: isSel ? const Color(0xFF1B7A43) : const Color(0xFF9CA3AF),
+              ),
+            ),
+          ),
+          // Expand area — tap to open categories
+          Expanded(
+            child: InkWell(
+              onTap: () {
+                setState(() {
+                  if (isOpen) {
+                    _openCoParent = null;
+                  } else {
+                    _openCoParent = co;
+                    _loadCategoriesForCompany(co);
+                    RenderLog.write('manual_import_co_expanded', co);
+                  }
+                });
+              },
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(4, 13, 12, 13),
+                child: Row(children: [
+                  Expanded(child: Text(co,
+                      style: TextStyle(fontSize: 13,
+                          fontWeight: FontWeight.w500,
+                          color: isSel ? const Color(0xFF1B7A43) : const Color(0xFF111827)))),
+                  if (catCount > 0) ...[
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                      decoration: BoxDecoration(
+                          color: const Color(0xFFDCFCE7),
+                          borderRadius: BorderRadius.circular(10)),
+                      child: Text('$catCount cat',
+                          style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700,
+                              color: Color(0xFF15803D))),
+                    ),
+                    const SizedBox(width: 6),
+                  ],
+                  AnimatedRotation(
+                    turns: isOpen ? 0.25 : 0.0,
+                    duration: const Duration(milliseconds: 200),
+                    child: const Icon(Icons.chevron_right, size: 20, color: Color(0xFF6B7280)),
+                  ),
+                ]),
+              ),
+            ),
+          ),
         ]),
-      )).toList(),
+      ),
+      if (isOpen) _buildCoChildPanel(co),
+      const Divider(height: 1, color: Color(0xFFE5E7EB)),
+    ]);
+  }
+
+  Widget _buildCoChildPanel(String co) {
+    final loading = _loadingCoCategories[co] ?? false;
+    final cats = _coCategories[co] ?? [];
+    final selected = _selectedCategoriesByCo[co] ?? {};
+    if (loading) {
+      return Container(
+        color: const Color(0xFFF9FAFB),
+        padding: const EdgeInsets.all(16),
+        child: const Center(child: CircularProgressIndicator(strokeWidth: 2)),
+      );
+    }
+    if (cats.isEmpty) {
+      return Container(
+        color: const Color(0xFFF9FAFB),
+        padding: const EdgeInsets.all(12),
+        child: const Text('No categories found.',
+            style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF))),
+      );
+    }
+    return Container(
+      color: const Color(0xFFF9FAFB),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: cats.map((cat) {
+          final isSel = selected.contains(cat);
+          return InkWell(
+            onTap: () => setState(() {
+              final s = _selectedCategoriesByCo[co] ?? {};
+              isSel ? s.remove(cat) : s.add(cat);
+              _selectedCategoriesByCo[co] = s;
+            }),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(48, 11, 16, 11),
+              child: Row(children: [
+                Icon(
+                  isSel ? Icons.check_box : Icons.check_box_outline_blank,
+                  size: 18,
+                  color: isSel ? const Color(0xFF1B7A43) : const Color(0xFF9CA3AF),
+                ),
+                const SizedBox(width: 10),
+                Expanded(child: Text(cat,
+                    style: TextStyle(fontSize: 13,
+                        color: isSel ? const Color(0xFF1B7A43) : const Color(0xFF6B7280)))),
+              ]),
+            ),
+          );
+        }).toList(),
+      ),
     );
   }
 
-  Widget _buildSelectedCompanyChips() {
+  // ── Selected companies summary ─────────────────────────────────────────────
+
+  Widget _buildSelectedCompanySummary() {
     final union = _unionCompanies.toList()..sort();
     return Container(
-      padding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
+      constraints: const BoxConstraints(maxHeight: 120),
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
       decoration: const BoxDecoration(
           border: Border(top: BorderSide(color: Color(0xFFE5E7EB)))),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -6155,21 +6221,25 @@ class _ManualSupplierImportDialogState extends State<_ManualSupplierImportDialog
                 color: Color(0xFF374151))),
         if (union.isNotEmpty) ...[
           const SizedBox(height: 6),
-          Wrap(
-            spacing: 6, runSpacing: 4,
-            children: union.map((co) => Chip(
-              label: Text(co, style: const TextStyle(fontSize: 11)),
-              deleteIcon: const Icon(Icons.close, size: 12),
-              onDeleted: () => setState(() {
-                _selectedCompaniesDirect.remove(co);
-                for (final s in _selectedCompaniesByCategory.values) s.remove(co);
-              }),
-              backgroundColor: const Color(0xFFDCFCE7),
-              side: const BorderSide(color: Color(0xFF1B7A43)),
-              labelStyle: const TextStyle(color: Color(0xFF15803D)),
-              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              padding: const EdgeInsets.symmetric(horizontal: 2),
-            )).toList(),
+          Expanded(
+            child: SingleChildScrollView(
+              child: Wrap(
+                spacing: 6, runSpacing: 4,
+                children: union.map((co) => Chip(
+                  label: Text(co, style: const TextStyle(fontSize: 11)),
+                  deleteIcon: const Icon(Icons.close, size: 12),
+                  onDeleted: () => setState(() {
+                    _selectedCompaniesDirect.remove(co);
+                    for (final s in _selectedCompaniesByCat.values) s.remove(co);
+                  }),
+                  backgroundColor: const Color(0xFFDCFCE7),
+                  side: const BorderSide(color: Color(0xFF1B7A43)),
+                  labelStyle: const TextStyle(color: Color(0xFF15803D)),
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  padding: const EdgeInsets.symmetric(horizontal: 2),
+                )).toList(),
+              ),
+            ),
           ),
         ],
       ]),

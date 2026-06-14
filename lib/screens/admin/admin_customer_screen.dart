@@ -259,6 +259,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   bool _loading = true;
   _CustFilter _filter = _CustFilter.approvedCustomers;
   final Set<String> _expanded = {};
+  // orderId → per-product inquiry status from get_order_item_inquiry_status
+  final Map<String, List<Map<String, dynamic>>> _orderItemStatuses = {};
   final ScrollController _scrollCtrl = ScrollController();
 
   final List<RealtimeChannel> _realtimeChannels = [];
@@ -947,8 +949,32 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     );
   }
 
-  void _toggleExpand(String key) => setState(
-      () => _expanded.contains(key) ? _expanded.remove(key) : _expanded.add(key));
+  void _toggleExpand(String key, {VoidCallback? onExpand}) {
+    setState(() {
+      if (_expanded.contains(key)) {
+        _expanded.remove(key);
+      } else {
+        _expanded.add(key);
+        onExpand?.call();
+      }
+    });
+  }
+
+  Future<void> _fetchOrderItemStatus(String orderId) async {
+    try {
+      final rows = await Supabase.instance.client.rpc(
+        'get_order_item_inquiry_status',
+        params: {'p_order_id': orderId},
+      ) as List;
+      if (mounted) {
+        setState(() {
+          _orderItemStatuses[orderId] =
+              rows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
+        });
+        RenderLog.write('order_item_status', 'orderId:$orderId count:${rows.length}');
+      }
+    } catch (_) {}
+  }
 
   // ── Build ──────────────────────────────────────────────────────────────────
 
@@ -1206,7 +1232,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       InkWell(
-        onTap: () => _toggleExpand(key),
+        onTap: () => _toggleExpand(key,
+            onExpand: row.orderId != null ? () => _fetchOrderItemStatus(row.orderId!) : null),
         mouseCursor: SystemMouseCursors.click,
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 13),
@@ -1324,7 +1351,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       ),
       child: GestureDetector(
         behavior: HitTestBehavior.translucent,
-        onTap: () => _toggleExpand(key),
+        onTap: () => _toggleExpand(key,
+            onExpand: row.orderId != null ? () => _fetchOrderItemStatus(row.orderId!) : null),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Padding(
             padding: const EdgeInsets.all(14),
@@ -1409,6 +1437,31 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     );
   }
 
+  Widget _itemInquiryBadge(String status, String? supplier) {
+    final lower = status.toLowerCase();
+    final Color bg;
+    final Color fg;
+    final String label;
+    if (lower.contains('no supplier') || lower == 'no_supplier_available') {
+      bg = const Color(0xFFFEE2E2); fg = const Color(0xFF991B1B);
+      label = 'No supplier available';
+    } else if (lower == 'available') {
+      bg = const Color(0xFFD1FAE5); fg = const Color(0xFF065F46);
+      label = supplier != null && supplier.isNotEmpty ? 'Supplier: $supplier' : 'Available';
+    } else if (lower.contains('confirmation') || lower.contains('pending')) {
+      bg = const Color(0xFFFEF3C7); fg = const Color(0xFF92400E);
+      label = supplier != null && supplier.isNotEmpty ? 'Awaiting $supplier' : 'Confirmation pending';
+    } else {
+      bg = const Color(0xFFF3F4F6); fg = const Color(0xFF374151);
+      label = status;
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(4)),
+      child: Text(label, style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: fg)),
+    );
+  }
+
   Widget _buildExpandedItems(_CustRow row, {required bool isDesktop}) {
     final lpad = isDesktop ? 44.0 : 16.0;
     final rpad = isDesktop ? 28.0 : 16.0;
@@ -1473,29 +1526,44 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                       color: Color(0xFF9CA3AF)))),
         ]),
         const SizedBox(height: 4),
-        ...row.items.map((item) => Padding(
-              padding: const EdgeInsets.only(top: 5),
-              child: Row(children: [
+        ...row.items.map((item) {
+          final statuses = row.orderId != null ? (_orderItemStatuses[row.orderId!] ?? []) : <Map<String, dynamic>>[];
+          Map<String, dynamic>? iqStatus;
+          if (item.productId != null) {
+            final pid = int.tryParse(item.productId!);
+            iqStatus = statuses.cast<Map<String, dynamic>?>().firstWhere(
+              (s) => s != null && (s['product_id'] as num?)?.toInt() == pid,
+              orElse: () => null,
+            );
+          }
+          final currentStatus   = iqStatus?['current_status'] as String?;
+          final currentSupplier = iqStatus?['current_supplier'] as String?;
+          return Padding(
+            padding: const EdgeInsets.only(top: 5),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
                 Expanded(
                     flex: 5,
                     child: Text(item.name,
-                        style: const TextStyle(
-                            fontSize: 12, color: Color(0xFF374151)))),
+                        style: const TextStyle(fontSize: 12, color: Color(0xFF374151)))),
                 SizedBox(
                     width: 50,
                     child: Text('×${item.qty}',
-                        style: const TextStyle(
-                            fontSize: 12, color: Color(0xFF6B7280)))),
+                        style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)))),
                 SizedBox(
                     width: 90,
                     child: Text(
-                        item.price != null
-                            ? '₹${item.price!.toStringAsFixed(2)}'
-                            : '—',
-                        style: const TextStyle(
-                            fontSize: 12, color: Color(0xFF374151)))),
+                        item.price != null ? '₹${item.price!.toStringAsFixed(2)}' : '—',
+                        style: const TextStyle(fontSize: 12, color: Color(0xFF374151)))),
               ]),
-            )),
+              if (currentStatus != null && currentStatus != 'Not in inquiry')
+                Padding(
+                  padding: const EdgeInsets.only(top: 3),
+                  child: _itemInquiryBadge(currentStatus, currentSupplier),
+                ),
+            ]),
+          );
+        }),
       ]),
     );
   }

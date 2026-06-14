@@ -190,6 +190,10 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   final Set<int> _settingAnswerFor = {}; // inquiry_ids currently being admin-set
   String? _expandedOrderId; // which supplier order row is expanded
 
+  // ── Unassigned inquiry items (no current supplier) ───────────────────────
+  List<Map<String, dynamic>> _unassignedItems = [];
+  bool _unassignedLoading = false;
+
   // ── Send-inquiry popover (Clear Cart style) ──────────────────────────────
   final Map<String, LayerLink> _sendLinks = {};
   OverlayEntry? _sendPopoverOverlay;
@@ -427,6 +431,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         RenderLog.write('supplier_sort_default', 'spn_desc');
       }
       _fetchInquiryOverview(silent: true);
+      _fetchUnassignedItems(silent: true);
       _fetchStaging();
     } catch (e) {
       if (mounted) setState(() => _loading = false);
@@ -1027,6 +1032,23 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     }
   }
 
+  Future<void> _fetchUnassignedItems({bool silent = false}) async {
+    if (!silent && mounted) setState(() => _unassignedLoading = true);
+    try {
+      final rows = await Supabase.instance.client
+          .rpc('get_unassigned_inquiry_items') as List;
+      if (mounted) {
+        setState(() {
+          _unassignedItems = rows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
+          _unassignedLoading = false;
+        });
+        RenderLog.write('inquiry_unassigned', _unassignedItems.length);
+      }
+    } catch (e) {
+      if (mounted) setState(() => _unassignedLoading = false);
+    }
+  }
+
   Future<void> _fetchInquiryItems(String supplierName) async {
     if (mounted) setState(() { _inquiryItemsLoading = true; _inquiryItems = []; });
     try {
@@ -1091,6 +1113,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         await Future.wait([
           _fetchInquiryItems(supplierName),
           _fetchInquiryOverview(silent: true),
+          _fetchUnassignedItems(silent: true),
           _refetchOrders(),
         ]);
       }
@@ -1173,7 +1196,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           padding: EdgeInsets.all(40),
           child: Center(child: CircularProgressIndicator(color: Color(0xFF1B7A43), strokeWidth: 2)),
         )
-      else if (_inquiryOverview.isEmpty)
+      else if (_inquiryOverview.isEmpty && _unassignedItems.isEmpty)
         Padding(
           padding: EdgeInsets.fromLTRB(pad, 40, pad, 40),
           child: const Center(child: Column(children: [
@@ -1186,14 +1209,89 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                 style: TextStyle(fontSize: 13, color: Color(0xFF6B7280)), textAlign: TextAlign.center),
           ])),
         )
-      else
-        Padding(
-          padding: EdgeInsets.fromLTRB(pad, 4, pad, 24),
-          child: Column(
-            children: _inquiryOverview.map(_buildInquirySupplierRow).toList(),
+      else ...[
+        if (_inquiryOverview.isNotEmpty)
+          Padding(
+            padding: EdgeInsets.fromLTRB(pad, 4, pad, 8),
+            child: Column(
+              children: _inquiryOverview.map(_buildInquirySupplierRow).toList(),
+            ),
           ),
-        ),
+        if (_unassignedItems.isNotEmpty)
+          _buildUnassignedSection(pad),
+      ],
     ]);
+  }
+
+  Widget _buildUnassignedSection(double pad) {
+    return Padding(
+      padding: EdgeInsets.fromLTRB(pad, 4, pad, 24),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: Row(children: [
+            const Icon(Icons.warning_amber_rounded, size: 15, color: Color(0xFFDC2626)),
+            const SizedBox(width: 6),
+            const Text('No Supplier Available',
+                style: TextStyle(
+                    fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+            const SizedBox(width: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFEE2E2),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text('${_unassignedItems.length}',
+                  style: const TextStyle(
+                      fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF991B1B))),
+            ),
+          ]),
+        ),
+        ..._unassignedItems.map((item) {
+          final name   = item['product_name'] as String? ?? '';
+          final qty    = item['quantity'];
+          final reason = item['reason'] as String? ?? '';
+          final isNoSup = reason == 'no_supplier_mapped';
+          return Container(
+            margin: const EdgeInsets.only(bottom: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: const Color(0xFFFECACA)),
+              boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.03), blurRadius: 3)],
+            ),
+            child: Row(children: [
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(name,
+                      style: const TextStyle(
+                          fontSize: 13, fontWeight: FontWeight.w500, color: Color(0xFF111827))),
+                  if (qty != null)
+                    Text('Qty: $qty',
+                        style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
+                ]),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: isNoSup ? const Color(0xFFF3F4F6) : const Color(0xFFFEF3C7),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  isNoSup ? 'No supplier carries this' : 'All suppliers out of stock',
+                  style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w600,
+                      color: isNoSup ? const Color(0xFF374151) : const Color(0xFF92400E)),
+                ),
+              ),
+            ]),
+          );
+        }),
+      ]),
+    );
   }
 
   // ── Per-supplier row ──────────────────────────────────────────────────────

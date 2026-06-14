@@ -5828,6 +5828,39 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
       overflow: TextOverflow.ellipsis),
   );
 
+  Widget _saveButton() {
+    RenderLog.write('spn_save_button_rendered', 'true');
+    final dirty = _isDirty;
+    if (dirty) RenderLog.write('spn_save_dirty_green', 'visible');
+    return GestureDetector(
+      onTap: (_saving || !dirty) ? null : _saveAll,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: dirty ? const Color(0xFF1B7A43) : const Color(0xFF92400E).withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: _saving
+            ? const SizedBox(width: 14, height: 14,
+                child: CircularProgressIndicator(strokeWidth: 1.5, color: Colors.white))
+            : Text('Save',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: dirty ? Colors.white : const Color(0xFF92400E),
+                )),
+      ),
+    );
+  }
+
+  void _onPick(String field, String? val) {
+    _changeCounter++;
+    RenderLog.write('spn_change_count', _changeCounter.toString());
+    RenderLog.write('spn_save_dirty_green', 'true');
+    (_userCache[_supplierId] ??= {})[field] = val;
+    setState(() => _values[field] = val);
+  }
+
   @override
   Widget build(BuildContext context) {
     RenderLog.write('spn_panel', 1);
@@ -5840,113 +5873,127 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
       child: _loading
           ? const Padding(padding: EdgeInsets.all(20),
               child: Center(child: CircularProgressIndicator(color: Color(0xFF1B7A43), strokeWidth: 2)))
-          : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(14, 10, 8, 6),
-                child: Row(children: [
-                  const Text('Supplier Points — Terms',
-                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF374151))),
-                  const Spacer(),
-                  Builder(builder: (_) {
-                    RenderLog.write('spn_save_button_rendered', 'true');
-                    final dirty = _isDirty;
-                    if (dirty) RenderLog.write('spn_save_dirty_green', 'visible');
-                    return GestureDetector(
-                      onTap: (_saving || !dirty) ? null : _saveAll,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: dirty ? const Color(0xFF1B7A43) : const Color(0xFF92400E).withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: _saving
-                            ? const SizedBox(width: 14, height: 14,
-                                child: CircularProgressIndicator(strokeWidth: 1.5, color: Colors.white))
-                            : Text('Save',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w600,
-                                  color: dirty ? Colors.white : const Color(0xFF92400E),
-                                )),
-                      ),
-                    );
-                  }),
-                  const SizedBox(width: 4),
-                ]),
-              ),
-              const Divider(height: 1, color: Color(0xFFBFDBFE)),
-              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                // ── Frozen left pane ─────────────────────────────────────────
-                SizedBox(
-                  width: 320,
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                    Container(
-                      height: 32,
-                      color: const Color(0xFFF0F7FF),
-                      alignment: Alignment.centerLeft,
-                      padding: const EdgeInsets.fromLTRB(14, 0, 8, 0),
-                      child: const Text('SUPPLIER', style: TextStyle(
-                          fontSize: 10, fontWeight: FontWeight.w700,
-                          color: Color(0xFF6B7280), letterSpacing: 0.4),
-                        overflow: TextOverflow.ellipsis),
-                    ),
-                    const Divider(height: 1, color: Color(0xFFDBEAFE)),
-                    SizedBox(
-                      height: 52,
-                      child: Padding(
-                        padding: const EdgeInsets.fromLTRB(8, 0, 8, 0),
-                        child: Align(
-                          alignment: Alignment.centerLeft,
-                          child: Text(
-                            widget.supplierName,
-                            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
-                            maxLines: 1, overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ]),
-                ),
-                // ── 4 fixed columns (full width, no scroll) ──────────────────
-                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Container(
-                    height: 32,
-                    color: const Color(0xFFF0F7FF),
-                    child: Row(children: [
-                      for (final col in _spnCols) ...[
-                        const SizedBox(width: 4),
-                        _hdr(col.$1),
-                      ],
-                      const SizedBox(width: 8),
-                    ]),
-                  ),
-                  const Divider(height: 1, color: Color(0xFFDBEAFE)),
-                  SizedBox(
-                    height: 52,
-                    child: Row(children: [
-                      for (final col in _spnCols) ...[
-                        const SizedBox(width: 4),
-                        Expanded(child: _SpnDropdown(
-                          key: ValueKey('${_supplierId}_${col.$2}'),
-                          field: col.$2,
-                          initialValue: _values[col.$2],
-                          options: _spnOptions[col.$2]!,
-                          onPick: (field, val) {
-                            _changeCounter++;
-                            RenderLog.write('spn_change_count', _changeCounter.toString());
-                            RenderLog.write('spn_save_dirty_green', 'true');
-                            (_userCache[_supplierId] ??= {})[field] = val;
-                            setState(() => _values[field] = val);
-                          },
-                        )),
-                      ],
-                      const SizedBox(width: 8),
-                    ]),
-                  ),
-                ])),
-              ]),
-            ]),
+          : LayoutBuilder(builder: (ctx, constraints) {
+              final isNarrow = constraints.maxWidth < 560;
+              return isNarrow ? _buildMobile() : _buildDesktop();
+            }),
     );
+  }
+
+  // ── Desktop: single-row table layout ────────────────────────────────────────
+  Widget _buildDesktop() {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Padding(
+        padding: const EdgeInsets.fromLTRB(14, 10, 8, 6),
+        child: Row(children: [
+          const Text('Supplier Points — Terms',
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF374151))),
+          const Spacer(),
+          Builder(builder: (_) => _saveButton()),
+          const SizedBox(width: 4),
+        ]),
+      ),
+      const Divider(height: 1, color: Color(0xFFBFDBFE)),
+      Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        SizedBox(
+          width: 320,
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            Container(
+              height: 32, color: const Color(0xFFF0F7FF),
+              alignment: Alignment.centerLeft,
+              padding: const EdgeInsets.fromLTRB(14, 0, 8, 0),
+              child: const Text('SUPPLIER', style: TextStyle(
+                  fontSize: 10, fontWeight: FontWeight.w700,
+                  color: Color(0xFF6B7280), letterSpacing: 0.4),
+                overflow: TextOverflow.ellipsis),
+            ),
+            const Divider(height: 1, color: Color(0xFFDBEAFE)),
+            SizedBox(
+              height: 52,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(8, 0, 8, 0),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(widget.supplierName,
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
+                    maxLines: 1, overflow: TextOverflow.ellipsis),
+                ),
+              ),
+            ),
+          ]),
+        ),
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Container(
+            height: 32, color: const Color(0xFFF0F7FF),
+            child: Row(children: [
+              for (final col in _spnCols) ...[
+                const SizedBox(width: 4),
+                _hdr(col.$1),
+              ],
+              const SizedBox(width: 8),
+            ]),
+          ),
+          const Divider(height: 1, color: Color(0xFFDBEAFE)),
+          SizedBox(
+            height: 52,
+            child: Row(children: [
+              for (final col in _spnCols) ...[
+                const SizedBox(width: 4),
+                Expanded(child: _SpnDropdown(
+                  key: ValueKey('${_supplierId}_${col.$2}'),
+                  field: col.$2,
+                  initialValue: _values[col.$2],
+                  options: _spnOptions[col.$2]!,
+                  onPick: _onPick,
+                )),
+              ],
+              const SizedBox(width: 8),
+            ]),
+          ),
+        ])),
+      ]),
+    ]);
+  }
+
+  // ── Mobile: stacked vertical layout ─────────────────────────────────────────
+  Widget _buildMobile() {
+    RenderLog.write('spn_terms_mobile_stacked', 'true');
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Padding(
+        padding: const EdgeInsets.fromLTRB(14, 10, 8, 6),
+        child: Row(children: [
+          Expanded(
+            child: Text(widget.supplierName,
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF111827)),
+              maxLines: 1, overflow: TextOverflow.ellipsis),
+          ),
+          const SizedBox(width: 8),
+          Builder(builder: (_) => _saveButton()),
+          const SizedBox(width: 4),
+        ]),
+      ),
+      const Divider(height: 1, color: Color(0xFFBFDBFE)),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          for (final col in _spnCols) ...[
+            Text(col.$1,
+              style: const TextStyle(
+                fontSize: 10, fontWeight: FontWeight.w700,
+                color: Color(0xFF6B7280), letterSpacing: 0.4)),
+            const SizedBox(height: 4),
+            _SpnDropdown(
+              key: ValueKey('${_supplierId}_${col.$2}_m'),
+              field: col.$2,
+              initialValue: _values[col.$2],
+              options: _spnOptions[col.$2]!,
+              onPick: _onPick,
+            ),
+            const SizedBox(height: 10),
+          ],
+        ]),
+      ),
+    ]);
   }
 }
 

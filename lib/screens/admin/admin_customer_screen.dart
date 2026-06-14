@@ -1315,10 +1315,18 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                   )),
               Expanded(
                   flex: 3,
-                  child: _ConfirmActions(row: row, onUpdate: _updateStatus)),
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () {}, // absorb tap so Accept/Reject don't toggle row expand
+                    child: _ConfirmActions(row: row, onUpdate: _updateStatus),
+                  )),
               Expanded(
                   flex: 2,
-                  child: _ActionCell(row: row, onImport: () => _openImport(row))),
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () {},
+                    child: _ActionCell(row: row, onImport: () => _openImport(row)),
+                  )),
             ],
             SizedBox(
               width: 32,
@@ -1422,9 +1430,17 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
               ],
               if (showOrderCols) ...[
                 const SizedBox(height: 10),
-                _ConfirmActions(row: row, onUpdate: _updateStatus),
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () {},
+                  child: _ConfirmActions(row: row, onUpdate: _updateStatus),
+                ),
                 const SizedBox(height: 6),
-                _ActionCell(row: row, onImport: () => _openImport(row)),
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () {},
+                  child: _ActionCell(row: row, onImport: () => _openImport(row)),
+                ),
               ],
             ]),
           ),
@@ -1437,12 +1453,15 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     );
   }
 
-  Widget _itemInquiryBadge(String status, String? supplier) {
+  Widget _itemInquiryBadge(String? status, String? supplier) {
+    if (status == null || status == 'Not in inquiry') {
+      return const Text('—', style: TextStyle(fontSize: 10, color: Color(0xFF9CA3AF)));
+    }
     final lower = status.toLowerCase();
     final Color bg;
     final Color fg;
     final String label;
-    if (lower.contains('no supplier') || lower == 'no_supplier_available') {
+    if (lower.contains('no supplier')) {
       bg = const Color(0xFFFEE2E2); fg = const Color(0xFF991B1B);
       label = 'No supplier available';
     } else if (lower == 'available') {
@@ -1451,6 +1470,9 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     } else if (lower.contains('confirmation') || lower.contains('pending')) {
       bg = const Color(0xFFFEF3C7); fg = const Color(0xFF92400E);
       label = supplier != null && supplier.isNotEmpty ? 'Awaiting $supplier' : 'Confirmation pending';
+    } else if (lower.contains('out of stock')) {
+      bg = const Color(0xFFFEE2E2); fg = const Color(0xFF991B1B);
+      label = 'Out of stock';
     } else {
       bg = const Color(0xFFF3F4F6); fg = const Color(0xFF374151);
       label = status;
@@ -1491,11 +1513,29 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     }
     final label = 'Order Items (${row.items.length})'
         '${row.total != null ? ' · ₹${row.total!.toStringAsFixed(2)}' : ''}';
+    final statuses = row.orderId != null
+        ? (_orderItemStatuses[row.orderId!] ?? <Map<String, dynamic>>[])
+        : <Map<String, dynamic>>[];
+    RenderLog.write('order_items_expanded',
+        'orderId:${row.orderId ?? "?"}:items:${row.items.length}:statuses:${statuses.length}');
 
     return Container(
       color: const Color(0xFFF9FAFB),
       padding: EdgeInsets.fromLTRB(lpad, 10, rpad, 14),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // Ordered-by header
+        Row(children: [
+          const Icon(Icons.person_outline, size: 12, color: Color(0xFF9CA3AF)),
+          const SizedBox(width: 4),
+          Expanded(
+            child: Text(
+              'Ordered by: ${row.name}${row.pharmacy.isNotEmpty ? ' · ${row.pharmacy}' : ''}',
+              style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280)),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ]),
+        const SizedBox(height: 8),
         Text(label,
             style: const TextStyle(
                 fontSize: 12,
@@ -1506,28 +1546,22 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
           Expanded(
               flex: 5,
               child: Text('Product',
-                  style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF9CA3AF)))),
+                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF9CA3AF)))),
           SizedBox(
-              width: 50,
+              width: 44,
               child: Text('Qty',
-                  style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF9CA3AF)))),
+                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF9CA3AF)))),
           SizedBox(
-              width: 90,
+              width: 76,
               child: Text('Price',
-                  style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF9CA3AF)))),
+                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF9CA3AF)))),
+          Expanded(
+              flex: 4,
+              child: Text('Status',
+                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF9CA3AF)))),
         ]),
         const SizedBox(height: 4),
         ...row.items.map((item) {
-          final statuses = row.orderId != null ? (_orderItemStatuses[row.orderId!] ?? []) : <Map<String, dynamic>>[];
           Map<String, dynamic>? iqStatus;
           if (item.productId != null) {
             final pid = int.tryParse(item.productId!);
@@ -1539,28 +1573,25 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
           final currentStatus   = iqStatus?['current_status'] as String?;
           final currentSupplier = iqStatus?['current_supplier'] as String?;
           return Padding(
-            padding: const EdgeInsets.only(top: 5),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Row(children: [
-                Expanded(
-                    flex: 5,
-                    child: Text(item.name,
-                        style: const TextStyle(fontSize: 12, color: Color(0xFF374151)))),
-                SizedBox(
-                    width: 50,
-                    child: Text('×${item.qty}',
-                        style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)))),
-                SizedBox(
-                    width: 90,
-                    child: Text(
-                        item.price != null ? '₹${item.price!.toStringAsFixed(2)}' : '—',
-                        style: const TextStyle(fontSize: 12, color: Color(0xFF374151)))),
-              ]),
-              if (currentStatus != null && currentStatus != 'Not in inquiry')
-                Padding(
-                  padding: const EdgeInsets.only(top: 3),
-                  child: _itemInquiryBadge(currentStatus, currentSupplier),
-                ),
+            padding: const EdgeInsets.only(top: 6),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+              Expanded(
+                  flex: 5,
+                  child: Text(item.name,
+                      style: const TextStyle(fontSize: 12, color: Color(0xFF374151)))),
+              SizedBox(
+                  width: 44,
+                  child: Text('×${item.qty}',
+                      style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)))),
+              SizedBox(
+                  width: 76,
+                  child: Text(
+                      item.price != null ? '₹${item.price!.toStringAsFixed(2)}' : '—',
+                      style: const TextStyle(fontSize: 12, color: Color(0xFF374151)))),
+              Expanded(
+                flex: 4,
+                child: _itemInquiryBadge(currentStatus, currentSupplier),
+              ),
             ]),
           );
         }),

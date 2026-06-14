@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../user_state.dart';
+import '../view_as_state.dart';
 import 'auth/business_details_screen.dart';
+import 'admin/view_as_picker_dialog.dart';
 
 class ProfileScreen extends StatelessWidget {
   const ProfileScreen({super.key});
@@ -384,6 +386,10 @@ class ProfileScreen extends StatelessWidget {
                   ),
                 ],
 
+                // View As (Dev) — super-admin only, build-phase gated
+                if (kEnableViewAs && auth.isSuperAdmin)
+                  _ViewAsCard(),
+
                 // Logout button
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 24, 16, 40),
@@ -599,6 +605,111 @@ class _InfoRow extends StatelessWidget {
         if (!isLast)
           const Divider(height: 1, indent: 46, color: Color(0xFFF3F4F6)),
       ],
+    );
+  }
+}
+
+// ── View As card (super-admin dev tool) ───────────────────────────────────────
+
+class _ViewAsCard extends StatelessWidget {
+  const _ViewAsCard();
+
+  static const _amber = Color(0xFFD97706);
+  static const _amberBg = Color(0xFFFFFBEB);
+  static const _amberBorder = Color(0xFFFCD34D);
+
+  Future<void> _pick(BuildContext context, ViewAsRole role) async {
+    final identity = await showViewAsPicker(context, role);
+    if (identity != null && context.mounted) {
+      ViewAsState.read(context).activate(role, identity);
+      // Close profile screen — home_shell will re-route to preview
+      Navigator.of(context).popUntil((r) => r.isFirst);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 20, 16, 0),
+      decoration: BoxDecoration(
+        color: _amberBg,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _amberBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+            child: Row(
+              children: const [
+                Icon(Icons.preview_outlined, size: 16, color: _amber),
+                SizedBox(width: 6),
+                Text(
+                  'VIEW AS (Dev)',
+                  style: TextStyle(
+                    fontSize: 11, fontWeight: FontWeight.w700,
+                    color: _amber, letterSpacing: 0.4,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+            child: Text(
+              'Preview any account\'s interface without logging out.',
+              style: TextStyle(fontSize: 12, color: Color(0xFF92400E)),
+            ),
+          ),
+          const Divider(color: _amberBorder, height: 1),
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _ViewAsChip(label: 'Customer',         icon: Icons.person_outline,          onTap: () => _pick(context, ViewAsRole.customer)),
+                _ViewAsChip(label: 'Supplier',         icon: Icons.store_outlined,           onTap: () => _pick(context, ViewAsRole.supplier)),
+                _ViewAsChip(label: 'Company',          icon: Icons.business_outlined,        onTap: () => _pick(context, ViewAsRole.company)),
+                _ViewAsChip(label: 'Delivery Partner', icon: Icons.delivery_dining_outlined, onTap: () => _pick(context, ViewAsRole.deliveryPartner)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ViewAsChip extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final VoidCallback onTap;
+  const _ViewAsChip({required this.label, required this.icon, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: const Color(0xFFFCD34D)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 15, color: const Color(0xFFD97706)),
+            const SizedBox(width: 6),
+            Text(label, style: const TextStyle(
+              fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF92400E),
+            )),
+          ],
+        ),
+      ),
     );
   }
 }

@@ -9,6 +9,8 @@ import '../theme.dart';
 import '../url_sync.dart';
 import '../user_state.dart';
 import '../util.dart';
+import '../view_as_state.dart';
+import '../utils/render_log.dart';
 import '../widgets/animations.dart';
 import 'admin/admin_add_medicine_screen.dart';
 import 'admin/admin_manage_admins_screen.dart';
@@ -200,6 +202,42 @@ class _HomeShellState extends State<HomeShell> {
   @override
   Widget build(BuildContext context) {
     final auth = UserState.of(context);
+    final viewAs = ViewAsState.of(context);
+
+    // View As (Dev): super-admin previewing another account's interface.
+    // In-memory only — a page refresh returns to the real admin.
+    if (viewAs.isActive && auth.isSuperAdmin) {
+      final role = viewAs.role!;
+      final identity = viewAs.identity!;
+      RenderLog.write('view_as_active', '${role.name}:${identity.id}');
+
+      Widget preview;
+      switch (role) {
+        case ViewAsRole.supplier:
+          preview = SupplierShell(
+            viewAsSupplierId: identity.id,
+            viewAsSupplierName: identity.name,
+          );
+        case ViewAsRole.customer:
+          preview = _ViewAsCustomerPreview(identity: identity);
+        case ViewAsRole.company:
+          preview = _ViewAsCompanyPreview(identity: identity);
+        case ViewAsRole.deliveryPartner:
+          preview = _ViewAsDeliveryPartnerPreview(identity: identity);
+      }
+
+      return Column(children: [
+        _ViewAsBanner(
+          role: role,
+          identity: identity,
+          onExit: () {
+            ViewAsState.read(context).exit();
+            RenderLog.write('view_as_active', 'none');
+          },
+        ),
+        Expanded(child: preview),
+      ]);
+    }
 
     // Supplier: completely separate shell — takes priority after admin check
     if (!auth.isAdmin && auth.isSupplier) {
@@ -4007,3 +4045,263 @@ class _FadingIndexedStackState extends State<_FadingIndexedStack>
 }
 
 
+
+// ── View As banner ────────────────────────────────────────────────────────────
+
+class _ViewAsBanner extends StatelessWidget {
+  final ViewAsRole role;
+  final ViewAsIdentity identity;
+  final VoidCallback onExit;
+  const _ViewAsBanner({required this.role, required this.identity, required this.onExit});
+
+  String get _roleLabel {
+    switch (role) {
+      case ViewAsRole.supplier:        return 'Supplier';
+      case ViewAsRole.customer:        return 'Customer';
+      case ViewAsRole.company:         return 'Company';
+      case ViewAsRole.deliveryPartner: return 'Delivery Partner';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: const Color(0xFFFEF3C7),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        decoration: const BoxDecoration(
+          border: Border(bottom: BorderSide(color: Color(0xFFFCD34D))),
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.preview_outlined, size: 16, color: Color(0xFFD97706)),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Viewing as $_roleLabel: ${identity.name}',
+                style: const TextStyle(
+                  fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF92400E),
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            TextButton(
+              onPressed: onExit,
+              style: TextButton.styleFrom(
+                foregroundColor: const Color(0xFFD97706),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              child: const Text('Exit', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── View As preview screens ───────────────────────────────────────────────────
+
+class _ViewAsCustomerPreview extends StatefulWidget {
+  final ViewAsIdentity identity;
+  const _ViewAsCustomerPreview({required this.identity});
+
+  @override
+  State<_ViewAsCustomerPreview> createState() => _ViewAsCustomerPreviewState();
+}
+
+class _ViewAsCustomerPreviewState extends State<_ViewAsCustomerPreview> {
+  Map<String, dynamic>? _profile;
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetch();
+  }
+
+  Future<void> _fetch() async {
+    try {
+      final res = await Supabase.instance.client
+          .from('pharmacy_profiles')
+          .select()
+          .eq('id', widget.identity.id)
+          .maybeSingle();
+      if (mounted) setState(() { _profile = res; _loading = false; });
+    } catch (_) {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) return const Center(child: CircularProgressIndicator(color: Color(0xFF1B7A43)));
+    final p = _profile;
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(20),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 520),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            _previewHeader('Customer Profile', Icons.person_outline, const Color(0xFF1B7A43)),
+            const SizedBox(height: 16),
+            _previewField('Name', p?['customer_name'] ?? p?['owner_name']),
+            _previewField('Pharmacy', p?['pharmacy_name']),
+            _previewField('Email', p?['email'] ?? widget.identity.email),
+            _previewField('Phone', p?['phone']),
+            _previewField('City', p?['city']),
+            _previewField('State', p?['state']),
+            _previewField('Pincode', p?['pincode']),
+            _previewField('Status', p?['status']),
+            _previewField('Customer Code', p?['customer_code']),
+            _previewField('Drug License', p?['drug_license']),
+            _previewField('GST', p?['gst_no'] ?? p?['gstin']),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+class _ViewAsCompanyPreview extends StatefulWidget {
+  final ViewAsIdentity identity;
+  const _ViewAsCompanyPreview({required this.identity});
+
+  @override
+  State<_ViewAsCompanyPreview> createState() => _ViewAsCompanyPreviewState();
+}
+
+class _ViewAsCompanyPreviewState extends State<_ViewAsCompanyPreview> {
+  Map<String, dynamic>? _profile;
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetch();
+  }
+
+  Future<void> _fetch() async {
+    try {
+      final res = await Supabase.instance.client
+          .from('company_profiles')
+          .select()
+          .eq('id', widget.identity.id)
+          .maybeSingle();
+      if (mounted) setState(() { _profile = res; _loading = false; });
+    } catch (_) {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) return const Center(child: CircularProgressIndicator(color: Color(0xFF1B7A43)));
+    final p = _profile;
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(20),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 520),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            _previewHeader('Company Profile', Icons.business_outlined, const Color(0xFF1B7A43)),
+            const SizedBox(height: 16),
+            _previewField('Company Name', p?['company_name'] ?? widget.identity.name),
+            _previewField('Contact Person', p?['contact_person']),
+            _previewField('Email', p?['email'] ?? widget.identity.email),
+            _previewField('Phone', p?['phone']),
+            _previewField('City', p?['city']),
+            _previewField('State', p?['state']),
+            _previewField('Status', p?['status']),
+            _previewField('Drug License', p?['drug_license']),
+            _previewField('GST', p?['gst_no']),
+            _previewField('Website', p?['website']),
+            _previewField('Product Categories', p?['product_categories']),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+class _ViewAsDeliveryPartnerPreview extends StatefulWidget {
+  final ViewAsIdentity identity;
+  const _ViewAsDeliveryPartnerPreview({required this.identity});
+
+  @override
+  State<_ViewAsDeliveryPartnerPreview> createState() => _ViewAsDeliveryPartnerPreviewState();
+}
+
+class _ViewAsDeliveryPartnerPreviewState extends State<_ViewAsDeliveryPartnerPreview> {
+  Map<String, dynamic>? _profile;
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetch();
+  }
+
+  Future<void> _fetch() async {
+    try {
+      final res = await Supabase.instance.client
+          .from('delivery_partner_registrations')
+          .select()
+          .eq('id', widget.identity.id)
+          .maybeSingle();
+      if (mounted) setState(() { _profile = res; _loading = false; });
+    } catch (_) {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) return const Center(child: CircularProgressIndicator(color: Color(0xFF1B7A43)));
+    final p = _profile;
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(20),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 520),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            _previewHeader('Delivery Partner Profile', Icons.delivery_dining_outlined, const Color(0xFF1B7A43)),
+            const SizedBox(height: 16),
+            _previewField('Full Name', p?['full_name'] ?? widget.identity.name),
+            _previewField('Email', p?['email'] ?? widget.identity.email),
+            _previewField('Phone', p?['phone']),
+            _previewField('City', p?['city']),
+            _previewField('State', p?['state']),
+            _previewField('Delivery Zone', p?['delivery_zone']),
+            _previewField('Vehicle Type', p?['vehicle_type']),
+            _previewField('Status', p?['status']),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+Widget _previewHeader(String title, IconData icon, Color color) {
+  return Row(children: [
+    Icon(icon, size: 20, color: color),
+    const SizedBox(width: 8),
+    Text(title, style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: color)),
+  ]);
+}
+
+Widget _previewField(String label, dynamic value) {
+  final v = value?.toString() ?? '';
+  if (v.isEmpty) return const SizedBox.shrink();
+  return Padding(
+    padding: const EdgeInsets.only(bottom: 12),
+    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(label, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: Color(0xFF9CA3AF))),
+      const SizedBox(height: 2),
+      Text(v, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
+    ]),
+  );
+}

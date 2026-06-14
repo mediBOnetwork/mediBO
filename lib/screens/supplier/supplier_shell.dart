@@ -13,7 +13,17 @@ import 'supplier_orders_screen.dart';
 import 'supplier_add_medicine_screen.dart';
 
 class SupplierShell extends StatefulWidget {
-  const SupplierShell({super.key});
+  // When set, the shell runs in View-As preview mode using admin preview RPCs.
+  final String? viewAsSupplierId;
+  final String? viewAsSupplierName;
+
+  const SupplierShell({
+    super.key,
+    this.viewAsSupplierId,
+    this.viewAsSupplierName,
+  });
+
+  bool get isViewAs => viewAsSupplierId != null;
 
   @override
   State<SupplierShell> createState() => _SupplierShellState();
@@ -55,8 +65,16 @@ class _SupplierShellState extends State<SupplierShell> {
 
   Future<void> _fetchPendingCount() async {
     try {
-      final res = await Supabase.instance.client
-          .rpc('supplier_pending_inquiry_count') as int?;
+      final viewAsSupplierId = widget.viewAsSupplierId;
+      final int? res;
+      if (viewAsSupplierId != null) {
+        res = await Supabase.instance.client
+            .rpc('admin_preview_supplier_inquiry_count',
+                params: {'p_supplier_id': viewAsSupplierId}) as int?;
+      } else {
+        res = await Supabase.instance.client
+            .rpc('supplier_pending_inquiry_count') as int?;
+      }
       if (mounted) {
         final count = res ?? 0;
         if (count != _pendingInquiryCount) {
@@ -75,14 +93,18 @@ class _SupplierShellState extends State<SupplierShell> {
 
   @override
   Widget build(BuildContext context) {
-    final supplierName = UserState.of(context).supplierName ?? 'Supplier';
+    final supplierName = widget.viewAsSupplierName
+        ?? UserState.of(context).supplierName
+        ?? 'Supplier';
+    final viewAsSupplierId = widget.viewAsSupplierId;
     final isDesktop = MediaQuery.of(context).size.width >= 900;
 
     final pages = [
-      const SupplierHomeScreen(),
-      const SupplierAddMedicineScreen(),
-      SupplierInquiryScreen(key: _inquiryKey),
-      const SupplierOrdersScreen(),
+      SupplierHomeScreen(viewAsSupplierId: viewAsSupplierId),
+      if (viewAsSupplierId == null) const SupplierAddMedicineScreen()
+      else const _ViewAsReadOnlyPlaceholder(label: 'Add Medicine (read-only in preview)'),
+      SupplierInquiryScreen(key: _inquiryKey, viewAsSupplierId: viewAsSupplierId),
+      SupplierOrdersScreen(viewAsSupplierId: viewAsSupplierId),
     ];
 
     final showBanner = _pendingInquiryCount > 0 && !_bannerDismissed && _index != 2;
@@ -93,7 +115,9 @@ class _SupplierShellState extends State<SupplierShell> {
         _SupplierHeader(
           supplierName: supplierName,
           isDesktop: isDesktop,
-          onLogout: () => UserState.read(context).signOut(),
+          onLogout: viewAsSupplierId == null
+              ? () => UserState.read(context).signOut()
+              : null, // no logout in preview mode
         ),
         // Attention banner
         if (showBanner)
@@ -133,7 +157,7 @@ class _NavItem {
 class _SupplierHeader extends StatelessWidget {
   final String supplierName;
   final bool isDesktop;
-  final VoidCallback onLogout;
+  final VoidCallback? onLogout;
 
   const _SupplierHeader({
     required this.supplierName,
@@ -172,14 +196,15 @@ class _SupplierHeader extends StatelessWidget {
           overflow: TextOverflow.ellipsis,
         ),
         const SizedBox(width: 12),
-        InkWell(
-          onTap: onLogout,
-          borderRadius: BorderRadius.circular(8),
-          child: const Padding(
-            padding: EdgeInsets.all(6),
-            child: Icon(Icons.logout, color: Colors.white, size: 20),
+        if (onLogout != null)
+          InkWell(
+            onTap: onLogout,
+            borderRadius: BorderRadius.circular(8),
+            child: const Padding(
+              padding: EdgeInsets.all(6),
+              child: Icon(Icons.logout, color: Colors.white, size: 20),
+            ),
           ),
-        ),
       ]),
     );
   }
@@ -344,6 +369,31 @@ class _MobileBottomNav extends StatelessWidget {
             }),
           ),
         ),
+      ),
+    );
+  }
+}
+
+// ── Read-only placeholder (shown in View-As preview for write-only screens) ───
+
+class _ViewAsReadOnlyPlaceholder extends StatelessWidget {
+  final String label;
+  const _ViewAsReadOnlyPlaceholder({required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+          const Icon(Icons.preview_outlined, size: 40, color: Color(0xFFD97706)),
+          const SizedBox(height: 12),
+          Text(
+            label,
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 14, color: Color(0xFF92400E)),
+          ),
+        ]),
       ),
     );
   }

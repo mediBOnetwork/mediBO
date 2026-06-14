@@ -7,7 +7,8 @@ import '../../utils/render_log.dart';
 import '../../utils/toast.dart';
 
 class SupplierInquiryScreen extends StatefulWidget {
-  const SupplierInquiryScreen({super.key});
+  final String? viewAsSupplierId;
+  const SupplierInquiryScreen({super.key, this.viewAsSupplierId});
 
   @override
   State<SupplierInquiryScreen> createState() => SupplierInquiryScreenState();
@@ -27,8 +28,15 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen> {
   Future<void> _fetch({bool silent = false}) async {
     if (!silent) setState(() => _loading = true);
     try {
-      final res = await Supabase.instance.client
-          .rpc('supplier_my_inquiry_items') as List;
+      final viewAsSupplierId = widget.viewAsSupplierId;
+      final res = await Supabase.instance.client.rpc(
+        viewAsSupplierId != null
+            ? 'admin_preview_supplier_inquiries'
+            : 'supplier_my_inquiry_items',
+        params: viewAsSupplierId != null
+            ? {'p_supplier_id': viewAsSupplierId}
+            : null,
+      ) as List;
       if (mounted) {
         setState(() {
           _items = res.map((r) => Map<String, dynamic>.from(r as Map)).toList();
@@ -43,6 +51,10 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen> {
   }
 
   Future<void> _answer(int inquiryId, String answer) async {
+    if (widget.viewAsSupplierId != null) {
+      showToast(context, 'Read-only in View As preview', isError: true);
+      return;
+    }
     setState(() => _answering.add(inquiryId));
     try {
       final res = await Supabase.instance.client.rpc(

@@ -8,6 +8,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'app_state.dart';
 import 'utils/render_log.dart';
+import 'view_as_state.dart';
 import 'models/cart_model.dart';
 import 'screens/auth/login_screen.dart';
 import 'screens/home_shell.dart';
@@ -51,56 +52,61 @@ class PharmaB2BApp extends StatefulWidget {
 class _PharmaB2BAppState extends State<PharmaB2BApp> {
   final CartModel _cart = CartModel();
   final AuthNotifier _auth = AuthNotifier();
+  final ViewAsNotifier _viewAs = ViewAsNotifier();
 
   @override
   void dispose() {
     _cart.dispose();
     _auth.dispose();
+    _viewAs.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return UserState(
-      notifier: _auth,
-      child: AppState(
-        cart: _cart,
-        child: MaterialApp(
-          title: 'mediBO',
-          debugShowCheckedModeBanner: false,
-          theme: buildTheme(),
-          scrollBehavior: const SmoothScrollBehavior(),
-          home: _AppRoot(auth: _auth),
-          // Public inquiry form — no auth required, handles /inquiry/<token>
-          onGenerateRoute: (settings) {
-            final name = settings.name ?? '';
-            if (name.startsWith('/inquiry/')) {
-              final token = name.substring('/inquiry/'.length).split('?').first;
-              if (token.isNotEmpty) {
-                return MaterialPageRoute(
-                  settings: settings,
-                  builder: (_) => InquiryFormScreen(token: token),
-                );
+    return ViewAsState(
+      notifier: _viewAs,
+      child: UserState(
+        notifier: _auth,
+        child: AppState(
+          cart: _cart,
+          child: MaterialApp(
+            title: 'mediBO',
+            debugShowCheckedModeBanner: false,
+            theme: buildTheme(),
+            scrollBehavior: const SmoothScrollBehavior(),
+            home: _AppRoot(auth: _auth),
+            // Public inquiry form — no auth required, handles /inquiry/<token>
+            onGenerateRoute: (settings) {
+              final name = settings.name ?? '';
+              if (name.startsWith('/inquiry/')) {
+                final token = name.substring('/inquiry/'.length).split('?').first;
+                if (token.isNotEmpty) {
+                  return MaterialPageRoute(
+                    settings: settings,
+                    builder: (_) => InquiryFormScreen(token: token),
+                  );
+                }
               }
-            }
-            return null;
-          },
-          // Unknown paths (e.g. /c/cardiac) fall through to home shell,
-          // which reads the URL in initState and sets the correct category.
-          onUnknownRoute: (_) => MaterialPageRoute(
-            builder: (_) => _AppRoot(auth: _auth),
+              return null;
+            },
+            // Unknown paths (e.g. /c/cardiac) fall through to home shell,
+            // which reads the URL in initState and sets the correct category.
+            onUnknownRoute: (_) => MaterialPageRoute(
+              builder: (_) => _AppRoot(auth: _auth),
+            ),
+            routes: {
+              '/login':        (_) => const LoginScreen(),
+              '/register':     (_) => const LoginScreen(),
+              '/about':        (_) => const AboutScreen(),
+              '/contact':      (_) => const ContactScreen(),
+              '/terms':        (_) => const TermsScreen(),
+              '/privacy':      (_) => const PrivacyScreen(),
+              '/refund':       (_) => const RefundScreen(),
+              '/shipping':     (_) => const ShippingScreen(),
+              '/cancellation': (_) => const CancellationScreen(),
+            },
           ),
-          routes: {
-            '/login':        (_) => const LoginScreen(),
-            '/register':     (_) => const LoginScreen(),
-            '/about':        (_) => const AboutScreen(),
-            '/contact':      (_) => const ContactScreen(),
-            '/terms':        (_) => const TermsScreen(),
-            '/privacy':      (_) => const PrivacyScreen(),
-            '/refund':       (_) => const RefundScreen(),
-            '/shipping':     (_) => const ShippingScreen(),
-            '/cancellation': (_) => const CancellationScreen(),
-          },
         ),
       ),
     );

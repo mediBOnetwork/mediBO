@@ -5,7 +5,8 @@ import '../../utils/render_log.dart';
 import '../../utils/toast.dart';
 
 class SupplierOrdersScreen extends StatefulWidget {
-  const SupplierOrdersScreen({super.key});
+  final String? viewAsSupplierId;
+  const SupplierOrdersScreen({super.key, this.viewAsSupplierId});
 
   @override
   State<SupplierOrdersScreen> createState() => _SupplierOrdersScreenState();
@@ -24,9 +25,13 @@ class _SupplierOrdersScreenState extends State<SupplierOrdersScreen> {
   Future<void> _fetch() async {
     setState(() => _loading = true);
     try {
-      final res = await Supabase.instance.client
+      final viewAsSupplierId = widget.viewAsSupplierId;
+      final query = Supabase.instance.client
           .from('supplier_orders')
-          .select()
+          .select();
+      final res = await (viewAsSupplierId != null
+          ? query.eq('supplier_id', viewAsSupplierId)
+          : query)
           .order('created_at', ascending: false) as List;
       if (mounted) {
         setState(() {

@@ -6,7 +6,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../utils/render_log.dart';
 
 class SupplierHomeScreen extends StatefulWidget {
-  const SupplierHomeScreen({super.key});
+  final String? viewAsSupplierId;
+  const SupplierHomeScreen({super.key, this.viewAsSupplierId});
 
   @override
   State<SupplierHomeScreen> createState() => _SupplierHomeScreenState();
@@ -63,9 +64,13 @@ class _SupplierHomeScreenState extends State<SupplierHomeScreen> {
     setState(() => _loading = true);
     try {
       final offset = reset ? 0 : _items.length;
+      final viewAsSupplierId = widget.viewAsSupplierId;
       final res = await Supabase.instance.client.rpc(
-        'supplier_home_medicines',
+        viewAsSupplierId != null
+            ? 'admin_preview_supplier_medicines'
+            : 'supplier_home_medicines',
         params: {
+          if (viewAsSupplierId != null) 'p_supplier_id': viewAsSupplierId,
           'p_search': _currentSearch,
           'p_limit':  _pageSize,
           'p_offset': offset,

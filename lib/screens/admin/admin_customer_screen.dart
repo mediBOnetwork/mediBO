@@ -2347,14 +2347,12 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
               child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                // Name line: [Active status badge] [Full customer/pharmacy name]
+                // Name line: [Full customer/pharmacy name] [Active status badge]
                 Builder(builder: (_) {
                   RenderLog.write('customer_card_restructured', 'true');
                   return const SizedBox.shrink();
                 }),
                 Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-                  _CustomerStatusBadge(status: row.status),
-                  const SizedBox(width: 8),
                   Expanded(
                       child: Text(
                           row.pharmacyName.isNotEmpty
@@ -2368,6 +2366,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                               color: Color(0xFF111827)),
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis)),
+                  const SizedBox(width: 8),
+                  _CustomerStatusBadge(status: row.status),
                 ]),
                 if (row.customerName.isNotEmpty) ...[
                   const SizedBox(height: 3),

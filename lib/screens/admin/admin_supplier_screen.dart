@@ -2603,8 +2603,15 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                   RenderLog.write('supplier_card_restructured', 'true');
                   return const SizedBox.shrink();
                 }),
-                // Name line: [Active pill] [Full supplier name]
+                // Name line: [Full supplier name] [Active pill]
                 Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+                  Expanded(child: Text(
+                    row.supplierName.isNotEmpty ? row.supplierName : row.contactName.isNotEmpty ? row.contactName : 'Unknown',
+                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF111827)),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  )),
+                  const SizedBox(width: 8),
                   _StatusPill(
                     key: ValueKey('status_${row.id}'),
                     supplierId: row.id,
@@ -2614,13 +2621,6 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                       if (mounted) setState(() { _hasPendingChanges = true; });
                     },
                   ),
-                  const SizedBox(width: 8),
-                  Expanded(child: Text(
-                    row.supplierName.isNotEmpty ? row.supplierName : row.contactName.isNotEmpty ? row.contactName : 'Unknown',
-                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF111827)),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  )),
                 ]),
                 if (row.contactName.isNotEmpty) ...[const SizedBox(height: 3), Text(row.contactName, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)), overflow: TextOverflow.ellipsis)],
                 if (row.phone.isNotEmpty) ...[const SizedBox(height: 2), Text(row.phone, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)))],

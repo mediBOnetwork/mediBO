@@ -1117,23 +1117,11 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         color: Colors.white,
         border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
       ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      child: Builder(builder: (_) {
+        RenderLog.write('titles_removed_customers', 'true');
+        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
-          const Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('Customer Dashboard',
-                    style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w800,
-                        color: Color(0xFF111827))),
-                SizedBox(height: 2),
-                Text('Manage pharmacy accounts and registrations',
-                    style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
-              ],
-            ),
-          ),
+          const Expanded(child: SizedBox.shrink()),
           IconButton(
             onPressed: _load,
             icon: const Icon(Icons.refresh_outlined,
@@ -1162,7 +1150,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                 'Leads (${_loggedInLeads.length + _otherLeads.length})'),
           ]),
         ),
-      ]),
+      ]);
+      }),
     );
   }
 

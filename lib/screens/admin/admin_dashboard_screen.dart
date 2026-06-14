@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:pharma_b2b/utils/render_log.dart';
 
 class AdminDashboardScreen extends StatefulWidget {
   const AdminDashboardScreen({super.key});
@@ -151,16 +152,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Dashboard header — clean, no big icon
-            const Text('Admin Dashboard',
-                style: TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.w800,
-                    color: Color(0xFF111827))),
-            const SizedBox(height: 4),
-            const Text('mediBO operations overview',
-                style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
-            const SizedBox(height: 28),
+            Builder(builder: (_) {
+              RenderLog.write('titles_removed_dashboard', 'true');
+              return const SizedBox(height: 8);
+            }),
 
             if (_loading)
               const Center(

@@ -714,17 +714,11 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         color: Colors.white,
         border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
       ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      child: Builder(builder: (_) {
+        RenderLog.write('titles_removed_suppliers', 'true');
+        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
-          const Expanded(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('Supplier Dashboard',
-                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: Color(0xFF111827))),
-              SizedBox(height: 2),
-              Text('Manage supplier accounts and registrations',
-                  style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
-            ]),
-          ),
+          const Expanded(child: SizedBox.shrink()),
           if (_filter == _SupFilter.suppliers) ...[
             Builder(builder: (_) {
               RenderLog.write('sort_in_header_slot', 'true');
@@ -836,7 +830,8 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
             _tab(_SupFilter.staging,    'Staging (${_stagingCompanies.length + _stagingMedicines.length})'),
           ]),
         ),
-      ]),
+      ]);
+      }),
     );
   }
 

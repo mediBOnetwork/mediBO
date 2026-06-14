@@ -13,6 +13,7 @@ import 'package:syncfusion_flutter_pdf/pdf.dart';
 import 'package:xml/xml.dart' as xmlp;
 
 import '../../config/api_keys.dart';
+import '../../utils/render_log.dart';
 import '../../models/product.dart';
 import '../../supabase_config.dart';
 import '../../util.dart';
@@ -804,12 +805,10 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
           child: Padding(
             padding: EdgeInsets.symmetric(horizontal: isDesktop ? 32 : 20, vertical: 32),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const Text('Add Medicine Details',
-                  style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800, color: Color(0xFF111827))),
-              const SizedBox(height: 8),
-              const Text('Import medicines from a spreadsheet, PDF, or photo — adds new medicines or updates existing ones.',
-                  style: TextStyle(fontSize: 14, color: Color(0xFF6B7280))),
-              const SizedBox(height: 36),
+              Builder(builder: (_) {
+                RenderLog.write('titles_removed_addmedicine', 'true');
+                return const SizedBox(height: 8);
+              }),
               Container(
                 decoration: BoxDecoration(
                   color: Colors.white,

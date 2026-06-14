@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:pharma_b2b/utils/toast.dart';
+import 'package:pharma_b2b/utils/render_log.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'admin_add_medicine_screen.dart';
@@ -974,18 +975,11 @@ class _PendingBillsScreenState extends State<PendingBillsScreen> {
       color: Colors.white,
       padding: EdgeInsets.fromLTRB(
         isDesktop ? 24 : 16, 16, isDesktop ? 24 : 16, 14),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      child: Builder(builder: (_) {
+        RenderLog.write('titles_removed_bills', 'true');
+        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
-          const Text(
-            'Pending Bills',
-            style: TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.w800,
-              color: Color(0xFF111827),
-            ),
-          ),
           if (!_loading && actionable > 0) ...[
-            const SizedBox(width: 10),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
               decoration: BoxDecoration(
@@ -1032,7 +1026,8 @@ class _PendingBillsScreenState extends State<PendingBillsScreen> {
             onPressed: _loading ? null : _load,
           ),
         ]),
-      ]),
+      ]);
+      }),
     );
   }
 

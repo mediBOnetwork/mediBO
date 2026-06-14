@@ -88,6 +88,7 @@ class _OrderRow {
   final double? totalAmount;
   final String status;
   final DateTime? createdAt;
+  final List<Map<String, dynamic>> items;
 
   const _OrderRow({
     required this.id,
@@ -96,6 +97,7 @@ class _OrderRow {
     this.totalAmount,
     required this.status,
     this.createdAt,
+    this.items = const [],
   });
 
   factory _OrderRow.fromMap(Map<String, dynamic> m) => _OrderRow(
@@ -105,6 +107,9 @@ class _OrderRow {
     totalAmount:  (m['total_amount'] as num?)?.toDouble(),
     status:       m['status'] as String? ?? 'pending',
     createdAt:    m['created_at'] != null ? DateTime.tryParse(m['created_at'] as String) : null,
+    items:        (m['items'] as List<dynamic>?)
+                      ?.map((e) => Map<String, dynamic>.from(e as Map))
+                      .toList() ?? [],
   );
 }
 
@@ -184,6 +189,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   bool _inquiryItemsLoading = false;
   Timer? _inquiryPollTimer;
   final Set<int> _settingAnswerFor = {}; // inquiry_ids currently being admin-set
+  String? _expandedOrderId; // which supplier order row is expanded
 
   @override
   void initState() {
@@ -1264,6 +1270,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         GestureDetector(
+          behavior: HitTestBehavior.opaque,
           onTap: () {
             if (_expandedInquirySupplier == supName) {
               setState(() => _expandedInquirySupplier = null);
@@ -1339,8 +1346,6 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
             ]),
           ),
         ),
-        // Inline link after Send
-        if (linkData != null) _buildInquiryInlineLink(supName, linkData),
         // Expanded items
         if (isExpanded) _buildInquiryItemsPanel(),
       ]),
@@ -2275,56 +2280,124 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     final dateStr = row.createdAt != null
         ? '${row.createdAt!.day.toString().padLeft(2,'0')}/${row.createdAt!.month.toString().padLeft(2,'0')}/${row.createdAt!.year}'
         : '—';
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 13),
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
+    final isExpanded = _expandedOrderId == row.id;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () {
+          setState(() => _expandedOrderId = isExpanded ? null : row.id);
+          RenderLog.write('order_row_expanded', isExpanded ? 'collapse:${row.id}' : 'expand:${row.id}');
+        },
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 13),
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
+          ),
+          child: Row(children: [
+            Expanded(flex: 4, child: Text(row.supplierName ?? '—',
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
+                overflow: TextOverflow.ellipsis)),
+            Expanded(flex: 5, child: Text(row.description ?? '—',
+                style: const TextStyle(fontSize: 13, color: Color(0xFF374151)), overflow: TextOverflow.ellipsis)),
+            Expanded(flex: 2, child: Text(row.totalAmount != null ? '₹${row.totalAmount!.toStringAsFixed(0)}' : '—',
+                style: const TextStyle(fontSize: 13, color: Color(0xFF111827)))),
+            Expanded(flex: 3, child: _orderStatusLabel(row.status)),
+            Expanded(flex: 3, child: Text(dateStr, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)))),
+          ]),
+        ),
       ),
-      child: Row(children: [
-        Expanded(flex: 4, child: Text(row.supplierName ?? '—',
-            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
-            overflow: TextOverflow.ellipsis)),
-        Expanded(flex: 5, child: Text(row.description ?? '—',
-            style: const TextStyle(fontSize: 13, color: Color(0xFF374151)), overflow: TextOverflow.ellipsis)),
-        Expanded(flex: 2, child: Text(row.totalAmount != null ? '₹${row.totalAmount!.toStringAsFixed(0)}' : '—',
-            style: const TextStyle(fontSize: 13, color: Color(0xFF111827)))),
-        Expanded(flex: 3, child: _orderStatusLabel(row.status)),
-        Expanded(flex: 3, child: Text(dateStr, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)))),
-      ]),
-    );
+      if (isExpanded) _buildOrderItemsPanel(row.items, padH: 28),
+    ]);
   }
 
   Widget _mobileOrderCard(_OrderRow row) {
     final dateStr = row.createdAt != null
         ? '${row.createdAt!.day.toString().padLeft(2,'0')}/${row.createdAt!.month.toString().padLeft(2,'0')}/${row.createdAt!.year}'
         : '';
+    final isExpanded = _expandedOrderId == row.id;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () {
+        setState(() => _expandedOrderId = isExpanded ? null : row.id);
+        RenderLog.write('order_row_expanded', isExpanded ? 'collapse:${row.id}' : 'expand:${row.id}');
+      },
+      child: Container(
+        margin: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: const Color(0xFFE5E7EB)),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Padding(
+            padding: const EdgeInsets.all(14),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                Expanded(child: Text(row.supplierName ?? '—',
+                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF111827)),
+                    overflow: TextOverflow.ellipsis)),
+                if (dateStr.isNotEmpty) Text(dateStr, style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
+              ]),
+              if (row.description?.isNotEmpty == true) ...[
+                const SizedBox(height: 4),
+                Text(row.description!, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+              ],
+              if (row.totalAmount != null) ...[
+                const SizedBox(height: 4),
+                Text('₹${row.totalAmount!.toStringAsFixed(0)}', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF1B7A43))),
+              ],
+              const SizedBox(height: 10),
+              _orderStatusLabel(row.status),
+            ]),
+          ),
+          if (isExpanded) _buildOrderItemsPanel(row.items, padH: 14),
+        ]),
+      ),
+    );
+  }
+
+  Widget _buildOrderItemsPanel(List<Map<String, dynamic>> items, {double padH = 16}) {
     return Container(
-      margin: const EdgeInsets.fromLTRB(16, 10, 16, 0),
-      padding: const EdgeInsets.all(14),
+      margin: EdgeInsets.fromLTRB(padH, 0, padH, 12),
+      padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
+        color: const Color(0xFFF9FAFB),
+        borderRadius: BorderRadius.circular(8),
         border: Border.all(color: const Color(0xFFE5E7EB)),
       ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          Expanded(child: Text(row.supplierName ?? '—',
-              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF111827)),
-              overflow: TextOverflow.ellipsis)),
-          if (dateStr.isNotEmpty) Text(dateStr, style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
-        ]),
-        if (row.description?.isNotEmpty == true) ...[
-          const SizedBox(height: 4),
-          Text(row.description!, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
-        ],
-        if (row.totalAmount != null) ...[
-          const SizedBox(height: 4),
-          Text('₹${row.totalAmount!.toStringAsFixed(0)}', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF1B7A43))),
-        ],
-        const SizedBox(height: 10),
-        _orderStatusLabel(row.status),
-      ]),
+      child: items.isEmpty
+          ? const Text('No items.', style: TextStyle(fontSize: 13, color: Color(0xFF6B7280)))
+          : Column(
+              children: items.map((item) {
+                final name = item['product_name'] as String? ?? '—';
+                final qty  = item['quantity'];
+                final mrp  = item['mrp'];
+                final lineTotal = mrp != null && qty != null
+                    ? (mrp as num) * (qty as num)
+                    : null;
+                return Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 5),
+                  child: Row(children: [
+                    Expanded(child: Text(name,
+                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: Color(0xFF111827)))),
+                    if (qty != null)
+                      Text('Qty: $qty',
+                          style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+                    if (mrp != null) ...[
+                      const SizedBox(width: 12),
+                      Text('₹$mrp',
+                          style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+                    ],
+                    if (lineTotal != null) ...[
+                      const SizedBox(width: 12),
+                      Text('= ₹${lineTotal.toStringAsFixed(0)}',
+                          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
+                    ],
+                  ]),
+                );
+              }).toList(),
+            ),
     );
   }
 

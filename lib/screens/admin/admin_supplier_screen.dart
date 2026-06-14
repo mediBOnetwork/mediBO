@@ -2618,7 +2618,12 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                     initialStatus: row.status,
                     onStatusChanged: (newStatus) {
                       row.rawData['status'] = newStatus;
-                      if (mounted) setState(() { _hasPendingChanges = true; });
+                      _load(showSpinner: false).then((_) {
+                        if (mounted) {
+                          setState(_applySort);
+                          RenderLog.write('supplier_status_changed_refetched', newStatus);
+                        }
+                      });
                     },
                   ),
                 ]),
@@ -3600,7 +3605,7 @@ class _StatusPillState extends State<_StatusPill> {
   Color get _color => _colors[_selected] ?? const Color(0xFF6B7280);
   String get _label => _selected.isNotEmpty ? _selected : 'Active';
 
-  Future<void> _write(String newStatus) async {
+  Future<bool> _write(String newStatus) async {
     RenderLog.write('status_pill_write', '$_selected→$newStatus');
     try {
       final res = await Supabase.instance.client
@@ -3610,14 +3615,17 @@ class _StatusPillState extends State<_StatusPill> {
           .select('id')
           .timeout(const Duration(seconds: 8));
       RenderLog.write('status_pill_result', res.isEmpty ? 'EMPTY' : 'OK');
-      if (mounted) {
-        showToast(context, res.isEmpty ? 'Save failed — try again' : 'Status updated ✓', isError: res.isEmpty, duration: const Duration(milliseconds: 800));
+      if (!mounted) return false;
+      if (res.isEmpty) {
+        showToast(context, 'Save failed — try again', isError: true);
+        return false;
       }
+      showToast(context, 'Status updated ✓', duration: const Duration(milliseconds: 800));
+      return true;
     } catch (e) {
       RenderLog.write('status_pill_error', e.toString());
-      if (mounted) {
-        showToast(context, 'Error: $e', isError: true);
-      }
+      if (mounted) showToast(context, 'Error: $e', isError: true);
+      return false;
     }
   }
 
@@ -3629,11 +3637,16 @@ class _StatusPillState extends State<_StatusPill> {
       tooltip: '',
       padding: EdgeInsets.zero,
       position: PopupMenuPosition.under,
-      onSelected: (val) {
+      onSelected: (val) async {
         if (val == _selected) return;
-        setState(() => _selected = val);
-        widget.onStatusChanged(val);
-        _write(val);
+        final prev = _selected;
+        setState(() => _selected = val);   // optimistic local update
+        final ok = await _write(val);
+        if (!ok) {
+          if (mounted) setState(() => _selected = prev); // revert on failure
+          return;
+        }
+        widget.onStatusChanged(val);  // fire only after confirmed write
       },
       itemBuilder: (_) => _options.map((opt) {
         final c = _colors[opt] ?? const Color(0xFF6B7280);

@@ -1911,7 +1911,8 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
               Expanded(
                 child: Text(productName,
                   style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
-                  maxLines: 2,
+                  maxLines: 1,
+                  softWrap: false,
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
@@ -1930,8 +1931,10 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(productName,
-                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: Color(0xFF111827)),
-                  overflow: TextOverflow.ellipsis),
+                  maxLines: 1,
+                  softWrap: false,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: Color(0xFF111827))),
               Text(subtitleParts.join(' · '),
                   style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
             ]),

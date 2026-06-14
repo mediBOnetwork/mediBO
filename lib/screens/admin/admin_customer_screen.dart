@@ -1597,8 +1597,10 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
               Expanded(
                   flex: 5,
                   child: Text(item.name,
-                      style: const TextStyle(fontSize: 12, color: Color(0xFF374151)),
-                      overflow: TextOverflow.ellipsis)),
+                      maxLines: 1,
+                      softWrap: false,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 12, color: Color(0xFF374151)))),
               const SizedBox(width: 8),
               SizedBox(
                   width: 48,
@@ -1775,31 +1777,35 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          // Line 1: product name (left, bold) | qty (right)
-                          Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Expanded(
-                                child: Text(item.name,
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w600,
-                                    color: Color(0xFF111827),
+                          // Line 1: product name (left, bold, single-line) | qty (right)
+                          Builder(builder: (_) {
+                            RenderLog.write('product_name_single_line', 'true');
+                            return Row(
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                Expanded(
+                                  child: Text(item.name,
+                                    maxLines: 1,
+                                    softWrap: false,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                      color: Color(0xFF111827),
+                                    ),
                                   ),
                                 ),
-                              ),
-                              const SizedBox(width: 8),
-                              Text('×${item.qty}',
-                                style: const TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w500,
-                                  color: Color(0xFF6B7280),
+                                const SizedBox(width: 8),
+                                Text('×${item.qty}',
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w500,
+                                    color: Color(0xFF6B7280),
+                                  ),
                                 ),
-                              ),
-                            ],
-                          ),
+                              ],
+                            );
+                          }),
                           const SizedBox(height: 4),
                           // Line 2: pack size (left, grey) | MRP (right)
                           Row(
@@ -1808,7 +1814,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                               Expanded(
                                 child: Text(
                                   (item.packSize?.isNotEmpty == true) ? item.packSize! : '—',
-                                  maxLines: 2,
+                                  maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                   style: const TextStyle(
                                     fontSize: 11,

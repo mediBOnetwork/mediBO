@@ -1013,40 +1013,23 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
 
       if (!mounted) return;
 
+      setState(() => _inquiryLoading = false);
+
       if (token == null || token.isEmpty) {
-        setState(() => _inquiryLoading = false);
         showToast(context, 'Could not get inquiry link', isError: true);
         return;
       }
 
       final link = 'https://medibo.in/inquiry/$token';
+      final message = 'Hello $supName,\nWe want to buy some items from you. Please confirm availability:\n$link';
 
-      // Look up WhatsApp number
-      final sup = _suppliers.cast<_SupRow?>().firstWhere(
-        (s) => s!.supplierName.toLowerCase() == supName.toLowerCase(),
-        orElse: () => null,
-      );
-      final waNumbers = _parsePhoneList(sup?.rawData['whatsapp_no'] as String? ?? '');
-      final phone = waNumbers.isNotEmpty ? waNumbers.first : null;
-
-      setState(() => _inquiryLoading = false);
-
-      if (phone != null) {
-        final normalized = _normalizePhone(phone);
-        final msg = Uri.encodeComponent(
-            'Hello $supName,\nWe want to buy some items from you. Please confirm availability:\n$link');
-        html.window.open('https://wa.me/91$normalized?text=$msg', '_blank');
-        RenderLog.write('row_send_started_$slug', 'wa:91$normalized');
-      } else {
-        Clipboard.setData(ClipboardData(text: link));
-        showToast(context, 'No WhatsApp number — link copied');
-        RenderLog.write('row_send_started_$slug', 'fallback:clipboard');
-      }
-
-      // Refresh overview so this card shows its fresh Exp timer
-      await _fetchInquiryOverview(silent: true);
-      await _fetchUnassignedItems(silent: true);
+      // Refresh overview so this card shows its fresh Exp timer (timer already stamped)
+      _fetchInquiryOverview(silent: true);
+      _fetchUnassignedItems(silent: true);
       RenderLog.write('row_send_expiry_stamped', supName);
+
+      // Open contact-picker popup — user selects which number to WhatsApp
+      await _showSendContactPicker(supplierName: supName, message: message);
     } catch (e) {
       if (mounted) {
         setState(() => _inquiryLoading = false);
@@ -2725,51 +2708,65 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     try {
       final rows = await Supabase.instance.client
           .rpc('get_supplier_order_send_payload', params: {'p_supplier_name': supName}) as List;
-      if (rows.isEmpty) {
-        if (mounted) showToast(context, 'No order data found', isError: true);
-        return;
-      }
-      final data = Map<String, dynamic>.from(rows.first as Map);
-      final rawPhone = data['phone'] as String?;
-      final link = data['link'] as String?;
+      final link = rows.isNotEmpty
+          ? (Map<String, dynamic>.from(rows.first as Map)['link'] as String?)
+          : null;
 
-      // Build message: line 1 greeting, line 2 link (omit if null)
       final greeting = 'Hello $supName, we are ordering these items from you. Please take our order and check the items:';
-      final rawMsg = link != null && link.isNotEmpty ? '$greeting\n$link' : greeting;
-      final slug = supName.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '_');
+      final message = link != null && link.isNotEmpty ? '$greeting\n$link' : greeting;
 
-      RenderLog.write('order_send_phone_normalized', 'true');
-
-      // Extract first valid phone number from potentially comma/slash/space-separated list
-      final String? firstPhone = () {
-        if (rawPhone == null || rawPhone.trim().isEmpty) return null;
-        final parts = rawPhone.split(RegExp(r'[,/\s]+'));
-        for (final part in parts) {
-          final digits = part.replaceAll(RegExp(r'[^0-9]'), '');
-          if (digits.length >= 10) return digits;
-        }
-        return null;
-      }();
-
-      if (firstPhone != null) {
-        // Normalize: if 12 digits starting with 91, use as-is; if 10 digits, prefix 91
-        final String intl;
-        if (firstPhone.length == 12 && firstPhone.startsWith('91')) {
-          intl = firstPhone;
-        } else {
-          intl = '91${firstPhone.substring(firstPhone.length - 10)}';
-        }
-        final msg = Uri.encodeComponent(rawMsg);
-        html.window.open('https://wa.me/$intl?text=$msg', '_blank');
-        RenderLog.write('order_send_wa_$slug', 'sent:$intl');
-      } else {
-        await Clipboard.setData(ClipboardData(text: rawMsg));
-        if (mounted) showToast(context, 'No WhatsApp number — message copied');
-        RenderLog.write('order_send_wa_$slug', 'fallback:clipboard');
-      }
+      await _showSendContactPicker(supplierName: supName, message: message);
     } catch (e) {
       if (mounted) showToast(context, 'Failed to send: $e', isError: true);
     }
+  }
+
+  Future<void> _showSendContactPicker({
+    required String supplierName,
+    required String message,
+  }) async {
+    if (!mounted) return;
+    Map<String, dynamic> contactData;
+    try {
+      final result = await Supabase.instance.client
+          .rpc('get_supplier_contacts', params: {'p_supplier_name': supplierName});
+      if (result is Map) {
+        contactData = Map<String, dynamic>.from(result);
+      } else if (result is List && (result as List).isNotEmpty) {
+        contactData = Map<String, dynamic>.from((result as List).first as Map);
+      } else {
+        contactData = {};
+      }
+    } catch (e) {
+      if (mounted) showToast(context, 'Failed to load contacts: $e', isError: true);
+      return;
+    }
+    if (contactData.containsKey('error')) {
+      if (mounted) showToast(context, 'Contact error: ${contactData['error']}', isError: true);
+      return;
+    }
+    if (!mounted) return;
+
+    final wa = List<String>.from(contactData['whatsapp'] as List? ?? []);
+    final ct = List<String>.from(contactData['contact']  as List? ?? []);
+    final ph = List<String>.from(contactData['phone']    as List? ?? []);
+    final ot = List<String>.from(contactData['other']    as List? ?? []);
+    final em = contactData['email'] as String?;
+    final totalRows = wa.length + ct.length + ph.length + ot.length + (em != null ? 1 : 0);
+
+    RenderLog.write('send_contact_popup_opened', supplierName);
+    RenderLog.write('send_contact_groups_$totalRows', 'true');
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _ContactPickerSheet(
+        supplierName: supplierName,
+        message: message,
+        contactData: contactData,
+      ),
+    );
   }
 
   Widget _buildOrdersView(bool isDesktop) {
@@ -8576,4 +8573,181 @@ class _InquirySendPopoverState extends State<_InquirySendPopover>
           ]),
         ),
       );
+}
+
+// ── Contact-picker bottom sheet (Send button on Inquiry + Orders cards) ───────
+
+class _ContactPickerSheet extends StatefulWidget {
+  final String supplierName;
+  final String message;
+  final Map<String, dynamic> contactData;
+  const _ContactPickerSheet({
+    required this.supplierName,
+    required this.message,
+    required this.contactData,
+  });
+  @override
+  State<_ContactPickerSheet> createState() => _ContactPickerSheetState();
+}
+
+class _ContactPickerSheetState extends State<_ContactPickerSheet> {
+  late String? _lastUsed;
+
+  @override
+  void initState() {
+    super.initState();
+    _lastUsed = widget.contactData['last_used'] as String?;
+  }
+
+  String _normalizeForWa(String raw) {
+    final d = raw.replaceAll(RegExp(r'[^0-9]'), '');
+    if (d.length == 12 && d.startsWith('91')) return d;
+    if (d.length >= 10) return '91${d.substring(d.length - 10)}';
+    return d;
+  }
+
+  Future<void> _onTap(String value, {bool isEmail = false}) async {
+    if (!mounted) return;
+    Navigator.pop(context);
+    if (isEmail) {
+      html.window.open('mailto:$value', '_blank');
+    } else {
+      final intl = _normalizeForWa(value);
+      final msg  = Uri.encodeComponent(widget.message);
+      html.window.open('https://wa.me/$intl?text=$msg', '_blank');
+    }
+    try {
+      await Supabase.instance.client.rpc(
+        'set_supplier_last_send_contact',
+        params: {'p_supplier_name': widget.supplierName, 'p_value': value},
+      );
+      RenderLog.write('send_contact_picked_recorded', value);
+    } catch (_) {}
+  }
+
+  Widget _row(String value, {bool isEmail = false}) {
+    final isLast = _lastUsed != null && _lastUsed == value;
+    if (isLast) RenderLog.write('send_contact_last_used_badge', 'true');
+    return InkWell(
+      onTap: () => _onTap(value, isEmail: isEmail),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
+        child: Row(children: [
+          Icon(
+            isEmail ? Icons.email_outlined : Icons.phone_outlined,
+            size: 16,
+            color: const Color(0xFF6B7280),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(value,
+              style: const TextStyle(fontSize: 14, color: Color(0xFF111827)),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          if (isLast) ...[
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: const Color(0xFFD1FAE5),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Text('Last used',
+                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF065F46))),
+            ),
+          ],
+        ]),
+      ),
+    );
+  }
+
+  Widget _section(String label, List<String> values, {bool isEmail = false}) {
+    if (values.isEmpty) return const SizedBox.shrink();
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
+        child: Text(label,
+          style: const TextStyle(
+            fontSize: 11, fontWeight: FontWeight.w600,
+            color: Color(0xFF9CA3AF), letterSpacing: 0.6)),
+      ),
+      ...values.map((v) => _row(v, isEmail: isEmail)),
+    ]);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final wa = List<String>.from(widget.contactData['whatsapp'] as List? ?? []);
+    final ct = List<String>.from(widget.contactData['contact']  as List? ?? []);
+    final ph = List<String>.from(widget.contactData['phone']    as List? ?? []);
+    final ot = List<String>.from(widget.contactData['other']    as List? ?? []);
+    final em = widget.contactData['email'] as String?;
+    final hasAny = wa.isNotEmpty || ct.isNotEmpty || ph.isNotEmpty || ot.isNotEmpty || em != null;
+
+    return SafeArea(
+      child: Container(
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+        ),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          // drag handle
+          Center(
+            child: Container(
+              margin: const EdgeInsets.only(top: 12, bottom: 6),
+              width: 40, height: 4,
+              decoration: BoxDecoration(
+                color: const Color(0xFFE5E7EB),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+          // title row
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 8, 8),
+            child: Row(children: [
+              Expanded(
+                child: Text(
+                  'Send to ${widget.supplierName}',
+                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF111827)),
+                  maxLines: 1, overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              IconButton(
+                icon: const Icon(Icons.close, size: 18, color: Color(0xFF6B7280)),
+                onPressed: () => Navigator.pop(context),
+                visualDensity: VisualDensity.compact,
+              ),
+            ]),
+          ),
+          const Divider(height: 1, color: Color(0xFFE5E7EB)),
+          // contact list (scrollable)
+          if (!hasAny)
+            const Padding(
+              padding: EdgeInsets.all(24),
+              child: Text('No contact numbers on file',
+                style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+            )
+          else
+            ConstrainedBox(
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.of(context).size.height * 0.55,
+              ),
+              child: SingleChildScrollView(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  _section('WHATSAPP NUMBER', wa),
+                  _section('CONTACT NO', ct),
+                  _section('PHONE', ph),
+                  _section('OTHER', ot),
+                  if (em != null) _section('EMAIL', [em], isEmail: true),
+                  const SizedBox(height: 12),
+                ]),
+              ),
+            ),
+        ]),
+      ),
+    );
+  }
 }

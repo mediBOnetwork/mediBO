@@ -63,8 +63,8 @@ MAX_POLLS=12
 POLL=0
 while [ $POLL -lt $MAX_POLLS ]; do
   LOG=$(curl -s "${BASE_URL}/render-log" 2>/dev/null || echo "")
-  BUILD_IN_LOG=$(echo "$LOG" | grep "^build=" | head -1 | cut -d= -f2- | tr -d '[:space:]')
-  BOOT_STATUS=$(echo "$LOG" | grep "^boot_status=" | head -1 | cut -d= -f2- | tr -d '[:space:]')
+  BUILD_IN_LOG=$(echo "$LOG" | grep "^build=" | head -1 | cut -d= -f2- | tr -d '[:space:]' || true)
+  BOOT_STATUS=$(echo "$LOG" | grep "^boot_status=" | head -1 | cut -d= -f2- | tr -d '[:space:]' || true)
 
   echo "   poll $((POLL+1))/${MAX_POLLS}: build=${BUILD_IN_LOG:-<none>} boot_status=${BOOT_STATUS:-<none>}"
 

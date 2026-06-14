@@ -205,6 +205,11 @@ class _PharmaB2BAppState extends State<PharmaB2BApp> {
             debugShowCheckedModeBanner: false,
             theme: buildTheme(),
             scrollBehavior: const SmoothScrollBehavior(),
+            // Belt-and-suspenders: clear any stray text decoration on Flutter web.
+            builder: (context, child) => DefaultTextStyle.merge(
+              style: const TextStyle(decoration: TextDecoration.none, decorationColor: Color(0x00000000)),
+              child: child!,
+            ),
             home: _AppRoot(auth: _auth),
             // Public inquiry form — no auth required, handles /inquiry/<token>
             onGenerateRoute: (settings) {

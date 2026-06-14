@@ -171,5 +171,11 @@ ThemeData buildTheme() {
       ),
     ),
     snackBarTheme: const SnackBarThemeData(behavior: SnackBarBehavior.floating),
+    // Suppress yellow underlines that can bleed through on Flutter web CanvasKit.
+    listTileTheme: const ListTileThemeData(
+      titleTextStyle: TextStyle(decoration: TextDecoration.none, decorationColor: Color(0x00000000)),
+      subtitleTextStyle: TextStyle(decoration: TextDecoration.none, decorationColor: Color(0x00000000)),
+      leadingAndTrailingTextStyle: TextStyle(decoration: TextDecoration.none, decorationColor: Color(0x00000000)),
+    ),
   );
 }

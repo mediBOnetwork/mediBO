@@ -974,6 +974,11 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
               rows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
         });
         RenderLog.write('order_item_status', 'orderId:$orderId count:${rows.length}');
+        for (final r in rows) {
+          final m = r as Map;
+          RenderLog.write('order_item_rpc_row',
+              '${m['product_name']}:pid=${m['product_id']}:status=${m['current_status']}:sup=${m['current_supplier']}');
+        }
       }
     } catch (e) {
       RenderLog.write('order_item_status_error', 'orderId:$orderId err:$e');
@@ -1458,7 +1463,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   }
 
   Widget _itemInquiryBadge(String? status, String? supplier) {
-    if (status == null || status == 'Not in inquiry') {
+    if (status == null || status == 'Not in inquiry' || status == '—') {
       return const Text('—', style: TextStyle(fontSize: 10, color: Color(0xFF9CA3AF)));
     }
     final lower = status.toLowerCase();
@@ -1470,7 +1475,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       label = 'No supplier available';
     } else if (lower == 'available') {
       bg = const Color(0xFFD1FAE5); fg = const Color(0xFF065F46);
-      label = supplier != null && supplier.isNotEmpty ? 'Supplier: $supplier' : 'Available';
+      label = supplier != null && supplier.isNotEmpty ? 'Available — $supplier' : 'Available';
     } else if (lower.contains('confirmation') || lower.contains('pending')) {
       bg = const Color(0xFFFEF3C7); fg = const Color(0xFF92400E);
       label = supplier != null && supplier.isNotEmpty ? 'Awaiting $supplier' : 'Confirmation pending';
@@ -1517,24 +1522,32 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     }
     final label = 'Order Items (${row.items.length})'
         '${row.total != null ? ' · ₹${row.total!.toStringAsFixed(2)}' : ''}';
-    final statuses = row.orderId != null
+    final rawStatuses = row.orderId != null
         ? (_orderItemStatuses[row.orderId!] ?? <Map<String, dynamic>>[])
         : <Map<String, dynamic>>[];
+
+    // orders.items JSONB has product_name but no product_id — match by normalized name
+    String _norm(String s) => s.toLowerCase().trim().replaceAll(RegExp(r'\s+'), ' ');
+    final statusByName = <String, Map<String, dynamic>>{};
+    for (final s in rawStatuses) {
+      final pname = s['product_name'] as String?;
+      if (pname != null) statusByName[_norm(pname)] = s;
+    }
+
     RenderLog.write('order_items_expanded',
-        'orderId:${row.orderId ?? "?"}:items:${row.items.length}:statuses:${statuses.length}');
-    // Log per-item resolved status for verification
+        'orderId:${row.orderId ?? "?"}:items:${row.items.length}:statuses:${rawStatuses.length}');
+
+    // Per-item resolved status instrumentation
+    var anyDash = false;
     for (final item in row.items) {
-      if (item.productId != null) {
-        final pid = int.tryParse(item.productId!);
-        final s = statuses.cast<Map<String, dynamic>?>().firstWhere(
-          (s) => s != null && (s['product_id'] as num?)?.toInt() == pid,
-          orElse: () => null,
-        );
-        RenderLog.write('order_item_resolved',
-            '${item.name}:pid=${item.productId}:status=${s?['current_status'] ?? "no_match"}');
-      } else {
-        RenderLog.write('order_item_resolved', '${item.name}:pid=null');
-      }
+      final s = statusByName[_norm(item.name)];
+      final resolved = s?['current_status'] as String? ?? '—';
+      if (resolved == '—') anyDash = true;
+      RenderLog.write('order_item_resolved',
+          '${item.name}:status=$resolved:supplier=${s?['current_supplier'] ?? "none"}');
+    }
+    if (anyDash && rawStatuses.isNotEmpty) {
+      RenderLog.write('order_item_FAIL', 'accepted order has dash items — name mismatch?');
     }
 
     return Container(
@@ -1560,54 +1573,59 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                 fontWeight: FontWeight.w700,
                 color: Color(0xFF374151))),
         const SizedBox(height: 8),
-        const Row(children: [
+        // Header row — columns must match data row widths exactly
+        Row(children: const [
           Expanded(
               flex: 5,
               child: Text('Product',
                   style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF9CA3AF)))),
+          SizedBox(width: 8),
           SizedBox(
-              width: 44,
+              width: 48,
               child: Text('Qty',
+                  textAlign: TextAlign.right,
                   style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF9CA3AF)))),
+          SizedBox(width: 8),
           SizedBox(
-              width: 76,
+              width: 80,
               child: Text('Price',
+                  textAlign: TextAlign.right,
                   style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF9CA3AF)))),
-          Expanded(
-              flex: 4,
+          SizedBox(width: 12),
+          SizedBox(
+              width: 200,
               child: Text('Status',
                   style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF9CA3AF)))),
         ]),
         const SizedBox(height: 4),
         ...row.items.map((item) {
-          Map<String, dynamic>? iqStatus;
-          if (item.productId != null) {
-            final pid = int.tryParse(item.productId!);
-            iqStatus = statuses.cast<Map<String, dynamic>?>().firstWhere(
-              (s) => s != null && (s['product_id'] as num?)?.toInt() == pid,
-              orElse: () => null,
-            );
-          }
-          final currentStatus   = iqStatus?['current_status'] as String?;
-          final currentSupplier = iqStatus?['current_supplier'] as String?;
+          final s = statusByName[_norm(item.name)];
+          final currentStatus   = s?['current_status'] as String?;
+          final currentSupplier = s?['current_supplier'] as String?;
           return Padding(
             padding: const EdgeInsets.only(top: 6),
             child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
               Expanded(
                   flex: 5,
                   child: Text(item.name,
-                      style: const TextStyle(fontSize: 12, color: Color(0xFF374151)))),
+                      style: const TextStyle(fontSize: 12, color: Color(0xFF374151)),
+                      overflow: TextOverflow.ellipsis)),
+              const SizedBox(width: 8),
               SizedBox(
-                  width: 44,
+                  width: 48,
                   child: Text('×${item.qty}',
+                      textAlign: TextAlign.right,
                       style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)))),
+              const SizedBox(width: 8),
               SizedBox(
-                  width: 76,
+                  width: 80,
                   child: Text(
                       item.price != null ? '₹${item.price!.toStringAsFixed(2)}' : '—',
+                      textAlign: TextAlign.right,
                       style: const TextStyle(fontSize: 12, color: Color(0xFF374151)))),
-              Expanded(
-                flex: 4,
+              const SizedBox(width: 12),
+              SizedBox(
+                width: 200,
                 child: _itemInquiryBadge(currentStatus, currentSupplier),
               ),
             ]),

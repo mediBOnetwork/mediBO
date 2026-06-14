@@ -128,7 +128,7 @@ class _LeadItem {
 
 // ── Tab enum ──────────────────────────────────────────────────────────────────
 
-enum _SupFilter  { suppliers, orders, pending, leads }
+enum _SupFilter  { suppliers, inquiry, orders, pending, leads }
 enum _SupSortMode { spnDesc, nameAsc }
 
 // ── Screen ────────────────────────────────────────────────────────────────────
@@ -173,6 +173,14 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   final Map<String, Map<String, dynamic>> _inquiryLinks = {};
   bool _inquiryLoading = false;
 
+  // ── Inquiry tab state ────────────────────────────────────────────────────
+  List<Map<String, dynamic>> _inquiryOverview = [];
+  bool _inquiryOverviewLoading = false;
+  String? _expandedInquirySupplier;
+  List<Map<String, dynamic>> _inquiryItems = [];
+  bool _inquiryItemsLoading = false;
+  Timer? _inquiryPollTimer;
+
   @override
   void initState() {
     super.initState();
@@ -183,6 +191,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   @override
   void dispose() {
     _debounce?.cancel();
+    _inquiryPollTimer?.cancel();
     for (final ch in _channels) ch.unsubscribe();
     _channels.clear();
     _scrollCtrl.dispose();
@@ -395,6 +404,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         });
         RenderLog.write('supplier_sort_default', 'spn_desc');
       }
+      _fetchInquiryOverview(silent: true);
     } catch (e) {
       if (mounted) setState(() => _loading = false);
       // Silently swallow load errors — never surface a red banner on the homepage
@@ -703,6 +713,8 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           child: Row(children: [
             _tab(_SupFilter.suppliers,  'Suppliers (${_suppliers.length})'),
             const SizedBox(width: 4),
+            _tab(_SupFilter.inquiry,    'Supplier Inquiry (${_inquiryOverview.length})'),
+            const SizedBox(width: 4),
             _tab(_SupFilter.orders,     'Supplier Orders (${_orders.length})'),
             const SizedBox(width: 4),
             _tab(_SupFilter.pending,    'Pending Approval (${_pending.length})'),
@@ -721,7 +733,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       child: GestureDetector(
         onTap: () {
           if (_scrollCtrl.hasClients) _scrollCtrl.jumpTo(0);
-          setState(() { _filter = f; _expandedSupplierId = null; _companiesSupplierId = null; _spnSupplierId = null; });
+          _selectTab(f);
         },
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 150),
@@ -744,6 +756,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   Widget _buildContent(bool isDesktop) {
     switch (_filter) {
       case _SupFilter.suppliers:  return _buildSuppliersView(isDesktop);
+      case _SupFilter.inquiry:    return _buildInquiryView(isDesktop);
       case _SupFilter.orders:     return _buildOrdersView(isDesktop);
       case _SupFilter.pending:    return _buildPendingView(isDesktop);
       case _SupFilter.leads:      return _buildLeadsView(isDesktop);
@@ -926,6 +939,406 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           );
         }),
       ]),
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SUPPLIER INQUIRY TAB — tab selection, data fetching, widgets
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  void _selectTab(_SupFilter f) {
+    if (_filter == _SupFilter.inquiry && f != _SupFilter.inquiry) {
+      _inquiryPollTimer?.cancel();
+      _inquiryPollTimer = null;
+    }
+    setState(() {
+      _filter = f;
+      _expandedSupplierId  = null;
+      _companiesSupplierId = null;
+      _spnSupplierId       = null;
+    });
+    if (f == _SupFilter.inquiry) {
+      _fetchInquiryOverview();
+      _inquiryPollTimer?.cancel();
+      _inquiryPollTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+        if (mounted && _filter == _SupFilter.inquiry) _fetchInquiryOverview(silent: true);
+      });
+    }
+  }
+
+  Future<void> _fetchInquiryOverview({bool silent = false}) async {
+    if (!silent && mounted) setState(() => _inquiryOverviewLoading = true);
+    try {
+      final rows = await Supabase.instance.client
+          .rpc('get_supplier_inquiry_overview') as List;
+      if (mounted) {
+        final overview = rows
+            .map((r) => Map<String, dynamic>.from(r as Map))
+            .toList();
+        // Sort: current suppliers first, then by name
+        overview.sort((a, b) {
+          final aC = (a['current_count'] as num?)?.toInt() ?? 0;
+          final bC = (b['current_count'] as num?)?.toInt() ?? 0;
+          if (aC != bC) return bC.compareTo(aC);
+          return (a['supplier_name'] as String? ?? '').compareTo(b['supplier_name'] as String? ?? '');
+        });
+        setState(() {
+          _inquiryOverview = overview;
+          _inquiryOverviewLoading = false;
+          // Collapse expanded supplier if they've cleared from the loop
+          if (_expandedInquirySupplier != null &&
+              !overview.any((ov) => ov['supplier_name'] == _expandedInquirySupplier)) {
+            _expandedInquirySupplier = null;
+          }
+        });
+        RenderLog.write('inquiry_overview_rows', _inquiryOverview.length);
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _inquiryOverviewLoading = false);
+        if (!silent) showToast(context, 'Failed to load inquiry overview: $e', isError: true);
+      }
+    }
+  }
+
+  Future<void> _fetchInquiryItems(String supplierName) async {
+    if (mounted) setState(() { _inquiryItemsLoading = true; _inquiryItems = []; });
+    try {
+      final rows = await Supabase.instance.client
+          .rpc('get_supplier_inquiry_items',
+              params: {'p_supplier_name': supplierName}) as List;
+      if (mounted) {
+        setState(() {
+          _inquiryItems = rows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
+          _inquiryItemsLoading = false;
+        });
+        RenderLog.write('inquiry_items_loaded', '${supplierName}_${_inquiryItems.length}');
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _inquiryItemsLoading = false);
+        showToast(context, 'Failed to load items: $e', isError: true);
+      }
+    }
+  }
+
+  // ── Inquiry tab: top-level view ───────────────────────────────────────────
+
+  Widget _buildInquiryView(bool isDesktop) {
+    final pad = isDesktop ? 28.0 : 16.0;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Padding(
+        padding: EdgeInsets.fromLTRB(pad, 10, pad, 4),
+        child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+          GestureDetector(
+            onTap: _inquiryLoading ? null : () async {
+              await _sendAllInquiry();
+              _fetchInquiryOverview(silent: true);
+            },
+            child: Container(
+              height: 32,
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFECFDF5),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFF6EE7B7)),
+              ),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                if (_inquiryLoading)
+                  const SizedBox(width: 12, height: 12,
+                      child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF1B7A43)))
+                else
+                  const Icon(Icons.send_outlined, size: 14, color: Color(0xFF1B7A43)),
+                const SizedBox(width: 5),
+                const Text('Send All Inquiry',
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF1B7A43))),
+              ]),
+            ),
+          ),
+          const SizedBox(width: 8),
+          GestureDetector(
+            onTap: () => _fetchInquiryOverview(),
+            child: Container(
+              height: 32,
+              width: 32,
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFFE5E7EB)),
+              ),
+              child: _inquiryOverviewLoading
+                  ? const Padding(padding: EdgeInsets.all(7),
+                      child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF1B7A43)))
+                  : const Icon(Icons.refresh_outlined, size: 16, color: Color(0xFF6B7280)),
+            ),
+          ),
+        ]),
+      ),
+      if (_inquiryOverviewLoading && _inquiryOverview.isEmpty)
+        const Padding(
+          padding: EdgeInsets.all(40),
+          child: Center(child: CircularProgressIndicator(color: Color(0xFF1B7A43), strokeWidth: 2)),
+        )
+      else if (_inquiryOverview.isEmpty)
+        Padding(
+          padding: EdgeInsets.fromLTRB(pad, 40, pad, 40),
+          child: const Center(child: Column(children: [
+            Icon(Icons.check_circle_outline, size: 40, color: Color(0xFF1B7A43)),
+            SizedBox(height: 12),
+            Text('No pending inquiries',
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
+            SizedBox(height: 4),
+            Text('All suppliers have answered or nothing is in the inquiry loop.',
+                style: TextStyle(fontSize: 13, color: Color(0xFF6B7280)), textAlign: TextAlign.center),
+          ])),
+        )
+      else
+        Padding(
+          padding: EdgeInsets.fromLTRB(pad, 4, pad, 24),
+          child: Column(
+            children: _inquiryOverview.map(_buildInquirySupplierRow).toList(),
+          ),
+        ),
+    ]);
+  }
+
+  // ── Per-supplier row ──────────────────────────────────────────────────────
+
+  Widget _buildInquirySupplierRow(Map<String, dynamic> ov) {
+    final supName    = ov['supplier_name'] as String? ?? '';
+    final curCount   = (ov['current_count'] as num?)?.toInt() ?? 0;
+    final nxtCount   = (ov['next_count'] as num?)?.toInt() ?? 0;
+    final formStatus = ov['form_status'] as String?;
+    final expiresAt  = ov['expires_at'] != null ? DateTime.tryParse(ov['expires_at'] as String) : null;
+    final isExpanded = _expandedInquirySupplier == supName;
+    final linkData   = _inquiryLinks[supName];
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 4, offset: const Offset(0, 1))],
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(14, 12, 10, 12),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(supName,
+                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
+                const SizedBox(height: 6),
+                Wrap(spacing: 6, runSpacing: 4, children: [
+                  if (curCount > 0)
+                    _iqBadge('Current: $curCount', const Color(0xFFE6F4EA), const Color(0xFF1B7F3B)),
+                  if (nxtCount > 0)
+                    _iqBadge('Next: $nxtCount', const Color(0xFFFFF8E1), const Color(0xFF8A6D00)),
+                  if (formStatus != null) _iqStatusBadge(formStatus),
+                  if (expiresAt != null &&
+                      (formStatus == 'pending' || formStatus == 'partially_responded'))
+                    Text(
+                      'Exp ${expiresAt.toLocal().hour.toString().padLeft(2, '0')}:${expiresAt.toLocal().minute.toString().padLeft(2, '0')}',
+                      style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280)),
+                    ),
+                ]),
+              ]),
+            ),
+            const SizedBox(width: 8),
+            // Send button
+            GestureDetector(
+              onTap: _inquiryLoading ? null : () async {
+                await _sendSupplierInquiry(supName);
+                _fetchInquiryOverview(silent: true);
+              },
+              child: Container(
+                height: 30,
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFECFDF5),
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: const Color(0xFF6EE7B7)),
+                ),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  const Icon(Icons.send_outlined, size: 12, color: Color(0xFF1B7A43)),
+                  const SizedBox(width: 4),
+                  const Text('Send', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF1B7A43))),
+                ]),
+              ),
+            ),
+            const SizedBox(width: 4),
+            // Expand/collapse chevron
+            GestureDetector(
+              onTap: () {
+                if (_expandedInquirySupplier == supName) {
+                  setState(() => _expandedInquirySupplier = null);
+                } else {
+                  setState(() { _expandedInquirySupplier = supName; _inquiryItems = []; });
+                  _fetchInquiryItems(supName);
+                }
+              },
+              child: Padding(
+                padding: const EdgeInsets.all(6),
+                child: AnimatedRotation(
+                  turns: isExpanded ? 0.5 : 0.0,
+                  duration: const Duration(milliseconds: 200),
+                  child: const Icon(Icons.expand_more, size: 20, color: Color(0xFF6B7280)),
+                ),
+              ),
+            ),
+          ]),
+        ),
+        // Inline link after Send
+        if (linkData != null) _buildInquiryInlineLink(supName, linkData),
+        // Expanded items
+        if (isExpanded) _buildInquiryItemsPanel(),
+      ]),
+    );
+  }
+
+  Widget _buildInquiryInlineLink(String supName, Map<String, dynamic> linkData) {
+    final tok  = linkData['token'] as String? ?? '';
+    final link = 'https://medibo.in/inquiry/$tok';
+    return Container(
+      margin: const EdgeInsets.fromLTRB(14, 0, 14, 12),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFFECFDF5),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFF6EE7B7)),
+      ),
+      child: Row(children: [
+        const Icon(Icons.link, size: 13, color: Color(0xFF065F46)),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Text(link,
+              style: const TextStyle(fontSize: 11, color: Color(0xFF065F46)),
+              overflow: TextOverflow.ellipsis),
+        ),
+        GestureDetector(
+          onTap: () {
+            Clipboard.setData(ClipboardData(text: link));
+            showToast(context, 'Link copied!');
+            RenderLog.write('inquiry_link_copied_tab', supName);
+          },
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1B7A43),
+              borderRadius: BorderRadius.circular(5),
+            ),
+            child: const Text('Copy', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: Colors.white)),
+          ),
+        ),
+        const SizedBox(width: 6),
+        GestureDetector(
+          onTap: () => html.window.open(link, '_blank'),
+          child: const Icon(Icons.open_in_new_outlined, size: 14, color: Color(0xFF1B7A43)),
+        ),
+      ]),
+    );
+  }
+
+  // ── Expanded items panel ──────────────────────────────────────────────────
+
+  Widget _buildInquiryItemsPanel() {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(14, 0, 14, 12),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF9FAFB),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+      ),
+      child: _inquiryItemsLoading
+          ? const Center(child: Padding(
+              padding: EdgeInsets.all(16),
+              child: CircularProgressIndicator(color: Color(0xFF1B7A43), strokeWidth: 2)))
+          : _inquiryItems.isEmpty
+              ? const Text('No pending items for this supplier.',
+                  style: TextStyle(fontSize: 13, color: Color(0xFF6B7280)))
+              : Column(children: _inquiryItems.map(_buildInquiryItemRow).toList()),
+    );
+  }
+
+  Widget _buildInquiryItemRow(Map<String, dynamic> item) {
+    final role        = item['role'] as String? ?? 'current';
+    final productName = item['product_name'] as String? ?? '';
+    final qty         = item['quantity'];
+    final mrp         = item['mrp'];
+    final answer      = item['answer'] as String?;
+    final answered    = item['answered'] as bool? ?? false;
+    final isCurrent   = role == 'current';
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: isCurrent ? const Color(0xFFA7F3D0) : const Color(0xFFFDE68A)),
+      ),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+        _iqBadge(
+          isCurrent ? 'Current' : 'Next',
+          isCurrent ? const Color(0xFFE6F4EA) : const Color(0xFFFFF8E1),
+          isCurrent ? const Color(0xFF1B7F3B) : const Color(0xFF8A6D00),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(productName,
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: Color(0xFF111827)),
+                overflow: TextOverflow.ellipsis),
+            if (qty != null || mrp != null)
+              Text(
+                [if (qty != null) 'Qty: $qty', if (mrp != null) '₹$mrp'].join('  '),
+                style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280)),
+              ),
+          ]),
+        ),
+        const SizedBox(width: 8),
+        if (answered && answer != null)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+            decoration: BoxDecoration(
+              color: answer == 'Available' ? const Color(0xFFD1FAE5) : const Color(0xFFFEF3C7),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Text(answer,
+                style: TextStyle(
+                    fontSize: 11, fontWeight: FontWeight.w500,
+                    color: answer == 'Available' ? const Color(0xFF065F46) : const Color(0xFF92400E))),
+          )
+        else
+          const Text('Awaiting', style: TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
+      ]),
+    );
+  }
+
+  // ── Badge helpers (inquiry tab) ───────────────────────────────────────────
+
+  Widget _iqBadge(String label, Color bg, Color fg) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+    decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(20)),
+    child: Text(label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: fg)),
+  );
+
+  Widget _iqStatusBadge(String status) {
+    Color bg, fg;
+    String label;
+    switch (status) {
+      case 'pending':              bg = const Color(0xFFFEF3C7); fg = const Color(0xFF92400E); label = 'Pending';    break;
+      case 'partially_responded':  bg = const Color(0xFFEFF6FF); fg = const Color(0xFF1E40AF); label = 'Partial';    break;
+      case 'responded':            bg = const Color(0xFFD1FAE5); fg = const Color(0xFF065F46); label = 'Responded';  break;
+      case 'expired':              bg = const Color(0xFFFEE2E2); fg = const Color(0xFF991B1B); label = 'Expired';    break;
+      default:                     bg = const Color(0xFFF3F4F6); fg = const Color(0xFF6B7280); label = status;       break;
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(20)),
+      child: Text(label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: fg)),
     );
   }
 

@@ -5398,7 +5398,7 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                         style: const TextStyle(fontSize: 12, color: Color(0xFF92400E))),
                   ]),
                 ),
-              // ── Grid: frozen left column + single shared horizontal scroll ──
+              // ── Grid: responsive (wide = frozen-left + h-scroll; narrow = stacked cards) ──
               if (_rows.isEmpty && !_showAddForm)
                 const Padding(
                   padding: EdgeInsets.symmetric(horizontal: 14, vertical: 14),
@@ -5406,121 +5406,189 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                       style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
                 )
               else
-                Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  // ── Frozen left pane ───────────────────────────────────────
-                  SizedBox(
-                    width: 320,
-                    child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                      // Header cell
-                      Container(
-                        height: 32,
-                        color: const Color(0xFFF0F7FF),
-                        alignment: Alignment.centerLeft,
-                        padding: const EdgeInsets.fromLTRB(14, 0, 8, 0),
-                        child: const Text('SUPPLIER COMPANY', style: TextStyle(
-                            fontSize: 10, fontWeight: FontWeight.w700,
-                            color: Color(0xFF6B7280), letterSpacing: 0.4),
-                          overflow: TextOverflow.ellipsis),
-                      ),
-                      const Divider(height: 1, color: Color(0xFFDBEAFE)),
-                      // Data cells
+                LayoutBuilder(builder: (ctx, constraints) {
+                  final isNarrow = constraints.maxWidth < 560;
+                  if (isNarrow) {
+                    // ── MOBILE: stacked cards ──────────────────────────────────
+                    RenderLog.write('companies_expand_mobile_stacked', 'true');
+                    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                       for (int ri = 0; ri < _rows.length; ri++) ...[
-                        SizedBox(
-                          height: _flaggedRows.contains(ri) ? 56.0 : 44.0,
-                          child: ColoredBox(
-                            color: _flaggedRows.contains(ri) ? const Color(0xFFFFFBEB) : Colors.transparent,
-                            child: Padding(
-                              padding: const EdgeInsets.fromLTRB(8, 0, 8, 0),
-                              child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-                                if (_flaggedRows.contains(ri)) ...[
-                                  const Icon(Icons.flag, size: 11, color: Color(0xFFF59E0B)),
-                                  const SizedBox(width: 4),
-                                ],
-                                Expanded(
-                                  child: _flaggedRows.contains(ri)
-                                    ? Column(
-                                        mainAxisAlignment: MainAxisAlignment.center,
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                          Text(
-                                            _rows[ri]['supplier_company'] as String? ?? '—',
-                                            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
-                                            maxLines: 1, overflow: TextOverflow.ellipsis,
-                                          ),
-                                          const Text(
-                                            'No match in catalog — map manually',
-                                            style: TextStyle(fontSize: 10, color: Color(0xFFD97706), fontStyle: FontStyle.italic),
-                                            maxLines: 1, overflow: TextOverflow.ellipsis,
-                                          ),
-                                        ],
-                                      )
-                                    : Text(
-                                        _rows[ri]['supplier_company'] as String? ?? '—',
-                                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
-                                        maxLines: 1, overflow: TextOverflow.ellipsis,
-                                      ),
+                        Container(
+                          color: _flaggedRows.contains(ri) ? const Color(0xFFFFFBEB) : Colors.transparent,
+                          padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+                          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                            // Supplier company name
+                            Row(children: [
+                              if (_flaggedRows.contains(ri)) ...[
+                                const Icon(Icons.flag, size: 11, color: Color(0xFFF59E0B)),
+                                const SizedBox(width: 4),
+                              ],
+                              Expanded(
+                                child: Text(
+                                  _rows[ri]['supplier_company'] as String? ?? '—',
+                                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF111827)),
                                 ),
-                              ]),
-                            ),
-                          ),
-                        ),
-                        if (ri < _rows.length - 1) const Divider(height: 1, color: Color(0xFFEFF6FF)),
-                      ],
-                    ]),
-                  ),
-                  // ── Single shared horizontal scroll (header + all rows) ────
-                  Expanded(child: SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    controller: _scrollCtrl,
-                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      // Header row
-                      Container(
-                        height: 32,
-                        color: const Color(0xFFF0F7FF),
-                        child: Row(children: [
-                          for (int i = 1; i <= 30; i++) ...[
-                            const SizedBox(width: 4),
-                            SizedBox(width: 220, child: Text('COMPANY $i', style: const TextStyle(
-                                fontSize: 10, fontWeight: FontWeight.w700,
-                                color: Color(0xFF6B7280), letterSpacing: 0.4),
-                              overflow: TextOverflow.ellipsis)),
-                          ],
-                          const SizedBox(width: 8),
-                        ]),
-                      ),
-                      const Divider(height: 1, color: Color(0xFFDBEAFE)),
-                      // Data rows — height matches frozen pane (56px for flagged, 44px otherwise)
-                      for (int ri = 0; ri < _rows.length; ri++) ...[
-                        SizedBox(
-                          height: _flaggedRows.contains(ri) ? 56.0 : 44.0,
-                          child: Row(children: [
-                            for (final col in _companyCols) ...[
-                              const SizedBox(width: 4),
-                              SizedBox(width: 220, child: _CompanyCell(
-                                value: _rows[ri][col] as String?,
-                                options: _medMarketers,
-                                onChanged: (v) => _mapped
-                                    ? setState(() => _rows[ri][col] = (v == null || v.isEmpty) ? null : v)
-                                    : _updateCell(_rows[ri]['id'] as String, col, v),
-                                onClear: (_rows[ri][col] != null && (_rows[ri][col] as String).isNotEmpty)
-                                    ? () {
-                                        if (_mapped) {
-                                          setState(() => _rows[ri][col] = null);
-                                        } else {
-                                          _updateCell(_rows[ri]['id'] as String, col, null);
-                                        }
-                                      }
-                                    : null,
-                              )),
+                              ),
+                            ]),
+                            if (_flaggedRows.contains(ri)) ...[
+                              const SizedBox(height: 2),
+                              const Text('No match in catalog — map manually',
+                                style: TextStyle(fontSize: 10, color: Color(0xFFD97706), fontStyle: FontStyle.italic)),
                             ],
-                            const SizedBox(width: 8),
+                            // Mapped canonical companies
+                            ...[for (int ci = 0; ci < _companyCols.length; ci++) ...[
+                              Builder(builder: (_) {
+                                final col = _companyCols[ci];
+                                final val = _rows[ri][col] as String?;
+                                // Only show slots that have a value OR the first empty slot (for editing)
+                                final hasValue = val != null && val.isNotEmpty;
+                                final isFirstEmpty = !hasValue && (ci == 0 ||
+                                    _companyCols.sublist(0, ci).every((c) {
+                                      final s = _rows[ri][c] as String?;
+                                      return s == null || s.isEmpty;
+                                    }));
+                                if (!hasValue && !isFirstEmpty) return const SizedBox.shrink();
+                                return Padding(
+                                  padding: const EdgeInsets.only(top: 6),
+                                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                    Text('Mapped company${ci > 0 ? " ${ci + 1}" : ""}',
+                                      style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w600,
+                                          color: Color(0xFF6B7280), letterSpacing: 0.3)),
+                                    const SizedBox(height: 3),
+                                    _CompanyCell(
+                                      value: val,
+                                      options: _medMarketers,
+                                      onChanged: (v) => _mapped
+                                          ? setState(() => _rows[ri][col] = (v == null || v.isEmpty) ? null : v)
+                                          : _updateCell(_rows[ri]['id'] as String, col, v),
+                                      onClear: hasValue
+                                          ? () {
+                                              if (_mapped) {
+                                                setState(() => _rows[ri][col] = null);
+                                              } else {
+                                                _updateCell(_rows[ri]['id'] as String, col, null);
+                                              }
+                                            }
+                                          : null,
+                                    ),
+                                  ]),
+                                );
+                              }),
+                            ]],
                           ]),
                         ),
                         if (ri < _rows.length - 1) const Divider(height: 1, color: Color(0xFFEFF6FF)),
                       ],
-                    ]),
-                  )),
-                ]),
+                    ]);
+                  }
+                  // ── WIDE: frozen left + horizontal scroll ──────────────────
+                  RenderLog.write('companies_expand_wide_grid', 'true');
+                  return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    // Frozen left pane
+                    SizedBox(
+                      width: 320,
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                        Container(
+                          height: 32,
+                          color: const Color(0xFFF0F7FF),
+                          alignment: Alignment.centerLeft,
+                          padding: const EdgeInsets.fromLTRB(14, 0, 8, 0),
+                          child: const Text('SUPPLIER COMPANY', style: TextStyle(
+                              fontSize: 10, fontWeight: FontWeight.w700,
+                              color: Color(0xFF6B7280), letterSpacing: 0.4),
+                            overflow: TextOverflow.ellipsis),
+                        ),
+                        const Divider(height: 1, color: Color(0xFFDBEAFE)),
+                        for (int ri = 0; ri < _rows.length; ri++) ...[
+                          SizedBox(
+                            height: _flaggedRows.contains(ri) ? 56.0 : 44.0,
+                            child: ColoredBox(
+                              color: _flaggedRows.contains(ri) ? const Color(0xFFFFFBEB) : Colors.transparent,
+                              child: Padding(
+                                padding: const EdgeInsets.fromLTRB(8, 0, 8, 0),
+                                child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+                                  if (_flaggedRows.contains(ri)) ...[
+                                    const Icon(Icons.flag, size: 11, color: Color(0xFFF59E0B)),
+                                    const SizedBox(width: 4),
+                                  ],
+                                  Expanded(
+                                    child: _flaggedRows.contains(ri)
+                                      ? Column(
+                                          mainAxisAlignment: MainAxisAlignment.center,
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text(_rows[ri]['supplier_company'] as String? ?? '—',
+                                              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
+                                              maxLines: 1, overflow: TextOverflow.ellipsis),
+                                            const Text('No match in catalog — map manually',
+                                              style: TextStyle(fontSize: 10, color: Color(0xFFD97706), fontStyle: FontStyle.italic),
+                                              maxLines: 1, overflow: TextOverflow.ellipsis),
+                                          ],
+                                        )
+                                      : Text(_rows[ri]['supplier_company'] as String? ?? '—',
+                                          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
+                                          maxLines: 1, overflow: TextOverflow.ellipsis),
+                                  ),
+                                ]),
+                              ),
+                            ),
+                          ),
+                          if (ri < _rows.length - 1) const Divider(height: 1, color: Color(0xFFEFF6FF)),
+                        ],
+                      ]),
+                    ),
+                    // Horizontal scroll pane
+                    Expanded(child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      controller: _scrollCtrl,
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Container(
+                          height: 32,
+                          color: const Color(0xFFF0F7FF),
+                          child: Row(children: [
+                            for (int i = 1; i <= 30; i++) ...[
+                              const SizedBox(width: 4),
+                              SizedBox(width: 220, child: Text('COMPANY $i', style: const TextStyle(
+                                  fontSize: 10, fontWeight: FontWeight.w700,
+                                  color: Color(0xFF6B7280), letterSpacing: 0.4),
+                                overflow: TextOverflow.ellipsis)),
+                            ],
+                            const SizedBox(width: 8),
+                          ]),
+                        ),
+                        const Divider(height: 1, color: Color(0xFFDBEAFE)),
+                        for (int ri = 0; ri < _rows.length; ri++) ...[
+                          SizedBox(
+                            height: _flaggedRows.contains(ri) ? 56.0 : 44.0,
+                            child: Row(children: [
+                              for (final col in _companyCols) ...[
+                                const SizedBox(width: 4),
+                                SizedBox(width: 220, child: _CompanyCell(
+                                  value: _rows[ri][col] as String?,
+                                  options: _medMarketers,
+                                  onChanged: (v) => _mapped
+                                      ? setState(() => _rows[ri][col] = (v == null || v.isEmpty) ? null : v)
+                                      : _updateCell(_rows[ri]['id'] as String, col, v),
+                                  onClear: (_rows[ri][col] != null && (_rows[ri][col] as String).isNotEmpty)
+                                      ? () {
+                                          if (_mapped) {
+                                            setState(() => _rows[ri][col] = null);
+                                          } else {
+                                            _updateCell(_rows[ri]['id'] as String, col, null);
+                                          }
+                                        }
+                                      : null,
+                                )),
+                              ],
+                              const SizedBox(width: 8),
+                            ]),
+                          ),
+                          if (ri < _rows.length - 1) const Divider(height: 1, color: Color(0xFFEFF6FF)),
+                        ],
+                      ]),
+                    )),
+                  ]);
+                }),
               // ── Add-row form ─────────────────────────────────────────────────
               if (_showAddForm)
                 Padding(

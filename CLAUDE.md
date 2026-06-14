@@ -117,14 +117,41 @@ Apply these rules automatically to every frontend/UI change in this Flutter web 
 NEVER use CDP/Puppeteer/incognito automation — Flutter canvas is unreadable by browser tools.
 NEVER report success from source code or JS bundle grep alone — string-in-bundle ≠ widget rendered.
 
-After EVERY UI deploy, verify with render-log:
-1. `curl https://medibo.in/version.json` — confirm commit hash
-2. Have test user open the relevant screen (logged in with matching credential)
-3. `curl https://medibo.in/render-log` — confirm `build=<hash>` matches AND relevant count > 0
-   OR: Supabase MCP `SELECT build_hash, data FROM render_log WHERE id='singleton'`
+After EVERY deploy, run the autonomous verifier FIRST:
+```
+bash scripts/verify_live.sh
+```
+- Exit 0 = VERIFIED (version.json matches + render-log shows boot_status=painted).
+- Exit 1 = BROKEN (HTTP check failed — diagnose and redeploy before reporting anything).
+- Exit 2 = DEPLOYED BUT UNCONFIRMED (deploy landed; no browser has visited yet). In this
+  case report the commit hash + ask Om to open medibo.in — then re-run the script.
+
+For UI feature verification also confirm the specific render count:
+1. `curl https://medibo.in/render-log` — `build` must match commit AND relevant count > 0
 
 If count = 0 → widget did NOT render → keep fixing.
 This rule overrides everything else.
+
+## LIVE VERIFICATION IS CLAUDE CODE'S JOB — NEVER OM'S
+Claude Code MUST run `bash scripts/verify_live.sh` after every deploy and report the result.
+NEVER say "please check the site", "please open medibo.in", or "let me know if it works".
+The only time Om's eyes are needed is for subjective UI review (layout, colours) — not for
+proving the app boots or a feature works. That proof comes from render-log.
+
+## DEFENSIVE IMPORT RULE (prevents dart2js static-init crashes)
+NEVER add `import 'dart:html'`, `import 'dart:js'`, or any `dart:*` web-only library to files
+that are imported by the widget tree (e.g. view_as_state.dart, app_state.dart, user_state.dart,
+any model or notifier). These libraries cause static-initialization ordering crashes in
+dart2js -O4 release builds, white-screening the entire app.
+
+Only `main.dart` (the entry point) may import `dart:html` — it is loaded last.
+If a feature needs localStorage/sessionStorage, use the `shared_preferences` package instead.
+
+## BOOT RESILIENCE RULE (permanent)
+main.dart MUST always wrap startup in `runZonedGuarded`. Supabase.initialize and every other
+init step MUST be individually try/caught. `_AppRoot` MUST remain a StatefulWidget with a
+hard 5-second boot timeout that forces HomeShell if auth never resolves. FlutterError.onError
+MUST be set at boot. Never revert these patterns — a feature crash MUST NOT white-screen the app.
 
 ## GEMINI RULE (ABSOLUTE)
 Every AI/OCR feature uses ONLY gemini-3.5-flash on Vertex AI global endpoint (aiplatform.googleapis.com, locations/global, thinkingLevel='low', GCP_SA_KEY auth). NEVER gemini-2.5/2.0/1.5, NEVER generativelanguage.googleapis.com, NEVER API-key auth. Before writing any Gemini code, copy the exact pattern from the gemini-ocr edge function.

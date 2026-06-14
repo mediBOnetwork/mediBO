@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 // ignore: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
@@ -21,25 +22,48 @@ import 'theme.dart';
 import 'user_state.dart';
 import 'widgets/animations.dart';
 
-Future<void> main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-  usePathUrlStrategy(); // clean URLs — no # in the address bar
-  await Supabase.initialize(
-    url: SupabaseConfig.url,
-    anonKey: SupabaseConfig.anonKey,
-  );
+// Boot entry point: crash-isolated so no single subsystem can white-screen the app.
+void main() {
+  runZonedGuarded(() async {
+    WidgetsFlutterBinding.ensureInitialized();
 
-  // Boot render-log: fetch version.json (already live, ~0ms) and record build hash.
-  try {
-    final raw = await html.HttpRequest.getString('/version.json');
-    final info = jsonDecode(raw) as Map<String, dynamic>;
-    RenderLog.setBuildHash(info['commit'] as String? ?? 'unknown');
-  } catch (_) {
-    RenderLog.setBuildHash('unknown');
-  }
-  RenderLog.write('screen', 'boot');
+    // Flutter framework errors: log and swallow — never let them crash the boot.
+    FlutterError.onError = (details) {
+      try {
+        final msg = details.exceptionAsString();
+        RenderLog.write('flutter_error', msg.length > 120 ? msg.substring(0, 120) : msg);
+      } catch (_) {}
+    };
 
-  runApp(const PharmaB2BApp());
+    usePathUrlStrategy();
+
+    // Supabase init is crash-isolated: failure renders app in signed-out state.
+    try {
+      await Supabase.initialize(
+        url: SupabaseConfig.url,
+        anonKey: SupabaseConfig.anonKey,
+      );
+    } catch (e) {
+      try { RenderLog.write('boot_error', 'supabase_init_failed'); } catch (_) {}
+    }
+
+    try {
+      final raw = await html.HttpRequest.getString('/version.json');
+      final info = jsonDecode(raw) as Map<String, dynamic>;
+      RenderLog.setBuildHash(info['commit'] as String? ?? 'unknown');
+    } catch (_) {
+      RenderLog.setBuildHash('unknown');
+    }
+    RenderLog.write('screen', 'boot');
+
+    runApp(const PharmaB2BApp());
+  }, (error, stack) {
+    // Zone-level catch-all: uncaught async errors are logged and swallowed.
+    try {
+      final msg = error.toString();
+      RenderLog.write('boot_zone_error', msg.length > 120 ? msg.substring(0, 120) : msg);
+    } catch (_) {}
+  });
 }
 
 class PharmaB2BApp extends StatefulWidget {
@@ -130,21 +154,56 @@ class _PharmaB2BAppState extends State<PharmaB2BApp> {
   }
 }
 
-/// Root widget: switches between loading, business setup, and the main shell.
-class _AppRoot extends StatelessWidget {
+/// Root widget: shows splash during auth init, then the main shell.
+/// Has a 5-second hard timeout so a stalled auth check never blocks first paint.
+class _AppRoot extends StatefulWidget {
   final AuthNotifier auth;
   const _AppRoot({required this.auth});
 
   @override
+  State<_AppRoot> createState() => _AppRootState();
+}
+
+class _AppRootState extends State<_AppRoot> {
+  bool _timedOut = false;
+  bool _didWriteBootSuccess = false;
+  Timer? _bootTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    // Hard 5-second timeout: if auth never resolves, render HomeShell anyway.
+    // A feature crash in auth init MUST NOT leave users on an infinite spinner.
+    _bootTimer = Timer(const Duration(seconds: 5), () {
+      if (mounted && widget.auth.loading) {
+        try { RenderLog.write('boot_status', 'timeout_fallback'); } catch (_) {}
+        setState(() => _timedOut = true);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _bootTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: auth,
+      listenable: widget.auth,
       builder: (context, _) {
-        // Show splash only during the very first session check, not on subsequent sign-ins
-        if (auth.loading) {
+        if (widget.auth.loading && !_timedOut) {
           return const _SplashScreen();
         }
-
+        // Write boot_status=painted exactly once — this is the render-log proof
+        // that the app successfully rendered its first content screen.
+        if (!_didWriteBootSuccess) {
+          _didWriteBootSuccess = true;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            try { RenderLog.write('boot_status', 'painted'); } catch (_) {}
+          });
+        }
         return const HomeShell();
       },
     );

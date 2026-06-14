@@ -3841,9 +3841,21 @@ class _SupplierEditDialogState extends State<_SupplierEditDialog> {
   Future<void> _save() async {
     setState(() => _saving = true);
     try {
-      final update = {for (final f in _fields) f.$1: _ctrls[f.$1]!.text.trim()};
-      await Supabase.instance.client.from('supplier_profiles').update(update).eq('id', widget.row.id);
-      if (mounted) Navigator.pop(context, true);
+      // Explicitly build only the writable fields — never include SPN (GENERATED ALWAYS)
+      // or any computed/aggregate columns. _fields lists exactly the editable columns.
+      final update = <String, dynamic>{
+        for (final f in _fields) f.$1: _ctrls[f.$1]!.text.trim(),
+      };
+      await Supabase.instance.client
+          .from('supplier_profiles')
+          .update(update)
+          .eq('id', widget.row.id)
+          .select();
+      if (mounted) {
+        RenderLog.write('supplier_edit_saved', 'true');
+        showToast(context, 'Saved ✓');
+        Navigator.pop(context, true);
+      }
     } catch (e) {
       if (mounted) {
         setState(() => _saving = false);

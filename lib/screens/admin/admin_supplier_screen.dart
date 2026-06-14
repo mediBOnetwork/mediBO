@@ -721,21 +721,51 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                   style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
             ]),
           ),
-          CompositedTransformTarget(
-            link: _importSupplierLink,
-            child: TextButton.icon(
-              onPressed: _pickAndImportSupplierProfile,
-              icon: const Icon(Icons.upload_file_outlined, size: 16),
-              label: const Text('Import Supplier'),
-              style: TextButton.styleFrom(
-                foregroundColor: const Color(0xFF1B7A43),
-                textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          if (_filter == _SupFilter.inquiry) ...[
+            // Inquiry tab: show Auto-Meta toggle in the Import Supplier slot
+            Builder(builder: (_) {
+              RenderLog.write('toggle_in_header_slot', 'true');
+              RenderLog.write('send_all_removed', 'true');
+              return Row(mainAxisSize: MainAxisSize.min, children: [
+                Text('Automatic by Meta',
+                    style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: _autoMeta ? const Color(0xFF1B7A43) : const Color(0xFF6B7280))),
+                const SizedBox(width: 6),
+                _autoMetaLoading
+                    ? const SizedBox(width: 28, height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF1B7A43)))
+                    : Transform.scale(
+                        scale: 0.75,
+                        child: Switch(
+                          value: _autoMeta,
+                          onChanged: (v) => _saveAutoMeta(v),
+                          activeColor: const Color(0xFF1B7A43),
+                          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                      ),
+              ]);
+            }),
+          ] else ...[
+            CompositedTransformTarget(
+              link: _importSupplierLink,
+              child: TextButton.icon(
+                onPressed: _pickAndImportSupplierProfile,
+                icon: const Icon(Icons.upload_file_outlined, size: 16),
+                label: const Text('Import Supplier'),
+                style: TextButton.styleFrom(
+                  foregroundColor: const Color(0xFF1B7A43),
+                  textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                ),
               ),
             ),
-          ),
+          ],
           IconButton(
-            onPressed: _load,
+            onPressed: _filter == _SupFilter.inquiry
+                ? () { _fetchInquiryOverview(); _fetchUnassignedItems(); }
+                : _load,
             icon: const Icon(Icons.refresh_outlined, color: Color(0xFF6B7280), size: 20),
             tooltip: 'Refresh',
             visualDensity: VisualDensity.compact,
@@ -1297,88 +1327,6 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   Widget _buildInquiryView(bool isDesktop) {
     final pad = isDesktop ? 28.0 : 16.0;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Padding(
-        padding: EdgeInsets.fromLTRB(pad, 10, pad, 4),
-        child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
-          // "Automatic by Meta" toggle
-          Row(mainAxisSize: MainAxisSize.min, children: [
-            Text('Automatic by Meta',
-                style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
-                    color: _autoMeta ? const Color(0xFF1B7A43) : const Color(0xFF6B7280))),
-            const SizedBox(width: 6),
-            _autoMetaLoading
-                ? const SizedBox(width: 28, height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF1B7A43)))
-                : Transform.scale(
-                    scale: 0.75,
-                    child: Switch(
-                      value: _autoMeta,
-                      onChanged: (v) => _saveAutoMeta(v),
-                      activeColor: const Color(0xFF1B7A43),
-                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    ),
-                  ),
-          ]),
-          const SizedBox(width: 10),
-          // "Send All Inquiry" — enabled only when toggle ON
-          Builder(builder: (ctx) {
-            final enabled = _autoMeta && !_inquiryLoading;
-            if (!enabled) {
-              RenderLog.write('send_all_disabled_dark', 'autoMeta:$_autoMeta');
-            }
-            return Tooltip(
-              message: _autoMeta ? '' : "Turn on 'Automatic by Meta' to send all at once",
-              child: GestureDetector(
-                onTap: enabled ? () async {
-                  await _sendAllMeta();
-                } : null,
-                child: Container(
-                  height: 32,
-                  padding: const EdgeInsets.symmetric(horizontal: 10),
-                  decoration: BoxDecoration(
-                    color: enabled ? const Color(0xFFECFDF5) : const Color(0xFFF3F4F6),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: enabled ? const Color(0xFF6EE7B7) : const Color(0xFFD1D5DB)),
-                  ),
-                  child: Row(mainAxisSize: MainAxisSize.min, children: [
-                    if (_inquiryLoading && _autoMeta)
-                      const SizedBox(width: 12, height: 12,
-                          child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF1B7A43)))
-                    else
-                      Icon(Icons.send_outlined, size: 14,
-                          color: enabled ? const Color(0xFF1B7A43) : const Color(0xFF9CA3AF)),
-                    const SizedBox(width: 5),
-                    Text('Send All Inquiry',
-                        style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                            color: enabled ? const Color(0xFF1B7A43) : const Color(0xFF9CA3AF))),
-                  ]),
-                ),
-              ),
-            );
-          }),
-          const SizedBox(width: 8),
-          GestureDetector(
-            onTap: () => _fetchInquiryOverview(),
-            child: Container(
-              height: 32,
-              width: 32,
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: const Color(0xFFE5E7EB)),
-              ),
-              child: _inquiryOverviewLoading
-                  ? const Padding(padding: EdgeInsets.all(7),
-                      child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF1B7A43)))
-                  : const Icon(Icons.refresh_outlined, size: 16, color: Color(0xFF6B7280)),
-            ),
-          ),
-        ]),
-      ),
       if (_inquiryOverviewLoading && _inquiryOverview.isEmpty)
         const Padding(
           padding: EdgeInsets.all(40),

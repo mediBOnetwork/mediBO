@@ -638,14 +638,16 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
           .map((e) {
             final m = Map<String, dynamic>.from(e as Map);
             return _ItemLine(
-              name:  m['product_name'] as String? ?? '',
-              qty:   (m['quantity'] as num?)?.toInt() ?? 1,
-              price: (m['price'] as num?)?.toDouble(),
+              name:      m['product_name'] as String? ?? '',
+              qty:       (m['quantity'] as num?)?.toInt() ?? 1,
+              price:     (m['price'] as num?)?.toDouble(),
+              productId: m['product_id']?.toString(),
             );
           })
           .where((i) => i.name.isNotEmpty)
           .toList();
-    } catch (_) {
+    } catch (e) {
+      RenderLog.write('parse_items_error', e.toString());
       return [];
     }
   }
@@ -973,7 +975,9 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         });
         RenderLog.write('order_item_status', 'orderId:$orderId count:${rows.length}');
       }
-    } catch (_) {}
+    } catch (e) {
+      RenderLog.write('order_item_status_error', 'orderId:$orderId err:$e');
+    }
   }
 
   // ── Build ──────────────────────────────────────────────────────────────────
@@ -1485,7 +1489,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   }
 
   Widget _buildExpandedItems(_CustRow row, {required bool isDesktop}) {
-    final lpad = isDesktop ? 44.0 : 16.0;
+    final lpad = isDesktop ? 28.0 : 16.0;
     final rpad = isDesktop ? 28.0 : 16.0;
 
     if (row.source == 'whatsapp' && row.items.isEmpty) {
@@ -1518,6 +1522,20 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         : <Map<String, dynamic>>[];
     RenderLog.write('order_items_expanded',
         'orderId:${row.orderId ?? "?"}:items:${row.items.length}:statuses:${statuses.length}');
+    // Log per-item resolved status for verification
+    for (final item in row.items) {
+      if (item.productId != null) {
+        final pid = int.tryParse(item.productId!);
+        final s = statuses.cast<Map<String, dynamic>?>().firstWhere(
+          (s) => s != null && (s['product_id'] as num?)?.toInt() == pid,
+          orElse: () => null,
+        );
+        RenderLog.write('order_item_resolved',
+            '${item.name}:pid=${item.productId}:status=${s?['current_status'] ?? "no_match"}');
+      } else {
+        RenderLog.write('order_item_resolved', '${item.name}:pid=null');
+      }
+    }
 
     return Container(
       color: const Color(0xFFF9FAFB),

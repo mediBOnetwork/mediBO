@@ -978,6 +978,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   // ═══════════════════════════════════════════════════════════════════════════
 
   void _selectTab(_SupFilter f) {
+    _closeSendPopover();
     if (_filter == _SupFilter.inquiry && f != _SupFilter.inquiry) {
       _inquiryPollTimer?.cancel();
       _inquiryPollTimer = null;

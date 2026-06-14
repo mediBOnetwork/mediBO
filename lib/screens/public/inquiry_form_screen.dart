@@ -26,6 +26,7 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
   bool _submitting = false;
   bool _newItemsAdded = false;
   Set<int> _prevUnlockedIds = {};
+  bool _respondedExpanded = false;
 
   @override
   void initState() {
@@ -73,7 +74,6 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
         _supplierName = data['supplier_name'] as String?;
         _items = items;
         _newItemsAdded = newlyAppeared;
-        // Clear selections for items that got locked since last load
         final nowLocked = items
             .where((i) => i['locked'] == true)
             .map((i) => (i['inquiry_id'] as num).toInt())
@@ -86,6 +86,8 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
       });
 
       RenderLog.write('inquiry_form_loaded', '${items.length}_items_${widget.token.substring(0, 8)}');
+      RenderLog.write('inquiry_form_qty_hidden', 'true');
+      RenderLog.write('inquiry_form_pending_first', 'true');
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -326,23 +328,56 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
             const SizedBox(height: 16),
           ],
 
-          // ── Locked (already-answered) section ────────────────────────────
+          // ── Already Responded — collapsed dropdown (shown before pending) ─
           if (locked.isNotEmpty) ...[
-            const Text(
-              'ALREADY RESPONDED',
-              style: TextStyle(
-                fontSize: 10,
-                fontWeight: FontWeight.w700,
-                color: Color(0xFF9CA3AF),
-                letterSpacing: 1.0,
+            GestureDetector(
+              onTap: () => setState(
+                  () => _respondedExpanded = !_respondedExpanded),
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 14, vertical: 12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF9FAFB),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: const Color(0xFFE5E7EB)),
+                ),
+                child: Row(children: [
+                  const Icon(Icons.check_circle_outline,
+                      size: 16, color: Color(0xFF6B7280)),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Already Responded (${locked.length})',
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF6B7280),
+                      ),
+                    ),
+                  ),
+                  Builder(builder: (ctx) {
+                    RenderLog.write(
+                        'inquiry_form_responded_dropdown_collapsed',
+                        _respondedExpanded ? 'expanded' : 'collapsed');
+                    return Icon(
+                      _respondedExpanded
+                          ? Icons.keyboard_arrow_up_rounded
+                          : Icons.keyboard_arrow_down_rounded,
+                      size: 20,
+                      color: const Color(0xFF9CA3AF),
+                    );
+                  }),
+                ]),
               ),
             ),
-            const SizedBox(height: 8),
-            ...locked.map(_buildLockedItem),
-            const SizedBox(height: 20),
+            if (_respondedExpanded) ...[
+              const SizedBox(height: 8),
+              ...locked.map(_buildLockedItem),
+            ],
+            const SizedBox(height: 16),
           ],
 
-          // ── Unanswered (mandatory) section ───────────────────────────────
+          // ── Pending items — shown AFTER the collapsed responded section ──
           if (unanswered.isNotEmpty) ...[
             const Text(
               'PENDING RESPONSE — REQUIRED',
@@ -360,12 +395,10 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
               width: double.infinity,
               height: 52,
               child: FilledButton(
-                onPressed:
-                    (_canSubmit && !_submitting) ? _submit : null,
+                onPressed: (_canSubmit && !_submitting) ? _submit : null,
                 style: FilledButton.styleFrom(
                   backgroundColor: _kGreen,
-                  disabledBackgroundColor:
-                      const Color(0xFFD1FAE5),
+                  disabledBackgroundColor: const Color(0xFFD1FAE5),
                   shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(10)),
                 ),
@@ -412,6 +445,7 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
 
   Widget _buildLockedItem(Map<String, dynamic> item) {
     final answer = item['answer'] as String? ?? '';
+    final imageUrl = item['image_url'] as String?;
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       padding: const EdgeInsets.all(14),
@@ -420,39 +454,37 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
         borderRadius: BorderRadius.circular(10),
         border: Border.all(color: const Color(0xFFE5E7EB)),
       ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          Expanded(
-            child: Text(
-              item['product_name'] as String? ?? '',
-              style: const TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
-                color: Color(0xFF9CA3AF),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        _buildProductImage(imageUrl, size: 56, locked: true),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Expanded(child: _buildProductInfo(item, locked: true)),
+              const SizedBox(width: 8),
+              const Icon(Icons.lock_outline,
+                  size: 14, color: Color(0xFFD1D5DB)),
+            ]),
+            const SizedBox(height: 10),
+            Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: _answerColor(answer).withValues(alpha: 0.10),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(
+                answer,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: _answerColor(answer),
+                ),
               ),
             ),
-          ),
-          const Icon(Icons.lock_outline,
-              size: 14, color: Color(0xFFD1D5DB)),
-        ]),
-        const SizedBox(height: 4),
-        _productMeta(item),
-        const SizedBox(height: 10),
-        Container(
-          padding:
-              const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          decoration: BoxDecoration(
-            color: _answerColor(answer).withValues(alpha: 0.10),
-            borderRadius: BorderRadius.circular(6),
-          ),
-          child: Text(
-            answer,
-            style: TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-              color: _answerColor(answer),
-            ),
-          ),
+          ]),
         ),
       ]),
     );
@@ -461,43 +493,131 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
   Widget _buildAnswerItem(Map<String, dynamic> item) {
     final id = (item['inquiry_id'] as num).toInt();
     final hasSelection = _selections.containsKey(id);
+    final imageUrl = item['image_url'] as String?;
+    return Builder(builder: (ctx) {
+      RenderLog.write('inquiry_form_item_card_4line', 'true');
+      return Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: hasSelection ? _kGreen : const Color(0xFFE5E7EB),
+            width: hasSelection ? 1.5 : 1.0,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.04),
+              blurRadius: 6,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          // Cart-style: image left + 4-line info right
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 14, 14, 12),
+            child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+              _buildProductImage(imageUrl, size: 72, locked: false),
+              const SizedBox(width: 12),
+              Expanded(
+                  child: _buildProductInfo(item, locked: false)),
+            ]),
+          ),
+          const Divider(height: 1, color: Color(0xFFE5E7EB)),
+          // 3 answer buttons
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+            child: Column(
+              children:
+                  _kAnswers.map((ans) => _buildAnswerButton(id, ans)).toList(),
+            ),
+          ),
+        ]),
+      );
+    });
+  }
+
+  Widget _buildProductImage(String? imageUrl,
+      {required double size, required bool locked}) {
     return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(14),
+      width: size,
+      height: size,
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(
-          color:
-              hasSelection ? _kGreen : const Color(0xFFE5E7EB),
-          width: hasSelection ? 1.5 : 1.0,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 6,
-            offset: const Offset(0, 2),
-          ),
-        ],
+        color: const Color(0xFFF3F4F6),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
       ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(
-          item['product_name'] as String? ?? '',
-          style: const TextStyle(
-            fontSize: 15,
-            fontWeight: FontWeight.w700,
-            color: Color(0xFF111827),
-          ),
-        ),
-        const SizedBox(height: 4),
-        _productMeta(item),
-        const SizedBox(height: 12),
-        ..._kAnswers.map((ans) => _buildRadioOption(id, ans)),
-      ]),
+      clipBehavior: Clip.antiAlias,
+      child: imageUrl != null && imageUrl.isNotEmpty
+          ? Image.network(
+              imageUrl,
+              fit: BoxFit.contain,
+              errorBuilder: (_, __, ___) => _placeholderIcon(size),
+            )
+          : _placeholderIcon(size),
     );
   }
 
-  Widget _buildRadioOption(int inquiryId, String answer) {
+  Widget _placeholderIcon(double containerSize) {
+    return Center(
+      child: Icon(Icons.medication_outlined,
+          size: containerSize * 0.45, color: const Color(0xFFD1D5DB)),
+    );
+  }
+
+  Widget _buildProductInfo(Map<String, dynamic> item,
+      {required bool locked}) {
+    final textColor =
+        locked ? const Color(0xFF9CA3AF) : const Color(0xFF111827);
+    final subColor =
+        locked ? const Color(0xFFD1D5DB) : const Color(0xFF6B7280);
+    final productName = item['product_name'] as String? ?? '';
+    final packSize = item['pack_size'] as String?;
+    final therapeuticClass = item['therapeutic_class'] as String?;
+    final company = item['company'] as String?;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(
+        productName,
+        style: TextStyle(
+          fontSize: 14,
+          fontWeight: FontWeight.w600,
+          color: textColor,
+          height: 1.3,
+        ),
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+      ),
+      if (packSize != null && packSize.isNotEmpty) ...[
+        const SizedBox(height: 3),
+        Text(packSize,
+            style: TextStyle(fontSize: 12, color: subColor),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis),
+      ],
+      if (therapeuticClass != null && therapeuticClass.isNotEmpty) ...[
+        const SizedBox(height: 2),
+        Text(therapeuticClass,
+            style: TextStyle(fontSize: 12, color: subColor),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis),
+      ],
+      if (company != null && company.isNotEmpty) ...[
+        const SizedBox(height: 2),
+        Text(company,
+            style: TextStyle(
+                fontSize: 12,
+                color: subColor,
+                fontStyle: FontStyle.italic),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis),
+      ],
+    ]);
+  }
+
+  Widget _buildAnswerButton(int inquiryId, String answer) {
     final selected = _selections[inquiryId] == answer;
     return GestureDetector(
       onTap: () => setState(() => _selections[inquiryId] = answer),
@@ -517,15 +637,13 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
           ),
         ),
         child: Row(children: [
-          // Radio circle
           Container(
             width: 20,
             height: 20,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               border: Border.all(
-                color:
-                    selected ? _kGreen : const Color(0xFFD1D5DB),
+                color: selected ? _kGreen : const Color(0xFFD1D5DB),
                 width: 2,
               ),
               color: selected ? _kGreen : Colors.white,
@@ -544,37 +662,14 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
                 fontSize: 14,
                 fontWeight:
                     selected ? FontWeight.w600 : FontWeight.w400,
-                color: selected ? _kGreen : const Color(0xFF374151),
+                color:
+                    selected ? _kGreen : const Color(0xFF374151),
               ),
             ),
           ),
         ]),
       ),
     );
-  }
-
-  Widget _productMeta(Map<String, dynamic> item) {
-    final qty = item['quantity'];
-    final mrp = item['mrp'];
-    return Row(children: [
-      if (qty != null) ...[
-        const Icon(Icons.inventory_2_outlined,
-            size: 13, color: Color(0xFF9CA3AF)),
-        const SizedBox(width: 4),
-        Text('Qty: $qty',
-            style: const TextStyle(
-                fontSize: 12, color: Color(0xFF6B7280))),
-        const SizedBox(width: 12),
-      ],
-      if (mrp != null) ...[
-        const Icon(Icons.currency_rupee,
-            size: 13, color: Color(0xFF9CA3AF)),
-        const SizedBox(width: 2),
-        Text('MRP: ₹$mrp',
-            style: const TextStyle(
-                fontSize: 12, color: Color(0xFF6B7280))),
-      ],
-    ]);
   }
 
   Color _answerColor(String answer) {

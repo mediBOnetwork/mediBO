@@ -125235,7 +125235,8 @@ m===$&&A.a()
 l=t.z
 s=6
 return A.i(m.aJ("orders").bD(0,A.I(["status",b],l,l)).br("id",a),$async$K4)
-case 6:o.Dx()
+case 6:A.bo("order_status_written","orderId:"+a+" status:"+b)
+o.Dx()
 q=1
 s=5
 break
@@ -126172,7 +126173,7 @@ E(a){var s,r=this,q=r.a.c
 if(q.f==null)return B.yC
 if(r.d)return B.kn
 s=q.w
-if(s==="confirmed")return r.a8N("Confirmed",B.r)
+if(s==="accepted"||s==="confirmed")return r.a8N("Accepted",B.r)
 if(s==="rejected")return r.a8N("Rejected",B.K)
 return A.Q(A.b([r.DL("Accept",B.r,new A.b5h(r)),B.ae,r.DL("Reject",B.K,new A.b5i(r))],t.p),B.j,B.d,B.x,0)},
 a8N(a,b){var s=null,r=b.aK(0.1),q=A.u(20)
@@ -126186,7 +126187,7 @@ A.b5g.prototype={
 $0(){return this.a.d=!1},
 $S:0}
 A.b5h.prototype={
-$0(){return this.a.nH("confirmed")},
+$0(){return this.a.nH("accepted")},
 $S:0}
 A.b5i.prototype={
 $0(){return this.a.nH("rejected")},
@@ -140106,12 +140107,18 @@ k=A.l(l.a,j,j,j,j,j,j,j,j,j)
 p.push(A.azs(!1,j,!0,j,!0,j,j,!0,j,j,j,j,j,j,j,!1,j,j,j,j,j,A.l(A.ea(l.b)+" \xd7 "+l.c,j,j,j,j,j,j,j,j,j),j,k,j,A.l(A.ea(l.d),j,j,j,j,j,j,j,j,j),j))}return new A.a0d(new A.LM(new A.a0l(i,h,j),r,q,p,o,j),j)}}
 A.ajI.prototype={
 E(a){var s,r,q,p=null,o=this.c,n=o.toLowerCase()
-A:{if("confirmed"===n){s=B.ajB
-break A}if("cancelled"===n||"rejected"===n){s=B.ajA
-break A}s=B.ajz
-break A}r=s.aK(0.15)
+A:{s="accepted"!==n
+if(!s||"confirmed"===n){r=B.ajB
+break A}if("cancelled"===n||"rejected"===n){r=B.ajA
+break A}r=B.ajz
+break A}B:{if(!s||"confirmed"===n){o="Accepted"
+break B}if("cancelled"===n){o="Cancelled"
+break B}if("rejected"===n){o="Rejected"
+break B}if("pending"===n){o="Pending"
+break B}o=o[0].toUpperCase()+B.c.bg(o,1)
+break B}s=r.aK(0.15)
 q=A.u(10)
-return A.B(p,A.l(o,p,p,p,p,p,A.be(p,p,s,p,p,p,p,p,p,p,p,11,p,p,B.y,p,p,!0,p,p,p,p,p,p,p,p),p,p,p),B.i,p,p,new A.M(r,p,p,q,p,p,B.l),p,p,p,B.oF,B.oN,p,p,p)}}
+return A.B(p,A.l(o,p,p,p,p,p,A.be(p,p,r,p,p,p,p,p,p,p,p,11,p,p,B.y,p,p,!0,p,p,p,p,p,p,p,p),p,p,p),B.i,p,p,new A.M(s,p,p,q,p,p,B.l),p,p,p,B.oF,B.oN,p,p,p)}}
 A.rJ.prototype={
 Y(){return new A.ah3()}}
 A.ah3.prototype={

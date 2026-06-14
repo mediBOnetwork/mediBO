@@ -10,6 +10,7 @@ import 'package:pharma_b2b/utils/toast.dart';
 
 import '../../config/api_keys.dart';
 import '../../util.dart';
+import '../../utils/render_log.dart';
 import '../bulk_upload_screen.dart';
 
 // ── Item model ────────────────────────────────────────────────────────────────
@@ -898,6 +899,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
           .from('orders')
           .update({'status': status})
           .eq('id', orderId);
+      RenderLog.write('order_status_written', 'orderId:$orderId status:$status');
       _load();
     } catch (e) {
       if (mounted) {
@@ -3160,11 +3162,11 @@ class _ConfirmActionsState extends State<_ConfirmActions> {
               strokeWidth: 2, color: Color(0xFF1B7A43)));
     }
     final status = widget.row.orderStatus;
-    if (status == 'confirmed') return _chip('Confirmed', const Color(0xFF1B7A43));
+    if (status == 'accepted' || status == 'confirmed') return _chip('Accepted', const Color(0xFF1B7A43));
     if (status == 'rejected')  return _chip('Rejected',  const Color(0xFFDC2626));
 
     return Row(mainAxisSize: MainAxisSize.min, children: [
-      _btn('Accept', const Color(0xFF1B7A43), () => _act('confirmed')),
+      _btn('Accept', const Color(0xFF1B7A43), () => _act('accepted')),
       const SizedBox(width: 4),
       _btn('Reject', const Color(0xFFDC2626), () => _act('rejected')),
     ]);

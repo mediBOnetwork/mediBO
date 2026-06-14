@@ -274,10 +274,18 @@ class _StatusChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = switch (status.toLowerCase()) {
-      'confirmed' => Colors.green,
+    final lower = status.toLowerCase();
+    final color = switch (lower) {
+      'accepted' || 'confirmed' => Colors.green,
       'cancelled' || 'rejected' => Colors.red,
       _ => Colors.orange, // pending, processing, etc.
+    };
+    final label = switch (lower) {
+      'accepted' || 'confirmed' => 'Accepted',
+      'cancelled' => 'Cancelled',
+      'rejected' => 'Rejected',
+      'pending' => 'Pending',
+      _ => status[0].toUpperCase() + status.substring(1),
     };
     return Container(
       margin: const EdgeInsets.only(top: 4),
@@ -286,7 +294,7 @@ class _StatusChip extends StatelessWidget {
         color: color.withValues(alpha: 0.15),
         borderRadius: BorderRadius.circular(10),
       ),
-      child: Text(status,
+      child: Text(label,
           style: TextStyle(
               fontSize: 11, color: color, fontWeight: FontWeight.w600)),
     );

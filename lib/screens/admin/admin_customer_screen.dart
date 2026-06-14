@@ -1764,71 +1764,94 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                   );
               }),
             ] else ...[
-              // Mobile: aligned table inside horizontal scroll (matches desktop)
-              Builder(builder: (_) {
-                RenderLog.write('cart_items_mobile_table', 'true');
-                const colProduct  = 180.0;
-                const colQty      =  52.0;
-                const colPack     = 130.0;
-                const colMrp      =  72.0;
-                const colBadge    = 110.0;
-                const colRemove   =  84.0;
-                const hStyle = TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF9CA3AF));
-                const rowStyle  = TextStyle(fontSize: 12, color: Color(0xFF374151));
-                const metaStyle = TextStyle(fontSize: 12, color: Color(0xFF6B7280));
-                return SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    // Header row
-                    Container(
-                      color: const Color(0xFFF9FAFB),
-                      padding: const EdgeInsets.symmetric(vertical: 6),
-                      child: Row(children: const [
-                        SizedBox(width: colProduct, child: Text('Product',         style: hStyle)),
-                        SizedBox(width: colQty,     child: Text('Qty',             style: hStyle)),
-                        SizedBox(width: colPack,    child: Text('Pack size',       style: hStyle)),
-                        SizedBox(width: colMrp,     child: Text('MRP',             style: hStyle)),
-                        SizedBox(width: colBadge,   child: Text('Added/Removed by',maxLines: 2, style: hStyle)),
-                        SizedBox(width: colRemove),
-                      ]),
-                    ),
-                    const Divider(height: 1, color: Color(0xFFE5E7EB)),
-                    // Data rows
-                    ...row.items.map((item) => Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 7),
-                          child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-                            SizedBox(width: colProduct, child: Text(item.name,
-                                maxLines: 2, overflow: TextOverflow.ellipsis, style: rowStyle)),
-                            SizedBox(width: colQty, child: Text('×${item.qty}', style: metaStyle)),
-                            SizedBox(width: colPack, child: Text(
-                                (item.packSize?.isNotEmpty == true) ? item.packSize! : '—',
-                                maxLines: 2, overflow: TextOverflow.ellipsis, style: metaStyle)),
-                            SizedBox(width: colMrp, child: Text(
+              // Mobile: 3-line stacked layout (no horizontal scroll, no clipping)
+              ...row.items.map((item) {
+                RenderLog.write('cart_items_mobile_3line', 'true');
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // Line 1: product name (left, bold) | qty (right)
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Expanded(
+                                child: Text(item.name,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                    color: Color(0xFF111827),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Text('×${item.qty}',
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w500,
+                                  color: Color(0xFF6B7280),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 4),
+                          // Line 2: pack size (left, grey) | MRP (right)
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  (item.packSize?.isNotEmpty == true) ? item.packSize! : '—',
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontSize: 11,
+                                    color: Color(0xFF6B7280),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
                                 item.mrp != null ? '₹${item.mrp!.toStringAsFixed(0)}' : '—',
-                                style: rowStyle)),
-                            SizedBox(width: colBadge, child: _addedByBadge(item.addedBy)),
-                            SizedBox(width: colRemove, child: item.id != null
-                                ? TextButton(
-                                    onPressed: () => _adminSoftRemoveItem(item.id!),
-                                    style: TextButton.styleFrom(
-                                      foregroundColor: const Color(0xFFDC2626),
-                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                                      minimumSize: Size.zero,
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w500,
+                                  color: Color(0xFF374151),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 4),
+                          // Line 3: added/removed-by (left) | Remove (right)
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              _addedByBadge(item.addedBy),
+                              const Spacer(),
+                              if (item.id != null)
+                                GestureDetector(
+                                  onTap: () => _adminSoftRemoveItem(item.id!),
+                                  child: const Text('Remove',
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600,
+                                      color: Color(0xFFDC2626),
                                     ),
-                                    child: const Text('Remove',
-                                        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
-                                  )
-                                : const SizedBox()),
-                          ]),
-                        ),
-                        const Divider(height: 1, color: Color(0xFFF3F4F6)),
-                      ],
-                    )),
-                  ]),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Divider(height: 1, color: Color(0xFFF3F4F6)),
+                  ],
                 );
               }),
             ],

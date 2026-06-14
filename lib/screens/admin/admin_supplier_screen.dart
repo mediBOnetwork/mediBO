@@ -1646,34 +1646,9 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   Widget _buildSuppliersView(bool isDesktop) {
     final pad = isDesktop ? 28.0 : 16.0;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      _buildInquiryLinksPanel(),
       Padding(
         padding: EdgeInsets.fromLTRB(pad, 10, pad, 4),
         child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
-          // Send All Inquiry
-          GestureDetector(
-            onTap: _inquiryLoading ? null : _sendAllInquiry,
-            child: Container(
-              height: 32,
-              padding: const EdgeInsets.symmetric(horizontal: 10),
-              decoration: BoxDecoration(
-                color: const Color(0xFFECFDF5),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: const Color(0xFF6EE7B7)),
-              ),
-              child: Row(mainAxisSize: MainAxisSize.min, children: [
-                if (_inquiryLoading)
-                  const SizedBox(width: 12, height: 12,
-                      child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF1B7A43)))
-                else
-                  const Icon(Icons.send_outlined, size: 14, color: Color(0xFF1B7A43)),
-                const SizedBox(width: 5),
-                const Text('Send All Inquiry',
-                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF1B7A43))),
-              ]),
-            ),
-          ),
-          const SizedBox(width: 12),
           _buildRefreshButton(),
           const SizedBox(width: 12),
           const Text('Sort:', style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
@@ -1988,9 +1963,6 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                   },
                 ),
                 const SizedBox(width: 14),
-                _actionBtn('Inquiry', const Color(0xFF2563EB),
-                    () => _sendSupplierInquiry(row.supplierName)),
-                const SizedBox(width: 6),
                 _actionBtn('Edit', const Color(0xFF1B7A43), () => _editSupplier(row)),
                 const SizedBox(width: 6),
                 _actionBtn('Delete', const Color(0xFFDC2626), () => _deleteSupplier(row)),
@@ -2093,8 +2065,6 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                 ]),
                 const SizedBox(height: 12),
                 Wrap(spacing: 8, runSpacing: 6, children: [
-                  _actionBtn('Inquiry', const Color(0xFF2563EB),
-                      () => _sendSupplierInquiry(row.supplierName)),
                   _actionBtn('Edit',   const Color(0xFF1B7A43), () => _editSupplier(row)),
                   _actionBtn('Delete', const Color(0xFFDC2626), () => _deleteSupplier(row)),
                 ]),

@@ -3161,10 +3161,28 @@ class _ConfirmActionsState extends State<_ConfirmActions> {
           child: CircularProgressIndicator(
               strokeWidth: 2, color: Color(0xFF1B7A43)));
     }
-    final status = widget.row.orderStatus;
-    if (status == 'accepted' || status == 'confirmed') return _chip('Accepted', const Color(0xFF1B7A43));
-    if (status == 'rejected')  return _chip('Rejected',  const Color(0xFFDC2626));
+    final status = widget.row.orderStatus.toLowerCase().trim();
+    final orderId = widget.row.orderId ?? '';
 
+    Widget resolved(String label, Color color) {
+      RenderLog.write('order_confirm_cell', '$orderId:$status→$label');
+      return _chip(label, color);
+    }
+
+    if (status == 'accepted' || status == 'confirmed') {
+      return resolved('Accepted', const Color(0xFF1B7A43));
+    }
+    if (status == 'rejected') {
+      return resolved('Rejected', const Color(0xFFDC2626));
+    }
+    if (status == 'cancelled') {
+      return resolved('Cancelled', const Color(0xFF6B7280));
+    }
+    if (status != 'pending' && status.isNotEmpty) {
+      return resolved(status[0].toUpperCase() + status.substring(1), const Color(0xFF6B7280));
+    }
+
+    RenderLog.write('order_confirm_cell', '$orderId:$status→buttons');
     return Row(mainAxisSize: MainAxisSize.min, children: [
       _btn('Accept', const Color(0xFF1B7A43), () => _act('accepted')),
       const SizedBox(width: 4),

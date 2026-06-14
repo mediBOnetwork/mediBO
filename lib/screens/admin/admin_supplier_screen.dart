@@ -194,6 +194,10 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   List<Map<String, dynamic>> _unassignedItems = [];
   bool _unassignedLoading = false;
 
+  // ── Auto-meta toggle (persisted via get/set_app_setting) ─────────────────
+  bool _autoMeta = false;
+  bool _autoMetaLoading = false;
+
   // ── Send-inquiry popover (Clear Cart style) ──────────────────────────────
   final Map<String, LayerLink> _sendLinks = {};
   OverlayEntry? _sendPopoverOverlay;
@@ -821,6 +825,153 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     }
   }
 
+  Future<void> _loadAutoMeta() async {
+    if (!mounted) return;
+    setState(() => _autoMetaLoading = true);
+    try {
+      final result = await Supabase.instance.client
+          .rpc('get_app_setting', params: {'p_key': 'inquiry_auto_meta'});
+      final val = result as bool? ?? false;
+      if (mounted) {
+        setState(() { _autoMeta = val; _autoMetaLoading = false; });
+        RenderLog.write(val ? 'toggle_loaded_on' : 'toggle_loaded_off', 'autoMeta:$val');
+      }
+    } catch (e) {
+      if (mounted) setState(() => _autoMetaLoading = false);
+      RenderLog.write('toggle_loaded_off', 'err:$e');
+    }
+  }
+
+  Future<void> _saveAutoMeta(bool val) async {
+    setState(() { _autoMeta = val; _autoMetaLoading = true; });
+    try {
+      await Supabase.instance.client.rpc('set_app_setting', params: {
+        'p_key': 'inquiry_auto_meta',
+        'p_value': val,
+      });
+      if (mounted) {
+        setState(() => _autoMetaLoading = false);
+        showToast(context, val ? 'Automatic by Meta: ON' : 'Automatic by Meta: OFF');
+        RenderLog.write(val ? 'toggle_saved_on' : 'toggle_saved_off', 'autoMeta:$val');
+        _fetchInquiryOverview(silent: true);
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() { _autoMeta = !val; _autoMetaLoading = false; });
+        showToast(context, 'Failed to save setting: $e', isError: true);
+      }
+    }
+  }
+
+  // Per-supplier Send: ALWAYS stamps fresh timer, then opens WhatsApp directly.
+  Future<void> _sendPerSupplierDirect(String supName) async {
+    if (mounted) setState(() => _inquiryLoading = true);
+    try {
+      final slug = supName.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '_');
+      // Always stamp a FRESH timer for this supplier (even if token already exists)
+      final rows = await Supabase.instance.client
+          .rpc('start_inquiry_for_suppliers', params: {'p_supplier_names': [supName]}) as List;
+      String? token;
+      for (final r in rows) {
+        final m = Map<String, dynamic>.from(r as Map);
+        if (mounted) setState(() => _inquiryLinks[m['supplier_name'] as String] = m);
+        if ((m['supplier_name'] as String?)?.toLowerCase() == supName.toLowerCase()) {
+          token = m['token'] as String?;
+        }
+      }
+      RenderLog.write('row_send_started_$slug', 'token:${token != null ? "ok" : "null"}');
+
+      if (!mounted) return;
+
+      if (token == null || token.isEmpty) {
+        setState(() => _inquiryLoading = false);
+        showToast(context, 'Could not get inquiry link', isError: true);
+        return;
+      }
+
+      final link = 'https://medibo.in/inquiry/$token';
+
+      // Look up WhatsApp number
+      final sup = _suppliers.cast<_SupRow?>().firstWhere(
+        (s) => s!.supplierName.toLowerCase() == supName.toLowerCase(),
+        orElse: () => null,
+      );
+      final waNumbers = _parsePhoneList(sup?.rawData['whatsapp_no'] as String? ?? '');
+      final phone = waNumbers.isNotEmpty ? waNumbers.first : null;
+
+      setState(() => _inquiryLoading = false);
+
+      if (phone != null) {
+        final normalized = _normalizePhone(phone);
+        final msg = Uri.encodeComponent(
+            'Hello $supName,\nWe want to buy some items from you. Please confirm availability:\n$link');
+        html.window.open('https://wa.me/91$normalized?text=$msg', '_blank');
+        RenderLog.write('row_send_started_$slug', 'wa:91$normalized');
+      } else {
+        Clipboard.setData(ClipboardData(text: link));
+        showToast(context, 'No WhatsApp number — link copied');
+        RenderLog.write('row_send_started_$slug', 'fallback:clipboard');
+      }
+
+      // Refresh overview so this card shows its fresh Exp timer
+      await _fetchInquiryOverview(silent: true);
+      await _fetchUnassignedItems(silent: true);
+      RenderLog.write('row_send_expiry_stamped', supName);
+    } catch (e) {
+      if (mounted) {
+        setState(() => _inquiryLoading = false);
+        showToast(context, 'Failed to send: $e', isError: true);
+      }
+    }
+  }
+
+  // Meta path: send all via edge function (only when toggle ON)
+  Future<void> _sendAllMeta() async {
+    if (mounted) setState(() => _inquiryLoading = true);
+    try {
+      // Build supplier/phone/link list from current overview
+      final overview = List<Map<String, dynamic>>.from(
+          _inquiryOverview.map((r) => Map<String, dynamic>.from(r)));
+
+      final supplierList = overview.map((o) {
+        final name = o['supplier_name'] as String? ?? '';
+        final tok  = o['token'] as String? ?? '';
+        final link = 'https://medibo.in/inquiry/$tok';
+        final sup = _suppliers.cast<_SupRow?>().firstWhere(
+          (s) => s!.supplierName.toLowerCase() == name.toLowerCase(),
+          orElse: () => null,
+        );
+        final waNumbers = _parsePhoneList(sup?.rawData['whatsapp_no'] as String? ?? '');
+        final phone = waNumbers.isNotEmpty ? '91${_normalizePhone(waNumbers.first)}' : null;
+        return {'name': name, 'phone': phone, 'link': link};
+      }).toList();
+
+      final resp = await Supabase.instance.client.functions.invoke(
+        'meta-send-inquiry',
+        body: {'suppliers': supplierList},
+      );
+      final data = resp.data as Map<String, dynamic>? ?? {};
+      if (data['error'] == 'meta_not_configured') {
+        RenderLog.write('meta_not_configured', 'true');
+        if (mounted) showToast(context, "Meta not configured yet — turn off Automatic to send manually", isError: true);
+        if (mounted) setState(() => _inquiryLoading = false);
+        return;
+      }
+
+      // Meta sent — now stamp ALL timers
+      await Supabase.instance.client.rpc('start_inquiry_for_suppliers');
+      RenderLog.write('inquiry_send_all', 'meta:sent');
+      if (mounted) showToast(context, 'Sent via Meta WhatsApp');
+      await _fetchInquiryOverview(silent: true);
+      if (mounted) setState(() => _inquiryLoading = false);
+    } catch (e) {
+      if (mounted) {
+        setState(() => _inquiryLoading = false);
+        showToast(context, 'Failed to send via Meta: $e', isError: true);
+      }
+    }
+  }
+
   Future<void> _sendSupplierInquiry(String supplierName) async {
     setState(() => _inquiryLoading = true);
     try {
@@ -991,6 +1142,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     });
     if (f == _SupFilter.inquiry) {
       _fetchInquiryOverview();
+      _loadAutoMeta();
       _inquiryPollTimer?.cancel();
       _inquiryPollTimer = Timer.periodic(const Duration(seconds: 30), (_) {
         if (mounted && _filter == _SupFilter.inquiry) _fetchInquiryOverview(silent: true);
@@ -1148,31 +1300,66 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       Padding(
         padding: EdgeInsets.fromLTRB(pad, 10, pad, 4),
         child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
-          GestureDetector(
-            onTap: _inquiryLoading ? null : () async {
-              await _sendAllInquiry();
-              _fetchInquiryOverview(silent: true);
-            },
-            child: Container(
-              height: 32,
-              padding: const EdgeInsets.symmetric(horizontal: 10),
-              decoration: BoxDecoration(
-                color: const Color(0xFFECFDF5),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: const Color(0xFF6EE7B7)),
+          // "Automatic by Meta" toggle
+          Row(mainAxisSize: MainAxisSize.min, children: [
+            Text('Automatic by Meta',
+                style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                    color: _autoMeta ? const Color(0xFF1B7A43) : const Color(0xFF6B7280))),
+            const SizedBox(width: 6),
+            _autoMetaLoading
+                ? const SizedBox(width: 28, height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF1B7A43)))
+                : Transform.scale(
+                    scale: 0.75,
+                    child: Switch(
+                      value: _autoMeta,
+                      onChanged: (v) => _saveAutoMeta(v),
+                      activeColor: const Color(0xFF1B7A43),
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                  ),
+          ]),
+          const SizedBox(width: 10),
+          // "Send All Inquiry" — enabled only when toggle ON
+          Builder(builder: (ctx) {
+            final enabled = _autoMeta && !_inquiryLoading;
+            if (!enabled) {
+              RenderLog.write('send_all_disabled_dark', 'autoMeta:$_autoMeta');
+            }
+            return Tooltip(
+              message: _autoMeta ? '' : "Turn on 'Automatic by Meta' to send all at once",
+              child: GestureDetector(
+                onTap: enabled ? () async {
+                  await _sendAllMeta();
+                } : null,
+                child: Container(
+                  height: 32,
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  decoration: BoxDecoration(
+                    color: enabled ? const Color(0xFFECFDF5) : const Color(0xFFF3F4F6),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: enabled ? const Color(0xFF6EE7B7) : const Color(0xFFD1D5DB)),
+                  ),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    if (_inquiryLoading && _autoMeta)
+                      const SizedBox(width: 12, height: 12,
+                          child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF1B7A43)))
+                    else
+                      Icon(Icons.send_outlined, size: 14,
+                          color: enabled ? const Color(0xFF1B7A43) : const Color(0xFF9CA3AF)),
+                    const SizedBox(width: 5),
+                    Text('Send All Inquiry',
+                        style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: enabled ? const Color(0xFF1B7A43) : const Color(0xFF9CA3AF))),
+                  ]),
+                ),
               ),
-              child: Row(mainAxisSize: MainAxisSize.min, children: [
-                if (_inquiryLoading)
-                  const SizedBox(width: 12, height: 12,
-                      child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF1B7A43)))
-                else
-                  const Icon(Icons.send_outlined, size: 14, color: Color(0xFF1B7A43)),
-                const SizedBox(width: 5),
-                const Text('Send All Inquiry',
-                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF1B7A43))),
-              ]),
-            ),
-          ),
+            );
+          }),
           const SizedBox(width: 8),
           GestureDetector(
             onTap: () => _fetchInquiryOverview(),
@@ -1370,26 +1557,23 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                 ),
               ),
               const SizedBox(width: 6),
-              // Send button — opens compact contact picker popover
-              CompositedTransformTarget(
-                link: _getSendLink(supName),
-                child: GestureDetector(
-                  onTap: () => _openSendPopover(supName),
-                  behavior: HitTestBehavior.opaque,
-                  child: Container(
-                    height: 30,
-                    padding: const EdgeInsets.symmetric(horizontal: 10),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFECFDF5),
-                      borderRadius: BorderRadius.circular(6),
-                      border: Border.all(color: const Color(0xFF25D366)),
-                    ),
-                    child: const Row(mainAxisSize: MainAxisSize.min, children: [
-                      Icon(Icons.send_outlined, size: 12, color: Color(0xFF128C7E)),
-                      SizedBox(width: 4),
-                      Text('Send', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF128C7E))),
-                    ]),
+              // Send button — stamps fresh per-supplier timer + opens WhatsApp
+              GestureDetector(
+                onTap: _inquiryLoading ? null : () => _sendPerSupplierDirect(supName),
+                behavior: HitTestBehavior.opaque,
+                child: Container(
+                  height: 30,
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFECFDF5),
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: const Color(0xFF25D366)),
                   ),
+                  child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                    Icon(Icons.send_outlined, size: 12, color: Color(0xFF128C7E)),
+                    SizedBox(width: 4),
+                    Text('Send', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF128C7E))),
+                  ]),
                 ),
               ),
             ]),

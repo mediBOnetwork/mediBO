@@ -14,7 +14,6 @@ import 'package:pharma_b2b/utils/toast.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart';
 import 'package:xml/xml.dart' as xmlp;
 
-import '../../supabase_config.dart';
 import '../../utils/render_log.dart';
 
 const _ocrEdgeFn =
@@ -1036,130 +1035,50 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     }
   }
 
-  // ── Admin set answer (mirrors submit_inquiry_form logic in Dart) ─────────
-  // All DDL paths are currently blocked (Management API 404, MCP permission denied,
-  // CLI needs DB password). We implement admin answer as direct REST API calls
-  // using the service role key, which bypasses RLS and runs at the db level.
-  // Triggers still fire on UPDATE, so inquiry_to_supplier_orders_trg cascades.
+  // ── Admin set answer via RPC ─────────────────────────────────────────────
+  // admin_set_inquiry_answer validates the caller is admin/super_admin (SECURITY
+  // DEFINER), writes the AS slot, and calls rebuild_all_supplier_orders() so
+  // supplier_orders is deterministically built without relying on triggers.
 
   Future<void> _adminSetInquiryAnswer({
     required int inquiryId,
     required String supplierName,
     required String answer,
-    required int slotIndex,
   }) async {
     if (mounted) setState(() => _settingAnswerFor.add(inquiryId));
     try {
-      final base = SupabaseConfig.url;
-
-      // 1. Write AS[n] — admin overwrite allowed (unlike public form)
-      final patchAs = await http.patch(
-        Uri.parse('$base/rest/v1/inquiry').replace(queryParameters: {'id': 'eq.$inquiryId'}),
-        headers: SupabaseConfig.svcWriteHeaders,
-        body: jsonEncode({'AS$slotIndex': answer}),
+      RenderLog.write('admin_answer_sending', '${supplierName}_${inquiryId}_$answer');
+      final result = await Supabase.instance.client.rpc(
+        'admin_set_inquiry_answer',
+        params: {
+          'p_inquiry_id':    inquiryId,
+          'p_supplier_name': supplierName,
+          'p_answer':        answer,
+        },
       );
-      if (patchAs.statusCode >= 300) {
-        throw Exception('Write AS failed (${patchAs.statusCode}): ${patchAs.body}');
+      final res = (result as Map<String, dynamic>?) ?? {};
+      if (res['error'] != null) {
+        final code = res['error'] as String;
+        final msg = switch (code) {
+          'not_authorized'             => 'Only admins can set responses.',
+          'invalid_answer'             => 'Invalid response value.',
+          'not_found'                  => 'Inquiry item not found (refresh).',
+          'no_supplier'                => 'No supplier to answer for this item.',
+          'supplier_not_in_inquiry'    => 'No supplier to answer for this item.',
+          _                            => 'Error: $code',
+        };
+        if (mounted) showToast(context, msg, isError: true);
+        // Re-fetch to show true state
+        if (mounted) await Future.wait([_fetchInquiryItems(supplierName), _fetchInquiryOverview(silent: true)]);
+        return;
       }
-
-      // 2. Re-read inquiry row to recompute current/next supplier
-      final readResp = await http.get(
-        Uri.parse('$base/rest/v1/inquiry').replace(queryParameters: {'select': '*', 'id': 'eq.$inquiryId'}),
-        headers: SupabaseConfig.svcReadHeaders,
-      );
-      if (readResp.statusCode != 200) throw Exception('Re-read failed: ${readResp.body}');
-      final rows = jsonDecode(readResp.body) as List;
-      if (rows.isEmpty) throw Exception('Inquiry row $inquiryId not found');
-      final row = Map<String, dynamic>.from(rows.first as Map);
-      final oldCurrent = row['current_supplier'] as String?;
-
-      // Recompute: scan PS1..PS30; current = 1st slot with null/empty or Available AS;
-      // next = 2nd such slot. (Same logic as submit_inquiry_form.)
-      String? newCurrent, newNext;
-      int found = 0;
-      for (int i = 1; i <= 30; i++) {
-        final ps = row['PS$i'] as String?;
-        final as_ = row['AS$i'] as String?;
-        if (ps == null || ps.trim().isEmpty) break;
-        if (as_ == null || as_.trim().isEmpty || as_ == 'Available') {
-          found++;
-          if (found == 1) newCurrent = ps;
-          else if (found == 2) { newNext = ps; break; }
-        }
-      }
-
-      // 3. Patch current_supplier / next_supplier / asked_at
-      final Map<String, dynamic> cascadeUpdate = {
-        'current_supplier': newCurrent,
-        'next_supplier': newNext,
-      };
-      if (newCurrent != oldCurrent) {
-        cascadeUpdate['asked_at'] = newCurrent != null
-            ? DateTime.now().toUtc().toIso8601String()
-            : null;
-      }
-      await http.patch(
-        Uri.parse('$base/rest/v1/inquiry').replace(queryParameters: {'id': 'eq.$inquiryId'}),
-        headers: SupabaseConfig.svcWriteHeaders,
-        body: jsonEncode(cascadeUpdate),
-      );
-
-      // 4. Mint / refresh token for newly-promoted current supplier
-      //    (reuse start_inquiry_for_suppliers which has the correct UPSERT logic)
-      if (newCurrent != null && newCurrent != oldCurrent) {
-        await Supabase.instance.client
-            .rpc('start_inquiry_for_suppliers', params: {'p_supplier_names': [newCurrent]});
-      }
-
-      // 5. Update inquiry_forms.status for the answering supplier
-      final relResp = await http.get(
-        Uri.parse('$base/rest/v1/inquiry').replace(queryParameters: {
-          'select': '*',
-          'or': '(current_supplier.eq.$supplierName,next_supplier.eq.$supplierName)',
-        }),
-        headers: SupabaseConfig.svcReadHeaders,
-      );
-      if (relResp.statusCode == 200) {
-        final relRows = jsonDecode(relResp.body) as List;
-        final relevantCt = relRows.length;
-        int answeredCt = 0;
-        for (final rRow in relRows) {
-          final r = Map<String, dynamic>.from(rRow as Map);
-          for (int i = 1; i <= 30; i++) {
-            final ps = r['PS$i'] as String?;
-            if (ps == null || ps.trim().isEmpty) break;
-            if (ps == supplierName) {
-              final as_ = r['AS$i'] as String?;
-              if (as_ != null && as_.trim().isNotEmpty) answeredCt++;
-              break;
-            }
-          }
-        }
-        String? newStatus;
-        if (relevantCt == 0 || answeredCt >= relevantCt) newStatus = 'responded';
-        else if (answeredCt > 0) newStatus = 'partially_responded';
-
-        if (newStatus != null) {
-          await http.patch(
-            Uri.parse('$base/rest/v1/inquiry_forms').replace(
-                queryParameters: {'supplier_name': 'eq.$supplierName'}),
-            headers: SupabaseConfig.svcWriteHeaders,
-            body: jsonEncode({
-              'last_responded_at': DateTime.now().toUtc().toIso8601String(),
-              'status': newStatus,
-            }),
-          );
-        }
-      }
-
-      RenderLog.write('admin_answer_set', '${supplierName}_${inquiryId}_$answer');
-
-      // Refresh items and overview so cascade reflects immediately
+      RenderLog.write('admin_answer_set', '${supplierName}_${inquiryId}_$answer:ok');
       if (mounted) {
         showToast(context, 'Response saved');
         await Future.wait([
           _fetchInquiryItems(supplierName),
           _fetchInquiryOverview(silent: true),
+          _refetchOrders(),
         ]);
       }
     } catch (e) {
@@ -1167,6 +1086,21 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     } finally {
       if (mounted) setState(() => _settingAnswerFor.remove(inquiryId));
     }
+  }
+
+  Future<void> _refetchOrders() async {
+    try {
+      final rows = await Supabase.instance.client
+          .from('supplier_orders')
+          .select()
+          .order('created_at', ascending: false) as List;
+      if (mounted) {
+        setState(() {
+          _orders = rows.map((r) => _OrderRow.fromMap(Map<String, dynamic>.from(r as Map))).toList();
+        });
+        RenderLog.write('supplier_orders_refreshed', _orders.length);
+      }
+    } catch (_) {}
   }
 
   // ── Inquiry tab: top-level view ───────────────────────────────────────────
@@ -1432,8 +1366,9 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     final mrp         = item['mrp'];
     final answer      = item['answer'] as String?;
     final inquiryId   = (item['inquiry_id'] as num).toInt();
-    final slotIndex   = (item['slot_index'] as num).toInt();
+    final slotIndex   = (item['slot_index'] as num?)?.toInt() ?? 0;
     final isCurrent   = role == 'current';
+    final noSupplier  = slotIndex <= 0 || role == 'none' || role == 'no_supplier';
     final isSetting   = _settingAnswerFor.contains(inquiryId);
 
     return Container(
@@ -1469,6 +1404,18 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
             width: 18, height: 18,
             child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF1B7A43)),
           )
+        else if (noSupplier)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF3F4F6),
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(color: const Color(0xFFD1D5DB)),
+            ),
+            child: const Text('No supplier available',
+                style: TextStyle(
+                    fontSize: 10, fontWeight: FontWeight.w500, color: Color(0xFF6B7280))),
+          )
         else
           Wrap(
             spacing: 5,
@@ -1485,7 +1432,6 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                   inquiryId: inquiryId,
                   supplierName: supplierName,
                   answer: opt,
-                  slotIndex: slotIndex,
                 ),
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),

@@ -173,10 +173,16 @@ class _ViewAsPickerDialogState extends State<_ViewAsPickerDialog> {
                                   trailing: const Icon(Icons.chevron_right, size: 18, color: Color(0xFF9CA3AF)),
                                   onTap: () {
                                     RenderLog.write('view_as_picked', '${widget.role.name}:$id');
+                                    // For customers, also capture user_id so OrdersScreen
+                                    // can scope to the impersonated customer's orders.
+                                    final userId = widget.role == ViewAsRole.customer
+                                        ? item['user_id'] as String?
+                                        : null;
                                     Navigator.pop(context, ViewAsIdentity(
                                       id: id,
                                       name: name.isNotEmpty ? name : email,
                                       email: email,
+                                      userId: userId,
                                     ));
                                   },
                                 );

@@ -206,7 +206,9 @@ class _HomeShellState extends State<HomeShell> {
 
     // View As (Dev): super-admin previewing another account's interface.
     // In-memory only — a page refresh returns to the real admin.
-    if (viewAs.isActive && auth.isSuperAdmin) {
+    final isCustomerViewAs = viewAs.isActive && auth.isSuperAdmin && viewAs.role == ViewAsRole.customer;
+
+    if (viewAs.isActive && auth.isSuperAdmin && !isCustomerViewAs) {
       final role = viewAs.role!;
       final identity = viewAs.identity!;
       RenderLog.write('view_as_active', '${role.name}:${identity.id}');
@@ -218,12 +220,12 @@ class _HomeShellState extends State<HomeShell> {
             viewAsSupplierId: identity.id,
             viewAsSupplierName: identity.name,
           );
-        case ViewAsRole.customer:
-          preview = _ViewAsCustomerPreview(identity: identity);
         case ViewAsRole.company:
           preview = _ViewAsCompanyPreview(identity: identity);
         case ViewAsRole.deliveryPartner:
           preview = _ViewAsDeliveryPartnerPreview(identity: identity);
+        case ViewAsRole.customer:
+          preview = const SizedBox.shrink(); // unreachable — handled below
       }
 
       return Column(children: [
@@ -237,6 +239,12 @@ class _HomeShellState extends State<HomeShell> {
         ),
         Expanded(child: preview),
       ]);
+    }
+
+    // Customer ViewAs: fall through to the real customer UI below.
+    // Banner is added by wrapping the LayoutBuilder result at the bottom of build().
+    if (isCustomerViewAs) {
+      RenderLog.write('view_as_active', 'customer:${viewAs.identity!.id}');
     }
 
     // Supplier: completely separate shell — takes priority after admin check
@@ -306,7 +314,7 @@ class _HomeShellState extends State<HomeShell> {
             onFooterOrders: () => _setIndex(1),
             onFooterCart: () => setState(() => _cartOpen = true),
           ),
-          const OrdersScreen(),
+          OrdersScreen(viewAsUserId: isCustomerViewAs ? viewAs.identity?.userId : null),
           BulkUploadScreen(key: _bulkUploadKey),
           // Admin-only pages: indices 3–7 (desktop only; built for admin users)
           // Kept alive in IndexedStack so no state loss on tab switch.
@@ -330,6 +338,19 @@ class _HomeShellState extends State<HomeShell> {
         final shell = isDesktop
             ? _buildDesktop(pages, onLogoTap, isAdmin)
             : _buildMobile(pages, onLogoTap, isAdmin);
+        if (isCustomerViewAs) {
+          return Column(children: [
+            _ViewAsBanner(
+              role: ViewAsRole.customer,
+              identity: viewAs.identity!,
+              onExit: () {
+                ViewAsState.read(context).exit();
+                RenderLog.write('view_as_active', 'none');
+              },
+            ),
+            Expanded(child: shell),
+          ]);
+        }
         if (!isAdmin) return shell;
         return AdminAlertOverlay(
           onOrderTap: () => _handleAdminNav('customers'),
@@ -675,6 +696,9 @@ class _MobileProfileAvatar extends StatelessWidget {
         ? profile!.displayName[0].toUpperCase()
         : null;
 
+    final viewAs = ViewAsState.of(context);
+    final isCustomerViewAs = viewAs.isActive && viewAs.role == ViewAsRole.customer;
+
     return PressEffect(
       scale: 0.92,
       child: GestureDetector(
@@ -682,6 +706,10 @@ class _MobileProfileAvatar extends StatelessWidget {
           if (!auth.isAuthenticated) {
             Navigator.push(context,
                 MaterialPageRoute(builder: (_) => const LoginScreen()));
+          } else if (isCustomerViewAs) {
+            // In customer ViewAs mode, show the impersonated customer's profile
+            Navigator.push(context,
+                MaterialPageRoute(builder: (_) => ProfileScreen(viewAsProfileId: viewAs.identity!.id)));
           } else if (onAdminNav != null) {
             _showAdminSheet(context, auth);
           } else {

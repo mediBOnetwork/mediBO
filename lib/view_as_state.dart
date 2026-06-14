@@ -6,10 +6,11 @@ const bool kEnableViewAs = true;
 enum ViewAsRole { customer, supplier, company, deliveryPartner }
 
 class ViewAsIdentity {
-  final String id;
+  final String id;     // table PK (pharmacy_profiles.id for customer)
   final String name;
   final String email;
-  const ViewAsIdentity({required this.id, required this.name, required this.email});
+  final String? userId; // auth.users.id — set for customer so orders can be scoped
+  const ViewAsIdentity({required this.id, required this.name, required this.email, this.userId});
 }
 
 class ViewAsNotifier extends ChangeNotifier {

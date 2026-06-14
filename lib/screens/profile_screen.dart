@@ -1,21 +1,68 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../models/user_profile.dart';
 import '../user_state.dart';
 import '../view_as_state.dart';
 import 'auth/business_details_screen.dart';
 import 'admin/view_as_picker_dialog.dart';
 
-class ProfileScreen extends StatelessWidget {
-  const ProfileScreen({super.key});
+class ProfileScreen extends StatefulWidget {
+  // When set (View As Customer), load THIS pharmacy_profiles.id instead of current user's.
+  final String? viewAsProfileId;
+  const ProfileScreen({super.key, this.viewAsProfileId});
+
+  @override
+  State<ProfileScreen> createState() => _ProfileScreenState();
+}
+
+class _ProfileScreenState extends State<ProfileScreen> {
+  Map<String, dynamic>? _viewAsProfileRow;
+  bool _viewAsLoading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.viewAsProfileId != null) _fetchViewAsProfile();
+  }
+
+  Future<void> _fetchViewAsProfile() async {
+    setState(() => _viewAsLoading = true);
+    try {
+      final res = await Supabase.instance.client
+          .from('pharmacy_profiles')
+          .select()
+          .eq('id', widget.viewAsProfileId!)
+          .maybeSingle();
+      if (mounted) setState(() { _viewAsProfileRow = res; _viewAsLoading = false; });
+    } catch (_) {
+      if (mounted) setState(() => _viewAsLoading = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
+    final isViewAs = widget.viewAsProfileId != null;
+
+    // In View As mode: use the fetched row; otherwise use the real auth profile.
     final auth = UserState.of(context);
-    final profile = auth.profile;
     final authUser = Supabase.instance.client.auth.currentUser;
-    final authEmail = authUser?.email ?? '';
-    final isRegistered = auth.isRegistered;
+
+    // Build a synthetic UserProfile-like read from the fetched row when viewing as customer.
+    final profile = isViewAs
+        ? (_viewAsProfileRow != null ? UserProfile.fromJson(_viewAsProfileRow!) : null)
+        : auth.profile;
+    final authEmail = isViewAs
+        ? (_viewAsProfileRow?['email'] as String? ?? '')
+        : (authUser?.email ?? '');
+    final isRegistered = isViewAs ? (profile != null) : auth.isRegistered;
+
+    if (isViewAs && _viewAsLoading) {
+      return const Scaffold(
+        backgroundColor: Color(0xFFF9FAFB),
+        body: Center(child: CircularProgressIndicator(color: Color(0xFF1B7A43))),
+      );
+    }
 
     return Scaffold(
       backgroundColor: const Color(0xFFF9FAFB),
@@ -386,11 +433,12 @@ class ProfileScreen extends StatelessWidget {
                   ),
                 ],
 
-                // View As (Dev) — super-admin only, build-phase gated
-                if (kEnableViewAs && auth.isSuperAdmin)
+                // View As (Dev) — super-admin only, build-phase gated; hidden in viewAs mode
+                if (!isViewAs && kEnableViewAs && auth.isSuperAdmin)
                   _ViewAsCard(),
 
-                // Logout button
+                // Logout button — hidden when viewing as another customer
+                if (!isViewAs)
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 24, 16, 40),
                   child: OutlinedButton.icon(

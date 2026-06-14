@@ -74,7 +74,9 @@ class _DbLine {
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
 class OrdersScreen extends StatefulWidget {
-  const OrdersScreen({super.key});
+  // When set (View As Customer), fetch orders for this user_id instead of currentUser.
+  final String? viewAsUserId;
+  const OrdersScreen({super.key, this.viewAsUserId});
 
   @override
   State<OrdersScreen> createState() => _OrdersScreenState();
@@ -100,7 +102,9 @@ class _OrdersScreenState extends State<OrdersScreen> {
 
   Future<void> _fetch() async {
     try {
-      final uid = Supabase.instance.client.auth.currentUser?.id;
+      // viewAsUserId is set when super-admin is previewing a customer's orders.
+      final uid = widget.viewAsUserId
+          ?? Supabase.instance.client.auth.currentUser?.id;
       if (uid == null) {
         if (mounted) setState(() => _loading = false);
         return;
@@ -121,6 +125,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
   }
 
   void _subscribeRealtime() {
+    if (widget.viewAsUserId != null) return; // no realtime in view-as mode
     final uid = Supabase.instance.client.auth.currentUser?.id;
     if (uid == null) return;
     _channel = Supabase.instance.client

@@ -2599,35 +2599,12 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
             Padding(
               padding: const EdgeInsets.all(14),
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Row(children: [
-                  Expanded(child: Text(
-                      row.supplierName.isNotEmpty ? row.supplierName : row.contactName.isNotEmpty ? row.contactName : 'Unknown',
-                      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF111827)),
-                      overflow: TextOverflow.ellipsis)),
-                  const SizedBox(width: 8),
-                  GestureDetector(
-                    onTap: () => _toggleSpn(row.id),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: _spnSupplierId == row.id ? const Color(0xFFDBEAFE) : Colors.white,
-                        borderRadius: BorderRadius.circular(5),
-                        border: Border.all(color: _spnSupplierId == row.id ? const Color(0xFF93C5FD) : const Color(0xFFD1D5DB)),
-                      ),
-                      child: const Text('SPN', style: TextStyle(
-                          fontSize: 10, fontWeight: FontWeight.w700, color: Color(0xFF374151))),
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                  GestureDetector(
-                    onTap: () => _toggleCompanies(row.id),
-                    behavior: HitTestBehavior.opaque,
-                    child: _SupplierCompaniesButton(
-                      count: _companyCounts[row.id] ?? 0,
-                      isOpen: _companiesSupplierId == row.id,
-                    ),
-                  ),
-                  const SizedBox(width: 6),
+                Builder(builder: (_) {
+                  RenderLog.write('supplier_card_restructured', 'true');
+                  return const SizedBox.shrink();
+                }),
+                // Name line: [Active pill] [Full supplier name]
+                Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
                   _StatusPill(
                     key: ValueKey('status_${row.id}'),
                     supplierId: row.id,
@@ -2637,12 +2614,13 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                       if (mounted) setState(() { _hasPendingChanges = true; });
                     },
                   ),
-                  const SizedBox(width: 4),
-                  AnimatedRotation(
-                    turns: isExpanded ? 0.5 : 0.0,
-                    duration: const Duration(milliseconds: 200),
-                    child: const Icon(Icons.expand_more, size: 18, color: Color(0xFF9CA3AF)),
-                  ),
+                  const SizedBox(width: 8),
+                  Expanded(child: Text(
+                    row.supplierName.isNotEmpty ? row.supplierName : row.contactName.isNotEmpty ? row.contactName : 'Unknown',
+                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF111827)),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  )),
                 ]),
                 if (row.contactName.isNotEmpty) ...[const SizedBox(height: 3), Text(row.contactName, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)), overflow: TextOverflow.ellipsis)],
                 if (row.phone.isNotEmpty) ...[const SizedBox(height: 2), Text(row.phone, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)))],
@@ -2653,7 +2631,28 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                   if (row.city.isNotEmpty)          _mobileField('City', [row.city, row.state].where((s) => s.isNotEmpty).join(', ')),
                 ]),
                 const SizedBox(height: 12),
+                // Last action row: [SPN] [Companies (N)] [Edit] [Delete]
                 Wrap(spacing: 8, runSpacing: 6, children: [
+                  GestureDetector(
+                    onTap: () => _toggleSpn(row.id),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                      decoration: BoxDecoration(
+                        color: _spnSupplierId == row.id ? const Color(0xFFDBEAFE) : Colors.white,
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(color: _spnSupplierId == row.id ? const Color(0xFF93C5FD) : const Color(0xFFD1D5DB)),
+                      ),
+                      child: const Text('SPN', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF374151))),
+                    ),
+                  ),
+                  GestureDetector(
+                    onTap: () => _toggleCompanies(row.id),
+                    behavior: HitTestBehavior.opaque,
+                    child: _SupplierCompaniesButton(
+                      count: _companyCounts[row.id] ?? 0,
+                      isOpen: _companiesSupplierId == row.id,
+                    ),
+                  ),
                   _actionBtn('Edit',   const Color(0xFF1B7A43), () => _editSupplier(row)),
                   _actionBtn('Delete', const Color(0xFFDC2626), () => _deleteSupplier(row)),
                 ]),

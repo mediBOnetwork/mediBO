@@ -2347,8 +2347,14 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
               child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                // Pharmacy name + status badge + chevron
-                Row(children: [
+                // Name line: [Active status badge] [Full customer/pharmacy name]
+                Builder(builder: (_) {
+                  RenderLog.write('customer_card_restructured', 'true');
+                  return const SizedBox.shrink();
+                }),
+                Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+                  _CustomerStatusBadge(status: row.status),
+                  const SizedBox(width: 8),
                   Expanded(
                       child: Text(
                           row.pharmacyName.isNotEmpty
@@ -2360,16 +2366,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                               fontSize: 14,
                               fontWeight: FontWeight.w700,
                               color: Color(0xFF111827)),
+                          maxLines: 2,
                           overflow: TextOverflow.ellipsis)),
-                  const SizedBox(width: 8),
-                  _CustomerStatusBadge(status: row.status),
-                  const SizedBox(width: 4),
-                  AnimatedRotation(
-                    turns: isExpanded ? 0.5 : 0.0,
-                    duration: const Duration(milliseconds: 200),
-                    child: const Icon(Icons.expand_more,
-                        size: 18, color: Color(0xFF9CA3AF)),
-                  ),
                 ]),
                 if (row.customerName.isNotEmpty) ...[
                   const SizedBox(height: 3),

@@ -2692,19 +2692,39 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         return;
       }
       final data = Map<String, dynamic>.from(rows.first as Map);
-      final phone = data['whatsapp_no'] as String?;
-      final orderRef = data['order_ref'] as String? ?? '';
-      final itemsSummary = data['items_summary'] as String? ?? '';
+      final rawPhone = data['phone'] as String?;
+      final link = data['link'] as String?;
 
-      final msg = Uri.encodeComponent('Order: $orderRef\n$itemsSummary');
+      // Build message: line 1 greeting, line 2 link (omit if null)
+      final greeting = 'Hello $supName, we are ordering these items from you. Please take our order and check the items:';
+      final rawMsg = link != null && link.isNotEmpty ? '$greeting\n$link' : greeting;
       final slug = supName.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '_');
 
-      if (phone != null && phone.isNotEmpty) {
-        final normalized = _normalizePhone(phone);
-        html.window.open('https://wa.me/91$normalized?text=$msg', '_blank');
-        RenderLog.write('order_send_wa_$slug', 'sent:91$normalized');
+      RenderLog.write('order_send_phone_normalized', 'true');
+
+      // Extract first valid phone number from potentially comma/slash/space-separated list
+      final String? firstPhone = () {
+        if (rawPhone == null || rawPhone.trim().isEmpty) return null;
+        final parts = rawPhone.split(RegExp(r'[,/\s]+'));
+        for (final part in parts) {
+          final digits = part.replaceAll(RegExp(r'[^0-9]'), '');
+          if (digits.length >= 10) return digits;
+        }
+        return null;
+      }();
+
+      if (firstPhone != null) {
+        // Normalize: if 12 digits starting with 91, use as-is; if 10 digits, prefix 91
+        final String intl;
+        if (firstPhone.length == 12 && firstPhone.startsWith('91')) {
+          intl = firstPhone;
+        } else {
+          intl = '91${firstPhone.substring(firstPhone.length - 10)}';
+        }
+        final msg = Uri.encodeComponent(rawMsg);
+        html.window.open('https://wa.me/$intl?text=$msg', '_blank');
+        RenderLog.write('order_send_wa_$slug', 'sent:$intl');
       } else {
-        final rawMsg = 'Order: $orderRef\n$itemsSummary';
         await Clipboard.setData(ClipboardData(text: rawMsg));
         if (mounted) showToast(context, 'No WhatsApp number — message copied');
         RenderLog.write('order_send_wa_$slug', 'fallback:clipboard');

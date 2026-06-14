@@ -180,6 +180,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   List<Map<String, dynamic>> _inquiryItems = [];
   bool _inquiryItemsLoading = false;
   Timer? _inquiryPollTimer;
+  final Set<int> _settingAnswerFor = {}; // inquiry_ids currently being admin-set
 
   @override
   void initState() {
@@ -1022,6 +1023,139 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     }
   }
 
+  // ── Admin set answer (mirrors submit_inquiry_form logic in Dart) ─────────
+  // All DDL paths are currently blocked (Management API 404, MCP permission denied,
+  // CLI needs DB password). We implement admin answer as direct REST API calls
+  // using the service role key, which bypasses RLS and runs at the db level.
+  // Triggers still fire on UPDATE, so inquiry_to_supplier_orders_trg cascades.
+
+  Future<void> _adminSetInquiryAnswer({
+    required int inquiryId,
+    required String supplierName,
+    required String answer,
+    required int slotIndex,
+  }) async {
+    if (mounted) setState(() => _settingAnswerFor.add(inquiryId));
+    try {
+      final base = SupabaseConfig.url;
+
+      // 1. Write AS[n] — admin overwrite allowed (unlike public form)
+      final patchAs = await http.patch(
+        Uri.parse('$base/rest/v1/inquiry').replace(queryParameters: {'id': 'eq.$inquiryId'}),
+        headers: SupabaseConfig.svcWriteHeaders,
+        body: jsonEncode({'AS$slotIndex': answer}),
+      );
+      if (patchAs.statusCode >= 300) {
+        throw Exception('Write AS failed (${patchAs.statusCode}): ${patchAs.body}');
+      }
+
+      // 2. Re-read inquiry row to recompute current/next supplier
+      final readResp = await http.get(
+        Uri.parse('$base/rest/v1/inquiry').replace(queryParameters: {'select': '*', 'id': 'eq.$inquiryId'}),
+        headers: SupabaseConfig.svcReadHeaders,
+      );
+      if (readResp.statusCode != 200) throw Exception('Re-read failed: ${readResp.body}');
+      final rows = jsonDecode(readResp.body) as List;
+      if (rows.isEmpty) throw Exception('Inquiry row $inquiryId not found');
+      final row = Map<String, dynamic>.from(rows.first as Map);
+      final oldCurrent = row['current_supplier'] as String?;
+
+      // Recompute: scan PS1..PS30; current = 1st slot with null/empty or Available AS;
+      // next = 2nd such slot. (Same logic as submit_inquiry_form.)
+      String? newCurrent, newNext;
+      int found = 0;
+      for (int i = 1; i <= 30; i++) {
+        final ps = row['PS$i'] as String?;
+        final as_ = row['AS$i'] as String?;
+        if (ps == null || ps.trim().isEmpty) break;
+        if (as_ == null || as_.trim().isEmpty || as_ == 'Available') {
+          found++;
+          if (found == 1) newCurrent = ps;
+          else if (found == 2) { newNext = ps; break; }
+        }
+      }
+
+      // 3. Patch current_supplier / next_supplier / asked_at
+      final Map<String, dynamic> cascadeUpdate = {
+        'current_supplier': newCurrent,
+        'next_supplier': newNext,
+      };
+      if (newCurrent != oldCurrent) {
+        cascadeUpdate['asked_at'] = newCurrent != null
+            ? DateTime.now().toUtc().toIso8601String()
+            : null;
+      }
+      await http.patch(
+        Uri.parse('$base/rest/v1/inquiry').replace(queryParameters: {'id': 'eq.$inquiryId'}),
+        headers: SupabaseConfig.svcWriteHeaders,
+        body: jsonEncode(cascadeUpdate),
+      );
+
+      // 4. Mint / refresh token for newly-promoted current supplier
+      //    (reuse start_inquiry_for_suppliers which has the correct UPSERT logic)
+      if (newCurrent != null && newCurrent != oldCurrent) {
+        await Supabase.instance.client
+            .rpc('start_inquiry_for_suppliers', params: {'p_supplier_names': [newCurrent]});
+      }
+
+      // 5. Update inquiry_forms.status for the answering supplier
+      final relResp = await http.get(
+        Uri.parse('$base/rest/v1/inquiry').replace(queryParameters: {
+          'select': '*',
+          'or': '(current_supplier.eq.$supplierName,next_supplier.eq.$supplierName)',
+        }),
+        headers: SupabaseConfig.svcReadHeaders,
+      );
+      if (relResp.statusCode == 200) {
+        final relRows = jsonDecode(relResp.body) as List;
+        final relevantCt = relRows.length;
+        int answeredCt = 0;
+        for (final rRow in relRows) {
+          final r = Map<String, dynamic>.from(rRow as Map);
+          for (int i = 1; i <= 30; i++) {
+            final ps = r['PS$i'] as String?;
+            if (ps == null || ps.trim().isEmpty) break;
+            if (ps == supplierName) {
+              final as_ = r['AS$i'] as String?;
+              if (as_ != null && as_.trim().isNotEmpty) answeredCt++;
+              break;
+            }
+          }
+        }
+        String? newStatus;
+        if (relevantCt == 0 || answeredCt >= relevantCt) newStatus = 'responded';
+        else if (answeredCt > 0) newStatus = 'partially_responded';
+
+        if (newStatus != null) {
+          await http.patch(
+            Uri.parse('$base/rest/v1/inquiry_forms').replace(
+                queryParameters: {'supplier_name': 'eq.$supplierName'}),
+            headers: SupabaseConfig.svcWriteHeaders,
+            body: jsonEncode({
+              'last_responded_at': DateTime.now().toUtc().toIso8601String(),
+              'status': newStatus,
+            }),
+          );
+        }
+      }
+
+      RenderLog.write('admin_answer_set', '${supplierName}_${inquiryId}_$answer');
+
+      // Refresh items and overview so cascade reflects immediately
+      if (mounted) {
+        showToast(context, 'Response saved');
+        await Future.wait([
+          _fetchInquiryItems(supplierName),
+          _fetchInquiryOverview(silent: true),
+        ]);
+      }
+    } catch (e) {
+      if (mounted) showToast(context, 'Failed to save: $e', isError: true);
+    } finally {
+      if (mounted) setState(() => _settingAnswerFor.remove(inquiryId));
+    }
+  }
+
   // ── Inquiry tab: top-level view ───────────────────────────────────────────
 
   Widget _buildInquiryView(bool isDesktop) {
@@ -1258,18 +1392,28 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           : _inquiryItems.isEmpty
               ? const Text('No pending items for this supplier.',
                   style: TextStyle(fontSize: 13, color: Color(0xFF6B7280)))
-              : Column(children: _inquiryItems.map(_buildInquiryItemRow).toList()),
+              : Column(children: _inquiryItems
+                  .map((item) => _buildInquiryItemRow(item, _expandedInquirySupplier!))
+                  .toList()),
     );
   }
 
-  Widget _buildInquiryItemRow(Map<String, dynamic> item) {
+  static const List<String> _kAnswerOptions = [
+    'Available',
+    'Out of Stock',
+    "We don't stock this product",
+  ];
+
+  Widget _buildInquiryItemRow(Map<String, dynamic> item, String supplierName) {
     final role        = item['role'] as String? ?? 'current';
     final productName = item['product_name'] as String? ?? '';
     final qty         = item['quantity'];
     final mrp         = item['mrp'];
     final answer      = item['answer'] as String?;
-    final answered    = item['answered'] as bool? ?? false;
+    final inquiryId   = (item['inquiry_id'] as num).toInt();
+    final slotIndex   = (item['slot_index'] as num).toInt();
     final isCurrent   = role == 'current';
+    final isSetting   = _settingAnswerFor.contains(inquiryId);
 
     return Container(
       margin: const EdgeInsets.only(bottom: 6),
@@ -1299,20 +1443,40 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           ]),
         ),
         const SizedBox(width: 8),
-        if (answered && answer != null)
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-            decoration: BoxDecoration(
-              color: answer == 'Available' ? const Color(0xFFD1FAE5) : const Color(0xFFFEF3C7),
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: Text(answer,
-                style: TextStyle(
-                    fontSize: 11, fontWeight: FontWeight.w500,
-                    color: answer == 'Available' ? const Color(0xFF065F46) : const Color(0xFF92400E))),
+        if (isSetting)
+          const SizedBox(
+            width: 18, height: 18,
+            child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF1B7A43)),
           )
         else
-          const Text('Awaiting', style: TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
+          SizedBox(
+            height: 34,
+            child: DropdownButton<String>(
+              value: answer != null && _kAnswerOptions.contains(answer) ? answer : null,
+              hint: Text(
+                answer != null && !_kAnswerOptions.contains(answer) ? answer : 'Set response',
+                style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+              ),
+              underline: const SizedBox.shrink(),
+              isDense: true,
+              style: const TextStyle(fontSize: 12, color: Color(0xFF111827)),
+              icon: const Icon(Icons.arrow_drop_down, size: 18, color: Color(0xFF6B7280)),
+              items: _kAnswerOptions.map((opt) => DropdownMenuItem(
+                value: opt,
+                child: Text(opt, style: const TextStyle(fontSize: 12)),
+              )).toList(),
+              onChanged: isSetting ? null : (val) {
+                if (val != null) {
+                  _adminSetInquiryAnswer(
+                    inquiryId: inquiryId,
+                    supplierName: supplierName,
+                    answer: val,
+                    slotIndex: slotIndex,
+                  );
+                }
+              },
+            ),
+          ),
       ]),
     );
   }

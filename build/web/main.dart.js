@@ -143683,7 +143683,7 @@ s=6
 return A.i(j.cL(i,h,t.z),$async$FR)
 case 6:l=e.a(c)
 if(n.c!=null){n.p(new A.aOm(n,l))
-A.aJ("supplier_inquiry_items",n.d.length)}o.push(5)
+A.aJ("supplier_inquiry_rows_"+n.d.length,"true")}o.push(5)
 s=4
 break
 case 3:q=2
@@ -143752,8 +143752,8 @@ return A.q($async$DQ,r)},
 E(a){var s,r,q,p=this,o=null,n=A.bW(a,o,t.w).w
 if(p.e)return B.ld
 s=p.d.length
-if(s===0)return A.bU(A.M(A.b([B.a9D,B.a7,B.aCK,B.b4,B.aEi,B.a2,A.vb(B.m_,B.nh,new A.aOo(p),A.hd(o,o,o,o,o,o,o,o,o,B.r,o,o,o,o,o,B.bt,o,o,o,o))],t.p),B.j,B.bW,B.h),o,o)
-n=n.a.a>=900?24:12
+if(s===0){A.aJ("supplier_inquiry_empty_state","true")
+return A.bU(A.M(A.b([B.a9D,B.a7,B.aCK,B.b4,B.aEi,B.a2,A.vb(B.m_,B.nh,new A.aOo(p),A.hd(o,o,o,o,o,o,o,o,o,B.r,o,o,o,o,o,B.bt,o,o,o,o))],t.p),B.j,B.bW,B.h),o,o)}n=n.a.a>=900?24:12
 r=s===1?"":"s"
 q=t.p
 q=A.b([A.R(A.b([A.l(""+s+" item"+r,o,o,o,o,o,B.yA,o,o,o),B.bQ,A.w6(B.m_,B.nh,new A.aOp(p),A.jq(o,o,o,o,o,o,o,o,o,B.r,o,o,o,o,o,o,o,o,o,o))],q),B.j,B.d,B.h,0),B.Z],q)

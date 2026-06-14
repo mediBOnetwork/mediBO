@@ -41,7 +41,7 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen> {
         setState(() {
           _items = res.map((r) => Map<String, dynamic>.from(r as Map)).toList();
         });
-        RenderLog.write('supplier_inquiry_items', _items.length);
+        RenderLog.write('supplier_inquiry_rows_${_items.length}', 'true');
       }
     } catch (e) {
       RenderLog.write('supplier_inquiry_error', e.toString());
@@ -89,6 +89,7 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen> {
     }
 
     if (_items.isEmpty) {
+      RenderLog.write('supplier_inquiry_empty_state', 'true');
       return Center(
         child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
           const Icon(Icons.check_circle_outline, size: 56, color: Color(0xFFD1FAE5)),

@@ -668,11 +668,40 @@ class _ViewAsCard extends StatelessWidget {
 
   Future<void> _pick(BuildContext context, ViewAsRole role) async {
     final identity = await showViewAsPicker(context, role);
-    if (identity != null && context.mounted) {
-      ViewAsState.read(context).activate(role, identity);
-      // Close profile screen — home_shell will re-route to preview
-      Navigator.of(context).popUntil((r) => r.isFirst);
-    }
+    if (identity == null || !context.mounted) return;
+    // Warn: writes are now LIVE
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(children: [
+          const Icon(Icons.warning_amber_rounded, color: Color(0xFFD97706), size: 22),
+          const SizedBox(width: 8),
+          Expanded(child: Text('Act as ${identity.name}?',
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700))),
+        ]),
+        content: Text(
+          'Any changes (cart, orders, profile) will be SAVED to '
+          '${identity.name}\'s real account.\n\nThis cannot be undone.',
+          style: const TextStyle(fontSize: 14),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(backgroundColor: const Color(0xFFD97706)),
+            child: const Text('Continue — I understand'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+    ViewAsState.read(context).activate(role, identity);
+    // Close profile screen — home_shell will re-route to preview
+    Navigator.of(context).popUntil((r) => r.isFirst);
   }
 
   @override

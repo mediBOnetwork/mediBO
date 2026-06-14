@@ -51,16 +51,15 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen> {
   }
 
   Future<void> _answer(int inquiryId, String answer) async {
-    if (widget.viewAsSupplierId != null) {
-      showToast(context, 'Read-only in View As preview', isError: true);
-      return;
-    }
     setState(() => _answering.add(inquiryId));
     try {
-      final res = await Supabase.instance.client.rpc(
-        'supplier_answer_inquiry',
-        params: {'p_inquiry_id': inquiryId, 'p_answer': answer},
-      ) as Map;
+      final rpcName = widget.viewAsSupplierId != null
+          ? 'admin_writeas_supplier_answer'
+          : 'supplier_answer_inquiry';
+      final params = widget.viewAsSupplierId != null
+          ? {'p_supplier_id': widget.viewAsSupplierId!, 'p_inquiry_id': inquiryId, 'p_answer': answer}
+          : {'p_inquiry_id': inquiryId, 'p_answer': answer};
+      final res = await Supabase.instance.client.rpc(rpcName, params: params) as Map;
       if (res['error'] != null) {
         final err = res['error'] as String;
         if (mounted) {

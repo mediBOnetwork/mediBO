@@ -3389,7 +3389,7 @@ class _DesktopProfileButton extends StatelessWidget {
         } else if (val == 'logout') {
           if (isCustomerViewAs) {
             if (context.mounted) {
-              showToast(context, 'Read-only in View As preview — Exit to sign out', isError: true);
+              showToast(context, 'Exit View As first, then sign out.', isError: true);
             }
           } else {
             await UserState.read(context).signOut();
@@ -4114,22 +4114,22 @@ class _ViewAsBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: const Color(0xFFFEF3C7),
+      color: const Color(0xFFFEF2F2), // light red — writes are LIVE
       child: Container(
         width: double.infinity,
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         decoration: const BoxDecoration(
-          border: Border(bottom: BorderSide(color: Color(0xFFFCD34D))),
+          border: Border(bottom: BorderSide(color: Color(0xFFFCA5A5))),
         ),
         child: Row(
           children: [
-            const Icon(Icons.preview_outlined, size: 16, color: Color(0xFFD97706)),
-            const SizedBox(width: 8),
+            const Icon(Icons.warning_amber_rounded, size: 16, color: Color(0xFFDC2626)),
+            const SizedBox(width: 6),
             Expanded(
               child: Text(
-                'Viewing as $_roleLabel: ${identity.name}',
+                '⚠ Acting as $_roleLabel: ${identity.name} — changes are SAVED to their account',
                 style: const TextStyle(
-                  fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF92400E),
+                  fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF991B1B),
                 ),
                 overflow: TextOverflow.ellipsis,
               ),
@@ -4137,7 +4137,7 @@ class _ViewAsBanner extends StatelessWidget {
             TextButton(
               onPressed: onExit,
               style: TextButton.styleFrom(
-                foregroundColor: const Color(0xFFD97706),
+                foregroundColor: const Color(0xFFDC2626),
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
                 minimumSize: Size.zero,
                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,

@@ -256,13 +256,8 @@ class _CartControlState extends State<_CartControl>
     //   if (!mounted) return;
     //   if (!UserState.read(context).isAuthenticated) return;
     // }
-    final cart = AppState.of(context);
-    if (cart.isViewAs) {
-      showToast(context, 'Read-only in View As preview');
-      return;
-    }
     _popCtrl.forward(from: 0);
-    cart.add(widget.product);
+    AppState.of(context).add(widget.product);
     MedicineRepository().incrementSalesCount(widget.product.id);
   }
 
@@ -989,10 +984,7 @@ class _QuantityStepperState extends State<_QuantityStepper> {
               MouseRegion(
                 cursor: SystemMouseCursors.click,
                 child: GestureDetector(
-                  onTap: () {
-                    if (cart.isViewAs) { showToast(context, 'Read-only in View As preview'); return; }
-                    cart.decrement(widget.product);
-                  },
+                  onTap: () => cart.decrement(widget.product),
                   child: const SizedBox(
                     width: 44,
                     child: Center(
@@ -1067,10 +1059,7 @@ class _QuantityStepperState extends State<_QuantityStepper> {
               MouseRegion(
                 cursor: SystemMouseCursors.click,
                 child: GestureDetector(
-                  onTap: () {
-                    if (cart.isViewAs) { showToast(context, 'Read-only in View As preview'); return; }
-                    cart.increment(widget.product);
-                  },
+                  onTap: () => cart.increment(widget.product),
                   child: const SizedBox(
                     width: 44,
                     child: Center(
@@ -1101,10 +1090,7 @@ class _QuantityStepperState extends State<_QuantityStepper> {
                   cursor: SystemMouseCursors.click,
                   child: GestureDetector(
                     behavior: HitTestBehavior.opaque,
-                    onTap: () {
-                      if (cart.isViewAs) { showToast(context, 'Read-only in View As preview'); return; }
-                      cart.decrement(widget.product);
-                    },
+                    onTap: () => cart.decrement(widget.product),
                     child: const SizedBox.expand(),
                   ),
                 ),
@@ -1124,10 +1110,7 @@ class _QuantityStepperState extends State<_QuantityStepper> {
                   cursor: SystemMouseCursors.click,
                   child: GestureDetector(
                     behavior: HitTestBehavior.opaque,
-                    onTap: () {
-                      if (cart.isViewAs) { showToast(context, 'Read-only in View As preview'); return; }
-                      cart.increment(widget.product);
-                    },
+                    onTap: () => cart.increment(widget.product),
                     child: const SizedBox.expand(),
                   ),
                 ),

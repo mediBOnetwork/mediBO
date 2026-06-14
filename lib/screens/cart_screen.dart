@@ -3,11 +3,13 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:pharma_b2b/utils/toast.dart';
 
 import '../app_state.dart';
+import '../utils/render_log.dart';
 import '../models/cart_model.dart';
 import '../models/product.dart';
 import '../theme.dart';
 import '../user_state.dart';
 import '../util.dart';
+import '../view_as_state.dart';
 import '../widgets/animations.dart';
 import 'auth/login_screen.dart';
 
@@ -27,10 +29,87 @@ class _CartScreenState extends State<CartScreen> {
     if (_orderInProgress) return;
 
     final cart = AppState.of(context);
-    if (cart.isViewAs) {
-      showToast(context, 'Read-only in View As preview', isError: true);
+    final viewAs = ViewAsState.of(context);
+
+    // ── ViewAs: place a real order for the impersonated customer ────────────
+    if (cart.isViewAs && viewAs.isActive && viewAs.role == ViewAsRole.customer) {
+      if (cart.lines.isEmpty) return;
+      final name = viewAs.identity?.name ?? 'this customer';
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Place a REAL order?',
+              style: TextStyle(fontWeight: FontWeight.w700)),
+          content: Text(
+              'This will create a real order for $name.\nIt cannot be undone.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              style: FilledButton.styleFrom(backgroundColor: const Color(0xFFD97706)),
+              child: const Text('Yes, Place Order'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+
+      setState(() => _orderInProgress = true);
+      try {
+        final customerId = viewAs.identity?.userId;
+        if (customerId == null) {
+          showToast(context, 'Customer id missing for ViewAs order', isError: true);
+          return;
+        }
+        final netPayable = cart.netPayable;
+        final orderNumber = _generateOrderNumber();
+        final items = cart.lines.map((l) => {
+          'product_name': l.product.name,
+          'quantity':     l.quantity,
+          'price':        l.product.b2bPrice,
+          'mrp':          l.product.mrp,
+          'gst_percent':  l.product.gstPercent,
+          'line_total':   l.lineTotal,
+        }).toList();
+        final orderId = await Supabase.instance.client.rpc(
+          'admin_writeas_place_order',
+          params: {
+            'p_user_id':       customerId,
+            'p_pharmacy_name': viewAs.identity!.name,
+            'p_phone':         '',
+            'p_address':       '',
+            'p_items':         items,
+            'p_total_amount':  netPayable,
+            'p_payment_id':    orderNumber,
+          },
+        );
+        RenderLog.write('view_as_order_placed',
+            'order:$orderId:customer:$customerId:total:${netPayable.toStringAsFixed(0)}');
+        if (!mounted) return;
+        cart.clear(); // clears via admin_writeas_cart_clear
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (_) => _OrderPlacedDialog(
+            orderNumber: orderNumber,
+            amount: rupees(netPayable),
+            onDone: () {
+              Navigator.of(context).pop();
+              widget.onOrderPlaced?.call();
+            },
+          ),
+        );
+      } catch (e) {
+        if (mounted) showToast(context, 'Could not place order: $e', isError: true);
+      } finally {
+        if (mounted) setState(() => _orderInProgress = false);
+      }
       return;
     }
+    // ── Normal (non-ViewAs) flow ─────────────────────────────────────────────
 
     final auth = UserState.read(context);
     if (!auth.isAuthenticated) {
@@ -523,10 +602,7 @@ class _CartItemCard extends StatelessWidget {
                           ],
                           const SizedBox(width: 6),
                           GestureDetector(
-                            onTap: () {
-                              if (cart.isViewAs) { showToast(context, 'Read-only in View As preview', isError: true); return; }
-                              cart.remove(p);
-                            },
+                            onTap: () => cart.remove(p),
                             child: Container(
                               width: 22,
                               height: 22,
@@ -914,10 +990,7 @@ class _CartStepperState extends State<_CartStepper> {
                     cursor: SystemMouseCursors.click,
                     child: GestureDetector(
                       behavior: HitTestBehavior.opaque,
-                      onTap: () {
-                        if (widget.cart.isViewAs) { showToast(context, 'Read-only in View As preview', isError: true); return; }
-                        widget.cart.decrement(widget.product);
-                      },
+                      onTap: () => widget.cart.decrement(widget.product),
                     ),
                   ),
                 ),
@@ -930,10 +1003,7 @@ class _CartStepperState extends State<_CartStepper> {
                     cursor: SystemMouseCursors.click,
                     child: GestureDetector(
                       behavior: HitTestBehavior.opaque,
-                      onTap: () {
-                        if (widget.cart.isViewAs) { showToast(context, 'Read-only in View As preview', isError: true); return; }
-                        widget.cart.increment(widget.product);
-                      },
+                      onTap: () => widget.cart.increment(widget.product),
                     ),
                   ),
                 ),

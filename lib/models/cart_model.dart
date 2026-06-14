@@ -98,6 +98,53 @@ class CartModel extends ChangeNotifier {
     await _loadFromSupabase();
   }
 
+  Future<void> _viewAsUpsert(Product product, int quantity) async {
+    try {
+      await Supabase.instance.client.rpc('admin_writeas_cart_upsert', params: {
+        'p_user_id':      _viewAsUserId!,
+        'p_product_id':   product.id,
+        'p_product_name': product.name,
+        'p_price':        product.b2bPrice,
+        'p_mrp':          product.mrp,
+        'p_quantity':     quantity,
+        'p_image_url':    product.imageUrl,
+        'p_manufacturer': product.manufacturer,
+        'p_pack_size':    product.packSize,
+        'p_category':     product.category,
+        'p_gst_percent':  product.gstPercent.toInt(),
+      });
+      RenderLog.write('view_as_cart_write', 'upsert:${product.id}:qty:$quantity');
+    } catch (e) {
+      RenderLog.write('view_as_cart_write_error', '$e');
+    }
+    await _loadFromSupabase();
+  }
+
+  Future<void> _viewAsRemove(String productId) async {
+    try {
+      await Supabase.instance.client.rpc('admin_writeas_cart_remove', params: {
+        'p_user_id':    _viewAsUserId!,
+        'p_product_id': productId,
+      });
+      RenderLog.write('view_as_cart_write', 'remove:$productId');
+    } catch (e) {
+      RenderLog.write('view_as_cart_write_error', '$e');
+    }
+    await _loadFromSupabase();
+  }
+
+  Future<void> _viewAsClear() async {
+    try {
+      await Supabase.instance.client.rpc('admin_writeas_cart_clear', params: {
+        'p_user_id': _viewAsUserId!,
+      });
+      RenderLog.write('view_as_cart_write', 'clear');
+    } catch (e) {
+      RenderLog.write('view_as_cart_write_error', '$e');
+    }
+    await _loadFromSupabase();
+  }
+
   CartModel() {
     _initPersistence();
   }
@@ -644,7 +691,21 @@ class CartModel extends ChangeNotifier {
   // ── Public API ────────────────────────────────────────────────────────────
 
   void add(Product product) {
-    if (isViewAs) return;
+    if (isViewAs) {
+      final existing = _lines[product.id];
+      final int qty;
+      if (existing == null) {
+        qty = product.moq;
+        _lines[product.id] = CartLine(product, qty);
+      } else {
+        existing.quantity += 1;
+        qty = existing.quantity;
+      }
+      _recomputeTotals();
+      notifyListeners();
+      _viewAsUpsert(product, qty);
+      return;
+    }
     final existing = _lines[product.id];
     final int qty;
     if (existing == null) {
@@ -660,7 +721,25 @@ class CartModel extends ChangeNotifier {
   }
 
   void setQuantity(Product product, int qty) {
-    if (isViewAs) return;
+    if (isViewAs) {
+      if (qty <= 0) {
+        _lines.remove(product.id);
+        _recomputeTotals();
+        notifyListeners();
+        _viewAsRemove(product.id);
+      } else {
+        final line = _lines[product.id];
+        if (line == null) {
+          _lines[product.id] = CartLine(product, qty);
+        } else {
+          line.quantity = qty;
+        }
+        _recomputeTotals();
+        notifyListeners();
+        _viewAsUpsert(product, qty);
+      }
+      return;
+    }
     if (qty <= 0) {
       _lines.remove(product.id);
       _recomputeTotals();
@@ -702,7 +781,13 @@ class CartModel extends ChangeNotifier {
   }
 
   void remove(Product product) {
-    if (isViewAs) return;
+    if (isViewAs) {
+      _lines.remove(product.id);
+      _recomputeTotals();
+      notifyListeners();
+      _viewAsRemove(product.id);
+      return;
+    }
     _lines.remove(product.id);
     if (!hasSampleItems) {
       _sampleTimer?.cancel();
@@ -719,7 +804,13 @@ class CartModel extends ChangeNotifier {
   }
 
   void clear() {
-    if (isViewAs) return;
+    if (isViewAs) {
+      _lines.clear();
+      _recomputeTotals();
+      notifyListeners();
+      _viewAsClear();
+      return;
+    }
     _sampleTimer?.cancel();
     _sampleTimer = null;
     _sampleCountdown = 15;

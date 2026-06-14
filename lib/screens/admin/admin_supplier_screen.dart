@@ -1583,12 +1583,6 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                 children: items.map((item) {
                   final name      = item['product_name'] as String? ?? '';
                   final qty       = item['quantity'];
-                  final customers = item['customers'] as String?;
-                  final orderedBy = (customers != null && customers.isNotEmpty)
-                      ? customers : '—';
-                  if (customers != null && customers.isNotEmpty) {
-                    RenderLog.write('item_row_shows_customer', '$name:$orderedBy');
-                  }
                   return Container(
                     margin: const EdgeInsets.only(bottom: 6),
                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
@@ -1607,7 +1601,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                               overflow: TextOverflow.ellipsis),
                           const SizedBox(height: 2),
                           Text(
-                            'Qty: ${qty ?? "—"} · Ordered by: $orderedBy',
+                            'Qty: ${qty ?? "—"}',
                             style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280)),
                           ),
                         ]),
@@ -1831,16 +1825,10 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     final isCurrent   = role == 'current';
     final noSupplier  = slotIndex <= 0 || role == 'none' || role == 'no_supplier';
     final isSetting   = _settingAnswerFor.contains(inquiryId);
-    final customers   = item['customers'] as String?;
-    final orderedBy   = (customers != null && customers.isNotEmpty) ? customers : '—';
-    if (customers != null && customers.isNotEmpty) {
-      RenderLog.write('item_row_shows_customer', '$productName:$orderedBy');
-    }
-
     final subtitleParts = <String>[];
     if (qty != null) subtitleParts.add('Qty: $qty');
     if (mrp != null) subtitleParts.add('₹$mrp');
-    subtitleParts.add('Ordered by: $orderedBy');
+    RenderLog.write('inquiry_ordered_by_removed', 'true');
 
     final roleBadge = _iqBadge(
       isCurrent ? 'Current' : 'Next',

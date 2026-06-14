@@ -130245,39 +130245,35 @@ if(s.length===0)s=B.aEJ
 else{r=A.O(s).j("H<1,d>")
 s=A.E(new A.H(s,new A.aYj(this),r),r.j("ai.E"))
 s=A.M(s,B.j,B.d,B.h)}}return A.B(q,s,B.i,q,q,new A.N(B.b2,q,o,p,q,q,B.l),q,q,q,B.a53,B.dY,q,q,q)},
-aDE(a,a0){var s,r,q,p,o,n,m,l,k,j,i,h,g,f,e=null,d={},c=J.ag(a),b=A.A(c.i(a,"role"))
-if(b==null)b="current"
-s=A.A(c.i(a,"product_name"))
+aDE(a,b){var s,r,q,p,o,n,m,l,k,j,i,h,g=null,f={},e=J.ag(a),d=A.A(e.i(a,"role"))
+if(d==null)d="current"
+s=A.A(e.i(a,"product_name"))
 if(s==null)s=""
-r=c.i(a,"quantity")
-q=c.i(a,"mrp")
-p=A.A(c.i(a,"answer"))
-o=B.e.aA(A.dP(c.i(a,"inquiry_id")))
-n=A.d0(c.i(a,"slot_index"))
-m=n==null?e:B.e.aA(n)
-if(m==null)m=0
-l=b==="current"
-k=m<=0||b==="none"||b==="no_supplier"
-j=this.p3.n(0,o)
-i=A.A(c.i(a,"customers"))
-c=i!=null
-h=c&&i.length!==0?i:"\u2014"
-if(c&&i.length!==0)A.aH("item_row_shows_customer",s+":"+h)
-g=A.b([],t.s)
-if(r!=null)g.push("Qty: "+A.j(r))
-if(q!=null)g.push("\u20b9"+A.j(q))
-g.push("Ordered by: "+h)
-c=l?"Current":"Next"
-n=l?B.oj:B.tv
-f=this.Xd(c,n,l?B.o1:B.tE)
-d.a=null
-if(j)d.a=B.mX
-else if(k){c=A.v(6)
-d.a=A.B(e,B.aGe,B.i,e,e,new A.N(B.aH,e,A.aE(B.aA,1),c,e,e,B.l),e,e,e,e,B.ds,e,e,e)}else{c=t.LA
-c=A.E(new A.H(B.w4,new A.aYh(this,p,o,a0),c),c.j("ai.E"))
-d.a=A.ew(B.aU,c,4,5)}c=A.v(8)
-n=A.aE(l?B.BC:B.tz,1)
-return A.B(e,A.ej(new A.aYi(d,j,k,f,s,g)),B.i,e,e,new A.N(B.k,e,n,c,e,e,B.l),e,e,e,B.oF,B.cn,e,e,e)},
+r=e.i(a,"quantity")
+q=e.i(a,"mrp")
+p=A.A(e.i(a,"answer"))
+o=B.e.aA(A.dP(e.i(a,"inquiry_id")))
+e=A.d0(e.i(a,"slot_index"))
+n=e==null?g:B.e.aA(e)
+if(n==null)n=0
+m=d==="current"
+l=n<=0||d==="none"||d==="no_supplier"
+k=this.p3.n(0,o)
+j=A.b([],t.s)
+if(r!=null)j.push("Qty: "+A.j(r))
+if(q!=null)j.push("\u20b9"+A.j(q))
+A.aH("inquiry_ordered_by_removed","true")
+e=m?"Current":"Next"
+i=m?B.oj:B.tv
+h=this.Xd(e,i,m?B.o1:B.tE)
+f.a=null
+if(k)f.a=B.mX
+else if(l){e=A.v(6)
+f.a=A.B(g,B.aGe,B.i,g,g,new A.N(B.aH,g,A.aE(B.aA,1),e,g,g,B.l),g,g,g,g,B.ds,g,g,g)}else{e=t.LA
+e=A.E(new A.H(B.w4,new A.aYh(this,p,o,b),e),e.j("ai.E"))
+f.a=A.ew(B.aU,e,4,5)}e=A.v(8)
+i=A.aE(m?B.BC:B.tz,1)
+return A.B(g,A.ej(new A.aYi(f,k,l,h,s,j)),B.i,g,g,new A.N(B.k,g,i,e,g,g,B.l),g,g,g,B.oF,B.cn,g,g,g)},
 L6(a){return this.aJ7(a)},
 aJ7(a){var s=0,r=A.r(t.T),q,p=2,o=[],n=this,m,l,k,j,i,h,g,f,e
 var $async$L6=A.t(function(b,c){if(b===1){o.push(c)
@@ -131339,20 +131335,16 @@ $0(){var s=this.b?null:this.c
 this.a.rx=s},
 $S:0}
 A.aYJ.prototype={
-$1(a){var s,r,q,p,o,n,m,l=this,k=null,j=J.ag(a),i=A.A(j.i(a,"product_name"))
-if(i==null)i=""
-s=j.i(a,"quantity")
-r=A.A(j.i(a,"customers"))
-j=r!=null
-q=j&&r.length!==0?r:"\u2014"
-if(j&&r.length!==0)A.aH("item_row_shows_customer",i+":"+q)
-j=A.v(8)
-p=A.aE(l.a,1)
-o=A.l(i,k,k,B.v,k,k,B.ne,k,k,k)
-n=t.p
-o=A.U(A.M(A.b([o,B.bl,A.l("Qty: "+A.j(s==null?"\u2014":s)+" \xb7 Ordered by: "+q,k,k,k,k,k,B.c0,k,k,k)],n),B.n,B.d,B.h),1)
-m=A.v(20)
-return A.B(k,A.R(A.b([o,B.D,A.B(k,A.l(l.c,k,k,k,k,k,A.bd(k,k,l.d,k,k,k,k,k,k,k,k,10,k,k,B.x,k,k,!0,k,k,k,k,k,k,k,k),k,k,k),B.i,k,k,new A.N(l.b,k,k,m,k,k,B.l),k,k,k,k,B.dL,k,k,k)],n),B.n,B.d,B.h,0),B.i,k,k,new A.N(B.eR,k,p,j,k,k,B.l),k,k,k,B.oF,B.cn,k,k,k)},
+$1(a){var s,r,q,p,o,n=this,m=null,l=J.ag(a),k=A.A(l.i(a,"product_name"))
+if(k==null)k=""
+s=l.i(a,"quantity")
+l=A.v(8)
+r=A.aE(n.a,1)
+q=A.l(k,m,m,B.v,m,m,B.ne,m,m,m)
+p=t.p
+q=A.U(A.M(A.b([q,B.bl,A.l("Qty: "+A.j(s==null?"\u2014":s),m,m,m,m,m,B.c0,m,m,m)],p),B.n,B.d,B.h),1)
+o=A.v(20)
+return A.B(m,A.R(A.b([q,B.D,A.B(m,A.l(n.c,m,m,m,m,m,A.bd(m,m,n.d,m,m,m,m,m,m,m,m,10,m,m,B.x,m,m,!0,m,m,m,m,m,m,m,m),m,m,m),B.i,m,m,new A.N(n.b,m,m,o,m,m,B.l),m,m,m,m,B.dL,m,m,m)],p),B.n,B.d,B.h,0),B.i,m,m,new A.N(B.eR,m,r,l,m,m,B.l),m,m,m,B.oF,B.cn,m,m,m)},
 $S:774}
 A.aYo.prototype={
 $0(){var s=this.a,r=this.b

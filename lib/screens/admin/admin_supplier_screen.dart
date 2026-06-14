@@ -193,6 +193,8 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   // ── Unassigned inquiry items (no current supplier) ───────────────────────
   List<Map<String, dynamic>> _unassignedItems = [];
   bool _unassignedLoading = false;
+  // Accordion state: which unassigned dropdown is open ('no_supplier' | 'all_oos' | null)
+  String? _openUnassignedDropdown;
 
   // ── Auto-meta toggle (persisted via get/set_app_setting) ─────────────────
   bool _autoMeta = false;
@@ -1055,9 +1057,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
               ? DateTime.tryParse(data['expires_at'] as String)
               : null;
           final link = 'https://medibo.in/inquiry/$token';
-          final expStr = expiresAt != null
-              ? 'Expires ${expiresAt.toLocal().hour.toString().padLeft(2,'0')}:${expiresAt.toLocal().minute.toString().padLeft(2,'0')}'
-              : '';
+          final expStr = expiresAt != null ? _formatExpIST(expiresAt) : '';
           return Container(
             margin: const EdgeInsets.only(bottom: 8),
             padding: const EdgeInsets.all(10),
@@ -1405,79 +1405,183 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
               children: _inquiryOverview.map(_buildInquirySupplierRow).toList(),
             ),
           ),
-        if (_unassignedItems.isNotEmpty)
+        if (_inquiryOverview.isNotEmpty || _unassignedItems.isNotEmpty)
           _buildUnassignedSection(pad),
       ],
     ]);
   }
 
   Widget _buildUnassignedSection(double pad) {
+    final listNoSupplier = _unassignedItems
+        .where((i) => i['reason'] == 'no_supplier_mapped')
+        .toList();
+    final listAllOOS = _unassignedItems
+        .where((i) => i['reason'] == 'all_out_of_stock')
+        .toList();
+
+    RenderLog.write('inquiry_two_dropdowns_rendered', 'true');
+    RenderLog.write('dd_no_supplier_count_${listNoSupplier.length}', 'true');
+    RenderLog.write('dd_all_oos_count_${listAllOOS.length}', 'true');
+
     return Padding(
       padding: EdgeInsets.fromLTRB(pad, 4, pad, 24),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Padding(
-          padding: const EdgeInsets.only(bottom: 8),
-          child: Row(children: [
-            const Icon(Icons.warning_amber_rounded, size: 15, color: Color(0xFFDC2626)),
-            const SizedBox(width: 6),
-            const Text('No Supplier Available',
-                style: TextStyle(
-                    fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
-            const SizedBox(width: 6),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-              decoration: BoxDecoration(
-                color: const Color(0xFFFEE2E2),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Text('${_unassignedItems.length}',
-                  style: const TextStyle(
-                      fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF991B1B))),
-            ),
-          ]),
+        _buildUnassignedDropdown(
+          key: 'no_supplier',
+          title: 'No Supplier Available',
+          count: listNoSupplier.length,
+          iconColor: const Color(0xFFDC2626),
+          badgeBg: const Color(0xFFFEE2E2),
+          badgeFg: const Color(0xFF991B1B),
+          borderColor: const Color(0xFFFECACA),
+          items: listNoSupplier,
+          badgeLabel: 'No supplier carries this',
+          itemBadgeBg: const Color(0xFFF3F4F6),
+          itemBadgeFg: const Color(0xFF374151),
         ),
-        ..._unassignedItems.map((item) {
-          final name   = item['product_name'] as String? ?? '';
-          final qty    = item['quantity'];
-          final reason = item['reason'] as String? ?? '';
-          final isNoSup = reason == 'no_supplier_mapped';
-          return Container(
-            margin: const EdgeInsets.only(bottom: 6),
+        const SizedBox(height: 8),
+        _buildUnassignedDropdown(
+          key: 'all_oos',
+          title: 'All Suppliers Out of Stock',
+          count: listAllOOS.length,
+          iconColor: const Color(0xFFD97706),
+          badgeBg: const Color(0xFFFEF3C7),
+          badgeFg: const Color(0xFF92400E),
+          borderColor: const Color(0xFFFDE68A),
+          items: listAllOOS,
+          badgeLabel: 'All suppliers out of stock',
+          itemBadgeBg: const Color(0xFFFEF3C7),
+          itemBadgeFg: const Color(0xFF92400E),
+        ),
+      ]),
+    );
+  }
+
+  Widget _buildUnassignedDropdown({
+    required String key,
+    required String title,
+    required int count,
+    required Color iconColor,
+    required Color badgeBg,
+    required Color badgeFg,
+    required Color borderColor,
+    required List<Map<String, dynamic>> items,
+    required String badgeLabel,
+    required Color itemBadgeBg,
+    required Color itemBadgeFg,
+  }) {
+    final isOpen = _openUnassignedDropdown == key;
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: borderColor),
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.03), blurRadius: 4)],
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // Header / toggle row
+        GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () {
+            final wasOpen = isOpen;
+            setState(() {
+              _openUnassignedDropdown = wasOpen ? null : key;
+            });
+            if (!wasOpen && _openUnassignedDropdown == key) {
+              RenderLog.write('accordion_single_open', key);
+            }
+          },
+          child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: const Color(0xFFFECACA)),
-              boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.03), blurRadius: 3)],
-            ),
             child: Row(children: [
-              Expanded(
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(name,
-                      style: const TextStyle(
-                          fontSize: 13, fontWeight: FontWeight.w500, color: Color(0xFF111827))),
-                  if (qty != null)
-                    Text('Qty: $qty',
-                        style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
-                ]),
-              ),
+              Icon(Icons.warning_amber_rounded, size: 15, color: iconColor),
+              const SizedBox(width: 6),
+              Text(title,
+                  style: const TextStyle(
+                      fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+              const SizedBox(width: 6),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                 decoration: BoxDecoration(
-                  color: isNoSup ? const Color(0xFFF3F4F6) : const Color(0xFFFEF3C7),
-                  borderRadius: BorderRadius.circular(20),
+                  color: badgeBg,
+                  borderRadius: BorderRadius.circular(10),
                 ),
-                child: Text(
-                  isNoSup ? 'No supplier carries this' : 'All suppliers out of stock',
-                  style: TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w600,
-                      color: isNoSup ? const Color(0xFF374151) : const Color(0xFF92400E)),
-                ),
+                child: Text('$count',
+                    style: TextStyle(
+                        fontSize: 11, fontWeight: FontWeight.w600, color: badgeFg)),
+              ),
+              const Spacer(),
+              AnimatedRotation(
+                turns: isOpen ? 0.5 : 0,
+                duration: const Duration(milliseconds: 200),
+                child: Icon(Icons.expand_more_rounded, size: 18, color: iconColor),
               ),
             ]),
-          );
-        }),
+          ),
+        ),
+        // Expanded content
+        if (isOpen) ...[
+          Divider(height: 1, color: borderColor),
+          if (items.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              child: Text('None',
+                  style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF))),
+            )
+          else
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
+              child: Column(
+                children: items.map((item) {
+                  final name      = item['product_name'] as String? ?? '';
+                  final qty       = item['quantity'];
+                  final customers = item['customers'] as String?;
+                  final orderedBy = (customers != null && customers.isNotEmpty)
+                      ? customers : '—';
+                  if (customers != null && customers.isNotEmpty) {
+                    RenderLog.write('item_row_shows_customer', '$name:$orderedBy');
+                  }
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 6),
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFAFAFA),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: borderColor),
+                    ),
+                    child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Expanded(
+                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Text(name,
+                              style: const TextStyle(
+                                  fontSize: 13, fontWeight: FontWeight.w500,
+                                  color: Color(0xFF111827)),
+                              overflow: TextOverflow.ellipsis),
+                          const SizedBox(height: 2),
+                          Text(
+                            'Qty: ${qty ?? "—"} · Ordered by: $orderedBy',
+                            style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280)),
+                          ),
+                        ]),
+                      ),
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: itemBadgeBg,
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Text(badgeLabel,
+                            style: TextStyle(
+                                fontSize: 10, fontWeight: FontWeight.w600,
+                                color: itemBadgeFg)),
+                      ),
+                    ]),
+                  );
+                }).toList(),
+              ),
+            ),
+        ],
       ]),
     );
   }
@@ -1530,7 +1634,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                     if (expiresAt != null &&
                         (formStatus == 'pending' || formStatus == 'partially_responded'))
                       Text(
-                        'Exp ${expiresAt.toLocal().hour.toString().padLeft(2, '0')}:${expiresAt.toLocal().minute.toString().padLeft(2, '0')}',
+                        _formatExpIST(expiresAt),
                         style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280)),
                       ),
                   ]),
@@ -1669,6 +1773,16 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     final isCurrent   = role == 'current';
     final noSupplier  = slotIndex <= 0 || role == 'none' || role == 'no_supplier';
     final isSetting   = _settingAnswerFor.contains(inquiryId);
+    final customers   = item['customers'] as String?;
+    final orderedBy   = (customers != null && customers.isNotEmpty) ? customers : '—';
+    if (customers != null && customers.isNotEmpty) {
+      RenderLog.write('item_row_shows_customer', '$productName:$orderedBy');
+    }
+
+    final subtitleParts = <String>[];
+    if (qty != null) subtitleParts.add('Qty: $qty');
+    if (mrp != null) subtitleParts.add('₹$mrp');
+    subtitleParts.add('Ordered by: $orderedBy');
 
     return Container(
       margin: const EdgeInsets.only(bottom: 6),
@@ -1690,11 +1804,8 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
             Text(productName,
                 style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: Color(0xFF111827)),
                 overflow: TextOverflow.ellipsis),
-            if (qty != null || mrp != null)
-              Text(
-                [if (qty != null) 'Qty: $qty', if (mrp != null) '₹$mrp'].join('  '),
-                style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280)),
-              ),
+            Text(subtitleParts.join(' · '),
+                style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
           ]),
         ),
         const SizedBox(width: 8),
@@ -1751,6 +1862,16 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           ),
       ]),
     );
+  }
+
+  // ── Timer helper: converts UTC DateTime to IST and formats as 12-hour AM/PM ─
+  String _formatExpIST(DateTime utc) {
+    final ist = utc.toUtc().add(const Duration(hours: 5, minutes: 30));
+    final h = ist.hour % 12 == 0 ? 12 : ist.hour % 12;
+    final m = ist.minute.toString().padLeft(2, '0');
+    final ampm = ist.hour >= 12 ? 'PM' : 'AM';
+    RenderLog.write('timer_12h_ist', '${ist.hour}:${ist.minute}->$h:$m $ampm');
+    return 'Exp $h:$m $ampm';
   }
 
   // ── Inquiry link helpers ──────────────────────────────────────────────────

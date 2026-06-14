@@ -1667,13 +1667,17 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           },
           child: Padding(
             padding: const EdgeInsets.fromLTRB(14, 12, 10, 12),
-            child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-              Expanded(
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(supName,
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+                Expanded(
+                  child: Text(supName,
                       style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
-                  const SizedBox(height: 6),
-                  Wrap(spacing: 6, runSpacing: 4, children: [
+                ),
+              ]),
+              const SizedBox(height: 6),
+              Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+                Expanded(
+                  child: Wrap(spacing: 6, runSpacing: 4, children: [
                     if (curCount > 0)
                       _iqBadge('Current: $curCount', const Color(0xFFE6F4EA), const Color(0xFF1B7F3B)),
                     if (nxtCount > 0)
@@ -1686,48 +1690,54 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                         style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280)),
                       ),
                   ]),
-                ]),
-              ),
-              const SizedBox(width: 8),
-              // Copy link button — stops propagation to row tap
-              GestureDetector(
-                onTap: () => _copyInquiryLink(supName),
-                behavior: HitTestBehavior.opaque,
-                child: Container(
-                  height: 30,
-                  padding: const EdgeInsets.symmetric(horizontal: 10),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFF0FDF4),
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(color: const Color(0xFF6EE7B7)),
-                  ),
-                  child: const Row(mainAxisSize: MainAxisSize.min, children: [
-                    Icon(Icons.copy_outlined, size: 12, color: Color(0xFF1B7A43)),
-                    SizedBox(width: 4),
-                    Text('Copy link', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF1B7A43))),
-                  ]),
                 ),
-              ),
-              const SizedBox(width: 6),
-              // Send button — stamps fresh per-supplier timer + opens WhatsApp
-              GestureDetector(
-                onTap: _inquiryLoading ? null : () => _sendPerSupplierDirect(supName),
-                behavior: HitTestBehavior.opaque,
-                child: Container(
-                  height: 30,
-                  padding: const EdgeInsets.symmetric(horizontal: 10),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFECFDF5),
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(color: const Color(0xFF25D366)),
+                const SizedBox(width: 8),
+                // Copy link button
+                GestureDetector(
+                  onTap: () => _copyInquiryLink(supName),
+                  behavior: HitTestBehavior.opaque,
+                  child: Container(
+                    height: 30,
+                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF0FDF4),
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: const Color(0xFF6EE7B7)),
+                    ),
+                    child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                      Icon(Icons.copy_outlined, size: 12, color: Color(0xFF1B7A43)),
+                      SizedBox(width: 4),
+                      Text('Copy link', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF1B7A43))),
+                    ]),
                   ),
-                  child: const Row(mainAxisSize: MainAxisSize.min, children: [
-                    Icon(Icons.send_outlined, size: 12, color: Color(0xFF128C7E)),
-                    SizedBox(width: 4),
-                    Text('Send', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF128C7E))),
-                  ]),
                 ),
-              ),
+                const SizedBox(width: 6),
+                // Send button
+                GestureDetector(
+                  onTap: _inquiryLoading ? null : () => _sendPerSupplierDirect(supName),
+                  behavior: HitTestBehavior.opaque,
+                  child: Container(
+                    height: 30,
+                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFECFDF5),
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: const Color(0xFF25D366)),
+                    ),
+                    child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                      Icon(Icons.send_outlined, size: 12, color: Color(0xFF128C7E)),
+                      SizedBox(width: 4),
+                      Text('Send', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF128C7E))),
+                    ]),
+                  ),
+                ),
+                const SizedBox(width: 4),
+                AnimatedRotation(
+                  turns: isExpanded ? 0.5 : 0,
+                  duration: const Duration(milliseconds: 200),
+                  child: const Icon(Icons.expand_more_rounded, size: 18, color: Color(0xFF6B7280)),
+                ),
+              ]),
             ]),
           ),
         ),
@@ -1832,6 +1842,65 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     if (mrp != null) subtitleParts.add('₹$mrp');
     subtitleParts.add('Ordered by: $orderedBy');
 
+    final roleBadge = _iqBadge(
+      isCurrent ? 'Current' : 'Next',
+      isCurrent ? const Color(0xFFE6F4EA) : const Color(0xFFFFF8E1),
+      isCurrent ? const Color(0xFF1B7F3B) : const Color(0xFF8A6D00),
+    );
+
+    Widget answerControls;
+    if (isSetting) {
+      answerControls = const SizedBox(
+        width: 18, height: 18,
+        child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF1B7A43)),
+      );
+    } else if (noSupplier) {
+      answerControls = Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF3F4F6),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: const Color(0xFFD1D5DB)),
+        ),
+        child: const Text('No supplier available',
+            style: TextStyle(fontSize: 10, fontWeight: FontWeight.w500, color: Color(0xFF6B7280))),
+      );
+    } else {
+      answerControls = Wrap(
+        spacing: 5,
+        runSpacing: 4,
+        children: _kAnswerOptions.map((opt) {
+          final isSelected = answer == opt;
+          final optColor = opt == 'Available'
+              ? const Color(0xFF1B7A43)
+              : opt == 'Out of Stock'
+                  ? const Color(0xFFDC2626)
+                  : const Color(0xFF374151);
+          return GestureDetector(
+            onTap: () => _adminSetInquiryAnswer(
+              inquiryId: inquiryId,
+              supplierName: supplierName,
+              answer: opt,
+            ),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: isSelected ? optColor : Colors.transparent,
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: optColor),
+              ),
+              child: Text(opt,
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w600,
+                  color: isSelected ? Colors.white : optColor,
+                )),
+            ),
+          );
+        }).toList(),
+      );
+    }
+
     return Container(
       margin: const EdgeInsets.only(bottom: 6),
       padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
@@ -1840,75 +1909,49 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: isCurrent ? const Color(0xFFA7F3D0) : const Color(0xFFFDE68A)),
       ),
-      child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-        _iqBadge(
-          isCurrent ? 'Current' : 'Next',
-          isCurrent ? const Color(0xFFE6F4EA) : const Color(0xFFFFF8E1),
-          isCurrent ? const Color(0xFF1B7F3B) : const Color(0xFF8A6D00),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(productName,
-                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: Color(0xFF111827)),
-                overflow: TextOverflow.ellipsis),
+      child: LayoutBuilder(builder: (ctx, constraints) {
+        final isNarrow = constraints.maxWidth < 560;
+        if (isNarrow) {
+          RenderLog.write('inquiry_item_mobile_stacked', 'true');
+          if (!isSetting && !noSupplier) {
+            RenderLog.write('inquiry_item_answers_wrapped', 'true');
+          }
+          return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+              roleBadge,
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(productName,
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ]),
+            const SizedBox(height: 4),
             Text(subtitleParts.join(' · '),
                 style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
-          ]),
-        ),
-        const SizedBox(width: 8),
-        if (isSetting)
-          const SizedBox(
-            width: 18, height: 18,
-            child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF1B7A43)),
-          )
-        else if (noSupplier)
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(
-              color: const Color(0xFFF3F4F6),
-              borderRadius: BorderRadius.circular(6),
-              border: Border.all(color: const Color(0xFFD1D5DB)),
-            ),
-            child: const Text('No supplier available',
-                style: TextStyle(
-                    fontSize: 10, fontWeight: FontWeight.w500, color: Color(0xFF6B7280))),
-          )
-        else
-          Wrap(
-            spacing: 5,
-            runSpacing: 4,
-            children: _kAnswerOptions.map((opt) {
-              final isSelected = answer == opt;
-              final optColor = opt == 'Available'
-                  ? const Color(0xFF1B7A43)
-                  : opt == 'Out of Stock'
-                      ? const Color(0xFFDC2626)
-                      : const Color(0xFF374151);
-              return GestureDetector(
-                onTap: () => _adminSetInquiryAnswer(
-                  inquiryId: inquiryId,
-                  supplierName: supplierName,
-                  answer: opt,
-                ),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: isSelected ? optColor : Colors.transparent,
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(color: optColor),
-                  ),
-                  child: Text(opt,
-                    style: TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w600,
-                      color: isSelected ? Colors.white : optColor,
-                    )),
-                ),
-              );
-            }).toList(),
+            const SizedBox(height: 8),
+            answerControls,
+          ]);
+        }
+        // Wide / desktop: original single-row layout
+        return Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+          roleBadge,
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(productName,
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: Color(0xFF111827)),
+                  overflow: TextOverflow.ellipsis),
+              Text(subtitleParts.join(' · '),
+                  style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
+            ]),
           ),
-      ]),
+          const SizedBox(width: 8),
+          answerControls,
+        ]);
+      }),
     );
   }
 

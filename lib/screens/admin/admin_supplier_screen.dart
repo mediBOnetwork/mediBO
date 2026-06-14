@@ -128,7 +128,7 @@ class _LeadItem {
 
 // ── Tab enum ──────────────────────────────────────────────────────────────────
 
-enum _SupFilter  { suppliers, inquiry, orders, pending, leads }
+enum _SupFilter  { suppliers, inquiry, orders, pending, leads, staging }
 enum _SupSortMode { spnDesc, nameAsc }
 
 // ── Screen ────────────────────────────────────────────────────────────────────
@@ -143,6 +143,9 @@ class AdminSupplierScreen extends StatefulWidget {
 class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   List<_SupRow>              _suppliers    = [];
   List<_PendingRow>          _pending      = [];
+  // Supplier staging (submitted companies + medicines awaiting admin approval)
+  List<Map<String, dynamic>> _stagingCompanies  = [];
+  List<Map<String, dynamic>> _stagingMedicines  = [];
   List<_OrderRow>            _orders       = [];
   List<_LeadItem>            _leads        = [];
   List<Map<String, dynamic>> _deletedRows  = [];
@@ -406,6 +409,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         RenderLog.write('supplier_sort_default', 'spn_desc');
       }
       _fetchInquiryOverview(silent: true);
+      _fetchStaging();
     } catch (e) {
       if (mounted) setState(() => _loading = false);
       // Silently swallow load errors — never surface a red banner on the homepage
@@ -721,6 +725,8 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
             _tab(_SupFilter.pending,    'Pending Approval (${_pending.length})'),
             const SizedBox(width: 4),
             _tab(_SupFilter.leads,      'Leads (${_leads.length})'),
+            const SizedBox(width: 4),
+            _tab(_SupFilter.staging,    'Staging (${_stagingCompanies.length + _stagingMedicines.length})'),
           ]),
         ),
       ]),
@@ -761,6 +767,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       case _SupFilter.orders:     return _buildOrdersView(isDesktop);
       case _SupFilter.pending:    return _buildPendingView(isDesktop);
       case _SupFilter.leads:      return _buildLeadsView(isDesktop);
+      case _SupFilter.staging:    return _buildStagingView(isDesktop);
     }
   }
 
@@ -1507,6 +1514,132 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // ── STAGING TAB (supplier pending companies + medicines) ─────────────────
+
+  Future<void> _fetchStaging() async {
+    try {
+      final client = Supabase.instance.client;
+      final results = await Future.wait([
+        client.from('supplier_pending_companies').select().eq('status', 'pending').order('created_at') as Future,
+        client.from('supplier_pending_medicines').select().eq('status', 'pending').order('created_at') as Future,
+      ]);
+      if (mounted) {
+        setState(() {
+          _stagingCompanies = (results[0] as List).map((r) => Map<String, dynamic>.from(r as Map)).toList();
+          _stagingMedicines = (results[1] as List).map((r) => Map<String, dynamic>.from(r as Map)).toList();
+        });
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _approveCompany(Map<String, dynamic> row) async {
+    final name = row['company_name'] as String? ?? '';
+    try {
+      // Insert into company table (dedupe by name)
+      await Supabase.instance.client.from('company').upsert(
+        {'company_name': name},
+        onConflict: 'company_name',
+        ignoreDuplicates: true,
+      );
+      await Supabase.instance.client.from('supplier_pending_companies')
+          .update({'status': 'approved'}).eq('id', row['id'] as int);
+      if (mounted) showToast(context, 'Company "$name" approved');
+      _fetchStaging();
+    } catch (e) {
+      if (mounted) showToast(context, 'Failed: $e', isError: true);
+    }
+  }
+
+  Future<void> _rejectCompany(Map<String, dynamic> row) async {
+    try {
+      await Supabase.instance.client.from('supplier_pending_companies')
+          .update({'status': 'rejected'}).eq('id', row['id'] as int);
+      if (mounted) showToast(context, 'Company rejected');
+      _fetchStaging();
+    } catch (e) {
+      if (mounted) showToast(context, 'Failed: $e', isError: true);
+    }
+  }
+
+  Future<void> _approveMedicine(Map<String, dynamic> row) async {
+    final name = row['product_name'] as String? ?? '';
+    final marketer = row['marketer'] as String? ?? '';
+    try {
+      // Insert into MEDICINE if not already present (match by product_name + marketer)
+      final existing = await Supabase.instance.client
+          .from('MEDICINE').select('id')
+          .ilike('product_name', name)
+          .ilike('marketer', marketer)
+          .maybeSingle();
+      if (existing == null) {
+        await Supabase.instance.client.from('MEDICINE').insert({
+          'product_name': name,
+          'marketer': marketer,
+          'therapeutic_class': row['therapeutic_class'],
+          'mrp': row['mrp']?.toString(),
+        });
+      }
+      await Supabase.instance.client.from('supplier_pending_medicines')
+          .update({'status': 'approved'}).eq('id', row['id'] as int);
+      if (mounted) showToast(context, 'Medicine "$name" approved');
+      _fetchStaging();
+    } catch (e) {
+      if (mounted) showToast(context, 'Failed: $e', isError: true);
+    }
+  }
+
+  Future<void> _rejectMedicine(Map<String, dynamic> row) async {
+    try {
+      await Supabase.instance.client.from('supplier_pending_medicines')
+          .update({'status': 'rejected'}).eq('id', row['id'] as int);
+      if (mounted) showToast(context, 'Medicine rejected');
+      _fetchStaging();
+    } catch (e) {
+      if (mounted) showToast(context, 'Failed: $e', isError: true);
+    }
+  }
+
+  Widget _buildStagingView(bool isDesktop) {
+    if (_stagingCompanies.isEmpty && _stagingMedicines.isEmpty) {
+      return _emptyState('0 pending staging items');
+    }
+    return SingleChildScrollView(
+      padding: EdgeInsets.all(isDesktop ? 24 : 12),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          const Text('Supplier Staging', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+          const Spacer(),
+          TextButton.icon(onPressed: _fetchStaging, icon: const Icon(Icons.refresh, size: 16), label: const Text('Refresh'),
+            style: TextButton.styleFrom(foregroundColor: const Color(0xFF1B7A43))),
+        ]),
+        const SizedBox(height: 16),
+        // Companies
+        if (_stagingCompanies.isNotEmpty) ...[
+          const Text('Pending Companies', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
+          const SizedBox(height: 8),
+          ..._stagingCompanies.map((row) => _StagingCard(
+            title: row['company_name'] as String? ?? '',
+            subtitle: 'Company',
+            onApprove: () => _approveCompany(row),
+            onReject: () => _rejectCompany(row),
+          )),
+          const SizedBox(height: 16),
+        ],
+        // Medicines
+        if (_stagingMedicines.isNotEmpty) ...[
+          const Text('Pending Medicines', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
+          const SizedBox(height: 8),
+          ..._stagingMedicines.map((row) => _StagingCard(
+            title: row['product_name'] as String? ?? '',
+            subtitle: 'by ${row['marketer'] ?? '—'}${row['mrp'] != null ? '  ·  MRP ₹${row['mrp']}' : ''}',
+            onApprove: () => _approveMedicine(row),
+            onReject: () => _rejectMedicine(row),
+          )),
+        ],
+      ]),
+    );
+  }
+
   // SUPPLIERS TAB
   // ═══════════════════════════════════════════════════════════════════════════
 
@@ -7277,6 +7410,65 @@ class _InquiryStatusBadge extends StatelessWidget {
       ),
       child: Text(label,
           style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: fg)),
+    );
+  }
+}
+
+// ── Staging review card (approve/reject) ──────────────────────────────────────
+
+class _StagingCard extends StatelessWidget {
+  final String title;
+  final String subtitle;
+  final VoidCallback onApprove;
+  final VoidCallback onReject;
+
+  const _StagingCard({
+    required this.title,
+    required this.subtitle,
+    required this.onApprove,
+    required this.onReject,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+        boxShadow: const [BoxShadow(color: Color(0x08000000), blurRadius: 4, offset: Offset(0,1))],
+      ),
+      child: Row(children: [
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(title, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
+          if (subtitle.isNotEmpty)
+            Text(subtitle, style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
+        ])),
+        const SizedBox(width: 8),
+        TextButton(
+          onPressed: onApprove,
+          style: TextButton.styleFrom(
+            foregroundColor: const Color(0xFF065F46),
+            backgroundColor: const Color(0xFFD1FAE5),
+            minimumSize: const Size(72, 32),
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+          ),
+          child: const Text('Approve', style: TextStyle(fontSize: 12)),
+        ),
+        const SizedBox(width: 6),
+        TextButton(
+          onPressed: onReject,
+          style: TextButton.styleFrom(
+            foregroundColor: const Color(0xFF991B1B),
+            backgroundColor: const Color(0xFFFEE2E2),
+            minimumSize: const Size(60, 32),
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+          ),
+          child: const Text('Reject', style: TextStyle(fontSize: 12)),
+        ),
+      ]),
     );
   }
 }

@@ -27,6 +27,7 @@ import 'cart_screen.dart';
 import 'orders_screen.dart';
 import 'profile_screen.dart';
 import 'storefront_screen.dart';
+import 'supplier/supplier_shell.dart';
 
 /// App shell: responsive — desktop gets a top nav + sidebar, mobile/tablet
 /// keeps the existing header + quick-nav chips + bottom nav layout.
@@ -198,6 +199,42 @@ class _HomeShellState extends State<HomeShell> {
 
   @override
   Widget build(BuildContext context) {
+    final auth = UserState.of(context);
+
+    // Supplier: completely separate shell — takes priority after admin check
+    if (!auth.isAdmin && auth.isSupplier) {
+      return const SupplierShell();
+    }
+
+    // Pending-approval supplier: show a waiting screen
+    if (!auth.isAdmin && !auth.isSupplier && auth.supplierStatus == 'pending_approval') {
+      return Scaffold(
+        backgroundColor: const Color(0xFFF5F6F8),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(32),
+            child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+              const Icon(Icons.hourglass_empty, size: 56, color: Color(0xFF9CA3AF)),
+              const SizedBox(height: 16),
+              Text('Welcome, ${auth.supplierName ?? 'Supplier'}',
+                style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+              const SizedBox(height: 8),
+              const Text('Your supplier account is pending admin approval.',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 14, color: Color(0xFF6B7280))),
+              const SizedBox(height: 24),
+              OutlinedButton(
+                onPressed: () => UserState.read(context).signOut(),
+                style: OutlinedButton.styleFrom(foregroundColor: const Color(0xFF1B7A43),
+                  side: const BorderSide(color: Color(0xFF1B7A43))),
+                child: const Text('Sign Out'),
+              ),
+            ]),
+          ),
+        ),
+      );
+    }
+
     return LayoutBuilder(
       builder: (context, constraints) {
         final isDesktop = constraints.maxWidth >= 900;

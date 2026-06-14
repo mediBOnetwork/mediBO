@@ -12,6 +12,11 @@ class AuthNotifier extends ChangeNotifier {
   bool _needsProfile = false;
   bool _isAdmin = false;
   bool _isSuperAdmin = false;
+  // Supplier role state
+  bool _isSupplier = false;
+  String? _supplierName;
+  String? _supplierId;
+  String? _supplierStatus; // 'ok'|'pending_approval'|'not_found'|'conflict'
   RealtimeChannel? _profileChannel;
 
   bool get loading => _loading;
@@ -19,6 +24,10 @@ class AuthNotifier extends ChangeNotifier {
   bool get needsProfile => _needsProfile;
   bool get isAdmin => _isAdmin;
   bool get isSuperAdmin => _isSuperAdmin;
+  bool get isSupplier => _isSupplier;
+  String? get supplierName => _supplierName;
+  String? get supplierId => _supplierId;
+  String? get supplierStatus => _supplierStatus;
   bool get isAuthenticated =>
       Supabase.instance.client.auth.currentUser != null;
   UserProfile? get profile => _profile;
@@ -55,6 +64,7 @@ class AuthNotifier extends ChangeNotifier {
       await Future.wait([
         _loadProfile(user.id),
         _checkAdminStatus(user.email ?? ''),
+        _checkSupplierStatus(user.email ?? ''),
       ]);
       if (_loading) {
         _loading = false;
@@ -76,6 +86,7 @@ class AuthNotifier extends ChangeNotifier {
         await Future.wait([
           _loadProfile(user.id),
           _checkAdminStatus(user.email ?? ''),
+          _checkSupplierStatus(user.email ?? ''),
         ]);
       }
       _loading = false;
@@ -93,6 +104,7 @@ class AuthNotifier extends ChangeNotifier {
         await Future.wait([
           _loadProfile(user.id),
           _checkAdminStatus(user.email ?? ''),
+          _checkSupplierStatus(user.email ?? ''),
         ]);
         _profileLoading = false;
         notifyListeners();
@@ -103,6 +115,10 @@ class AuthNotifier extends ChangeNotifier {
       _profileLoading = false;
       _isAdmin = false;
       _isSuperAdmin = false;
+      _isSupplier = false;
+      _supplierName = null;
+      _supplierId = null;
+      _supplierStatus = null;
       _profileChannel?.unsubscribe();
       _profileChannel = null;
       notifyListeners();
@@ -193,6 +209,34 @@ class AuthNotifier extends ChangeNotifier {
     } catch (_) {
       _isAdmin = false;
       _isSuperAdmin = false;
+    }
+  }
+
+  // Resolve supplier role by calling claim_supplier_profile RPC.
+  // Admins skip supplier check (admin takes priority).
+  Future<void> _checkSupplierStatus(String email) async {
+    if (email.isEmpty || _isAdmin) {
+      _isSupplier = false;
+      _supplierStatus = null;
+      return;
+    }
+    try {
+      final res = await Supabase.instance.client
+          .rpc('claim_supplier_profile', params: {'p_email': email}) as Map;
+      final status = res['status'] as String? ?? 'not_found';
+      _supplierStatus = status;
+      if (status == 'ok') {
+        _isSupplier = true;
+        _supplierName = res['supplier_name'] as String?;
+        _supplierId   = res['id'] as String?;
+      } else {
+        _isSupplier = false;
+        _supplierName = status == 'pending_approval' ? res['supplier_name'] as String? : null;
+        _supplierId   = null;
+      }
+    } catch (_) {
+      _isSupplier = false;
+      _supplierStatus = null;
     }
   }
 

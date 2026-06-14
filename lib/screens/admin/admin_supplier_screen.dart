@@ -1263,72 +1263,81 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 4, offset: const Offset(0, 1))],
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(14, 12, 10, 12),
-          child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-            Expanded(
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(supName,
-                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
-                const SizedBox(height: 6),
-                Wrap(spacing: 6, runSpacing: 4, children: [
-                  if (curCount > 0)
-                    _iqBadge('Current: $curCount', const Color(0xFFE6F4EA), const Color(0xFF1B7F3B)),
-                  if (nxtCount > 0)
-                    _iqBadge('Next: $nxtCount', const Color(0xFFFFF8E1), const Color(0xFF8A6D00)),
-                  if (formStatus != null) _iqStatusBadge(formStatus),
-                  if (expiresAt != null &&
-                      (formStatus == 'pending' || formStatus == 'partially_responded'))
-                    Text(
-                      'Exp ${expiresAt.toLocal().hour.toString().padLeft(2, '0')}:${expiresAt.toLocal().minute.toString().padLeft(2, '0')}',
-                      style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280)),
-                    ),
-                ]),
-              ]),
-            ),
-            const SizedBox(width: 8),
-            // Send button
-            GestureDetector(
-              onTap: _inquiryLoading ? null : () async {
-                await _sendSupplierInquiry(supName);
-                _fetchInquiryOverview(silent: true);
-              },
-              child: Container(
-                height: 30,
-                padding: const EdgeInsets.symmetric(horizontal: 10),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFECFDF5),
-                  borderRadius: BorderRadius.circular(6),
-                  border: Border.all(color: const Color(0xFF6EE7B7)),
-                ),
-                child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  const Icon(Icons.send_outlined, size: 12, color: Color(0xFF1B7A43)),
-                  const SizedBox(width: 4),
-                  const Text('Send', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF1B7A43))),
+        GestureDetector(
+          onTap: () {
+            if (_expandedInquirySupplier == supName) {
+              setState(() => _expandedInquirySupplier = null);
+            } else {
+              setState(() { _expandedInquirySupplier = supName; _inquiryItems = []; });
+              _fetchInquiryItems(supName);
+            }
+            RenderLog.write('inquiry_row_expanded', isExpanded ? 'collapse:$supName' : 'expand:$supName');
+          },
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(14, 12, 10, 12),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(supName,
+                      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
+                  const SizedBox(height: 6),
+                  Wrap(spacing: 6, runSpacing: 4, children: [
+                    if (curCount > 0)
+                      _iqBadge('Current: $curCount', const Color(0xFFE6F4EA), const Color(0xFF1B7F3B)),
+                    if (nxtCount > 0)
+                      _iqBadge('Next: $nxtCount', const Color(0xFFFFF8E1), const Color(0xFF8A6D00)),
+                    if (formStatus != null) _iqStatusBadge(formStatus),
+                    if (expiresAt != null &&
+                        (formStatus == 'pending' || formStatus == 'partially_responded'))
+                      Text(
+                        'Exp ${expiresAt.toLocal().hour.toString().padLeft(2, '0')}:${expiresAt.toLocal().minute.toString().padLeft(2, '0')}',
+                        style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280)),
+                      ),
+                  ]),
                 ]),
               ),
-            ),
-            const SizedBox(width: 4),
-            // Expand/collapse chevron
-            GestureDetector(
-              onTap: () {
-                if (_expandedInquirySupplier == supName) {
-                  setState(() => _expandedInquirySupplier = null);
-                } else {
-                  setState(() { _expandedInquirySupplier = supName; _inquiryItems = []; });
-                  _fetchInquiryItems(supName);
-                }
-              },
-              child: Padding(
-                padding: const EdgeInsets.all(6),
-                child: AnimatedRotation(
-                  turns: isExpanded ? 0.5 : 0.0,
-                  duration: const Duration(milliseconds: 200),
-                  child: const Icon(Icons.expand_more, size: 20, color: Color(0xFF6B7280)),
+              const SizedBox(width: 8),
+              // Copy link button — stops propagation to row tap
+              GestureDetector(
+                onTap: () => _copyInquiryLink(supName),
+                behavior: HitTestBehavior.opaque,
+                child: Container(
+                  height: 30,
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF0FDF4),
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: const Color(0xFF6EE7B7)),
+                  ),
+                  child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                    Icon(Icons.copy_outlined, size: 12, color: Color(0xFF1B7A43)),
+                    SizedBox(width: 4),
+                    Text('Copy link', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF1B7A43))),
+                  ]),
                 ),
               ),
-            ),
-          ]),
+              const SizedBox(width: 6),
+              // WhatsApp button — stops propagation to row tap
+              GestureDetector(
+                onTap: () => _openWhatsAppForSupplier(supName),
+                behavior: HitTestBehavior.opaque,
+                child: Container(
+                  height: 30,
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFECFDF5),
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: const Color(0xFF25D366)),
+                  ),
+                  child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                    Icon(Icons.chat_bubble_outline, size: 12, color: Color(0xFF128C7E)),
+                    SizedBox(width: 4),
+                    Text('WhatsApp', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF128C7E))),
+                  ]),
+                ),
+              ),
+            ]),
+          ),
         ),
         // Inline link after Send
         if (linkData != null) _buildInquiryInlineLink(supName, linkData),
@@ -1456,35 +1465,171 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
             child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF1B7A43)),
           )
         else
-          SizedBox(
-            height: 34,
-            child: DropdownButton<String>(
-              value: answer != null && _kAnswerOptions.contains(answer) ? answer : null,
-              hint: Text(
-                answer != null && !_kAnswerOptions.contains(answer) ? answer : 'Set response',
-                style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
-              ),
-              underline: const SizedBox.shrink(),
-              isDense: true,
-              style: const TextStyle(fontSize: 12, color: Color(0xFF111827)),
-              icon: const Icon(Icons.arrow_drop_down, size: 18, color: Color(0xFF6B7280)),
-              items: _kAnswerOptions.map((opt) => DropdownMenuItem(
-                value: opt,
-                child: Text(opt, style: const TextStyle(fontSize: 12)),
-              )).toList(),
-              onChanged: isSetting ? null : (val) {
-                if (val != null) {
-                  _adminSetInquiryAnswer(
-                    inquiryId: inquiryId,
-                    supplierName: supplierName,
-                    answer: val,
-                    slotIndex: slotIndex,
-                  );
-                }
-              },
-            ),
+          Wrap(
+            spacing: 5,
+            runSpacing: 4,
+            children: _kAnswerOptions.map((opt) {
+              final isSelected = answer == opt;
+              final optColor = opt == 'Available'
+                  ? const Color(0xFF1B7A43)
+                  : opt == 'Out of Stock'
+                      ? const Color(0xFFDC2626)
+                      : const Color(0xFF374151);
+              return GestureDetector(
+                onTap: () => _adminSetInquiryAnswer(
+                  inquiryId: inquiryId,
+                  supplierName: supplierName,
+                  answer: opt,
+                  slotIndex: slotIndex,
+                ),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: isSelected ? optColor : Colors.transparent,
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: optColor),
+                  ),
+                  child: Text(opt,
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w600,
+                      color: isSelected ? Colors.white : optColor,
+                    )),
+                ),
+              );
+            }).toList(),
           ),
       ]),
+    );
+  }
+
+  // ── Inquiry link helpers ──────────────────────────────────────────────────
+
+  Future<String?> _ensureInquiryToken(String supName) async {
+    final existing = _inquiryLinks[supName]?['token'] as String?;
+    if (existing != null && existing.isNotEmpty) return existing;
+    try {
+      final rows = await Supabase.instance.client
+          .rpc('start_inquiry_for_suppliers', params: {'p_supplier_names': [supName]}) as List;
+      for (final m in rows) {
+        if (mounted) setState(() => _inquiryLinks[m['supplier_name'] as String] = Map<String, dynamic>.from(m as Map));
+      }
+      return _inquiryLinks[supName]?['token'] as String?;
+    } catch (_) { return null; }
+  }
+
+  Future<void> _copyInquiryLink(String supName) async {
+    final token = await _ensureInquiryToken(supName);
+    if (token == null || token.isEmpty) {
+      if (mounted) showToast(context, 'Could not get inquiry link', isError: true);
+      return;
+    }
+    final link = 'https://medibo.in/inquiry/$token';
+    Clipboard.setData(ClipboardData(text: link));
+    if (mounted) showToast(context, 'Link copied');
+    RenderLog.write('inquiry_copy_link', supName);
+  }
+
+  bool _isValidPhone(String n) {
+    final d = n.replaceAll(RegExp(r'[^0-9]'), '');
+    return d.length >= 10;
+  }
+
+  String _normalizePhone(String n) {
+    final d = n.replaceAll(RegExp(r'[^0-9]'), '');
+    if (d.length == 12 && d.startsWith('91')) return d.substring(2);
+    if (d.length == 11 && d.startsWith('0')) return d.substring(1);
+    return d.length >= 10 ? d.substring(d.length - 10) : d;
+  }
+
+  Future<void> _openWhatsAppForSupplier(String supName) async {
+    final token = await _ensureInquiryToken(supName);
+    if (token == null || token.isEmpty) {
+      if (mounted) showToast(context, 'Could not get inquiry link', isError: true);
+      return;
+    }
+    final link = 'https://medibo.in/inquiry/$token';
+
+    final sup = _suppliers.cast<_SupRow?>().firstWhere(
+      (s) => s!.supplierName.toLowerCase() == supName.toLowerCase(),
+      orElse: () => null,
+    );
+    final numbers = <(String, String)>[];
+    if (sup != null) {
+      final wa = (sup.rawData['whatsapp_no'] as String? ?? '').trim();
+      final ct = (sup.rawData['contact_no']  as String? ?? '').trim();
+      if (_isValidPhone(wa)) numbers.add(('WhatsApp', wa));
+      if (_isValidPhone(ct) && ct != wa) numbers.add(('Contact', ct));
+    }
+
+    if (numbers.isEmpty) {
+      if (mounted) showToast(context, 'No valid phone number for $supName', isError: true);
+      return;
+    }
+    if (numbers.length == 1) {
+      _launchWhatsApp(supName, numbers[0].$2, link);
+    } else {
+      if (!mounted) return;
+      final chosen = await showDialog<String>(
+        context: context,
+        builder: (_) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          title: Text('Send via WhatsApp — $supName',
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: numbers.map(((String type, String num) entry) {
+              return ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.chat_bubble_outline, color: Color(0xFF128C7E)),
+                title: Text('${entry.$1}: ${entry.$2}',
+                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
+                onTap: () => Navigator.pop(context, entry.$2),
+              );
+            }).toList(),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          ],
+        ),
+      );
+      if (chosen != null) _launchWhatsApp(supName, chosen, link);
+    }
+  }
+
+  void _launchWhatsApp(String supName, String rawNumber, String link) {
+    final normalized = _normalizePhone(rawNumber);
+    final intl = '91$normalized';
+    final msg = Uri.encodeComponent(
+        'Hello $supName,\nWe want to buy some items from you. Please confirm the stock availability:\n$link');
+    final url = 'https://wa.me/$intl?text=$msg';
+    html.window.open(url, '_blank');
+    RenderLog.write('inquiry_whatsapp_sent', '$supName:$intl');
+  }
+
+  // ── Supplier Orders status label (read-only, no actions) ─────────────────
+
+  Widget _orderStatusLabel(String status) {
+    final lower = status.toLowerCase();
+    final label = switch (lower) {
+      'confirmed' || 'accepted' => 'Accepted',
+      'rejected' => 'Rejected',
+      _ => 'Pending',
+    };
+    final bg = switch (lower) {
+      'confirmed' || 'accepted' => const Color(0xFFD1FAE5),
+      'rejected' => const Color(0xFFFEE2E2),
+      _ => const Color(0xFFFEF3C7),
+    };
+    final fg = switch (lower) {
+      'confirmed' || 'accepted' => const Color(0xFF065F46),
+      'rejected' => const Color(0xFF991B1B),
+      _ => const Color(0xFF92400E),
+    };
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(20)),
+      child: Text(label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: fg)),
     );
   }
 
@@ -2103,7 +2248,6 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   Widget _buildOrdersView(bool isDesktop) {
     if (_orders.isEmpty) return _emptyState('0 supplier orders');
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      _buildInquiryLinksPanel(),
       if (isDesktop) _ordersTableHeader(),
       ..._orders.map((r) => isDesktop ? _desktopOrderRow(r) : _mobileOrderCard(r)),
       const SizedBox(height: 32),
@@ -2123,7 +2267,6 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         _th('AMOUNT', flex: 2),
         _th('STATUS', flex: 3),
         _th('DATE', flex: 3),
-        const SizedBox(width: 80),
       ]),
     );
   }
@@ -2146,24 +2289,8 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
             style: const TextStyle(fontSize: 13, color: Color(0xFF374151)), overflow: TextOverflow.ellipsis)),
         Expanded(flex: 2, child: Text(row.totalAmount != null ? '₹${row.totalAmount!.toStringAsFixed(0)}' : '—',
             style: const TextStyle(fontSize: 13, color: Color(0xFF111827)))),
-        Expanded(flex: 3, child: _OrderStatusActions(orderId: row.id, status: row.status, onUpdate: _updateOrderStatus)),
+        Expanded(flex: 3, child: _orderStatusLabel(row.status)),
         Expanded(flex: 3, child: Text(dateStr, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)))),
-        SizedBox(width: 80, child: GestureDetector(
-          onTap: () => _sendOrderInquiry(row.id),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(
-              color: const Color(0xFFEFF6FF),
-              borderRadius: BorderRadius.circular(6),
-              border: Border.all(color: const Color(0xFFBFDBFE)),
-            ),
-            child: const Row(mainAxisSize: MainAxisSize.min, children: [
-              Icon(Icons.send_outlined, size: 12, color: Color(0xFF2563EB)),
-              SizedBox(width: 4),
-              Text('Inquiry', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF2563EB))),
-            ]),
-          ),
-        )),
       ]),
     );
   }
@@ -2196,26 +2323,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           Text('₹${row.totalAmount!.toStringAsFixed(0)}', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF1B7A43))),
         ],
         const SizedBox(height: 10),
-        Row(children: [
-          Expanded(child: _OrderStatusActions(orderId: row.id, status: row.status, onUpdate: _updateOrderStatus)),
-          const SizedBox(width: 8),
-          GestureDetector(
-            onTap: () => _sendOrderInquiry(row.id),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: const Color(0xFFEFF6FF),
-                borderRadius: BorderRadius.circular(6),
-                border: Border.all(color: const Color(0xFFBFDBFE)),
-              ),
-              child: const Row(mainAxisSize: MainAxisSize.min, children: [
-                Icon(Icons.send_outlined, size: 13, color: Color(0xFF2563EB)),
-                SizedBox(width: 4),
-                Text('Inquiry', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF2563EB))),
-              ]),
-            ),
-          ),
-        ]),
+        _orderStatusLabel(row.status),
       ]),
     );
   }

@@ -10,6 +10,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'product.dart';
 import '../util.dart';
+import '../utils/render_log.dart';
 
 /// A single line in the cart: a product plus the ordered quantity (packs).
 class CartLine {
@@ -70,6 +71,32 @@ class CartModel extends ChangeNotifier {
   StreamSubscription<AuthState>? _authSub;
   RealtimeChannel? _cartChannel;
   bool _isLoggedIn = false;
+
+  // ── View As mode ──────────────────────────────────────────────────────────
+  // When set, CartModel shows the impersonated customer's cart (read-only).
+  String? _viewAsUserId;
+  bool get isViewAs => _viewAsUserId != null;
+
+  Future<void> enterViewAs(String userId) async {
+    _viewAsUserId = userId;
+    _lines.clear();
+    _adminRemovedLines.clear();
+    _recomputeTotals();
+    _cartChannel?.unsubscribe();
+    _cartChannel = null;
+    RenderLog.write('view_as_cart', 'enter:$userId');
+    await _loadFromSupabase();
+  }
+
+  Future<void> exitViewAs() async {
+    _viewAsUserId = null;
+    _lines.clear();
+    _adminRemovedLines.clear();
+    _recomputeTotals();
+    notifyListeners();
+    RenderLog.write('view_as_cart', 'exit');
+    await _loadFromSupabase();
+  }
 
   CartModel() {
     _initPersistence();
@@ -179,6 +206,35 @@ class CartModel extends ChangeNotifier {
 
   Future<void> _loadFromSupabase([String? overrideUid]) async {
     try {
+      // ViewAs mode: load the impersonated customer's cart via super-admin RPC.
+      if (_viewAsUserId != null) {
+        final rows = await Supabase.instance.client
+            .rpc('admin_preview_customer_cart', params: {'p_user_id': _viewAsUserId!}) as List;
+        _lines.clear();
+        _adminRemovedLines.clear();
+        for (final row in rows) {
+          final product = Product.fromCartData(
+            id: row['product_id'] as String,
+            name: row['product_name'] as String,
+            b2bPrice: (row['price'] as num).toDouble(),
+            mrp: (row['mrp'] as num).toDouble(),
+            imageUrl: (row['image_url'] as String?) ?? '',
+            manufacturer: (row['manufacturer'] as String?) ?? '',
+            packSize: (row['pack_size'] as String?) ?? '',
+            category: (row['category'] as String?) ?? 'Other',
+            gstPercent: (row['gst_percent'] as num?)?.toDouble() ?? 12.0,
+          );
+          final addedByAdmin = (row['added_by'] as String?) == 'admin';
+          final cartItemId = (row['id'] as num?)?.toInt();
+          _lines[product.id] = CartLine(product, row['quantity'] as int,
+              addedByAdmin: addedByAdmin, cartItemId: cartItemId);
+        }
+        _recomputeTotals();
+        notifyListeners();
+        RenderLog.write('view_as_cart', 'items:${_lines.length}:netPayable:${netPayable.toStringAsFixed(0)}');
+        return;
+      }
+
       final uid = overrideUid ?? Supabase.instance.client.auth.currentUser?.id;
       if (uid == null) return;
 
@@ -588,6 +644,7 @@ class CartModel extends ChangeNotifier {
   // ── Public API ────────────────────────────────────────────────────────────
 
   void add(Product product) {
+    if (isViewAs) return;
     final existing = _lines[product.id];
     final int qty;
     if (existing == null) {
@@ -603,6 +660,7 @@ class CartModel extends ChangeNotifier {
   }
 
   void setQuantity(Product product, int qty) {
+    if (isViewAs) return;
     if (qty <= 0) {
       _lines.remove(product.id);
       _recomputeTotals();
@@ -644,6 +702,7 @@ class CartModel extends ChangeNotifier {
   }
 
   void remove(Product product) {
+    if (isViewAs) return;
     _lines.remove(product.id);
     if (!hasSampleItems) {
       _sampleTimer?.cancel();
@@ -660,6 +719,7 @@ class CartModel extends ChangeNotifier {
   }
 
   void clear() {
+    if (isViewAs) return;
     _sampleTimer?.cancel();
     _sampleTimer = null;
     _sampleCountdown = 15;
@@ -712,6 +772,7 @@ class CartModel extends ChangeNotifier {
   }
 
   Order checkout() {
+    if (isViewAs) throw StateError('checkout blocked in ViewAs mode');
     _sampleTimer?.cancel();
     _sampleTimer = null;
     _sampleCountdown = 15;

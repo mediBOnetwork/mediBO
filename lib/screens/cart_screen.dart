@@ -26,6 +26,12 @@ class _CartScreenState extends State<CartScreen> {
   Future<void> _placeOrder() async {
     if (_orderInProgress) return;
 
+    final cart = AppState.of(context);
+    if (cart.isViewAs) {
+      showToast(context, 'Read-only in View As preview', isError: true);
+      return;
+    }
+
     final auth = UserState.read(context);
     if (!auth.isAuthenticated) {
       await Navigator.push(context,
@@ -53,7 +59,6 @@ class _CartScreenState extends State<CartScreen> {
     }
 
     setState(() => _orderInProgress = true);
-    final cart = AppState.of(context);
     final profile = auth.profile;
     final userId = Supabase.instance.client.auth.currentUser?.id;
     if (userId == null) {
@@ -518,7 +523,10 @@ class _CartItemCard extends StatelessWidget {
                           ],
                           const SizedBox(width: 6),
                           GestureDetector(
-                            onTap: () => cart.remove(p),
+                            onTap: () {
+                              if (cart.isViewAs) { showToast(context, 'Read-only in View As preview', isError: true); return; }
+                              cart.remove(p);
+                            },
                             child: Container(
                               width: 22,
                               height: 22,
@@ -906,7 +914,10 @@ class _CartStepperState extends State<_CartStepper> {
                     cursor: SystemMouseCursors.click,
                     child: GestureDetector(
                       behavior: HitTestBehavior.opaque,
-                      onTap: () => widget.cart.decrement(widget.product),
+                      onTap: () {
+                        if (widget.cart.isViewAs) { showToast(context, 'Read-only in View As preview', isError: true); return; }
+                        widget.cart.decrement(widget.product);
+                      },
                     ),
                   ),
                 ),
@@ -919,7 +930,10 @@ class _CartStepperState extends State<_CartStepper> {
                     cursor: SystemMouseCursors.click,
                     child: GestureDetector(
                       behavior: HitTestBehavior.opaque,
-                      onTap: () => widget.cart.increment(widget.product),
+                      onTap: () {
+                        if (widget.cart.isViewAs) { showToast(context, 'Read-only in View As preview', isError: true); return; }
+                        widget.cart.increment(widget.product);
+                      },
                     ),
                   ),
                 ),

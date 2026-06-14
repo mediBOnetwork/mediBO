@@ -55,7 +55,24 @@ class _PharmaB2BAppState extends State<PharmaB2BApp> {
   final ViewAsNotifier _viewAs = ViewAsNotifier();
 
   @override
+  void initState() {
+    super.initState();
+    _viewAs.addListener(_onViewAsChanged);
+  }
+
+  void _onViewAsChanged() {
+    if (_viewAs.isActive &&
+        _viewAs.role == ViewAsRole.customer &&
+        _viewAs.identity?.userId != null) {
+      _cart.enterViewAs(_viewAs.identity!.userId!);
+    } else {
+      _cart.exitViewAs();
+    }
+  }
+
+  @override
   void dispose() {
+    _viewAs.removeListener(_onViewAsChanged);
     _cart.dispose();
     _auth.dispose();
     _viewAs.dispose();

@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <meta name="build-commit" content="1a49086">
+  <meta name="build-commit" content="07f546c">
   <!--
     If you are serving your web app in a path other than the root, change the
     href value below to reflect the base path you are serving from.
@@ -30,6 +30,10 @@
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
   <meta name="description" content="B2B Pharmacy ordering platform">
   <meta name="autocomplete" content="off">
+  <!-- Prevent browsers from auto-detecting phone numbers, dates, addresses in
+       Flutter's accessibility semantic layer (flt-semantics elements), which
+       would otherwise add yellow underline / highlight to canvas-drawn text. -->
+  <meta name="format-detection" content="telephone=no, date=no, email=no, address=no">
 
   <!-- Force browsers to always check for a fresh version instead of
        serving index.html from cache. The _headers / server config should
@@ -69,6 +73,16 @@
     }
     flt-glass-pane {
       -webkit-tap-highlight-color: transparent !important;
+    }
+    /* Flutter accessibility semantic elements — positioned over the canvas.
+       Prevent browser from applying text-decoration or background highlights
+       (e.g. phone-number underline, autofill yellow) to these invisible elements. */
+    flt-semantics, flt-semantics-container, flt-semantics-img,
+    flt-semantics-value, flt-semantics-scroll-container {
+      text-decoration: none !important;
+      -webkit-text-decoration: none !important;
+      background-color: transparent !important;
+      color: transparent !important;
     }
     /* ── Loading screen — shown until Flutter paints ────────────────────── */
     #flutter-loading {

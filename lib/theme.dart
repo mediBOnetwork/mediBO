@@ -106,6 +106,10 @@ ThemeData buildTheme() {
     textTheme: base.textTheme.apply(
       bodyColor: Brand.ink,
       displayColor: Brand.ink,
+      // Explicitly clear any stray text decoration inherited from the
+      // Material 3 base theme — prevents yellow underline on canvas text.
+      decoration: TextDecoration.none,
+      decorationColor: Colors.transparent,
     ),
     dividerTheme: const DividerThemeData(color: Brand.border, thickness: 1),
     cardTheme: CardThemeData(

@@ -53,13 +53,11 @@ class _PharmaB2BAppState extends State<PharmaB2BApp> {
   final CartModel _cart = CartModel();
   final AuthNotifier _auth = AuthNotifier();
   final ViewAsNotifier _viewAs = ViewAsNotifier();
-  bool _authWasLoading = true;
 
   @override
   void initState() {
     super.initState();
     _viewAs.addListener(_onViewAsChanged);
-    _auth.addListener(_onAuthChanged);
   }
 
   void _onViewAsChanged() {
@@ -72,86 +70,9 @@ class _PharmaB2BAppState extends State<PharmaB2BApp> {
     }
   }
 
-  void _onAuthChanged() {
-    if (_authWasLoading && !_auth.loading) {
-      _authWasLoading = false;
-      RenderLog.write('view_as_restore', 'auth_ready:superAdmin=${_auth.isSuperAdmin}');
-      if (_auth.isSuperAdmin && kEnableViewAs) {
-        // Fire-and-forget; .catchError ensures unhandled rejections never crash Flutter.
-        _tryRestoreViewAs().catchError((Object e) {
-          ViewAsNotifier.clearPersisted();
-          RenderLog.write('view_as_restore', 'uncaught:$e');
-        });
-      } else {
-        // Non-super-admin or flag off: clear any leftover descriptor.
-        ViewAsNotifier.clearPersisted();
-        RenderLog.write('view_as_restore', 'cleared:not_super_admin');
-      }
-    }
-  }
-
-  Future<void> _tryRestoreViewAs() async {
-    try {
-      final desc = ViewAsNotifier.readPersistedDescriptor();
-      if (desc == null) {
-        RenderLog.write('view_as_restore', 'no_persisted');
-        return;
-      }
-      final roleStr = desc['role'] as String?;
-      final id = desc['id'] as String?;
-      final name = desc['name'] as String?;
-      final email = desc['email'] as String?;
-      final userId = desc['userId'] as String?;
-      if (roleStr == null || id == null || name == null || email == null) {
-        ViewAsNotifier.clearPersisted();
-        RenderLog.write('view_as_restore', 'invalid_descriptor');
-        return;
-      }
-      ViewAsRole? role;
-      try { role = ViewAsRole.values.byName(roleStr); } catch (_) {}
-      if (role == null) {
-        ViewAsNotifier.clearPersisted();
-        RenderLog.write('view_as_restore', 'unknown_role:$roleStr');
-        return;
-      }
-      // Validate the account still exists in DB — 5s timeout guards against hangs.
-      Map<String, dynamic>? res;
-      try {
-        final queryFuture = Supabase.instance.client
-            .from('pharmacy_profiles')
-            .select('id')
-            .eq('id', id)
-            .maybeSingle();
-        // Race the query against a 5-second null fallback.
-        final result = await Future.any<dynamic>([
-          queryFuture,
-          Future<dynamic>.delayed(const Duration(seconds: 5)),
-        ]);
-        res = result as Map<String, dynamic>?;
-      } catch (e) {
-        // Network/auth error — skip restore but keep descriptor for next boot.
-        RenderLog.write('view_as_restore', 'validation_error:$e');
-        return;
-      }
-      if (res == null) {
-        ViewAsNotifier.clearPersisted();
-        RenderLog.write('view_as_restore', 'account_not_found:$id');
-        return;
-      }
-      final identity = ViewAsIdentity(id: id, name: name, email: email, userId: userId);
-      _viewAs.activate(role, identity);
-      RenderLog.write('view_as_restore', '${role.name}:$id:$name');
-    } catch (e) {
-      // Catch-all: restore must never block or crash the app.
-      ViewAsNotifier.clearPersisted();
-      RenderLog.write('view_as_restore', 'fatal:$e');
-    }
-  }
-
   @override
   void dispose() {
     _viewAs.removeListener(_onViewAsChanged);
-    _auth.removeListener(_onAuthChanged);
     _cart.dispose();
     _auth.dispose();
     _viewAs.dispose();

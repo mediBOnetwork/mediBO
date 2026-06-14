@@ -26,6 +26,7 @@ import 'admin/admin_supplier_screen.dart';
 import 'auth/login_screen.dart';
 import 'bulk_upload_screen.dart';
 import 'cart_screen.dart';
+import '../utils/toast.dart';
 import 'orders_screen.dart';
 import 'profile_screen.dart';
 import 'storefront_screen.dart';
@@ -332,12 +333,17 @@ class _HomeShellState extends State<HomeShell> {
         ];
 
         final isAdmin = UserState.of(context).isAdmin;
+        // Customer ViewAs: force customer shell (header + nav), never admin chrome
+        final effectiveAdmin = isCustomerViewAs ? false : isAdmin;
+        if (isCustomerViewAs) {
+          RenderLog.write('view_as_shell', 'customer:${isDesktop ? "desktop" : "mobile"}');
+        }
 
         // Wrap admin layouts in AdminAlertOverlay so realtime channels +
         // FCM handler are alive as long as the admin shell is on screen.
         final shell = isDesktop
-            ? _buildDesktop(pages, onLogoTap, isAdmin)
-            : _buildMobile(pages, onLogoTap, isAdmin);
+            ? _buildDesktop(pages, onLogoTap, effectiveAdmin)
+            : _buildMobile(pages, onLogoTap, effectiveAdmin);
         if (isCustomerViewAs) {
           return Column(children: [
             _ViewAsBanner(
@@ -3253,6 +3259,8 @@ class _DesktopProfileButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final auth = UserState.of(context);
+    final viewAs = ViewAsState.of(context);
+    final isCustomerViewAs = viewAs.isActive && viewAs.role == ViewAsRole.customer;
 
     if (!auth.isAuthenticated) {
       return PressEffect(
@@ -3370,10 +3378,22 @@ class _DesktopProfileButton extends StatelessWidget {
       ],
       onSelected: (val) async {
         if (val == 'profile' && context.mounted) {
-          Navigator.push(context,
-              MaterialPageRoute(builder: (_) => const ProfileScreen()));
+          if (isCustomerViewAs) {
+            Navigator.push(context, MaterialPageRoute(
+              builder: (_) => ProfileScreen(viewAsProfileId: viewAs.identity!.id),
+            ));
+          } else {
+            Navigator.push(context,
+                MaterialPageRoute(builder: (_) => const ProfileScreen()));
+          }
         } else if (val == 'logout') {
-          await UserState.read(context).signOut();
+          if (isCustomerViewAs) {
+            if (context.mounted) {
+              showToast(context, 'Read-only in View As preview — Exit to sign out', isError: true);
+            }
+          } else {
+            await UserState.read(context).signOut();
+          }
         } else if (onAdminNav != null) {
           onAdminNav!(val);
         }

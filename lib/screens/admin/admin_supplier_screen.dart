@@ -200,6 +200,10 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   bool _autoMeta = false;
   bool _autoMetaLoading = false;
 
+  // ── Supplier Orders auto-meta toggle ─────────────────────────────────────
+  bool _orderAutoMeta = false;
+  bool _orderAutoMetaLoading = false;
+
   // ── Send-inquiry popover (Clear Cart style) ──────────────────────────────
   final Map<String, LayerLink> _sendLinks = {};
   OverlayEntry? _sendPopoverOverlay;
@@ -721,8 +725,42 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                   style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
             ]),
           ),
-          if (_filter == _SupFilter.inquiry) ...[
-            // Inquiry tab: show Auto-Meta toggle in the Import Supplier slot
+          if (_filter == _SupFilter.suppliers) ...[
+            Builder(builder: (_) {
+              RenderLog.write('sort_in_header_slot', 'true');
+              return Row(mainAxisSize: MainAxisSize.min, children: [
+                const Text('Sort:', style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+                const SizedBox(width: 6),
+                Container(
+                  height: 32,
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: const Color(0xFFE5E7EB)),
+                  ),
+                  child: DropdownButtonHideUnderline(
+                    child: DropdownButton<_SupSortMode>(
+                      value: _sortMode,
+                      isDense: true,
+                      icon: const Icon(Icons.unfold_more, size: 14, color: Color(0xFF6B7280)),
+                      style: const TextStyle(fontSize: 12, color: Color(0xFF111827)),
+                      items: const [
+                        DropdownMenuItem(value: _SupSortMode.spnDesc, child: Text('SPN (High→Low)')),
+                        DropdownMenuItem(value: _SupSortMode.nameAsc, child: Text('Name (A–Z)')),
+                      ],
+                      onChanged: (mode) {
+                        if (mode == null || mode == _sortMode) return;
+                        setState(() { _sortMode = mode; _applySort(); });
+                        RenderLog.write('supplier_sort_mode',
+                            mode == _SupSortMode.spnDesc ? 'spn_desc' : 'name_asc');
+                      },
+                    ),
+                  ),
+                ),
+              ]);
+            }),
+          ] else if (_filter == _SupFilter.inquiry) ...[
             Builder(builder: (_) {
               RenderLog.write('toggle_in_header_slot', 'true');
               RenderLog.write('send_all_removed', 'true');
@@ -747,20 +785,30 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                       ),
               ]);
             }),
-          ] else ...[
-            CompositedTransformTarget(
-              link: _importSupplierLink,
-              child: TextButton.icon(
-                onPressed: _pickAndImportSupplierProfile,
-                icon: const Icon(Icons.upload_file_outlined, size: 16),
-                label: const Text('Import Supplier'),
-                style: TextButton.styleFrom(
-                  foregroundColor: const Color(0xFF1B7A43),
-                  textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                ),
-              ),
-            ),
+          ] else if (_filter == _SupFilter.orders) ...[
+            Builder(builder: (_) {
+              RenderLog.write('order_auto_meta_toggle_rendered', 'true');
+              return Row(mainAxisSize: MainAxisSize.min, children: [
+                Text('Automatic by Meta',
+                    style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: _orderAutoMeta ? const Color(0xFF1B7A43) : const Color(0xFF6B7280))),
+                const SizedBox(width: 6),
+                _orderAutoMetaLoading
+                    ? const SizedBox(width: 28, height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF1B7A43)))
+                    : Transform.scale(
+                        scale: 0.75,
+                        child: Switch(
+                          value: _orderAutoMeta,
+                          onChanged: (v) => _saveOrderAutoMeta(v),
+                          activeColor: const Color(0xFF1B7A43),
+                          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                      ),
+              ]);
+            }),
           ],
           IconButton(
             onPressed: _filter == _SupFilter.inquiry
@@ -890,6 +938,61 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     } catch (e) {
       if (mounted) {
         setState(() { _autoMeta = !val; _autoMetaLoading = false; });
+        showToast(context, 'Failed to save setting: $e', isError: true);
+      }
+    }
+  }
+
+  Future<void> _loadOrderAutoMeta() async {
+    if (!mounted) return;
+    setState(() => _orderAutoMetaLoading = true);
+    try {
+      final result = await Supabase.instance.client
+          .rpc('get_app_setting', params: {'p_key': 'supplier_order_auto_meta'});
+      final val = result as bool? ?? false;
+      if (mounted) {
+        setState(() { _orderAutoMeta = val; _orderAutoMetaLoading = false; });
+        RenderLog.write('order_auto_meta_toggle_rendered', 'loaded:$val');
+      }
+    } catch (e) {
+      if (mounted) setState(() => _orderAutoMetaLoading = false);
+    }
+  }
+
+  Future<void> _saveOrderAutoMeta(bool val) async {
+    setState(() { _orderAutoMeta = val; _orderAutoMetaLoading = true; });
+    try {
+      if (val) {
+        // Attempt Meta edge function — expect meta_not_configured
+        final resp = await Supabase.instance.client.functions.invoke(
+          'meta-send-inquiry',
+          body: {'suppliers': []},
+        );
+        final data = resp.data as Map<String, dynamic>? ?? {};
+        if (data['error'] == 'meta_not_configured') {
+          RenderLog.write('order_meta_not_configured', 'true');
+          if (mounted) {
+            showToast(context, 'Meta not configured — Automatic disabled', isError: true);
+            setState(() { _orderAutoMeta = false; _orderAutoMetaLoading = false; });
+          }
+          await Supabase.instance.client.rpc('set_app_setting', params: {
+            'p_key': 'supplier_order_auto_meta',
+            'p_value': false,
+          });
+          return;
+        }
+      }
+      await Supabase.instance.client.rpc('set_app_setting', params: {
+        'p_key': 'supplier_order_auto_meta',
+        'p_value': val,
+      });
+      if (mounted) {
+        setState(() => _orderAutoMetaLoading = false);
+        showToast(context, val ? 'Automatic by Meta: ON' : 'Automatic by Meta: OFF');
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() { _orderAutoMeta = !val; _orderAutoMetaLoading = false; });
         showToast(context, 'Failed to save setting: $e', isError: true);
       }
     }
@@ -1177,6 +1280,8 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       _inquiryPollTimer = Timer.periodic(const Duration(seconds: 30), (_) {
         if (mounted && _filter == _SupFilter.inquiry) _fetchInquiryOverview(silent: true);
       });
+    } else if (f == _SupFilter.orders) {
+      _loadOrderAutoMeta();
     }
   }
 
@@ -2130,45 +2235,6 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         padding: EdgeInsets.fromLTRB(pad, 10, pad, 4),
         child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
           _buildRefreshButton(),
-          const SizedBox(width: 12),
-          const Text('Sort:', style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
-          const SizedBox(width: 6),
-          Container(
-            height: 32,
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: const Color(0xFFE5E7EB)),
-            ),
-            child: DropdownButtonHideUnderline(
-              child: DropdownButton<_SupSortMode>(
-                value: _sortMode,
-                isDense: true,
-                icon: const Icon(Icons.unfold_more, size: 14, color: Color(0xFF6B7280)),
-                style: const TextStyle(fontSize: 12, color: Color(0xFF111827)),
-                items: const [
-                  DropdownMenuItem(
-                    value: _SupSortMode.spnDesc,
-                    child: Text('SPN (High→Low)'),
-                  ),
-                  DropdownMenuItem(
-                    value: _SupSortMode.nameAsc,
-                    child: Text('Name (A–Z)'),
-                  ),
-                ],
-                onChanged: (mode) {
-                  if (mode == null || mode == _sortMode) return;
-                  setState(() {
-                    _sortMode = mode;
-                    _applySort();
-                  });
-                  RenderLog.write('supplier_sort_mode',
-                      mode == _SupSortMode.spnDesc ? 'spn_desc' : 'name_asc');
-                },
-              ),
-            ),
-          ),
         ]),
       ),
       if (_suppliers.isEmpty)
@@ -2179,30 +2245,49 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       ],
       const SizedBox(height: 32),
       _buildDeletedSection(isDesktop),
-      const SizedBox(height: 32),
+      const SizedBox(height: 24),
+      Builder(builder: (_) {
+        RenderLog.write('import_supplier_at_bottom', 'true');
+        RenderLog.write('import_supplier_only_suppliers_tab', 'true');
+        return Padding(
+          padding: EdgeInsets.fromLTRB(pad, 0, pad, 32),
+          child: CompositedTransformTarget(
+            link: _importSupplierLink,
+            child: SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: _pickAndImportSupplierProfile,
+                icon: const Icon(Icons.upload_file_outlined, size: 18),
+                label: const Text('Import Supplier'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF1B7A43),
+                  foregroundColor: Colors.white,
+                  textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  elevation: 0,
+                ),
+              ),
+            ),
+          ),
+        );
+      }),
     ]);
   }
 
   Widget _buildRefreshButton() {
-    RenderLog.write('button_rendered', _hasPendingChanges ? 'pending' : 'idle');
-    final isPending = _hasPendingChanges;
-    final bgColor    = isPending ? const Color(0xFF1B7A43) : Colors.white;
-    final textColor  = isPending ? Colors.white : const Color(0xFF374151);
-    final borderColor = isPending ? const Color(0xFF1B7A43) : const Color(0xFFE5E7EB);
-    final label = isPending ? 'Save Changes' : 'Refresh';
-    final icon  = isPending ? Icons.save_outlined : Icons.refresh;
-
+    RenderLog.write('supabase_refresh_removed', 'true');
     return MouseRegion(
       cursor: SystemMouseCursors.click,
       child: GestureDetector(
-        onTap: _refreshLoading ? null : () => _refreshSuppliers(isSave: isPending),
+        onTap: _refreshLoading ? null : () => _refreshSuppliers(),
         child: Container(
           height: 32,
           padding: const EdgeInsets.symmetric(horizontal: 10),
           decoration: BoxDecoration(
-            color: bgColor,
+            color: Colors.white,
             borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: borderColor),
+            border: Border.all(color: const Color(0xFFE5E7EB)),
             boxShadow: [
               BoxShadow(
                 color: Colors.black.withValues(alpha: 0.06),
@@ -2213,17 +2298,12 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           ),
           child: Row(mainAxisSize: MainAxisSize.min, children: [
             if (_refreshLoading)
-              SizedBox(
-                width: 12, height: 12,
-                child: CircularProgressIndicator(
-                  strokeWidth: 1.5,
-                  color: isPending ? Colors.white : const Color(0xFF6B7280),
-                ),
-              )
+              const SizedBox(width: 12, height: 12,
+                child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF6B7280)))
             else
-              Icon(icon, size: 14, color: textColor),
+              const Icon(Icons.refresh, size: 14, color: Color(0xFF374151)),
             const SizedBox(width: 5),
-            Text(label, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: textColor)),
+            const Text('Refresh', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: Color(0xFF374151))),
           ]),
         ),
       ),
@@ -2580,6 +2660,59 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   // SUPPLIER ORDERS TAB
   // ═══════════════════════════════════════════════════════════════════════════
 
+  Widget _buildOrderSendButton(_OrderRow row) {
+    RenderLog.write('order_send_button_rendered', 'true');
+    return GestureDetector(
+      onTap: () => _sendOrderWhatsApp(row),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: const Color(0xFFD1FAE5),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: const Color(0xFF065F46).withValues(alpha: 0.3)),
+        ),
+        child: const Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(Icons.send_outlined, size: 13, color: Color(0xFF065F46)),
+          SizedBox(width: 4),
+          Text('Send', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF065F46))),
+        ]),
+      ),
+    );
+  }
+
+  Future<void> _sendOrderWhatsApp(_OrderRow row) async {
+    final supName = row.supplierName;
+    if (supName == null) return;
+    try {
+      final rows = await Supabase.instance.client
+          .rpc('get_supplier_order_send_payload', params: {'p_supplier_name': supName}) as List;
+      if (rows.isEmpty) {
+        if (mounted) showToast(context, 'No order data found', isError: true);
+        return;
+      }
+      final data = Map<String, dynamic>.from(rows.first as Map);
+      final phone = data['whatsapp_no'] as String?;
+      final orderRef = data['order_ref'] as String? ?? '';
+      final itemsSummary = data['items_summary'] as String? ?? '';
+
+      final msg = Uri.encodeComponent('Order: $orderRef\n$itemsSummary');
+      final slug = supName.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '_');
+
+      if (phone != null && phone.isNotEmpty) {
+        final normalized = _normalizePhone(phone);
+        html.window.open('https://wa.me/91$normalized?text=$msg', '_blank');
+        RenderLog.write('order_send_wa_$slug', 'sent:91$normalized');
+      } else {
+        final rawMsg = 'Order: $orderRef\n$itemsSummary';
+        await Clipboard.setData(ClipboardData(text: rawMsg));
+        if (mounted) showToast(context, 'No WhatsApp number — message copied');
+        RenderLog.write('order_send_wa_$slug', 'fallback:clipboard');
+      }
+    } catch (e) {
+      if (mounted) showToast(context, 'Failed to send: $e', isError: true);
+    }
+  }
+
   Widget _buildOrdersView(bool isDesktop) {
     if (_orders.isEmpty) return _emptyState('0 supplier orders');
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -2602,6 +2735,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         _th('AMOUNT', flex: 2),
         _th('STATUS', flex: 3),
         _th('DATE', flex: 3),
+        const SizedBox(width: 72),
       ]),
     );
   }
@@ -2634,6 +2768,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                 style: const TextStyle(fontSize: 13, color: Color(0xFF111827)))),
             Expanded(flex: 3, child: _orderStatusLabel(row.status)),
             Expanded(flex: 3, child: Text(dateStr, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)))),
+            _buildOrderSendButton(row),
           ]),
         ),
       ),
@@ -2678,7 +2813,11 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                 Text('₹${row.totalAmount!.toStringAsFixed(0)}', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF1B7A43))),
               ],
               const SizedBox(height: 10),
-              _orderStatusLabel(row.status),
+              Row(children: [
+                _orderStatusLabel(row.status),
+                const Spacer(),
+                _buildOrderSendButton(row),
+              ]),
             ]),
           ),
           if (isExpanded) _buildOrderItemsPanel(row.items, padH: 14),
@@ -5523,8 +5662,12 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
 
   bool _loading = true;
   bool _loadCancelled = false;
+  bool _saving = false;
   final Map<String, String?> _values = {};
+  final Map<String, String?> _savedValues = {};
   int _changeCounter = 0;
+
+  bool get _isDirty => _spnCols.any((col) => _values[col.$2] != _savedValues[col.$2]);
 
   @override
   void initState() {
@@ -5560,6 +5703,10 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
         // User-cached values take precedence — never overwrite a user pick with a stale DB reload.
         final cached = _userCache[_supplierId] ?? {};
         setState(() {
+          _savedValues['margin']       = row['margin'] as String?;
+          _savedValues['cd_condition'] = row['cd_condition'] as String?;
+          _savedValues['behaviour']    = row['behaviour'] as String?;
+          _savedValues['payment_term'] = row['payment_type'] as String?;
           _values['margin']       = cached['margin']       ?? row['margin'] as String?;
           _values['cd_condition'] = cached['cd_condition'] ?? row['cd_condition'] as String?;
           _values['behaviour']    = cached['behaviour']    ?? row['behaviour'] as String?;
@@ -5571,6 +5718,52 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
       }
     } catch (_) {
       if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _saveAll() async {
+    if (_saving) return;
+    setState(() => _saving = true);
+    RenderLog.write('spn_saved_supabase', 'start');
+    final id = _supplierId;
+    if (id.isEmpty) { setState(() => _saving = false); return; }
+    try {
+      final res = await Supabase.instance.client
+          .from('supplier_profiles')
+          .update({
+            'margin':       _values['margin'],
+            'cd_condition': _values['cd_condition'],
+            'behaviour':    _values['behaviour'],
+            'payment_type': _values['payment_term'],
+          })
+          .eq('id', id)
+          .select('id')
+          .timeout(const Duration(seconds: 8));
+      RenderLog.write('spn_saved_supabase', 'rows:${res.length}');
+      if (res.isNotEmpty) {
+        Supabase.instance.client
+            .rpc('recompute_supplier_points', params: {'p_id': id})
+            .then((_) {})
+            .catchError((_) {});
+        if (mounted) {
+          setState(() {
+            _savedValues.addAll(_values);
+            _saving = false;
+          });
+          _userCache.remove(id);
+          showToast(context, 'Saved ✓', duration: const Duration(milliseconds: 800));
+        }
+      } else {
+        if (mounted) {
+          setState(() => _saving = false);
+          showToast(context, 'Save failed — try again', isError: true);
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _saving = false);
+        showToast(context, 'Save error: $e', isError: true);
+      }
     }
   }
 
@@ -5629,6 +5822,32 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
                 child: Row(children: [
                   const Text('Supplier Points — Terms',
                       style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF374151))),
+                  const Spacer(),
+                  Builder(builder: (_) {
+                    RenderLog.write('spn_save_button_rendered', 'true');
+                    final dirty = _isDirty;
+                    if (dirty) RenderLog.write('spn_save_dirty_green', 'visible');
+                    return GestureDetector(
+                      onTap: (_saving || !dirty) ? null : _saveAll,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: dirty ? const Color(0xFF1B7A43) : const Color(0xFF92400E).withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: _saving
+                            ? const SizedBox(width: 14, height: 14,
+                                child: CircularProgressIndicator(strokeWidth: 1.5, color: Colors.white))
+                            : Text('Save',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: dirty ? Colors.white : const Color(0xFF92400E),
+                                )),
+                      ),
+                    );
+                  }),
+                  const SizedBox(width: 4),
                 ]),
               ),
               const Divider(height: 1, color: Color(0xFFBFDBFE)),
@@ -5691,9 +5910,9 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
                           onPick: (field, val) {
                             _changeCounter++;
                             RenderLog.write('spn_change_count', _changeCounter.toString());
-                            RenderLog.write('spn_change_last', '$field=$val@${DateTime.now().millisecondsSinceEpoch}');
+                            RenderLog.write('spn_save_dirty_green', 'true');
                             (_userCache[_supplierId] ??= {})[field] = val;
-                            _writeField(field, val);
+                            setState(() => _values[field] = val);
                           },
                         )),
                       ],

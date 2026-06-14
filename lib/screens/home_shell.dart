@@ -59,6 +59,7 @@ class _HomeShellState extends State<HomeShell> {
   int _scrollTrigger = 0;
   int _scrollToTopTrigger = 0;
   bool _searchLoading = false;
+  int _ordersRefreshSignal = 0; // increment to force OrdersScreen re-fetch
 
   // Desktop scroll state (header shadow only — fires setState at most twice per visit)
   bool _desktopScrolled = false;
@@ -315,7 +316,10 @@ class _HomeShellState extends State<HomeShell> {
             onFooterOrders: () => _setIndex(1),
             onFooterCart: () => setState(() => _cartOpen = true),
           ),
-          OrdersScreen(viewAsUserId: isCustomerViewAs ? viewAs.identity?.userId : null),
+          OrdersScreen(
+            viewAsUserId: isCustomerViewAs ? viewAs.identity?.userId : null,
+            refreshSignal: _ordersRefreshSignal,
+          ),
           BulkUploadScreen(key: _bulkUploadKey),
           // Admin-only pages: indices 3–7 (desktop only; built for admin users)
           // Kept alive in IndexedStack so no state loss on tab switch.
@@ -469,7 +473,10 @@ class _HomeShellState extends State<HomeShell> {
               child: CartPanel(
                 open: _cartOpen,
                 onClose: () => setState(() => _cartOpen = false),
-                onOrderPlaced: () => _setIndex(1),
+                onOrderPlaced: () {
+                  setState(() => _ordersRefreshSignal++);
+                  _setIndex(1);
+                },
               ),
             ),
         ],
@@ -578,7 +585,10 @@ class _HomeShellState extends State<HomeShell> {
               child: CartPanel(
                 open: _cartOpen,
                 onClose: () => setState(() => _cartOpen = false),
-                onOrderPlaced: () => _setIndex(1),
+                onOrderPlaced: () {
+                  setState(() => _ordersRefreshSignal++);
+                  _setIndex(1);
+                },
               ),
             ),
           ],
@@ -3287,7 +3297,10 @@ class _DesktopProfileButton extends StatelessWidget {
     }
 
     final profile = auth.profile;
-    final displayName = profile?.displayName ?? 'Account';
+    // In ViewAs mode show the impersonated account's name, not the admin's profile.
+    final displayName = viewAs.isActive
+        ? (viewAs.identity?.name ?? 'Account')
+        : (profile?.displayName ?? 'Account');
     final initial = displayName.isNotEmpty ? displayName[0].toUpperCase() : '?';
     final shortName =
         displayName.length > 16 ? '${displayName.substring(0, 14)}…' : displayName;
@@ -3529,6 +3542,11 @@ class _MobileProfileButton extends StatelessWidget {
 
   void _showProfileSheet(BuildContext context, AuthNotifier auth) {
     final profile = auth.profile;
+    // Capture viewAs name before opening the modal (modal has a different context tree).
+    final viewAs = ViewAsState.read(context);
+    final displayName = viewAs.isActive
+        ? (viewAs.identity?.name ?? 'Account')
+        : (profile?.displayName ?? 'Account');
     showModalBottomSheet(
       context: context,
       shape: const RoundedRectangleBorder(
@@ -3570,7 +3588,7 @@ class _MobileProfileButton extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        profile?.displayName ?? 'Account',
+                        displayName,
                         style: const TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w700,

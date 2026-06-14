@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../util.dart';
+import '../utils/render_log.dart';
 import '../widgets/animations.dart';
 
 // ─── Data models ─────────────────────────────────────────────────────────────
@@ -79,7 +80,9 @@ class _DbLine {
 class OrdersScreen extends StatefulWidget {
   // When set (View As Customer), fetch orders for this user_id instead of currentUser.
   final String? viewAsUserId;
-  const OrdersScreen({super.key, this.viewAsUserId});
+  // Increment to force a re-fetch (used after write-as order placement).
+  final int refreshSignal;
+  const OrdersScreen({super.key, this.viewAsUserId, this.refreshSignal = 0});
 
   @override
   State<OrdersScreen> createState() => _OrdersScreenState();
@@ -95,6 +98,15 @@ class _OrdersScreenState extends State<OrdersScreen> {
     super.initState();
     _fetch();
     _subscribeRealtime();
+  }
+
+  @override
+  void didUpdateWidget(OrdersScreen old) {
+    super.didUpdateWidget(old);
+    if (widget.refreshSignal != old.refreshSignal ||
+        widget.viewAsUserId != old.viewAsUserId) {
+      _fetch();
+    }
   }
 
   @override
@@ -118,8 +130,11 @@ class _OrdersScreenState extends State<OrdersScreen> {
           .eq('user_id', uid)
           .order('created_at', ascending: false);
       if (!mounted) return;
+      final parsed = rows.map((r) => _DbOrder.fromRow(r)).toList();
+      RenderLog.write('orders_fetched',
+          'count:${parsed.length}${widget.viewAsUserId != null ? ':viewas' : ''}');
       setState(() {
-        _orders = rows.map((r) => _DbOrder.fromRow(r)).toList();
+        _orders = parsed;
         _loading = false;
       });
     } catch (_) {

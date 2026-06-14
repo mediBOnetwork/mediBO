@@ -3,6 +3,8 @@ import 'dart:convert';
 // ignore: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
 
+import 'package:shared_preferences/shared_preferences.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_web_plugins/url_strategy.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -77,14 +79,100 @@ class _PharmaB2BAppState extends State<PharmaB2BApp> {
   final CartModel _cart = CartModel();
   final AuthNotifier _auth = AuthNotifier();
   final ViewAsNotifier _viewAs = ViewAsNotifier();
+  bool _viewAsRestored = false;
 
   @override
   void initState() {
     super.initState();
     _viewAs.addListener(_onViewAsChanged);
+    _auth.addListener(_onAuthChanged);
   }
 
+  // ─── ViewAs persistence (shared_preferences only — never dart:html) ─────────
+
+  void _onAuthChanged() {
+    // Run once when auth fully resolves (loading=false means role is set too).
+    if (_viewAsRestored) return;
+    if (_auth.loading) return;
+    _viewAsRestored = true;
+    if (_auth.isSuperAdmin && kEnableViewAs) {
+      _tryRestoreViewAs();
+    }
+  }
+
+  Future<void> _tryRestoreViewAs() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString('viewas_descriptor');
+      if (raw == null) return;
+      final map = jsonDecode(raw) as Map<String, dynamic>;
+      final roleName = map['role'] as String?;
+      ViewAsRole? roleValue;
+      for (final r in ViewAsRole.values) {
+        if (r.name == roleName) { roleValue = r; break; }
+      }
+      if (roleValue == null) {
+        await prefs.remove('viewas_descriptor');
+        RenderLog.write('view_as_restore', 'skipped:bad_role');
+        return;
+      }
+      final id = map['id'] as String? ?? '';
+      if (id.isEmpty) {
+        await prefs.remove('viewas_descriptor');
+        return;
+      }
+      final identity = ViewAsIdentity(
+        id: id,
+        name: map['name'] as String? ?? '',
+        email: map['email'] as String? ?? '',
+        userId: map['userId'] as String?,
+        isApproved: map['isApproved'] as bool? ?? true,
+      );
+      _viewAs.activate(roleValue, identity);
+      RenderLog.write('view_as_restore', '${roleValue.name}:$id');
+    } catch (e) {
+      try {
+        final msg = e.toString();
+        RenderLog.write('view_as_restore_error', msg.length > 80 ? msg.substring(0, 80) : msg);
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.remove('viewas_descriptor');
+      } catch (_) {}
+    }
+  }
+
+  void _saveViewAsDescriptor() {
+    try {
+      final role = _viewAs.role;
+      final identity = _viewAs.identity;
+      if (role == null || identity == null) return;
+      SharedPreferences.getInstance().then((prefs) {
+        prefs.setString('viewas_descriptor', jsonEncode({
+          'role':       role.name,
+          'id':         identity.id,
+          'name':       identity.name,
+          'email':      identity.email,
+          'userId':     identity.userId,
+          'isApproved': identity.isApproved,
+        }));
+      });
+    } catch (_) {}
+  }
+
+  void _clearViewAsDescriptor() {
+    try {
+      SharedPreferences.getInstance()
+          .then((prefs) => prefs.remove('viewas_descriptor'));
+    } catch (_) {}
+  }
+
+  // ─── ViewAs listener: syncs cart scope + persists descriptor ────────────────
+
   void _onViewAsChanged() {
+    if (_viewAs.isActive) {
+      _saveViewAsDescriptor();
+    } else {
+      _clearViewAsDescriptor();
+    }
     if (_viewAs.isActive &&
         _viewAs.role == ViewAsRole.customer &&
         _viewAs.identity?.userId != null) {
@@ -97,6 +185,7 @@ class _PharmaB2BAppState extends State<PharmaB2BApp> {
   @override
   void dispose() {
     _viewAs.removeListener(_onViewAsChanged);
+    _auth.removeListener(_onAuthChanged);
     _cart.dispose();
     _auth.dispose();
     _viewAs.dispose();

@@ -53,11 +53,13 @@ class _PharmaB2BAppState extends State<PharmaB2BApp> {
   final CartModel _cart = CartModel();
   final AuthNotifier _auth = AuthNotifier();
   final ViewAsNotifier _viewAs = ViewAsNotifier();
+  bool _authWasLoading = true;
 
   @override
   void initState() {
     super.initState();
     _viewAs.addListener(_onViewAsChanged);
+    _auth.addListener(_onAuthChanged);
   }
 
   void _onViewAsChanged() {
@@ -70,9 +72,68 @@ class _PharmaB2BAppState extends State<PharmaB2BApp> {
     }
   }
 
+  void _onAuthChanged() {
+    if (_authWasLoading && !_auth.loading) {
+      _authWasLoading = false;
+      if (_auth.isSuperAdmin && kEnableViewAs) {
+        _tryRestoreViewAs();
+      } else if (!_auth.loading) {
+        // Non-super-admin (or signed out): clear any leftover descriptor so
+        // a later super-admin login doesn't inherit a stale impersonation.
+        ViewAsNotifier.clearPersisted();
+      }
+    }
+  }
+
+  Future<void> _tryRestoreViewAs() async {
+    final desc = ViewAsNotifier.readPersistedDescriptor();
+    if (desc == null) {
+      RenderLog.write('view_as_restore', 'no_persisted');
+      return;
+    }
+    final roleStr = desc['role'] as String?;
+    final id = desc['id'] as String?;
+    final name = desc['name'] as String?;
+    final email = desc['email'] as String?;
+    final userId = desc['userId'] as String?;
+    if (roleStr == null || id == null || name == null || email == null) {
+      ViewAsNotifier.clearPersisted();
+      RenderLog.write('view_as_restore', 'invalid_descriptor');
+      return;
+    }
+    ViewAsRole? role;
+    try { role = ViewAsRole.values.byName(roleStr); } catch (_) {}
+    if (role == null) {
+      ViewAsNotifier.clearPersisted();
+      RenderLog.write('view_as_restore', 'unknown_role:$roleStr');
+      return;
+    }
+    // Validate the account still exists in DB before restoring.
+    try {
+      final res = await Supabase.instance.client
+          .from('pharmacy_profiles')
+          .select('id')
+          .eq('id', id)
+          .maybeSingle();
+      if (res == null) {
+        ViewAsNotifier.clearPersisted();
+        RenderLog.write('view_as_restore', 'account_not_found:$id');
+        return;
+      }
+    } catch (e) {
+      // Network/auth error — skip restore but keep descriptor for next boot.
+      RenderLog.write('view_as_restore', 'validation_error:$e');
+      return;
+    }
+    final identity = ViewAsIdentity(id: id, name: name, email: email, userId: userId);
+    _viewAs.activate(role, identity);
+    RenderLog.write('view_as_restore', '${role.name}:$id:$name');
+  }
+
   @override
   void dispose() {
     _viewAs.removeListener(_onViewAsChanged);
+    _auth.removeListener(_onAuthChanged);
     _cart.dispose();
     _auth.dispose();
     _viewAs.dispose();

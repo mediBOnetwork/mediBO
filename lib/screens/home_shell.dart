@@ -52,6 +52,7 @@ class _HomeShellState extends State<HomeShell> {
   final GlobalKey _bulkUploadKey = GlobalKey();
 
   int _index = 0; // 0 = storefront, 1 = orders, 2 = bulk upload
+  String _viewAsKey = 'none'; // tracks active ViewAs identity; reset _index on change
   String _query = '';
   String _category = 'All';
   bool _cartOpen = false;
@@ -72,6 +73,21 @@ class _HomeShellState extends State<HomeShell> {
     super.initState();
     _initFromUrl();
     listenPopState(_applyPath);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final viewAs = ViewAsState.of(context);
+    final key = viewAs.isActive
+        ? '${viewAs.role!.name}:${viewAs.identity!.id}'
+        : 'none';
+    if (_viewAsKey != key) {
+      _viewAsKey = key;
+      _index = 0;
+      _cartOpen = false;
+      RenderLog.write('view_as_shell_reset', key);
+    }
   }
 
   // ── URL helpers ─────────────────────────────────────────────────────────────
@@ -219,13 +235,14 @@ class _HomeShellState extends State<HomeShell> {
       switch (role) {
         case ViewAsRole.supplier:
           preview = SupplierShell(
+            key: ValueKey(identity.id),
             viewAsSupplierId: identity.id,
             viewAsSupplierName: identity.name,
           );
         case ViewAsRole.company:
-          preview = _ViewAsCompanyPreview(identity: identity);
+          preview = _ViewAsCompanyPreview(key: ValueKey(identity.id), identity: identity);
         case ViewAsRole.deliveryPartner:
-          preview = _ViewAsDeliveryPartnerPreview(identity: identity);
+          preview = _ViewAsDeliveryPartnerPreview(key: ValueKey(identity.id), identity: identity);
         case ViewAsRole.customer:
           preview = const SizedBox.shrink(); // unreachable — handled below
       }
@@ -4234,7 +4251,7 @@ class _ViewAsCustomerPreviewState extends State<_ViewAsCustomerPreview> {
 
 class _ViewAsCompanyPreview extends StatefulWidget {
   final ViewAsIdentity identity;
-  const _ViewAsCompanyPreview({required this.identity});
+  const _ViewAsCompanyPreview({super.key, required this.identity});
 
   @override
   State<_ViewAsCompanyPreview> createState() => _ViewAsCompanyPreviewState();
@@ -4295,7 +4312,7 @@ class _ViewAsCompanyPreviewState extends State<_ViewAsCompanyPreview> {
 
 class _ViewAsDeliveryPartnerPreview extends StatefulWidget {
   final ViewAsIdentity identity;
-  const _ViewAsDeliveryPartnerPreview({required this.identity});
+  const _ViewAsDeliveryPartnerPreview({super.key, required this.identity});
 
   @override
   State<_ViewAsDeliveryPartnerPreview> createState() => _ViewAsDeliveryPartnerPreviewState();

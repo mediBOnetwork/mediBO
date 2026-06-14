@@ -190,6 +190,18 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   final Set<int> _settingAnswerFor = {}; // inquiry_ids currently being admin-set
   String? _expandedOrderId; // which supplier order row is expanded
 
+  // ── Send-inquiry popover (Clear Cart style) ──────────────────────────────
+  final Map<String, LayerLink> _sendLinks = {};
+  OverlayEntry? _sendPopoverOverlay;
+
+  LayerLink _getSendLink(String supName) =>
+      _sendLinks.putIfAbsent(supName, LayerLink.new);
+
+  void _closeSendPopover() {
+    _sendPopoverOverlay?.remove();
+    _sendPopoverOverlay = null;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -204,6 +216,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     for (final ch in _channels) ch.unsubscribe();
     _channels.clear();
     _scrollCtrl.dispose();
+    _closeSendPopover();
     super.dispose();
   }
 
@@ -1258,23 +1271,26 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                 ),
               ),
               const SizedBox(width: 6),
-              // WhatsApp button — stops propagation to row tap
-              GestureDetector(
-                onTap: () => _openWhatsAppForSupplier(supName),
-                behavior: HitTestBehavior.opaque,
-                child: Container(
-                  height: 30,
-                  padding: const EdgeInsets.symmetric(horizontal: 10),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFECFDF5),
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(color: const Color(0xFF25D366)),
+              // Send button — opens compact contact picker popover
+              CompositedTransformTarget(
+                link: _getSendLink(supName),
+                child: GestureDetector(
+                  onTap: () => _openSendPopover(supName),
+                  behavior: HitTestBehavior.opaque,
+                  child: Container(
+                    height: 30,
+                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFECFDF5),
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: const Color(0xFF25D366)),
+                    ),
+                    child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                      Icon(Icons.send_outlined, size: 12, color: Color(0xFF128C7E)),
+                      SizedBox(width: 4),
+                      Text('Send', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF128C7E))),
+                    ]),
                   ),
-                  child: const Row(mainAxisSize: MainAxisSize.min, children: [
-                    Icon(Icons.chat_bubble_outline, size: 12, color: Color(0xFF128C7E)),
-                    SizedBox(width: 4),
-                    Text('WhatsApp', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF128C7E))),
-                  ]),
                 ),
               ),
             ]),
@@ -1493,59 +1509,68 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     return d.length >= 10 ? d.substring(d.length - 10) : d;
   }
 
-  Future<void> _openWhatsAppForSupplier(String supName) async {
+  List<String> _parsePhoneList(String raw) {
+    return raw
+        .split(RegExp(r'[,\s]+'))
+        .map((s) => s.trim())
+        .where(_isValidPhone)
+        .toSet()
+        .toList();
+  }
+
+  List<String> _parseEmailList(String raw) {
+    return raw
+        .split(RegExp(r'[,\s]+'))
+        .map((s) => s.trim())
+        .where((s) => s.contains('@') && s.contains('.') && s.length > 5)
+        .toSet()
+        .toList();
+  }
+
+  Future<void> _openSendPopover(String supName) async {
+    _closeSendPopover();
     final token = await _ensureInquiryToken(supName);
     if (token == null || token.isEmpty) {
       if (mounted) showToast(context, 'Could not get inquiry link', isError: true);
       return;
     }
-    final link = 'https://medibo.in/inquiry/$token';
+    if (!mounted) return;
 
+    final link = 'https://medibo.in/inquiry/$token';
     final sup = _suppliers.cast<_SupRow?>().firstWhere(
       (s) => s!.supplierName.toLowerCase() == supName.toLowerCase(),
       orElse: () => null,
     );
-    final numbers = <(String, String)>[];
-    if (sup != null) {
-      final wa = (sup.rawData['whatsapp_no'] as String? ?? '').trim();
-      final ct = (sup.rawData['contact_no']  as String? ?? '').trim();
-      if (_isValidPhone(wa)) numbers.add(('WhatsApp', wa));
-      if (_isValidPhone(ct) && ct != wa) numbers.add(('Contact', ct));
-    }
 
-    if (numbers.isEmpty) {
-      if (mounted) showToast(context, 'No valid phone number for $supName', isError: true);
-      return;
-    }
-    if (numbers.length == 1) {
-      _launchWhatsApp(supName, numbers[0].$2, link);
-    } else {
-      if (!mounted) return;
-      final chosen = await showDialog<String>(
-        context: context,
-        builder: (_) => AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          title: Text('Send via WhatsApp — $supName',
-              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: numbers.map(((String type, String num) entry) {
-              return ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: const Icon(Icons.chat_bubble_outline, color: Color(0xFF128C7E)),
-                title: Text('${entry.$1}: ${entry.$2}',
-                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
-                onTap: () => Navigator.pop(context, entry.$2),
-              );
-            }).toList(),
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-          ],
-        ),
-      );
-      if (chosen != null) _launchWhatsApp(supName, chosen, link);
-    }
+    final waNumbers    = _parsePhoneList(sup?.rawData['whatsapp_no']   as String? ?? '');
+    final otherNumbers = _parsePhoneList(
+      '${sup?.rawData['contact_no'] as String? ?? ''},${sup?.rawData['other_contact'] as String? ?? ''}',
+    ).where((n) => !waNumbers.contains(n)).toList();
+    final emails       = _parseEmailList(sup?.rawData['email'] as String? ?? '');
+
+    RenderLog.write('inquiry_send_popup', '$supName:wa=${waNumbers.length}:other=${otherNumbers.length}:email=${emails.length}');
+
+    final entry = OverlayEntry(
+      builder: (_) => _InquirySendPopover(
+        link: _getSendLink(supName),
+        supName: supName,
+        waNumbers: waNumbers,
+        otherNumbers: otherNumbers,
+        emails: emails,
+        inquiryLink: link,
+        onDismissed: _closeSendPopover,
+        onWaNumber: (num) {
+          _closeSendPopover();
+          _launchWhatsApp(supName, num, link);
+        },
+        onEmail: (email) {
+          _closeSendPopover();
+          _launchEmail(supName, email, link);
+        },
+      ),
+    );
+    _sendPopoverOverlay = entry;
+    Overlay.of(context).insert(entry);
   }
 
   void _launchWhatsApp(String supName, String rawNumber, String link) {
@@ -1553,9 +1578,16 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     final intl = '91$normalized';
     final msg = Uri.encodeComponent(
         'Hello $supName,\nWe want to buy some items from you. Please confirm the stock availability:\n$link');
-    final url = 'https://wa.me/$intl?text=$msg';
-    html.window.open(url, '_blank');
+    html.window.open('https://wa.me/$intl?text=$msg', '_blank');
     RenderLog.write('inquiry_whatsapp_sent', '$supName:$intl');
+  }
+
+  void _launchEmail(String supName, String email, String link) {
+    final subject = Uri.encodeComponent('mediBO — Stock Availability Inquiry');
+    final body = Uri.encodeComponent(
+        'Hello $supName,\nWe want to buy some items from you. Please confirm the stock availability:\n$link');
+    html.window.open('mailto:$email?subject=$subject&body=$body', '_blank');
+    RenderLog.write('inquiry_email_sent', '$supName:$email');
   }
 
   // ── Supplier Orders status label (read-only, no actions) ─────────────────
@@ -7568,4 +7600,192 @@ class _StagingCard extends StatelessWidget {
       ]),
     );
   }
+}
+
+// ── Inquiry send-contact popover (Clear Cart style) ───────────────────────────
+
+class _InquirySendPopover extends StatefulWidget {
+  final LayerLink link;
+  final String supName;
+  final List<String> waNumbers;
+  final List<String> otherNumbers;
+  final List<String> emails;
+  final String inquiryLink;
+  final VoidCallback onDismissed;
+  final void Function(String) onWaNumber;
+  final void Function(String) onEmail;
+
+  const _InquirySendPopover({
+    required this.link,
+    required this.supName,
+    required this.waNumbers,
+    required this.otherNumbers,
+    required this.emails,
+    required this.inquiryLink,
+    required this.onDismissed,
+    required this.onWaNumber,
+    required this.onEmail,
+  });
+
+  @override
+  State<_InquirySendPopover> createState() => _InquirySendPopoverState();
+}
+
+class _InquirySendPopoverState extends State<_InquirySendPopover>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  late final Animation<double> _scale;
+  bool _dismissing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 200));
+    _scale = CurvedAnimation(parent: _ctrl, curve: Curves.easeOut);
+    _ctrl.forward();
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _dismiss() async {
+    if (_dismissing) return;
+    _dismissing = true;
+    await _ctrl.animateTo(0, duration: const Duration(milliseconds: 180), curve: Curves.easeIn);
+    widget.onDismissed();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final hasWa    = widget.waNumbers.isNotEmpty;
+    final hasOther = widget.otherNumbers.isNotEmpty;
+    final hasEmail = widget.emails.isNotEmpty;
+    final hasAny   = hasWa || hasOther || hasEmail;
+
+    return Stack(children: [
+      Positioned.fill(
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: _dismiss,
+          child: const SizedBox.expand(),
+        ),
+      ),
+      CompositedTransformFollower(
+        link: widget.link,
+        targetAnchor: Alignment.bottomRight,
+        followerAnchor: Alignment.topRight,
+        offset: const Offset(0, 6),
+        showWhenUnlinked: false,
+        child: ScaleTransition(
+          scale: _scale,
+          alignment: Alignment.topRight,
+          child: FadeTransition(
+            opacity: _ctrl,
+            child: Material(
+              color: Colors.transparent,
+              child: Container(
+                width: 272,
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(14),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.12),
+                      blurRadius: 20,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (!hasAny)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 8),
+                        child: Text('No contact details',
+                            style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+                      ),
+                    if (hasWa) ...[
+                      _sectionLabel('WhatsApp'),
+                      ...widget.waNumbers.map((n) => _row(
+                        Icons.chat_bubble_outline, const Color(0xFF128C7E), n,
+                        () => widget.onWaNumber(n),
+                      )),
+                    ],
+                    if (hasOther) ...[
+                      if (hasWa) const SizedBox(height: 6),
+                      _sectionLabel('Other Contact'),
+                      ...widget.otherNumbers.map((n) => _row(
+                        Icons.phone_outlined, const Color(0xFF1B7A43), n,
+                        () => widget.onWaNumber(n),
+                      )),
+                    ],
+                    if (hasEmail) ...[
+                      if (hasWa || hasOther) const SizedBox(height: 6),
+                      _sectionLabel('Email'),
+                      ...widget.emails.map((e) => _row(
+                        Icons.mail_outline, const Color(0xFF1E40AF), e,
+                        () => widget.onEmail(e),
+                      )),
+                    ],
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      width: double.infinity,
+                      child: FilledButton(
+                        onPressed: _dismiss,
+                        style: FilledButton.styleFrom(
+                          backgroundColor: const Color(0xFFDCFCE7),
+                          foregroundColor: const Color(0xFF15803D),
+                          minimumSize: const Size(0, 40),
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10)),
+                          elevation: 0,
+                          shadowColor: Colors.transparent,
+                        ),
+                        child: const Text('Cancel',
+                            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ]);
+  }
+
+  Widget _sectionLabel(String label) => Padding(
+    padding: const EdgeInsets.only(bottom: 2),
+    child: Text(label,
+        style: const TextStyle(
+            fontSize: 10, fontWeight: FontWeight.w700,
+            color: Color(0xFF6B7280), letterSpacing: 0.5)),
+  );
+
+  Widget _row(IconData icon, Color color, String label, VoidCallback onTap) =>
+      InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(6),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+          child: Row(children: [
+            Icon(icon, size: 15, color: color),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(label,
+                  style: const TextStyle(
+                      fontSize: 13, fontWeight: FontWeight.w500,
+                      color: Color(0xFF111827))),
+            ),
+          ]),
+        ),
+      );
 }

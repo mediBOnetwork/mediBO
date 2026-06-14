@@ -2540,10 +2540,13 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         ),
       if (_spnSupplierId == row.id)
         _SpnInlineSection(
-                key: ValueKey('spn_${row.id}'),
-                supplierId: row.id,
-                supplierName: row.supplierName,
-              ),
+          key: ValueKey('spn_${row.id}'),
+          supplierId: row.id,
+          supplierName: row.supplierName,
+          onSaved: () => _load(showSpinner: false).then((_) {
+            if (mounted) setState(_applySort);
+          }),
+        ),
       if (isExpanded) _buildDetails(row.rawData, lpad: 28, rpad: 0),
     ]);
   }
@@ -2639,6 +2642,9 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                 key: ValueKey('spn_${row.id}'),
                 supplierId: row.id,
                 supplierName: row.supplierName,
+                onSaved: () => _load(showSpinner: false).then((_) {
+                  if (mounted) setState(_applySort);
+                }),
               ),
             ],
             if (isExpanded) ...[
@@ -5623,10 +5629,12 @@ class _CompanyCell extends StatelessWidget {
 class _SpnInlineSection extends StatefulWidget {
   final String supplierId;
   final String supplierName;
+  final VoidCallback? onSaved;
   const _SpnInlineSection({
     super.key,
     required this.supplierId,
     required this.supplierName,
+    this.onSaved,
   });
 
   @override
@@ -5719,42 +5727,63 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
   Future<void> _saveAll() async {
     if (_saving) return;
     setState(() => _saving = true);
-    RenderLog.write('spn_saved_supabase', 'start');
     final id = _supplierId;
     if (id.isEmpty) { setState(() => _saving = false); return; }
     try {
-      final res = await Supabase.instance.client
-          .from('supplier_profiles')
-          .update({
-            'margin':       _values['margin'],
-            'cd_condition': _values['cd_condition'],
-            'behaviour':    _values['behaviour'],
-            'payment_type': _values['payment_term'],
-          })
-          .eq('id', id)
-          .select('id')
-          .timeout(const Duration(seconds: 8));
-      RenderLog.write('spn_saved_supabase', 'rows:${res.length}');
-      if (res.isNotEmpty) {
-        Supabase.instance.client
-            .rpc('recompute_supplier_points', params: {'p_id': id})
-            .then((_) {})
-            .catchError((_) {});
-        if (mounted) {
-          setState(() {
-            _savedValues.addAll(_values);
-            _saving = false;
-          });
-          _userCache.remove(id);
-          showToast(context, 'Saved ✓', duration: const Duration(milliseconds: 800));
+      // Write each field individually — same proven mechanism as _writeField.
+      bool allOk = true;
+      for (final col in _spnCols) {
+        final field = col.$2;
+        final val = _values[field];
+        // DB column name: payment_term UI key → payment_type DB column
+        final dbCol = (field == 'payment_term') ? 'payment_type' : field;
+        final res = await Supabase.instance.client
+            .from('supplier_profiles')
+            .update({dbCol: val})
+            .eq('id', id)
+            .select('id')
+            .timeout(const Duration(seconds: 10));
+        if ((res as List).isEmpty) {
+          allOk = false;
+          RenderLog.write('spn_save_field_failed', '$field rows:0');
+          break;
         }
-      } else {
+        RenderLog.write('spn_save_field_ok', '$field=$val');
+      }
+
+      if (!allOk) {
         if (mounted) {
           setState(() => _saving = false);
           showToast(context, 'Save failed — try again', isError: true);
         }
+        return;
+      }
+
+      // Await recompute so points + SPN update before we tell the parent to re-sort.
+      try {
+        await Supabase.instance.client
+            .rpc('recompute_supplier_points', params: {'p_id': id})
+            .timeout(const Duration(seconds: 10));
+        RenderLog.write('spn_recompute_ok', id);
+      } catch (e) {
+        // Non-fatal: points will re-sync on next page load.
+        RenderLog.write('spn_recompute_err', e.toString());
+      }
+
+      RenderLog.write('spn_saved_supabase', 'confirmed:$id');
+
+      if (mounted) {
+        setState(() {
+          _savedValues.addAll(_values);
+          _saving = false;
+        });
+        _userCache.remove(id);
+        showToast(context, 'Saved ✓', duration: const Duration(milliseconds: 800));
+        // Trigger parent re-fetch + re-sort so the row jumps to its new SPN position.
+        widget.onSaved?.call();
       }
     } catch (e) {
+      RenderLog.write('spn_save_error', e.toString());
       if (mounted) {
         setState(() => _saving = false);
         showToast(context, 'Save error: $e', isError: true);

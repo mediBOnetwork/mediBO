@@ -13,6 +13,7 @@ class _DbOrder {
   final List<_DbLine> lines;
   final double total;
   final String status; // DB value capitalized: Pending / Confirmed / etc.
+  final bool placedByAdmin;
 
   _DbOrder({
     required this.id,
@@ -21,6 +22,7 @@ class _DbOrder {
     required this.lines,
     required this.total,
     required this.status,
+    this.placedByAdmin = false,
   });
 
   factory _DbOrder.fromRow(Map<String, dynamic> row) {
@@ -40,6 +42,7 @@ class _DbOrder {
           .toList(),
       total: (row['total_amount'] as num?)?.toDouble() ?? 0.0,
       status: status,
+      placedByAdmin: (row['placed_by_admin'] as bool?) ?? false,
     );
   }
 
@@ -203,7 +206,28 @@ class _OrderCard extends StatelessWidget {
         // Primary label: human-readable PO number (payment_id)
         title: Text(order.number,
             style: const TextStyle(fontWeight: FontWeight.bold)),
-        subtitle: Text('${_date(order.placedAt)} · ${order.itemCount} packs'),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('${_date(order.placedAt)} · ${order.itemCount} packs'),
+            if (order.placedByAdmin) ...[
+              const SizedBox(height: 3),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFEF3C7),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: const Text('Placed by admin',
+                    style: TextStyle(
+                        fontSize: 10,
+                        color: Color(0xFF92400E),
+                        fontWeight: FontWeight.w600)),
+              ),
+            ],
+          ],
+        ),
         trailing: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           crossAxisAlignment: CrossAxisAlignment.end,

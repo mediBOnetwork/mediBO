@@ -55,6 +55,7 @@ class _CustRow {
   final List<_ItemLine> removedItems;
   final double? total;
   final double netPayable;
+  final bool placedByAdmin;
 
   const _CustRow({
     required this.userId,
@@ -69,6 +70,7 @@ class _CustRow {
     this.removedItems = const [],
     this.total,
     this.netPayable = 0.0,
+    this.placedByAdmin = false,
   });
 
   bool get isOrder    => source == 'website' || source == 'whatsapp';
@@ -363,16 +365,17 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         final up  = upMap[uid];
         final pp  = ppMap[uid];
         orders.add(_CustRow(
-          userId:      uid,
-          name:        _name(up, pp, mo),
-          pharmacy:    _pharmacy(up, pp, mo),
-          phone:       _phone(up, pp, mo),
-          source:      mo['source'] as String? ?? 'website',
-          orderId:     mo['id'] as String?,
-          orderNumber: mo['payment_id'] as String?,
-          orderStatus: mo['status'] as String? ?? 'unknown',
-          items:       _parseItems(mo['items']),
-          total:       (mo['total_amount'] as num?)?.toDouble(),
+          userId:        uid,
+          name:          _name(up, pp, mo),
+          pharmacy:      _pharmacy(up, pp, mo),
+          phone:         _phone(up, pp, mo),
+          source:        mo['source'] as String? ?? 'website',
+          orderId:       mo['id'] as String?,
+          orderNumber:   mo['payment_id'] as String?,
+          orderStatus:   mo['status'] as String? ?? 'unknown',
+          items:         _parseItems(mo['items']),
+          total:         (mo['total_amount'] as num?)?.toDouble(),
+          placedByAdmin: (mo['placed_by_admin'] as bool?) ?? false,
         ));
       }
 
@@ -1253,12 +1256,33 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
             ] else ...[
               Expanded(
                   flex: 2,
-                  child: Text(
-                    row.orderNumber ?? '—',
-                    style: const TextStyle(
-                        fontSize: 11,
-                        color: Color(0xFF6B7280),
-                        fontFamily: 'monospace'),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        row.orderNumber ?? '—',
+                        style: const TextStyle(
+                            fontSize: 11,
+                            color: Color(0xFF6B7280),
+                            fontFamily: 'monospace'),
+                      ),
+                      if (row.placedByAdmin) ...[
+                        const SizedBox(height: 2),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFFEF3C7),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: const Text('by admin',
+                              style: TextStyle(
+                                  fontSize: 9,
+                                  color: Color(0xFF92400E),
+                                  fontWeight: FontWeight.w600)),
+                        ),
+                      ],
+                    ],
                   )),
               Expanded(
                   flex: 3,

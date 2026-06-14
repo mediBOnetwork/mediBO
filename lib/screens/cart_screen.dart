@@ -34,6 +34,19 @@ class _CartScreenState extends State<CartScreen> {
     // ── ViewAs: place a real order for the impersonated customer ────────────
     if (cart.isViewAs && viewAs.isActive && viewAs.role == ViewAsRole.customer) {
       if (cart.lines.isEmpty) return;
+
+      // Approval gate: mirrors the real customer path — unapproved accounts cannot order.
+      if (viewAs.identity?.isApproved != true) {
+        RenderLog.write('view_as_order_blocked',
+            'unapproved:${viewAs.identity?.userId ?? 'unknown'}');
+        if (mounted) {
+          showToast(context,
+              "Cannot place order: ${viewAs.identity?.name ?? 'this customer'}'s account is pending approval.",
+              isError: true);
+        }
+        return;
+      }
+
       final name = viewAs.identity?.name ?? 'this customer';
       final confirmed = await showDialog<bool>(
         context: context,
@@ -128,6 +141,7 @@ class _CartScreenState extends State<CartScreen> {
     }
     if (!auth.canOrder) {
       final isSuspended = auth.profile?.status == 'suspended';
+      RenderLog.write('order_blocked', isSuspended ? 'suspended' : 'pending_approval');
       _showOrderGate(
         title: isSuspended ? 'Account suspended' : 'Account pending approval',
         message: isSuspended
@@ -136,6 +150,7 @@ class _CartScreenState extends State<CartScreen> {
       );
       return;
     }
+    RenderLog.write('order_approval_passed', 'approved:true');
 
     setState(() => _orderInProgress = true);
     final profile = auth.profile;
@@ -1211,7 +1226,13 @@ class _BillingBreakdownSection extends StatelessWidget {
 }
 
 // Returns a short gate message when the user cannot place orders, null when they can.
-String? _orderGateMessage(AuthNotifier auth) {
+// Pass viewAs when inside a ViewAs session to gate on the impersonated customer's approval.
+String? _orderGateMessage(AuthNotifier auth, [ViewAsNotifier? viewAs]) {
+  if (viewAs != null && viewAs.isActive && viewAs.role == ViewAsRole.customer) {
+    return (viewAs.identity?.isApproved ?? false)
+        ? null
+        : "This customer's account is pending approval";
+  }
   if (!auth.isAuthenticated) return 'Login and register to place orders';
   if (!auth.isRegistered) return 'Complete registration to place orders';
   if (auth.profile?.status == 'suspended') {
@@ -1278,7 +1299,7 @@ class _CheckoutBar extends StatelessWidget {
                 // View bill + Make Payment (auth-gated)
                 Builder(builder: (ctx) {
                   final auth = UserState.of(ctx);
-                  final gateMsg = _orderGateMessage(auth);
+                  final gateMsg = _orderGateMessage(auth, ViewAsState.of(ctx));
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
@@ -2075,7 +2096,7 @@ class _OrderSummaryPanel extends StatelessWidget {
           const SizedBox(height: 14),
           Builder(builder: (ctx) {
             final auth = UserState.of(ctx);
-            final gateMsg = _orderGateMessage(auth);
+            final gateMsg = _orderGateMessage(auth, ViewAsState.of(ctx));
             return Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [

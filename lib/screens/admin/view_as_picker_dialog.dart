@@ -183,6 +183,7 @@ class _ViewAsPickerDialogState extends State<_ViewAsPickerDialog> {
                                       name: name.isNotEmpty ? name : email,
                                       email: email,
                                       userId: userId,
+                                      isApproved: item['approved'] as bool? ?? false,
                                     ));
                                   },
                                 );

@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../user_state.dart';
+
 enum _ResetStep { none, otpSent, newPassword }
 
 class LoginScreen extends StatefulWidget {
@@ -88,10 +90,8 @@ class _LoginScreenState extends State<LoginScreen> {
   Future<void> _googleSignIn() async {
     setState(() { _loading = true; _error = null; });
     try {
-      await Supabase.instance.client.auth.signInWithOAuth(
-        OAuthProvider.google,
-        redirectTo: 'https://medibo.in',
-      );
+      // Route through AuthNotifier so signOut + prompt=select_account are applied.
+      await UserState.read(context).signInWithGoogle();
     } catch (_) {
       if (mounted) setState(() {
         _error = 'Google sign-in failed. Please try again.';

@@ -4,6 +4,7 @@ import 'package:flutter/widgets.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'models/user_profile.dart';
+import 'utils/render_log.dart';
 
 class AuthNotifier extends ChangeNotifier {
   UserProfile? _profile;
@@ -40,11 +41,6 @@ class AuthNotifier extends ChangeNotifier {
       (_profile?.isApproved ?? false) &&
       (_profile?.status != 'suspended');
 
-  static const _superAdminEmails = {
-    'masteromprakashsahu@gmail.com',
-    'medibonetwork@gmail.com',
-  };
-
   late final StreamSubscription<AuthState> _sub;
   // Prevents _init() and initialSession from both finalising loading state.
   bool _initDone = false;
@@ -63,8 +59,7 @@ class AuthNotifier extends ChangeNotifier {
       _initDone = true;
       await Future.wait([
         _loadProfile(user.id),
-        _checkAdminStatus(user.email ?? ''),
-        _checkSupplierStatus(user.email ?? ''),
+        _resolveRole(user.email ?? ''),
       ]);
       if (_loading) {
         _loading = false;
@@ -81,12 +76,14 @@ class AuthNotifier extends ChangeNotifier {
     if (state.event == AuthChangeEvent.initialSession) {
       if (_initDone) return; // synchronous _init() already handled it
       _initDone = true;
-      final user = state.session?.user;
+      // Server-validate even the restored session so role is always fresh.
+      final resp = await Supabase.instance.client.auth.getUser();
+      final user = resp.user;
       if (user != null) {
+        RenderLog.write('auth_email', user.email ?? 'unknown');
         await Future.wait([
           _loadProfile(user.id),
-          _checkAdminStatus(user.email ?? ''),
-          _checkSupplierStatus(user.email ?? ''),
+          _resolveRole(user.email ?? ''),
         ]);
       }
       _loading = false;
@@ -97,14 +94,16 @@ class AuthNotifier extends ChangeNotifier {
     if (_loading) return; // wait for initialSession to finish first
 
     if (state.event == AuthChangeEvent.signedIn) {
-      final user = state.session?.user;
+      // Server-validate: never trust the in-memory session user for role decisions.
+      final resp = await Supabase.instance.client.auth.getUser();
+      final user = resp.user;
       if (user != null) {
+        RenderLog.write('auth_email', user.email ?? 'unknown');
         _profileLoading = true;
         notifyListeners();
         await Future.wait([
           _loadProfile(user.id),
-          _checkAdminStatus(user.email ?? ''),
-          _checkSupplierStatus(user.email ?? ''),
+          _resolveRole(user.email ?? ''),
         ]);
         _profileLoading = false;
         notifyListeners();
@@ -121,6 +120,8 @@ class AuthNotifier extends ChangeNotifier {
       _supplierStatus = null;
       _profileChannel?.unsubscribe();
       _profileChannel = null;
+      RenderLog.write('auth_email', 'signed_out');
+      RenderLog.write('auth_role', 'none');
       notifyListeners();
     }
   }
@@ -186,40 +187,43 @@ class AuthNotifier extends ChangeNotifier {
     } catch (_) {}
   }
 
-  Future<void> _checkAdminStatus(String email) async {
+  // DB-authoritative role resolution via get_my_role() RPC.
+  // Precedence: super_admin > admin > supplier > customer > none.
+  // No hardcoded email constants — the DB is the single source of truth.
+  Future<void> _resolveRole(String email) async {
     if (email.isEmpty) {
       _isAdmin = false;
       _isSuperAdmin = false;
-      return;
-    }
-    final normalised = email.toLowerCase().trim();
-    if (_superAdminEmails.contains(normalised)) {
-      _isAdmin = true;
-      _isSuperAdmin = true;
+      _isSupplier = false;
+      _supplierName = null;
+      _supplierId = null;
+      _supplierStatus = null;
       return;
     }
     try {
-      final res = await Supabase.instance.client
-          .from('admins')
-          .select('email')
-          .eq('email', normalised)
-          .maybeSingle();
-      _isAdmin = res != null;
-      _isSuperAdmin = false;
+      final role = await Supabase.instance.client.rpc('get_my_role') as String;
+      RenderLog.write('auth_role', role);
+      _isAdmin = role == 'super_admin' || role == 'admin';
+      _isSuperAdmin = role == 'super_admin';
+      _isSupplier = false;
+      _supplierName = null;
+      _supplierId = null;
+      _supplierStatus = null;
+
+      if (!_isAdmin) {
+        // Resolve supplier details (approved or pending).
+        await _checkSupplierStatus(email);
+      }
     } catch (_) {
       _isAdmin = false;
       _isSuperAdmin = false;
+      _isSupplier = false;
+      _supplierStatus = null;
     }
   }
 
   // Resolve supplier role by calling claim_supplier_profile RPC.
-  // Admins skip supplier check (admin takes priority).
   Future<void> _checkSupplierStatus(String email) async {
-    if (email.isEmpty || _isAdmin) {
-      _isSupplier = false;
-      _supplierStatus = null;
-      return;
-    }
     try {
       final res = await Supabase.instance.client
           .rpc('claim_supplier_profile', params: {'p_email': email}) as Map;
@@ -250,9 +254,16 @@ class AuthNotifier extends ChangeNotifier {
   }
 
   Future<void> signInWithGoogle() async {
+    // Sign out any existing session first to prevent stale session bleed.
+    // This clears the Supabase auth token from localStorage/IndexedDB before
+    // the new OAuth flow starts, so the restored session is always the new one.
+    await Supabase.instance.client.auth.signOut();
     await Supabase.instance.client.auth.signInWithOAuth(
       OAuthProvider.google,
       redirectTo: 'https://medibo.in',
+      // Force Google to show the account chooser every time — never silently
+      // reuse a previous Google account.
+      queryParams: {'prompt': 'select_account'},
     );
   }
 

@@ -444,6 +444,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         _showListView = false;
       });
       RenderLog.write('fulfillment_ptl_loaded_${items.length}', supplier);
+      RenderLog.write('collect_area_rendered', supplier);
     } catch (e) {
       if (!mounted) return;
       setState(() { _loadingBox = false; _error = e.toString(); });
@@ -1761,19 +1762,37 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             child: const Icon(Icons.check_circle_rounded, color: _kReceivedFg, size: 48),
           ),
           const SizedBox(height: 16),
-          const Text('All done!',
-              style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: _kText)),
+          Text('${_selectedSupplier ?? 'Supplier'} counted ✓',
+              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: _kText),
+              textAlign: TextAlign.center),
           const SizedBox(height: 4),
           Text('$total items processed',
               style: const TextStyle(fontSize: 14, color: _kSub)),
-          const SizedBox(height: 20),
+          const SizedBox(height: 12),
           Wrap(spacing: 8, runSpacing: 8, alignment: WrapAlignment.center, children: [
             _SummaryChip('$received received', _kReceivedBg, _kReceivedFg),
             if (short > 0)     _SummaryChip('$short short',     _kShortBg,     _kShortFg),
             if (wrong > 0)     _SummaryChip('$wrong wrong',     _kWrongBg,     _kWrongFg),
             if (notComing > 0) _SummaryChip('$notComing N/A',   _kNotComingBg, _kNotComingFg),
           ]),
-          const SizedBox(height: 24),
+          const SizedBox(height: 16),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: BoxDecoration(
+              color: _kPendingBg,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: _kPendingFg.withValues(alpha: 0.3)),
+            ),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              const Icon(Icons.local_shipping_outlined, size: 14, color: _kPendingFg),
+              const SizedBox(width: 8),
+              const Flexible(child: Text(
+                'Collected — not yet at warehouse.\nGo to Arrivals tab to mark this box arrived.',
+                style: TextStyle(fontSize: 12, color: _kPendingFg),
+              )),
+            ]),
+          ),
+          const SizedBox(height: 20),
           OutlinedButton.icon(
             onPressed: () => setState(() => _showListView = true),
             icon: const Icon(Icons.list_rounded, size: 16),
@@ -1903,7 +1922,7 @@ class _ActionBtn extends StatelessWidget {
   }
 }
 
-// ── BAG LABELS SCREEN ────────────────────────────────────────────────────────
+// ── BAG LABELS SCREEN (legacy — kept for reference; use _BagLabelsInline) ─────
 
 class _BagLabelsScreen extends StatefulWidget {
   const _BagLabelsScreen({super.key});
@@ -2072,11 +2091,14 @@ class _PackScreenState extends State<_PackScreen> {
   final Map<String, bool> _loadingBag = {};
   final Map<String, bool> _shipping = {};
 
+  bool _showLabels = false;
+
   @override
   void initState() {
     super.initState();
     _load();
     RenderLog.write('fulfillment_pack_screen', 'true');
+    RenderLog.write('pack_area_rendered', 'true');
   }
 
   Future<void> _load() async {
@@ -2087,7 +2109,7 @@ class _PackScreenState extends State<_PackScreen> {
       final bags = res.map((r) => Map<String, dynamic>.from(r as Map)).toList();
       setState(() { _bags = bags; _loading = false; });
       for (var i = 0; i < bags.length; i++) {
-        RenderLog.write('fulfillment_pack_card_$i', bags[i]['pharmacy_name']?.toString() ?? '');
+        RenderLog.write('fulfillment_pack_card_$i', bags[i]['customer']?.toString() ?? '');
       }
     } catch (e) {
       if (!mounted) return;
@@ -2114,11 +2136,22 @@ class _PackScreenState extends State<_PackScreen> {
   Future<void> _ship(String orderId, {required bool partial}) async {
     setState(() => _shipping[orderId] = true);
     try {
-      await Supabase.instance.client.rpc('ship_order', params: {
+      final res = await Supabase.instance.client.rpc('ship_order', params: {
         'p_order_id': orderId, 'p_partial': partial,
       });
-      RenderLog.write('fulfillment_ship_ok', '$orderId:${partial ? 'partial' : 'full'}');
       if (!mounted) return;
+      final resMap = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+      if (resMap['error'] != null) {
+        final blocking = resMap['blocking']?.toString() ?? '';
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Not ready to ship${blocking.isNotEmpty ? ' ($blocking items pending/in transit)' : ''} — refresh and check arrivals'),
+          backgroundColor: const Color(0xFFDC2626),
+        ));
+        await _load();
+        return;
+      }
+      RenderLog.write('fulfillment_ship_ok', '$orderId:${partial ? 'partial' : 'full'}');
+      RenderLog.write('pack_ship_ok', '$orderId:${partial ? 'partial' : 'full'}');
       await _load();
     } catch (e) {
       if (!mounted) return;
@@ -2129,51 +2162,68 @@ class _PackScreenState extends State<_PackScreen> {
     }
   }
 
-  Future<void> _showShipDialog(Map<String, dynamic> bag) async {
-    final orderId = bag['order_id'].toString();
-    final bool hasShort    = ((bag['short_count']     as num?)?.toInt() ?? 0) > 0;
-    final bool hasNotComing = ((bag['not_coming_count'] as num?)?.toInt() ?? 0) > 0;
-    final bool canPartial  = hasShort || hasNotComing;
+  Future<void> _showShipDialog(Map<String, dynamic> bag, {required bool partial}) async {
+    final orderId  = bag['order_id'].toString();
+    final customer = bag['customer']?.toString() ?? '—';
+    final bagNo    = bag['bag_no']?.toString() ?? '';
+    final inTransit = (bag['in_transit_items'] as num?)?.toInt() ?? 0;
+    final shortItems = (bag['short_items'] as num?)?.toInt() ?? 0;
+    final notComingItems = (bag['not_coming_items'] as num?)?.toInt() ?? 0;
+
+    String warningText = '';
+    if (partial) {
+      warningText = 'Ship the arrived items now and close the rest of Bag $bagNo ($customer)?';
+    } else if (shortItems > 0 || notComingItems > 0) {
+      warningText = 'Some items are short or not coming.';
+    }
 
     final result = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('Ship Order',
-            style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: _kText)),
+        title: Text(partial ? 'Ship Partial?' : 'Ship Order',
+            style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: _kText)),
         content: Column(mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('Bag ${bag['bag_no'] ?? ''} — ${bag['pharmacy_name'] ?? ''}',
+          Text('Bag $bagNo — $customer',
               style: const TextStyle(fontSize: 14, color: _kSub)),
-          const SizedBox(height: 12),
-          if (canPartial)
+          if (inTransit > 0 && !partial) ...[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(color: _kShortBg, borderRadius: BorderRadius.circular(8)),
+              child: Row(children: [
+                const Icon(Icons.local_shipping_outlined, size: 16, color: _kShortFg),
+                const SizedBox(width: 8),
+                Expanded(child: Text('$inTransit item${inTransit==1?'':'s'} still in transit.',
+                    style: const TextStyle(fontSize: 13, color: _kShortFg))),
+              ]),
+            ),
+          ],
+          if (warningText.isNotEmpty) ...[
+            const SizedBox(height: 12),
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(color: _kPendingBg, borderRadius: BorderRadius.circular(8)),
-              child: const Row(children: [
-                Icon(Icons.warning_amber_rounded, size: 16, color: _kPendingFg),
-                SizedBox(width: 8),
-                Expanded(child: Text('Some items are short or not coming.',
-                    style: TextStyle(fontSize: 13, color: _kPendingFg))),
+              child: Row(children: [
+                const Icon(Icons.warning_amber_rounded, size: 16, color: _kPendingFg),
+                const SizedBox(width: 8),
+                Expanded(child: Text(warningText,
+                    style: const TextStyle(fontSize: 13, color: _kPendingFg))),
               ]),
             ),
+          ],
         ]),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx),
               child: const Text('Cancel', style: TextStyle(color: _kSub))),
-          if (canPartial)
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, 'partial'),
-              child: const Text('Ship Partial',
-                  style: TextStyle(color: Color(0xFF993C1D), fontWeight: FontWeight.w700)),
-            ),
           FilledButton(
-            onPressed: () => Navigator.pop(ctx, 'full'),
-            style: FilledButton.styleFrom(backgroundColor: _kGreen,
+            onPressed: () => Navigator.pop(ctx, partial ? 'partial' : 'full'),
+            style: FilledButton.styleFrom(backgroundColor: partial ? _kShortFg : _kGreen,
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
-            child: const Text('Ship',
-                style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+            child: Text(partial ? 'Ship Partial' : 'Ship',
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
           ),
         ],
       ),
@@ -2184,6 +2234,36 @@ class _PackScreenState extends State<_PackScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Bag-labels sub-view
+    if (_showLabels) {
+      return Column(children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+          child: Row(children: [
+            GestureDetector(
+              onTap: () => setState(() => _showLabels = false),
+              child: const Row(children: [
+                Icon(Icons.arrow_back_rounded, size: 18, color: _kGreen),
+                SizedBox(width: 6),
+                Text('Back to Pack', style: TextStyle(fontSize: 14, color: _kGreen, fontWeight: FontWeight.w600)),
+              ]),
+            ),
+            const Spacer(),
+            FilledButton.icon(
+              onPressed: () => html.window.print(),
+              icon: const Icon(Icons.print_rounded, size: 16),
+              label: const Text('Print'),
+              style: FilledButton.styleFrom(
+                backgroundColor: _kGreen,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+            ),
+          ]),
+        ),
+        Expanded(child: _BagLabelsInline()),
+      ]);
+    }
+
     if (_loading) {
       return const Center(child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2));
     }
@@ -2200,48 +2280,94 @@ class _PackScreenState extends State<_PackScreen> {
         const SizedBox(height: 12),
         const Text('No bags to pack', style: TextStyle(fontSize: 15, color: _kSub)),
         const SizedBox(height: 12),
-        OutlinedButton.icon(
-          onPressed: _load, icon: const Icon(Icons.refresh, size: 16),
-          label: const Text('Refresh'),
-          style: OutlinedButton.styleFrom(
-              foregroundColor: _kGreen, side: const BorderSide(color: _kGreen)),
-        ),
+        Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+          OutlinedButton.icon(
+            onPressed: _load, icon: const Icon(Icons.refresh, size: 16),
+            label: const Text('Refresh'),
+            style: OutlinedButton.styleFrom(foregroundColor: _kGreen, side: const BorderSide(color: _kGreen)),
+          ),
+          const SizedBox(width: 10),
+          OutlinedButton.icon(
+            onPressed: () => setState(() => _showLabels = true),
+            icon: const Icon(Icons.label_outline_rounded, size: 16),
+            label: const Text('Bag Labels'),
+            style: OutlinedButton.styleFrom(foregroundColor: _kSub, side: const BorderSide(color: _kBorder)),
+          ),
+        ]),
       ]));
     }
-    return RefreshIndicator(
-      color: _kGreen,
-      onRefresh: _load,
-      child: ListView.separated(
-        padding: const EdgeInsets.all(16),
-        itemCount: _bags.length,
-        separatorBuilder: (_, __) => const SizedBox(height: 8),
-        itemBuilder: (_, i) => _buildBagCard(_bags[i]),
+    return Column(children: [
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
+        child: Row(children: [
+          Text('${_bags.length} bag${_bags.length == 1 ? '' : 's'}',
+              style: const TextStyle(fontSize: 13, color: _kSub)),
+          const Spacer(),
+          OutlinedButton.icon(
+            onPressed: () => setState(() => _showLabels = true),
+            icon: const Icon(Icons.label_outline_rounded, size: 14),
+            label: const Text('Bag Labels'),
+            style: OutlinedButton.styleFrom(
+                foregroundColor: _kSub, side: const BorderSide(color: _kBorder),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                visualDensity: VisualDensity.compact),
+          ),
+          const SizedBox(width: 8),
+          OutlinedButton.icon(
+            onPressed: _load,
+            icon: const Icon(Icons.refresh_rounded, size: 14),
+            label: const Text('Refresh'),
+            style: OutlinedButton.styleFrom(
+                foregroundColor: _kSub, side: const BorderSide(color: _kBorder),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                visualDensity: VisualDensity.compact),
+          ),
+        ]),
       ),
-    );
+      Expanded(
+        child: RefreshIndicator(
+          color: _kGreen,
+          onRefresh: _load,
+          child: ListView.separated(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+            itemCount: _bags.length,
+            separatorBuilder: (_, __) => const SizedBox(height: 8),
+            itemBuilder: (_, i) => _buildBagCard(_bags[i]),
+          ),
+        ),
+      ),
+    ]);
   }
 
   Widget _buildBagCard(Map<String, dynamic> bag) {
-    final orderId        = bag['order_id'].toString();
-    final pharmacyName   = bag['pharmacy_name']?.toString() ?? '—';
-    final bagNo          = bag['bag_no']?.toString() ?? '';
-    final status         = bag['fulfillment_status']?.toString() ?? 'open';
-    final receivedCount  = (bag['received_count']   as num?)?.toInt() ?? 0;
-    final totalCount     = (bag['total_count']       as num?)?.toInt() ?? 0;
-    final shortCount     = (bag['short_count']       as num?)?.toInt() ?? 0;
-    final notComingCount = (bag['not_coming_count']  as num?)?.toInt() ?? 0;
-    final isExpanded     = _expanded.contains(orderId);
-    final isShipping     = _shipping[orderId] == true;
-    final isShipped      = status == 'shipped' || status == 'partially_shipped';
-    final canShip        = !isShipped && receivedCount > 0;
+    final orderId       = bag['order_id'].toString();
+    final customer      = bag['customer']?.toString() ?? '—';
+    final bagNo         = bag['bag_no']?.toString() ?? '';
+    final status        = bag['fulfillment_status']?.toString() ?? 'open';
+    final totalItems    = (bag['total_items']      as num?)?.toInt() ?? 0;
+    final pendingItems  = (bag['pending_items']    as num?)?.toInt() ?? 0;
+    final inTransit     = (bag['in_transit_items'] as num?)?.toInt() ?? 0;
+    final readyItems    = (bag['ready_items']      as num?)?.toInt() ?? 0;
+    final shortItems    = (bag['short_items']      as num?)?.toInt() ?? 0;
+    final wrongItems    = (bag['wrong_items']      as num?)?.toInt() ?? 0;
+    final notComing     = (bag['not_coming_items'] as num?)?.toInt() ?? 0;
+    final isExpanded    = _expanded.contains(orderId);
+    final isShipping    = _shipping[orderId] == true;
+    final isShipped     = status == 'shipped' || status == 'partially_shipped' || status == 'cancelled';
+
+    // Determine action
+    final bool canFullShip    = status == 'ready' && !isShipped;
+    final bool canPartialShip = (status == 'partial_ready' || (status == 'in_transit' && readyItems > 0)) && !isShipped;
+    final bool isBlocked      = (status == 'in_transit' && readyItems == 0) || status == 'collecting' || status == 'open';
 
     return Container(
       decoration: BoxDecoration(
         color: _kCard, borderRadius: BorderRadius.circular(12),
         border: Border.all(color: isShipped ? _kShippedBg : _kBorder),
-        boxShadow: const [BoxShadow(
-            color: Color(0x0F000000), blurRadius: 6, offset: Offset(0, 2))],
+        boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 6, offset: Offset(0, 2))],
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // ── Header (tap to expand) ──────────────────────────────────────────
         InkWell(
           onTap: () {
             setState(() {
@@ -2253,7 +2379,12 @@ class _PackScreenState extends State<_PackScreen> {
               }
             });
           },
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+          borderRadius: BorderRadius.vertical(
+            top: const Radius.circular(12),
+            bottom: (isExpanded || canFullShip || canPartialShip || isBlocked)
+                ? Radius.zero
+                : const Radius.circular(12),
+          ),
           child: Padding(
             padding: const EdgeInsets.all(12),
             child: Row(children: [
@@ -2264,34 +2395,48 @@ class _PackScreenState extends State<_PackScreen> {
                     border: Border.all(color: _kBorder)),
                 alignment: Alignment.center,
                 child: Text('B$bagNo',
-                    style: const TextStyle(
-                        fontSize: 13, fontWeight: FontWeight.w800, color: _kGreen)),
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: _kGreen)),
               ),
               const SizedBox(width: 12),
               Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(pharmacyName,
-                    style: const TextStyle(
-                        fontSize: 14, fontWeight: FontWeight.w700, color: _kText),
+                Text(customer,
+                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _kText),
                     maxLines: 1, overflow: TextOverflow.ellipsis),
                 const SizedBox(height: 4),
-                Row(children: [
-                  _OrderStatusBadge(status),
-                  const SizedBox(width: 8),
-                  Text('$receivedCount/$totalCount ready',
-                      style: const TextStyle(fontSize: 12, color: _kSub)),
-                  if (shortCount > 0) ...[
-                    const SizedBox(width: 6),
-                    Text('$shortCount short',
-                        style: const TextStyle(
-                            fontSize: 12, color: _kShortFg, fontWeight: FontWeight.w600)),
-                  ],
-                  if (notComingCount > 0) ...[
-                    const SizedBox(width: 6),
-                    Text('$notComingCount N/A',
-                        style: const TextStyle(
-                            fontSize: 12, color: _kNotComingFg, fontWeight: FontWeight.w600)),
-                  ],
-                ]),
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(children: [
+                    _OrderStatusBadge(status),
+                    const SizedBox(width: 8),
+                    Text('$readyItems/$totalItems ready',
+                        style: const TextStyle(fontSize: 12, color: _kSub)),
+                    if (inTransit > 0) ...[
+                      const SizedBox(width: 6),
+                      Text('$inTransit transit',
+                          style: const TextStyle(fontSize: 12, color: _kPendingFg, fontWeight: FontWeight.w600)),
+                    ],
+                    if (pendingItems > 0) ...[
+                      const SizedBox(width: 6),
+                      Text('$pendingItems uncollected',
+                          style: const TextStyle(fontSize: 12, color: _kSub)),
+                    ],
+                    if (shortItems > 0) ...[
+                      const SizedBox(width: 6),
+                      Text('$shortItems short',
+                          style: const TextStyle(fontSize: 12, color: _kShortFg, fontWeight: FontWeight.w600)),
+                    ],
+                    if (wrongItems > 0) ...[
+                      const SizedBox(width: 6),
+                      Text('$wrongItems wrong',
+                          style: const TextStyle(fontSize: 12, color: _kWrongFg, fontWeight: FontWeight.w600)),
+                    ],
+                    if (notComing > 0) ...[
+                      const SizedBox(width: 6),
+                      Text('$notComing N/A',
+                          style: const TextStyle(fontSize: 12, color: _kNotComingFg, fontWeight: FontWeight.w600)),
+                    ],
+                  ]),
+                ),
               ])),
               Icon(isExpanded
                   ? Icons.keyboard_arrow_up_rounded
@@ -2299,19 +2444,21 @@ class _PackScreenState extends State<_PackScreen> {
             ]),
           ),
         ),
-        if (!isShipped && canShip) ...[
+
+        // ── Action area ────────────────────────────────────────────────────
+        if (canFullShip) ...[
           const Divider(height: 1, color: _kBorder),
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
             child: SizedBox(
               width: double.infinity, height: 44,
               child: FilledButton.icon(
-                onPressed: isShipping ? null : () => _showShipDialog(bag),
+                onPressed: isShipping ? null : () => _showShipDialog(bag, partial: false),
                 icon: isShipping
                     ? const SizedBox(width: 16, height: 16,
                         child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
                     : const Icon(Icons.local_shipping_outlined, size: 18),
-                label: Text(isShipping ? 'Shipping…' : 'Ship Order',
+                label: Text(isShipping ? 'Shipping…' : 'Pack & Ship',
                     style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
                 style: FilledButton.styleFrom(
                   backgroundColor: _kGreen,
@@ -2320,7 +2467,66 @@ class _PackScreenState extends State<_PackScreen> {
               ),
             ),
           ),
+        ] else if (canPartialShip) ...[
+          const Divider(height: 1, color: _kBorder),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+            child: Column(children: [
+              if (inTransit > 0)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    decoration: BoxDecoration(color: _kPendingBg, borderRadius: BorderRadius.circular(8)),
+                    child: Row(children: [
+                      const Icon(Icons.local_shipping_outlined, size: 14, color: _kPendingFg),
+                      const SizedBox(width: 8),
+                      Expanded(child: Text('$inTransit item${inTransit==1?'':'s'} still in transit — mark arrived first to ship all.',
+                          style: const TextStyle(fontSize: 12, color: _kPendingFg))),
+                    ]),
+                  ),
+                ),
+              SizedBox(
+                width: double.infinity, height: 44,
+                child: FilledButton.icon(
+                  onPressed: isShipping ? null : () => _showShipDialog(bag, partial: true),
+                  icon: isShipping
+                      ? const SizedBox(width: 16, height: 16,
+                          child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                      : const Icon(Icons.local_shipping_outlined, size: 18),
+                  label: Text(isShipping ? 'Shipping…' : 'Ship Partial',
+                      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: _kShortFg,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                ),
+              ),
+            ]),
+          ),
+        ] else if (isBlocked && !isShipped) ...[
+          const Divider(height: 1, color: _kBorder),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(color: _kBg, borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: _kBorder)),
+              child: Row(children: [
+                const Icon(Icons.hourglass_top_rounded, size: 14, color: _kSub),
+                const SizedBox(width: 8),
+                Expanded(child: Text(
+                  status == 'in_transit'
+                      ? 'Waiting on arrival — mark box arrived in the Arrivals tab'
+                      : 'Still collecting — count stock in the Collect tab first',
+                  style: const TextStyle(fontSize: 12, color: _kSub),
+                )),
+              ]),
+            ),
+          ),
         ],
+
+        // ── Expanded item list ─────────────────────────────────────────────
         if (isExpanded) ...[
           const Divider(height: 1, color: _kBorder),
           if (_loadingBag[orderId] == true)
@@ -2337,28 +2543,453 @@ class _PackScreenState extends State<_PackScreen> {
   }
 
   Widget _buildPickItem(Map<String, dynamic> item) {
-    final name     = item['product_name']?.toString() ?? '—';
-    final qty      = (item['quantity'] as num?)?.toInt() ?? 0;
-    final state    = item['fulfillment_state']?.toString() ?? 'pending';
-    final imageUrl = item['image_url']?.toString();
+    final name       = item['product_name']?.toString() ?? '—';
+    final orderedQty = (item['ordered_qty']  as num?)?.toInt() ?? 0;
+    final recvQty    = (item['received_qty'] as num?)?.toInt() ?? 0;
+    final state      = item['fulfillment_state']?.toString() ?? 'pending';
+    final imageUrl   = item['image_url']?.toString();
+    final atWarehouse = item['at_warehouse'] as bool?;
+    final supplier   = item['assigned_supplier']?.toString() ?? '';
 
     return Container(
       padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
       decoration: const BoxDecoration(
           border: Border(top: BorderSide(color: _kBorder, width: 0.5))),
-      child: Row(children: [
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
         _FulfilImageTile(imageUrl, size: 40),
         const SizedBox(width: 10),
         Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(name,
-              style: const TextStyle(
-                  fontSize: 13, fontWeight: FontWeight.w600, color: _kText),
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _kText),
               maxLines: 1, overflow: TextOverflow.ellipsis),
           const SizedBox(height: 3),
-          Text('Qty: $qty', style: const TextStyle(fontSize: 12, color: _kSub)),
+          Row(children: [
+            Text('$recvQty/$orderedQty',
+                style: const TextStyle(fontSize: 12, color: _kSub)),
+            if (supplier.isNotEmpty) ...[
+              const SizedBox(width: 6),
+              Flexible(child: Text('from $supplier',
+                  style: const TextStyle(fontSize: 11, color: _kSub),
+                  maxLines: 1, overflow: TextOverflow.ellipsis)),
+            ],
+          ]),
+          if (atWarehouse != null) ...[
+            const SizedBox(height: 4),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: atWarehouse ? _kReceivedBg : _kPendingBg,
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(
+                atWarehouse ? 'At warehouse' : 'In transit',
+                style: TextStyle(
+                  fontSize: 10, fontWeight: FontWeight.w700,
+                  color: atWarehouse ? _kReceivedFg : _kPendingFg,
+                ),
+              ),
+            ),
+          ],
         ])),
+        const SizedBox(width: 8),
         _StatePill(state),
       ]),
+    );
+  }
+}
+
+// ── BAG LABELS INLINE (used inside Pack tab) ──────────────────────────────────
+
+class _BagLabelsInline extends StatefulWidget {
+  const _BagLabelsInline();
+
+  @override
+  State<_BagLabelsInline> createState() => _BagLabelsInlineState();
+}
+
+class _BagLabelsInlineState extends State<_BagLabelsInline> {
+  List<Map<String, dynamic>> _bags = [];
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() { _loading = true; _error = null; });
+    try {
+      final res = await Supabase.instance.client.rpc('get_customer_pack_status') as List;
+      if (!mounted) return;
+      final bags = res.map((r) => Map<String, dynamic>.from(r as Map)).toList();
+      bags.sort((a, b) => ((a['bag_no'] as num?)?.toInt() ?? 0)
+          .compareTo((b['bag_no'] as num?)?.toInt() ?? 0));
+      setState(() { _bags = bags; _loading = false; });
+      RenderLog.write('bag_labels_rendered', '${bags.length}');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() { _loading = false; _error = e.toString(); });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) return const Center(child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2));
+    if (_error != null) return Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+      Text('Error: $_error', style: const TextStyle(color: Color(0xFFDC2626), fontSize: 13)),
+      const SizedBox(height: 8),
+      OutlinedButton(onPressed: _load, child: const Text('Retry')),
+    ]));
+    if (_bags.isEmpty) return const Center(child: Text('No bags yet', style: TextStyle(color: _kSub)));
+    return GridView.builder(
+      padding: const EdgeInsets.all(16),
+      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+        maxCrossAxisExtent: 220, mainAxisSpacing: 12, crossAxisSpacing: 12, mainAxisExtent: 260,
+      ),
+      itemCount: _bags.length,
+      itemBuilder: (_, i) {
+        final bag      = _bags[i];
+        final orderId  = bag['order_id']?.toString() ?? '';
+        final bagNo    = bag['bag_no']?.toString() ?? '?';
+        final customer = bag['customer']?.toString() ?? '—';
+        final qrData   = 'MEDIBO-BAG:$orderId';
+        return Container(
+          decoration: BoxDecoration(
+            color: _kCard, borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: _kBorder),
+            boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 6, offset: Offset(0, 2))],
+          ),
+          child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+              decoration: const BoxDecoration(
+                color: _kGreen,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(12)),
+              ),
+              child: Center(child: Text('Bag $bagNo',
+                  style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: Colors.white))),
+            ),
+            const SizedBox(height: 12),
+            QrImageView(
+              data: qrData, version: QrVersions.auto, size: 130,
+              eyeStyle: const QrEyeStyle(eyeShape: QrEyeShape.square, color: _kText),
+              dataModuleStyle: const QrDataModuleStyle(dataModuleShape: QrDataModuleShape.square, color: _kText),
+            ),
+            const SizedBox(height: 10),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: Text(customer,
+                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText),
+                  textAlign: TextAlign.center, maxLines: 2, overflow: TextOverflow.ellipsis),
+            ),
+            const SizedBox(height: 6),
+            const Text('medibo.in', style: TextStyle(fontSize: 10, color: _kSub)),
+            const SizedBox(height: 10),
+          ]),
+        );
+      },
+    );
+  }
+}
+
+// ── ARRIVALS SCREEN ───────────────────────────────────────────────────────────
+
+class _ArrivalsScreen extends StatefulWidget {
+  const _ArrivalsScreen({super.key});
+
+  @override
+  State<_ArrivalsScreen> createState() => _ArrivalsScreenState();
+}
+
+class _ArrivalsScreenState extends State<_ArrivalsScreen> {
+  List<Map<String, dynamic>> _suppliers = [];
+  bool _loading = true;
+  String? _error;
+  final Set<String> _marking = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() { _loading = true; _error = null; });
+    try {
+      final res = await Supabase.instance.client
+          .rpc('get_supplier_arrival_status') as List;
+      if (!mounted) return;
+      final suppliers = res.map((r) => Map<String, dynamic>.from(r as Map)).toList();
+      // In-transit suppliers first, fully-arrived below
+      suppliers.sort((a, b) {
+        final aFull = (a['fully_arrived'] as bool?) == true;
+        final bFull = (b['fully_arrived'] as bool?) == true;
+        if (aFull != bFull) return aFull ? 1 : -1;
+        return (a['supplier_name'] ?? '').toString()
+            .compareTo((b['supplier_name'] ?? '').toString());
+      });
+      setState(() { _suppliers = suppliers; _loading = false; });
+      RenderLog.write('arrivals_area_rendered', '${suppliers.length}');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() { _loading = false; _error = e.toString(); });
+    }
+  }
+
+  Future<void> _markArrived(String supplier, int inTransit) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Mark arrived?',
+            style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: _kText)),
+        content: Text(
+          'Mark $inTransit item${inTransit == 1 ? '' : 's'} from $supplier '
+          'as arrived at the warehouse?',
+          style: const TextStyle(fontSize: 14, color: _kSub),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel', style: TextStyle(color: _kSub)),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(
+                backgroundColor: _kGreen,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
+            child: const Text('Mark Arrived', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true || !mounted) return;
+
+    setState(() => _marking.add(supplier));
+    try {
+      final res = await Supabase.instance.client
+          .rpc('mark_box_arrived', params: {'p_supplier_name': supplier});
+      if (!mounted) return;
+      final resMap = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+      if (resMap['error'] != null) {
+        _showSnack('Error: ${resMap['error']}');
+      } else {
+        final n = (resMap['items_arrived'] as num?)?.toInt() ?? 0;
+        _showSnack('$n item${n == 1 ? '' : 's'} from $supplier arrived at warehouse',
+            isGood: true);
+        RenderLog.write('arrivals_mark_arrived_ok', '$supplier:$n');
+        await _load();
+      }
+    } catch (e) {
+      if (!mounted) return;
+      _showSnack('Error: $e');
+    } finally {
+      if (mounted) setState(() => _marking.remove(supplier));
+    }
+  }
+
+  void _showSnack(String msg, {bool isGood = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(msg),
+      backgroundColor: isGood ? _kGreen : const Color(0xFFDC2626),
+      duration: const Duration(seconds: 3),
+    ));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2));
+    }
+    if (_error != null) {
+      return Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+        const Icon(Icons.error_outline_rounded, size: 40, color: Color(0xFFD1D5DB)),
+        const SizedBox(height: 12),
+        Text('Error: $_error', style: const TextStyle(color: Color(0xFFDC2626), fontSize: 13)),
+        const SizedBox(height: 12),
+        OutlinedButton.icon(
+          onPressed: _load, icon: const Icon(Icons.refresh, size: 16),
+          label: const Text('Retry'),
+          style: OutlinedButton.styleFrom(foregroundColor: _kGreen, side: const BorderSide(color: _kGreen)),
+        ),
+      ]));
+    }
+    if (_suppliers.isEmpty) {
+      return Center(child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          const Icon(Icons.inventory_2_outlined, size: 48, color: Color(0xFFD1D5DB)),
+          const SizedBox(height: 16),
+          const Text('Nothing collected yet',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _kText)),
+          const SizedBox(height: 6),
+          const Text('Count stock in the Collect tab first.',
+              style: TextStyle(fontSize: 13, color: _kSub), textAlign: TextAlign.center),
+          const SizedBox(height: 20),
+          OutlinedButton.icon(
+            onPressed: _load, icon: const Icon(Icons.refresh, size: 16),
+            label: const Text('Refresh'),
+            style: OutlinedButton.styleFrom(foregroundColor: _kGreen, side: const BorderSide(color: _kGreen)),
+          ),
+        ]),
+      ));
+    }
+
+    return Column(children: [
+      // Helper banner
+      Container(
+        width: double.infinity,
+        margin: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: _kPendingBg,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: _kPendingFg.withValues(alpha: 0.3)),
+        ),
+        child: Row(children: [
+          const Icon(Icons.info_outline_rounded, size: 16, color: _kPendingFg),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'Collected stock becomes packable only after you mark it arrived here.',
+              style: const TextStyle(fontSize: 12, color: _kPendingFg),
+            ),
+          ),
+        ]),
+      ),
+      // Refresh + count row
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+        child: Row(children: [
+          Text('${_suppliers.length} supplier${_suppliers.length == 1 ? '' : 's'}',
+              style: const TextStyle(fontSize: 13, color: _kSub)),
+          const Spacer(),
+          OutlinedButton.icon(
+            onPressed: _load,
+            icon: const Icon(Icons.refresh_rounded, size: 14),
+            label: const Text('Refresh'),
+            style: OutlinedButton.styleFrom(
+                foregroundColor: _kSub, side: const BorderSide(color: _kBorder),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                visualDensity: VisualDensity.compact),
+          ),
+        ]),
+      ),
+      const SizedBox(height: 8),
+      Expanded(
+        child: ListView.separated(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+          itemCount: _suppliers.length,
+          separatorBuilder: (_, __) => const SizedBox(height: 8),
+          itemBuilder: (_, i) => _buildSupplierCard(_suppliers[i]),
+        ),
+      ),
+    ]);
+  }
+
+  Widget _buildSupplierCard(Map<String, dynamic> supplier) {
+    final name       = supplier['supplier_name']?.toString() ?? '—';
+    final collected  = (supplier['collected']   as num?)?.toInt() ?? 0;
+    final arrived    = (supplier['arrived']     as num?)?.toInt() ?? 0;
+    final inTransit  = (supplier['in_transit']  as num?)?.toInt() ?? 0;
+    final fullyArrived = (supplier['fully_arrived'] as bool?) == true;
+    final isMarking  = _marking.contains(name);
+
+    return Container(
+      decoration: BoxDecoration(
+        color: _kCard,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: fullyArrived
+              ? _kReceivedFg.withValues(alpha: 0.25)
+              : inTransit > 0
+                  ? _kPendingFg.withValues(alpha: 0.25)
+                  : _kBorder,
+        ),
+        boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 6, offset: Offset(0, 2))],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          // Supplier name + status badge row
+          Row(children: [
+            Expanded(
+              child: Text(name,
+                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: _kText),
+                  maxLines: 1, overflow: TextOverflow.ellipsis),
+            ),
+            const SizedBox(width: 8),
+            if (fullyArrived)
+              _ArrivalBadge(label: 'All arrived', bg: _kReceivedBg, fg: _kReceivedFg)
+            else if (inTransit > 0)
+              _ArrivalBadge(label: 'In transit ($inTransit)', bg: _kPendingBg, fg: _kPendingFg),
+          ]),
+          const SizedBox(height: 8),
+          // Count chips
+          Wrap(spacing: 10, runSpacing: 6, children: [
+            _CountChip('Collected $collected', _kSub, _kBg),
+            _CountChip('Arrived $arrived', _kReceivedFg, _kReceivedBg),
+            if (inTransit > 0)
+              _CountChip('In transit $inTransit', _kPendingFg, _kPendingBg),
+          ]),
+          // Mark arrived button (only when there's something in transit)
+          if (!fullyArrived && inTransit > 0) ...[
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity, height: 44,
+              child: FilledButton.icon(
+                onPressed: isMarking ? null : () => _markArrived(name, inTransit),
+                icon: isMarking
+                    ? const SizedBox(width: 16, height: 16,
+                        child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                    : const Icon(Icons.warehouse_outlined, size: 18),
+                label: Text(isMarking ? 'Marking…' : 'Mark arrived at warehouse',
+                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+                style: FilledButton.styleFrom(
+                  backgroundColor: _kGreen,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+              ),
+            ),
+          ],
+        ]),
+      ),
+    );
+  }
+}
+
+class _ArrivalBadge extends StatelessWidget {
+  final String label;
+  final Color bg;
+  final Color fg;
+  const _ArrivalBadge({required this.label, required this.bg, required this.fg});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(20)),
+      child: Text(label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: fg)),
+    );
+  }
+}
+
+class _CountChip extends StatelessWidget {
+  final String label;
+  final Color fg;
+  final Color bg;
+  const _CountChip(this.label, this.fg, this.bg);
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(8)),
+      child: Text(label, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: fg)),
     );
   }
 }
@@ -2376,35 +3007,48 @@ class AdminFulfillmentScreen extends StatefulWidget {
 
 class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen> {
   int _tab = 0;
-  final _ptlKey    = GlobalKey<_PickToLightScreenState>();
-  final _packKey   = GlobalKey<_PackScreenState>();
-  final _labelsKey = GlobalKey<_BagLabelsScreenState>();
+  final _collectKey  = GlobalKey<_PickToLightScreenState>();
+  final _arrivalsKey = GlobalKey<_ArrivalsScreenState>();
+  final _packKey     = GlobalKey<_PackScreenState>();
 
   @override
   void initState() {
     super.initState();
     RenderLog.write('fulfillment_area_mounted', 'true');
+    RenderLog.write('fulfillment_three_areas_mounted', 'true');
   }
 
   void _onFocus() {}
+
+  static const _kSubtitles = [
+    'Count stock at the supplier',
+    'Mark boxes arrived at warehouse',
+    'Pack & ship customer bags',
+  ];
 
   @override
   Widget build(BuildContext context) {
     return Column(children: [
       Container(
         color: _kCard,
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           const Text('Fulfillment',
               style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: _kText)),
-          const SizedBox(height: 12),
-          Row(children: [
-            _TabBtn('Receive', _tab == 0, () => setState(() => _tab = 0)),
-            const SizedBox(width: 8),
-            _TabBtn('Pack & Ship', _tab == 1, () => setState(() => _tab = 1)),
-            const SizedBox(width: 8),
-            _TabBtn('Bag Labels', _tab == 2, () => setState(() => _tab = 2)),
-          ]),
+          const SizedBox(height: 2),
+          Text(_kSubtitles[_tab],
+              style: const TextStyle(fontSize: 12, color: _kSub)),
+          const SizedBox(height: 10),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(children: [
+              _TabBtn('Collect',   _tab == 0, () => setState(() => _tab = 0)),
+              const SizedBox(width: 6),
+              _TabBtn('Arrivals',  _tab == 1, () => setState(() => _tab = 1)),
+              const SizedBox(width: 6),
+              _TabBtn('Pack',      _tab == 2, () => setState(() => _tab = 2)),
+            ]),
+          ),
           const SizedBox(height: 1),
           const Divider(height: 1, color: _kBorder),
         ]),
@@ -2413,9 +3057,9 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen> {
         child: IndexedStack(
           index: _tab,
           children: [
-            _PickToLightScreen(key: _ptlKey),
+            _PickToLightScreen(key: _collectKey),
+            _ArrivalsScreen(key: _arrivalsKey),
             _PackScreen(key: _packKey),
-            _BagLabelsScreen(key: _labelsKey),
           ],
         ),
       ),

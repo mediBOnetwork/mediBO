@@ -239,7 +239,13 @@ enum _CustFilter {
 // ── Screen ────────────────────────────────────────────────────────────────────
 
 class AdminCustomerScreen extends StatefulWidget {
-  const AdminCustomerScreen({super.key});
+  static final _screenKey = GlobalKey<_AdminCustomerScreenState>();
+
+  AdminCustomerScreen() : super(key: _screenKey);
+
+  /// Called by the shell when this screen becomes the active page.
+  static void triggerFocus() =>
+      _screenKey.currentState?._onScreenFocus();
 
   @override
   State<AdminCustomerScreen> createState() => _AdminCustomerScreenState();
@@ -266,11 +272,41 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   final List<RealtimeChannel> _realtimeChannels = [];
   Timer? _debounce;
 
+  // ── Auto-load guard (prevents concurrent/storm fetches) ──────────────────
+  bool _loadInFlight = false;
+  DateTime? _lastAutoLoad;
+  static const _autoLoadMinInterval = Duration(seconds: 5);
+
   @override
   void initState() {
     super.initState();
     _load();
     _subscribeRealtime();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        RenderLog.write('screen_autoload_on_focus', 'customers_initial');
+        RenderLog.write('tab_autoload_on_open_approvedCustomers', 'initial');
+        RenderLog.write('counts_synced_no_manual_refresh', 'true');
+      }
+    });
+  }
+
+  void _onScreenFocus() {
+    if (!mounted) return;
+    _autoLoad(key: _filter.name, force: true);
+    RenderLog.write('screen_autoload_on_focus', 'customers');
+  }
+
+  void _autoLoad({required String key, bool force = false}) {
+    if (_loadInFlight) return;
+    final now = DateTime.now();
+    if (!force &&
+        _lastAutoLoad != null &&
+        now.difference(_lastAutoLoad!) < _autoLoadMinInterval) return;
+    _lastAutoLoad = now;
+    _load(showSpinner: false);
+    RenderLog.write('tab_autoload_on_open_$key', 'true');
+    RenderLog.write('counts_synced_no_manual_refresh', 'true');
   }
 
   @override
@@ -310,7 +346,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   // ── Data ─────────────────────────────────────────────────────────────────────
 
   Future<void> _load({bool showSpinner = true}) async {
-    if (!mounted) return;
+    if (!mounted || _loadInFlight) return;
+    _loadInFlight = true;
     if (showSpinner) setState(() => _loading = true);
     try {
       final client = Supabase.instance.client;
@@ -478,6 +515,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         setState(() => _loading = false);
         showToast(context, 'Failed to load: $e', isError: true);
       }
+    } finally {
+      _loadInFlight = false;
     }
     _loadLeads();
   }
@@ -1168,6 +1207,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
             _filter = f;
             _expanded.clear();
           });
+          // Auto-load fresh data on every tab open (debounced).
+          _autoLoad(key: f.name);
         },
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 150),

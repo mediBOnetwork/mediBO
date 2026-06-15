@@ -167,8 +167,8 @@ class _AdminShellState extends State<AdminShell> {
       child: const AdminDashboardScreen(),
     );
     if (_index == 1) return const AdminAddMedicineScreen();
-    if (_index == 2) return const AdminSupplierScreen();
-    if (_index == 3) return const AdminCustomerScreen();
+    if (_index == 2) return AdminSupplierScreen();
+    if (_index == 3) return AdminCustomerScreen();
     if (_index == 4) return PendingBillsScreen(onCountChanged: _loadPendingCount);
     if (isSuperAdmin && _index == 5) return const AdminManageAdminsScreen();
     if (_index < nav.length) {

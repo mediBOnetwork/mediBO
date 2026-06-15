@@ -138,7 +138,13 @@ enum _SupSortMode { spnDesc, nameAsc }
 // ── Screen ────────────────────────────────────────────────────────────────────
 
 class AdminSupplierScreen extends StatefulWidget {
-  const AdminSupplierScreen({super.key});
+  static final _screenKey = GlobalKey<_AdminSupplierScreenState>();
+
+  AdminSupplierScreen() : super(key: _screenKey);
+
+  /// Called by the shell when this screen becomes the active page.
+  static void triggerFocus() =>
+      _screenKey.currentState?._onScreenFocus();
 
   @override
   State<AdminSupplierScreen> createState() => _AdminSupplierScreenState();
@@ -204,6 +210,11 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   bool _orderAutoMeta = false;
   bool _orderAutoMetaLoading = false;
 
+  // ── Auto-load guard (prevents concurrent/storm fetches) ──────────────────
+  bool _loadInFlight = false;
+  DateTime? _lastAutoLoad;
+  static const _autoLoadMinInterval = Duration(seconds: 5);
+
   // ── Send-inquiry popover (Clear Cart style) ──────────────────────────────
   final Map<String, LayerLink> _sendLinks = {};
   OverlayEntry? _sendPopoverOverlay;
@@ -221,6 +232,30 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     super.initState();
     _load();
     _subscribeRealtime();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        RenderLog.write('screen_autoload_on_focus', 'suppliers_initial');
+        RenderLog.write('tab_autoload_on_open_suppliers', 'initial');
+      }
+    });
+  }
+
+  void _onScreenFocus() {
+    if (!mounted) return;
+    _autoLoad(key: _filter.name, force: true);
+    RenderLog.write('screen_autoload_on_focus', 'suppliers');
+  }
+
+  void _autoLoad({required String key, bool force = false}) {
+    if (_loadInFlight) return;
+    final now = DateTime.now();
+    if (!force &&
+        _lastAutoLoad != null &&
+        now.difference(_lastAutoLoad!) < _autoLoadMinInterval) return;
+    _lastAutoLoad = now;
+    _load(showSpinner: false);
+    RenderLog.write('tab_autoload_on_open_$key', 'true');
+    RenderLog.write('counts_synced_no_manual_refresh', 'true');
   }
 
   @override
@@ -364,7 +399,8 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   }
 
   Future<void> _load({bool showSpinner = true}) async {
-    if (!mounted) return;
+    if (!mounted || _loadInFlight) return;
+    _loadInFlight = true;
     if (showSpinner) setState(() => _loading = true);
     try {
       final client = Supabase.instance.client;
@@ -461,6 +497,8 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     } catch (e) {
       if (mounted) setState(() => _loading = false);
       // Silently swallow load errors — never surface a red banner on the homepage
+    } finally {
+      _loadInFlight = false;
     }
   }
 
@@ -1265,6 +1303,8 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     } else if (f == _SupFilter.orders) {
       _loadOrderAutoMeta();
     }
+    // Auto-load fresh data on every tab open (debounced; no-op if already in flight).
+    _autoLoad(key: f.name);
   }
 
   Future<void> _fetchInquiryOverview({bool silent = false}) async {

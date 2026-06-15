@@ -181,10 +181,14 @@ class _HomeShellState extends State<HomeShell> {
       case 'add_medicine': setState(() { _index = 4; _cartOpen = false; }); break;
       case 'suppliers':
       case 'add_supplier':
-        setState(() { _index = 5; _cartOpen = false; }); break;
+        setState(() { _index = 5; _cartOpen = false; });
+        WidgetsBinding.instance.addPostFrameCallback((_) => AdminSupplierScreen.triggerFocus());
+        break;
       case 'customers':
       case 'add_customer':
-        setState(() { _index = 6; _cartOpen = false; }); break;
+        setState(() { _index = 6; _cartOpen = false; });
+        WidgetsBinding.instance.addPostFrameCallback((_) => AdminCustomerScreen.triggerFocus());
+        break;
       case 'bills': setState(() { _index = 7; _cartOpen = false; }); break;
       case 'mr': setState(() { _index = 8; _cartOpen = false; }); break;
       case 'companies': setState(() { _index = 9; _cartOpen = false; }); break;
@@ -345,8 +349,8 @@ class _HomeShellState extends State<HomeShell> {
             child: const AdminDashboardScreen(),
           ),
           const AdminAddMedicineScreen(),
-          const AdminSupplierScreen(),
-          const AdminCustomerScreen(),
+          AdminSupplierScreen(),
+          AdminCustomerScreen(),
           const PendingBillsScreen(),
           const AdminMrScreen(),
           const AdminCompanyScreen(),

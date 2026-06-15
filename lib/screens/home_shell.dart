@@ -23,6 +23,7 @@ import 'admin/admin_pending_bills_screen.dart';
 import 'admin/admin_alert_overlay.dart';
 import 'admin/admin_shell.dart';
 import 'admin/admin_supplier_screen.dart';
+import 'admin/admin_fulfillment_screen.dart';
 import 'auth/login_screen.dart';
 import 'bulk_upload_screen.dart';
 import 'cart_screen.dart';
@@ -193,6 +194,10 @@ class _HomeShellState extends State<HomeShell> {
       case 'mr': setState(() { _index = 8; _cartOpen = false; }); break;
       case 'companies': setState(() { _index = 9; _cartOpen = false; }); break;
       case 'delivery_partners': setState(() { _index = 10; _cartOpen = false; }); break;
+      case 'fulfillment':
+        setState(() { _index = 11; _cartOpen = false; });
+        WidgetsBinding.instance.addPostFrameCallback((_) => AdminFulfillmentScreen.triggerFocus());
+        break;
       case 'manage_admins':
         if (UserState.of(context).isSuperAdmin) {
           Navigator.push(context,
@@ -355,6 +360,7 @@ class _HomeShellState extends State<HomeShell> {
           const AdminMrScreen(),
           const AdminCompanyScreen(),
           const AdminDeliveryPartnerScreen(),
+          AdminFulfillmentScreen(),
         ];
 
         final isAdmin = UserState.of(context).isAdmin;
@@ -400,7 +406,7 @@ class _HomeShellState extends State<HomeShell> {
           ? _AdminMobileBottomBar(
               index: _index,
               onSection: (i) => _handleAdminNav(const [
-                'dashboard', 'add_medicine', 'suppliers', 'customers', 'bills'
+                'dashboard', 'add_medicine', 'suppliers', 'customers', 'bills', 'fulfillment'
               ][i]),
             )
           : (_cartOpen
@@ -519,7 +525,7 @@ class _HomeShellState extends State<HomeShell> {
                   scrolled: _desktopScrolled,
                   onHome: onLogoTap,
                   onSection: (i) => _handleAdminNav(const [
-                    'dashboard', 'add_medicine', 'suppliers', 'customers', 'bills'
+                    'dashboard', 'add_medicine', 'suppliers', 'customers', 'bills', 'fulfillment'
                   ][i]),
                   onAdminNav: _handleAdminNav,
                   isSuperAdmin: UserState.of(context).isSuperAdmin,
@@ -3764,6 +3770,8 @@ class _AdminDesktopHeader extends StatelessWidget {
           _DesktopNavLink(label: 'Customers', icon: Icons.people_outline, selected: false, onTap: () => onSection(3)),
           const SizedBox(width: 2),
           _DesktopNavLink(label: 'Bills', icon: Icons.inbox_outlined, selected: false, onTap: () => onSection(4)),
+          const SizedBox(width: 2),
+          _DesktopNavLink(label: 'Fulfillment', icon: Icons.local_shipping_outlined, selected: false, onTap: () => onSection(5)),
           const SizedBox(width: 8),
           _DesktopProfileButton(onLogin: () {}, onAdminNav: onAdminNav, isSuperAdmin: isSuperAdmin),
           const SizedBox(width: 24),
@@ -3777,12 +3785,15 @@ class _AdminDesktopHeader extends StatelessWidget {
 
 class _AdminMobileBottomBar extends StatelessWidget {
   final int index; // current _index from HomeShellState
-  final ValueChanged<int> onSection; // 0=Dashboard,1=AddMedicine,2=Suppliers,3=Customers,4=Bills
+  final ValueChanged<int> onSection; // 0=Dashboard,1=AddMedicine,2=Suppliers,3=Customers,4=Bills,5=Fulfillment
 
   const _AdminMobileBottomBar({required this.index, required this.onSection});
 
   // Maps HomeShell _index to admin section index (3=dashboard=0, etc.)
-  int get _activeSection => index >= 3 ? index - 3 : -1;
+  int get _activeSection {
+    if (index == 11) return 5; // Fulfillment
+    return index >= 3 ? index - 3 : -1;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -3802,6 +3813,7 @@ class _AdminMobileBottomBar extends StatelessWidget {
               _AdminNavItem(icon: Icons.inventory_2_outlined, label: 'Suppliers', selected: _activeSection == 2, onTap: () => onSection(2)),
               _AdminNavItem(icon: Icons.people_outline, label: 'Customers', selected: _activeSection == 3, onTap: () => onSection(3)),
               _AdminNavItem(icon: Icons.inbox_outlined, label: 'Bills', selected: _activeSection == 4, onTap: () => onSection(4)),
+              _AdminNavItem(icon: Icons.local_shipping_outlined, label: 'Fulfill', selected: _activeSection == 5, onTap: () => onSection(5)),
             ],
           ),
         ),

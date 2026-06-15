@@ -62,7 +62,7 @@ const _kChips = [
   ),
 ];
 
-const _kWideBreakpoint = 700.0;
+const _kWideBreakpoint = 500.0;
 
 // ── Public widget ─────────────────────────────────────────────────────────────
 
@@ -178,6 +178,7 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
   @override
   Widget build(BuildContext context) {
     RenderLog.write('inquiry_v12_widget', _groupBy);
+    RenderLog.write('inquiry_v12_group_toggle', _groupBy);
     final grouped = _grouped();
 
     return LayoutBuilder(
@@ -462,7 +463,7 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
             onTap: () => widget.onAnswer(id, chip.answer),
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 120),
-              width: 116,
+              width: 90,
               padding: const EdgeInsets.symmetric(vertical: 9),
               decoration: BoxDecoration(
                 color: selected ? chip.selBg : Colors.white,

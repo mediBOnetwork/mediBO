@@ -994,7 +994,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   }
 
   // Per-supplier Send: ALWAYS stamps fresh timer, then opens WhatsApp directly.
-  Future<void> _sendPerSupplierDirect(String supName) async {
+  Future<void> _sendPerSupplierDirect(String supName, BuildContext btnCtx) async {
     if (mounted) setState(() => _inquiryLoading = true);
     try {
       final slug = supName.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '_');
@@ -1029,7 +1029,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       RenderLog.write('row_send_expiry_stamped', supName);
 
       // Open contact-picker popup — user selects which number to WhatsApp
-      await _showSendContactPicker(supplierName: supName, message: message);
+      await _showSendContactPicker(supplierName: supName, message: message, btnCtx: btnCtx, isOrders: false);
     } catch (e) {
       if (mounted) {
         setState(() => _inquiryLoading = false);
@@ -1690,8 +1690,8 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                 ),
                 const SizedBox(width: 6),
                 // Send button
-                GestureDetector(
-                  onTap: _inquiryLoading ? null : () => _sendPerSupplierDirect(supName),
+                Builder(builder: (btnCtx) => GestureDetector(
+                  onTap: _inquiryLoading ? null : () => _sendPerSupplierDirect(supName, btnCtx),
                   behavior: HitTestBehavior.opaque,
                   child: Container(
                     height: 30,
@@ -1707,7 +1707,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                       Text('Send', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF128C7E))),
                     ]),
                   ),
-                ),
+                )),
                 const SizedBox(width: 4),
                 AnimatedRotation(
                   turns: isExpanded ? 0.5 : 0,
@@ -2684,8 +2684,8 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
 
   Widget _buildOrderSendButton(_OrderRow row) {
     RenderLog.write('order_send_button_rendered', 'true');
-    return GestureDetector(
-      onTap: () => _sendOrderWhatsApp(row),
+    return Builder(builder: (btnCtx) => GestureDetector(
+      onTap: () => _sendOrderWhatsApp(row, btnCtx),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
@@ -2699,10 +2699,10 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           Text('Send', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF065F46))),
         ]),
       ),
-    );
+    ));
   }
 
-  Future<void> _sendOrderWhatsApp(_OrderRow row) async {
+  Future<void> _sendOrderWhatsApp(_OrderRow row, BuildContext btnCtx) async {
     final supName = row.supplierName;
     if (supName == null) return;
     try {
@@ -2715,7 +2715,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       final greeting = 'Hello $supName, we are ordering these items from you. Please take our order and check the items:';
       final message = link != null && link.isNotEmpty ? '$greeting\n$link' : greeting;
 
-      await _showSendContactPicker(supplierName: supName, message: message);
+      await _showSendContactPicker(supplierName: supName, message: message, btnCtx: btnCtx, isOrders: true);
     } catch (e) {
       if (mounted) showToast(context, 'Failed to send: $e', isError: true);
     }
@@ -2724,8 +2724,16 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   Future<void> _showSendContactPicker({
     required String supplierName,
     required String message,
+    required BuildContext btnCtx,
+    bool isOrders = false,
   }) async {
     if (!mounted) return;
+
+    // Capture button position BEFORE async gap
+    final box = btnCtx.findRenderObject() as RenderBox?;
+    final btnOffset = (box != null && box.attached) ? box.localToGlobal(Offset.zero) : Offset.zero;
+    final btnSize = (box != null && box.attached) ? box.size : const Size(60, 32);
+
     Map<String, dynamic> contactData;
     try {
       final result = await Supabase.instance.client
@@ -2756,15 +2764,27 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
 
     RenderLog.write('send_contact_popup_opened', supplierName);
     RenderLog.write('send_contact_groups_$totalRows', 'true');
+    if (isOrders) {
+      RenderLog.write('send_contact_anchored_orders', 'true');
+    } else {
+      RenderLog.write('send_contact_anchored_inquiry', 'true');
+    }
 
-    showDialog(
-      context: context,
-      builder: (_) => _ContactPickerSheet(
+    OverlayEntry? entry;
+    void dismiss() {
+      entry?.remove();
+      entry = null;
+    }
+    entry = OverlayEntry(
+      builder: (_) => _ContactPickerPopover(
+        btnRect: Rect.fromLTWH(btnOffset.dx, btnOffset.dy, btnSize.width, btnSize.height),
         supplierName: supplierName,
         message: message,
         contactData: contactData,
+        onDismiss: dismiss,
       ),
     );
+    Overlay.of(context).insert(entry!);
   }
 
   Widget _buildOrdersView(bool isDesktop) {
@@ -8573,28 +8593,56 @@ class _InquirySendPopoverState extends State<_InquirySendPopover>
       );
 }
 
-// ── Contact-picker bottom sheet (Send button on Inquiry + Orders cards) ───────
+// ── Contact-picker anchored popover (Send button on Inquiry + Orders cards) ───
 
-class _ContactPickerSheet extends StatefulWidget {
+class _ContactPickerPopover extends StatefulWidget {
+  final Rect btnRect;
   final String supplierName;
   final String message;
   final Map<String, dynamic> contactData;
-  const _ContactPickerSheet({
+  final VoidCallback onDismiss;
+
+  const _ContactPickerPopover({
+    required this.btnRect,
     required this.supplierName,
     required this.message,
     required this.contactData,
+    required this.onDismiss,
   });
+
   @override
-  State<_ContactPickerSheet> createState() => _ContactPickerSheetState();
+  State<_ContactPickerPopover> createState() => _ContactPickerPopoverState();
 }
 
-class _ContactPickerSheetState extends State<_ContactPickerSheet> {
+class _ContactPickerPopoverState extends State<_ContactPickerPopover>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  late final Animation<double> _scale;
+  late final Animation<double> _fade;
   late String? _lastUsed;
+  bool _dismissing = false;
 
   @override
   void initState() {
     super.initState();
     _lastUsed = widget.contactData['last_used'] as String?;
+    _ctrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 200));
+    _scale = CurvedAnimation(parent: _ctrl, curve: Curves.easeOut);
+    _fade = _ctrl;
+    _ctrl.forward();
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _dismiss() async {
+    if (_dismissing) return;
+    _dismissing = true;
+    await _ctrl.animateTo(0, duration: const Duration(milliseconds: 180), curve: Curves.easeIn);
+    widget.onDismiss();
   }
 
   String _normalizeForWa(String raw) {
@@ -8605,15 +8653,17 @@ class _ContactPickerSheetState extends State<_ContactPickerSheet> {
   }
 
   Future<void> _onTap(String value, {bool isEmail = false}) async {
-    if (!mounted) return;
-    Navigator.pop(context);
+    if (_dismissing) return;
+    _dismissing = true;
     if (isEmail) {
       html.window.open('mailto:$value', '_blank');
     } else {
       final intl = _normalizeForWa(value);
-      final msg  = Uri.encodeComponent(widget.message);
+      final msg = Uri.encodeComponent(widget.message);
       html.window.open('https://wa.me/$intl?text=$msg', '_blank');
     }
+    await _ctrl.animateTo(0, duration: const Duration(milliseconds: 180), curve: Curves.easeIn);
+    widget.onDismiss();
     try {
       await Supabase.instance.client.rpc(
         'set_supplier_last_send_contact',
@@ -8631,18 +8681,13 @@ class _ContactPickerSheetState extends State<_ContactPickerSheet> {
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
         child: Row(children: [
-          Icon(
-            isEmail ? Icons.email_outlined : Icons.phone_outlined,
-            size: 16,
-            color: const Color(0xFF6B7280),
-          ),
+          Icon(isEmail ? Icons.email_outlined : Icons.phone_outlined,
+            size: 16, color: const Color(0xFF6B7280)),
           const SizedBox(width: 10),
           Expanded(
             child: Text(value,
               style: const TextStyle(fontSize: 14, color: Color(0xFF111827)),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
+              maxLines: 1, overflow: TextOverflow.ellipsis),
           ),
           if (isLast) ...[
             const SizedBox(width: 8),
@@ -8667,8 +8712,7 @@ class _ContactPickerSheetState extends State<_ContactPickerSheet> {
       Padding(
         padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
         child: Text(label,
-          style: const TextStyle(
-            fontSize: 11, fontWeight: FontWeight.w600,
+          style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
             color: Color(0xFF9CA3AF), letterSpacing: 0.6)),
       ),
       ...values.map((v) => _row(v, isEmail: isEmail)),
@@ -8685,65 +8729,108 @@ class _ContactPickerSheetState extends State<_ContactPickerSheet> {
     final em = widget.contactData['email'] as String?;
     final hasAny = wa.isNotEmpty || ct.isNotEmpty || ph.isNotEmpty || ot.isNotEmpty || em != null;
 
-    return Dialog(
-      backgroundColor: Colors.transparent,
-      elevation: 0,
-      insetPadding: const EdgeInsets.symmetric(horizontal: 32, vertical: 48),
-      child: Container(
-        constraints: const BoxConstraints(maxWidth: 320, maxHeight: 460),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(14),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.12),
-              blurRadius: 20,
-              offset: const Offset(0, 4),
-            ),
-          ],
+    final screen = MediaQuery.of(context).size;
+    const popW = 300.0;
+    const popMaxH = 420.0;
+    const gap = 6.0;
+    const margin = 8.0;
+
+    // Horizontal: align right edge to button right, clamp to screen
+    double left = widget.btnRect.right - popW;
+    if (left < margin) left = margin;
+    if (left + popW > screen.width - margin) left = screen.width - popW - margin;
+
+    // Vertical: open below button unless insufficient space, then flip above
+    final spaceBelow = screen.height - widget.btnRect.bottom - gap;
+    double top;
+    Alignment scaleOrigin;
+    if (spaceBelow >= 160 || spaceBelow >= widget.btnRect.top - gap) {
+      top = widget.btnRect.bottom + gap;
+      scaleOrigin = Alignment.topRight;
+    } else {
+      top = widget.btnRect.top - gap - popMaxH;
+      if (top < margin) top = margin;
+      scaleOrigin = Alignment.bottomRight;
+    }
+
+    return Stack(children: [
+      // Transparent tap-outside barrier (no dim)
+      Positioned.fill(
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: _dismiss,
+          child: const SizedBox.expand(),
         ),
-        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          // title row
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 14, 8, 8),
-            child: Row(children: [
-              Expanded(
-                child: Text(
-                  'Send to ${widget.supplierName}',
-                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF111827)),
-                  maxLines: 1, overflow: TextOverflow.ellipsis,
+      ),
+      // Anchored popover card
+      Positioned(
+        left: left,
+        top: top,
+        width: popW,
+        child: ScaleTransition(
+          scale: _scale,
+          alignment: scaleOrigin,
+          child: FadeTransition(
+            opacity: _fade,
+            child: Material(
+              color: Colors.transparent,
+              elevation: 0,
+              child: Container(
+                constraints: const BoxConstraints(maxHeight: popMaxH),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(14),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.12),
+                      blurRadius: 20,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
                 ),
-              ),
-              IconButton(
-                icon: const Icon(Icons.close, size: 18, color: Color(0xFF6B7280)),
-                onPressed: () => Navigator.pop(context),
-                visualDensity: VisualDensity.compact,
-              ),
-            ]),
-          ),
-          const Divider(height: 1, color: Color(0xFFE5E7EB)),
-          // contact list (scrollable inside compact card)
-          if (!hasAny)
-            const Padding(
-              padding: EdgeInsets.all(24),
-              child: Text('No contact numbers on file',
-                style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
-            )
-          else
-            Flexible(
-              child: SingleChildScrollView(
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  _section('WHATSAPP NUMBER', wa),
-                  _section('CONTACT NO', ct),
-                  _section('PHONE', ph),
-                  _section('OTHER', ot),
-                  if (em != null) _section('EMAIL', [em], isEmail: true),
-                  const SizedBox(height: 12),
+                child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  // Title row
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 14, 8, 8),
+                    child: Row(children: [
+                      Expanded(
+                        child: Text('Send to ${widget.supplierName}',
+                          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF111827)),
+                          maxLines: 1, overflow: TextOverflow.ellipsis),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.close, size: 18, color: Color(0xFF6B7280)),
+                        onPressed: _dismiss,
+                        visualDensity: VisualDensity.compact,
+                      ),
+                    ]),
+                  ),
+                  const Divider(height: 1, color: Color(0xFFE5E7EB)),
+                  if (!hasAny)
+                    const Padding(
+                      padding: EdgeInsets.all(24),
+                      child: Text('No contact numbers on file',
+                        style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+                    )
+                  else
+                    Flexible(
+                      child: SingleChildScrollView(
+                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          _section('WHATSAPP NUMBER', wa),
+                          _section('CONTACT NO', ct),
+                          _section('PHONE', ph),
+                          _section('OTHER', ot),
+                          if (em != null) _section('EMAIL', [em], isEmail: true),
+                          const SizedBox(height: 12),
+                        ]),
+                      ),
+                    ),
                 ]),
               ),
             ),
-        ]),
+          ),
+        ),
       ),
-    );
+    ]);
   }
 }

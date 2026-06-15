@@ -8729,29 +8729,53 @@ class _ContactPickerPopoverState extends State<_ContactPickerPopover>
     final em = widget.contactData['email'] as String?;
     final hasAny = wa.isNotEmpty || ct.isNotEmpty || ph.isNotEmpty || ot.isNotEmpty || em != null;
 
-    final screen = MediaQuery.of(context).size;
+    final mq = MediaQuery.of(context);
+    final screen = mq.size;
     const popW = 300.0;
     const popMaxH = 420.0;
-    const gap = 6.0;
-    const margin = 8.0;
+    const gap = 8.0;
+    const margin = 12.0;
 
-    // Horizontal: align right edge to button right, clamp to screen
+    // Account for safe-area and keyboard so we never overlap OS chrome
+    final safeTop    = mq.padding.top + margin;
+    final safeBottom = screen.height - mq.padding.bottom - mq.viewInsets.bottom - margin;
+
+    // Horizontal: align popover right edge to button right, clamp to screen
     double left = widget.btnRect.right - popW;
     if (left < margin) left = margin;
     if (left + popW > screen.width - margin) left = screen.width - popW - margin;
 
-    // Vertical: open below button unless insufficient space, then flip above
-    final spaceBelow = screen.height - widget.btnRect.bottom - gap;
+    // Vertical: prefer opening BELOW; flip ABOVE if below doesn't fit; clamp if neither fully fits
+    final spaceBelow = safeBottom - (widget.btnRect.bottom + gap);
+    final spaceAbove = widget.btnRect.top - gap - safeTop;
+
     double top;
+    double effectiveMaxH;
     Alignment scaleOrigin;
-    if (spaceBelow >= 160 || spaceBelow >= widget.btnRect.top - gap) {
-      top = widget.btnRect.bottom + gap;
-      scaleOrigin = Alignment.topRight;
+    bool flippedUp;
+
+    if (spaceBelow >= popMaxH) {
+      // Plenty of room below — open downward
+      top          = widget.btnRect.bottom + gap;
+      effectiveMaxH = popMaxH;
+      scaleOrigin  = Alignment.topRight;
+      flippedUp    = false;
+    } else if (spaceAbove > spaceBelow) {
+      // More room above — flip upward
+      effectiveMaxH = spaceAbove.clamp(80.0, popMaxH);
+      top          = (widget.btnRect.top - gap - effectiveMaxH).clamp(safeTop, safeBottom - effectiveMaxH);
+      scaleOrigin  = Alignment.bottomRight;
+      flippedUp    = true;
     } else {
-      top = widget.btnRect.top - gap - popMaxH;
-      if (top < margin) top = margin;
-      scaleOrigin = Alignment.bottomRight;
+      // Open downward but clamp height to available space
+      effectiveMaxH = spaceBelow.clamp(80.0, popMaxH);
+      top          = widget.btnRect.bottom + gap;
+      scaleOrigin  = Alignment.topRight;
+      flippedUp    = false;
     }
+
+    if (flippedUp) RenderLog.write('send_popover_flipped_up', 'true');
+    RenderLog.write('send_popover_onscreen', 'true');
 
     return Stack(children: [
       // Transparent tap-outside barrier (no dim)
@@ -8776,7 +8800,7 @@ class _ContactPickerPopoverState extends State<_ContactPickerPopover>
               color: Colors.transparent,
               elevation: 0,
               child: Container(
-                constraints: const BoxConstraints(maxHeight: popMaxH),
+                constraints: BoxConstraints(maxHeight: effectiveMaxH),
                 decoration: BoxDecoration(
                   color: Colors.white,
                   borderRadius: BorderRadius.circular(14),

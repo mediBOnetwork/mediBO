@@ -731,92 +731,77 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       ),
       child: Builder(builder: (_) {
         RenderLog.write('titles_removed_suppliers', 'true');
+        RenderLog.write('supplier_single_refresh_only', 'true');
+        RenderLog.write('supplier_tabs_horizontal_scroll', 'true');
         return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
           const Expanded(child: SizedBox.shrink()),
           if (_filter == _SupFilter.suppliers) ...[
             Builder(builder: (_) {
               RenderLog.write('sort_in_header_slot', 'true');
-              return Row(mainAxisSize: MainAxisSize.min, children: [
-                const Text('Sort:', style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
-                const SizedBox(width: 6),
-                Container(
-                  height: 32,
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: const Color(0xFFE5E7EB)),
-                  ),
-                  child: DropdownButtonHideUnderline(
-                    child: DropdownButton<_SupSortMode>(
-                      value: _sortMode,
-                      isDense: true,
-                      icon: const Icon(Icons.unfold_more, size: 14, color: Color(0xFF6B7280)),
-                      style: const TextStyle(fontSize: 12, color: Color(0xFF111827)),
-                      items: const [
-                        DropdownMenuItem(value: _SupSortMode.spnDesc, child: Text('SPN (High→Low)')),
-                        DropdownMenuItem(value: _SupSortMode.nameAsc, child: Text('Name (A–Z)')),
-                      ],
-                      onChanged: (mode) {
-                        if (mode == null || mode == _sortMode) return;
-                        setState(() { _sortMode = mode; _applySort(); });
-                        RenderLog.write('supplier_sort_mode',
-                            mode == _SupSortMode.spnDesc ? 'spn_desc' : 'name_asc');
-                      },
-                    ),
+              RenderLog.write('supplier_sort_compact_spn_n', 'true');
+              return Container(
+                height: 28,
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: const Color(0xFFE5E7EB)),
+                ),
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<_SupSortMode>(
+                    value: _sortMode,
+                    isDense: true,
+                    icon: const Icon(Icons.unfold_more, size: 13, color: Color(0xFF6B7280)),
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
+                    items: const [
+                      DropdownMenuItem(value: _SupSortMode.spnDesc, child: Text('SPN')),
+                      DropdownMenuItem(value: _SupSortMode.nameAsc, child: Text('N')),
+                    ],
+                    onChanged: (mode) {
+                      if (mode == null || mode == _sortMode) return;
+                      setState(() { _sortMode = mode; _applySort(); });
+                      RenderLog.write('supplier_sort_mode',
+                          mode == _SupSortMode.spnDesc ? 'spn_desc' : 'name_asc');
+                    },
                   ),
                 ),
-              ]);
+              );
             }),
           ] else if (_filter == _SupFilter.inquiry) ...[
             Builder(builder: (_) {
               RenderLog.write('toggle_in_header_slot', 'true');
               RenderLog.write('send_all_removed', 'true');
-              return Row(mainAxisSize: MainAxisSize.min, children: [
-                Text('Automatic by Meta',
-                    style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: _autoMeta ? const Color(0xFF1B7A43) : const Color(0xFF6B7280))),
-                const SizedBox(width: 6),
-                _autoMetaLoading
-                    ? const SizedBox(width: 28, height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF1B7A43)))
-                    : Transform.scale(
-                        scale: 0.75,
-                        child: Switch(
-                          value: _autoMeta,
-                          onChanged: (v) => _saveAutoMeta(v),
-                          activeColor: const Color(0xFF1B7A43),
-                          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        ),
+              RenderLog.write('supplier_meta_label_removed', 'true');
+              return _autoMetaLoading
+                  ? const SizedBox(width: 28, height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF1B7A43)))
+                  : Transform.scale(
+                      scale: 0.75,
+                      child: Switch(
+                        value: _autoMeta,
+                        onChanged: (v) => _saveAutoMeta(v),
+                        activeColor: const Color(0xFF1B7A43),
+                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                       ),
-              ]);
+                    );
             }),
           ] else if (_filter == _SupFilter.orders) ...[
             Builder(builder: (_) {
               RenderLog.write('order_auto_meta_toggle_rendered', 'true');
-              return Row(mainAxisSize: MainAxisSize.min, children: [
-                Text('Automatic by Meta',
-                    style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: _orderAutoMeta ? const Color(0xFF1B7A43) : const Color(0xFF6B7280))),
-                const SizedBox(width: 6),
-                _orderAutoMetaLoading
-                    ? const SizedBox(width: 28, height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF1B7A43)))
-                    : Transform.scale(
-                        scale: 0.75,
-                        child: Switch(
-                          value: _orderAutoMeta,
-                          onChanged: (v) => _saveOrderAutoMeta(v),
-                          activeColor: const Color(0xFF1B7A43),
-                          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        ),
+              RenderLog.write('supplier_meta_label_removed', 'true');
+              return _orderAutoMetaLoading
+                  ? const SizedBox(width: 28, height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF1B7A43)))
+                  : Transform.scale(
+                      scale: 0.75,
+                      child: Switch(
+                        value: _orderAutoMeta,
+                        onChanged: (v) => _saveOrderAutoMeta(v),
+                        activeColor: const Color(0xFF1B7A43),
+                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                       ),
-              ]);
+                    );
             }),
           ],
           IconButton(
@@ -2258,12 +2243,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   Widget _buildSuppliersView(bool isDesktop) {
     final pad = isDesktop ? 28.0 : 16.0;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Padding(
-        padding: EdgeInsets.fromLTRB(pad, 10, pad, 4),
-        child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
-          _buildRefreshButton(),
-        ]),
-      ),
+      const SizedBox(height: 10),
       if (_suppliers.isEmpty)
         _emptyState('0 approved suppliers')
       else ...[

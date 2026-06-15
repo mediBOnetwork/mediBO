@@ -734,10 +734,31 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         RenderLog.write('supplier_single_refresh_only', 'true');
         RenderLog.write('supplier_tabs_horizontal_scroll', 'true');
         RenderLog.write('supplier_meta_label_removed', 'true');
-        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          const Expanded(child: SizedBox.shrink()),
+        // Single row: tabs scroll in Expanded area; controls pinned to the right.
+        // No vertical stacking — everything on one line.
+        return Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+          // ── Scrollable tab pills ────────────────────────────────────────────
+          Expanded(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                _tab(_SupFilter.suppliers,  'Suppliers (${_suppliers.length})'),
+                const SizedBox(width: 4),
+                _tab(_SupFilter.inquiry,    'Supplier Inquiry (${_inquiryOverview.length})'),
+                const SizedBox(width: 4),
+                _tab(_SupFilter.orders,     'Supplier Orders (${_orders.length})'),
+                const SizedBox(width: 4),
+                _tab(_SupFilter.pending,    'Pending Approval (${_pending.length})'),
+                const SizedBox(width: 4),
+                _tab(_SupFilter.leads,      'Leads (${_leads.length})'),
+                const SizedBox(width: 4),
+                _tab(_SupFilter.staging,    'Staging (${_stagingCompanies.length + _stagingMedicines.length})'),
+              ]),
+            ),
+          ),
+          // ── Pinned controls: compact sort or toggle, then refresh ───────────
           if (_filter == _SupFilter.suppliers) ...[
+            const SizedBox(width: 8),
             Builder(builder: (_) {
               RenderLog.write('sort_in_header_slot', 'true');
               RenderLog.write('supplier_sort_compact_spn_n', 'true');
@@ -770,10 +791,10 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
               );
             }),
           ] else if (_filter == _SupFilter.inquiry) ...[
+            const SizedBox(width: 4),
             Builder(builder: (_) {
               RenderLog.write('toggle_in_header_slot', 'true');
               RenderLog.write('send_all_removed', 'true');
-              RenderLog.write('supplier_meta_label_removed', 'true');
               return _autoMetaLoading
                   ? const SizedBox(width: 28, height: 16,
                       child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF1B7A43)))
@@ -788,9 +809,9 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                     );
             }),
           ] else if (_filter == _SupFilter.orders) ...[
+            const SizedBox(width: 4),
             Builder(builder: (_) {
               RenderLog.write('order_auto_meta_toggle_rendered', 'true');
-              RenderLog.write('supplier_meta_label_removed', 'true');
               return _orderAutoMetaLoading
                   ? const SizedBox(width: 28, height: 16,
                       child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF1B7A43)))
@@ -813,25 +834,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
             tooltip: 'Refresh',
             visualDensity: VisualDensity.compact,
           ),
-        ]),
-        const SizedBox(height: 12),
-        SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Row(children: [
-            _tab(_SupFilter.suppliers,  'Suppliers (${_suppliers.length})'),
-            const SizedBox(width: 4),
-            _tab(_SupFilter.inquiry,    'Supplier Inquiry (${_inquiryOverview.length})'),
-            const SizedBox(width: 4),
-            _tab(_SupFilter.orders,     'Supplier Orders (${_orders.length})'),
-            const SizedBox(width: 4),
-            _tab(_SupFilter.pending,    'Pending Approval (${_pending.length})'),
-            const SizedBox(width: 4),
-            _tab(_SupFilter.leads,      'Leads (${_leads.length})'),
-            const SizedBox(width: 4),
-            _tab(_SupFilter.staging,    'Staging (${_stagingCompanies.length + _stagingMedicines.length})'),
-          ]),
-        ),
-      ]);
+        ]);
       }),
     );
   }

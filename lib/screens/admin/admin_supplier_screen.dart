@@ -733,6 +733,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         RenderLog.write('titles_removed_suppliers', 'true');
         RenderLog.write('supplier_single_refresh_only', 'true');
         RenderLog.write('supplier_tabs_horizontal_scroll', 'true');
+        RenderLog.write('supplier_meta_label_removed', 'true');
         return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
           const Expanded(child: SizedBox.shrink()),

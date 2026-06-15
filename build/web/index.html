@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <meta name="build-commit" content="5aaa924">
+  <meta name="build-commit" content="8ed2e32">
   <!--
     If you are serving your web app in a path other than the root, change the
     href value below to reflect the base path you are serving from.
@@ -435,6 +435,69 @@
             .then(function (token) { callback(token || null); })
             .catch(function (e) { console.warn('[FCM] getToken error:', e); callback(null); });
         }).catch(function () { callback(null); });
+      };
+    })();
+  </script>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       VOICE RECEIVE — Web Speech API bridge
+       mediboVoiceSupported : bool
+       mediboVoiceStart(onInterim, onFinal, onError) — push-to-talk listen
+       mediboVoiceStop()    — abort recognition
+       mediboVoiceSpeak(text) — TTS echo
+       ═══════════════════════════════════════════════════════════════════════ -->
+  <script>
+    (function () {
+      var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      window.mediboVoiceSupported = !!SR;
+      if (!SR) return;
+
+      var _recognition = null;
+
+      window.mediboVoiceStart = function (onInterim, onFinal, onError) {
+        if (_recognition) { try { _recognition.abort(); } catch (e) {} }
+        _recognition = new SR();
+        _recognition.lang = 'en-IN';
+        _recognition.interimResults = true;
+        _recognition.continuous = false;
+        _recognition.maxAlternatives = 1;
+        var _gotFinal = false;
+
+        _recognition.onresult = function (event) {
+          for (var i = event.resultIndex; i < event.results.length; i++) {
+            var t = event.results[i][0].transcript.trim();
+            if (event.results[i].isFinal && !_gotFinal) {
+              _gotFinal = true;
+              onFinal(t);
+            } else if (!event.results[i].isFinal) {
+              onInterim(t);
+            }
+          }
+        };
+
+        _recognition.onerror = function (e) {
+          if (e.error !== 'aborted') onError(e.error || 'unknown');
+        };
+
+        _recognition.onend = function () {
+          if (!_gotFinal) onError('no-speech');
+        };
+
+        try { _recognition.start(); } catch (e) { onError('start-failed'); }
+      };
+
+      window.mediboVoiceStop = function () {
+        if (_recognition) { try { _recognition.stop(); } catch (e) {} }
+      };
+
+      var _synth = window.speechSynthesis;
+      window.mediboVoiceSpeak = function (text) {
+        if (!_synth) return;
+        _synth.cancel();
+        var u = new SpeechSynthesisUtterance(text);
+        u.lang = 'en-IN';
+        u.rate = 1.0;
+        _synth.speak(u);
       };
     })();
   </script>

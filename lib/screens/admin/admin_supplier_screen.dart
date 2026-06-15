@@ -15,6 +15,7 @@ import 'package:syncfusion_flutter_pdf/pdf.dart';
 import 'package:xml/xml.dart' as xmlp;
 
 import '../../utils/render_log.dart';
+import '../../widgets/inquiry_v11.dart';
 
 const _ocrEdgeFn =
     'https://swojhmarmaijkshsbeih.supabase.co/functions/v1/gemini-ocr';
@@ -1434,6 +1435,39 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     }
   }
 
+  Future<void> _adminBulkSetInquiryAnswer({
+    required List<int> ids,
+    required String supplierName,
+    required String answer,
+  }) async {
+    if (answer.isEmpty || ids.isEmpty) return;
+    if (mounted) setState(() => _settingAnswerFor.addAll(ids));
+    try {
+      await Future.wait(ids.map((id) => Supabase.instance.client.rpc(
+            'admin_set_inquiry_answer',
+            params: {
+              'p_inquiry_id': id,
+              'p_supplier_name': supplierName,
+              'p_answer': answer,
+            },
+          )));
+      RenderLog.write('admin_bulk_answer_set',
+          '${ids.length}:$supplierName:$answer');
+    } catch (e) {
+      if (mounted) showToast(context, 'Bulk save failed: $e', isError: true);
+    } finally {
+      if (mounted) setState(() => _settingAnswerFor.removeAll(ids));
+    }
+    if (mounted) {
+      await Future.wait([
+        _fetchInquiryItems(supplierName),
+        _fetchInquiryOverview(silent: true),
+        _fetchUnassignedItems(silent: true),
+        _refetchOrders(),
+      ]);
+    }
+  }
+
   Future<void> _refetchOrders() async {
     try {
       final rows = await Supabase.instance.client
@@ -1814,24 +1848,43 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   // ── Expanded items panel ──────────────────────────────────────────────────
 
   Widget _buildInquiryItemsPanel() {
+    final supName = _expandedInquirySupplier ?? '';
     return Container(
       margin: const EdgeInsets.fromLTRB(14, 0, 14, 12),
-      padding: const EdgeInsets.all(10),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: const Color(0xFFF9FAFB),
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: const Color(0xFFE5E7EB)),
       ),
       child: _inquiryItemsLoading
-          ? const Center(child: Padding(
-              padding: EdgeInsets.all(16),
-              child: CircularProgressIndicator(color: Color(0xFF1B7A43), strokeWidth: 2)))
+          ? const Center(
+              child: Padding(
+                padding: EdgeInsets.all(16),
+                child: CircularProgressIndicator(
+                    color: Color(0xFF1B7A43), strokeWidth: 2)))
           : _inquiryItems.isEmpty
               ? const Text('No pending items for this supplier.',
                   style: TextStyle(fontSize: 13, color: Color(0xFF6B7280)))
-              : Column(children: _inquiryItems
-                  .map((item) => _buildInquiryItemRow(item, _expandedInquirySupplier!))
-                  .toList()),
+              : Builder(builder: (_) {
+                  RenderLog.write('inquiry_v11_admin_dropdown', supName);
+                  return InquiryV11List(
+                    key: ValueKey('admin_v11_$supName'),
+                    items: _inquiryItems,
+                    answeringIds: _settingAnswerFor,
+                    onAnswer: (id, answer) => _adminSetInquiryAnswer(
+                      inquiryId: id,
+                      supplierName: supName,
+                      answer: answer,
+                    ),
+                    onBulkAnswer: (ids, answer) =>
+                        _adminBulkSetInquiryAnswer(
+                      ids: ids,
+                      supplierName: supName,
+                      answer: answer,
+                    ),
+                  );
+                }),
     );
   }
 

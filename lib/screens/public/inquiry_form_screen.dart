@@ -1,13 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../utils/render_log.dart';
+import '../../widgets/inquiry_v11.dart';
 
 const _kGreen = Color(0xFF1B7A43);
-const _kAnswers = [
-  'Available',
-  'Out of Stock',
-  "We don't stock this product",
-];
 
 class InquiryFormScreen extends StatefulWidget {
   final String token;
@@ -67,8 +63,8 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
           .toSet();
 
       final hadItems = _items.isNotEmpty;
-      final newlyAppeared = hadItems &&
-          unlockedIds.any((id) => !_prevUnlockedIds.contains(id));
+      final newlyAppeared =
+          hadItems && unlockedIds.any((id) => !_prevUnlockedIds.contains(id));
 
       setState(() {
         _supplierName = data['supplier_name'] as String?;
@@ -85,16 +81,17 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
         _loading = false;
       });
 
-      RenderLog.write('inquiry_form_loaded', '${items.length}_items_${widget.token.substring(0, 8)}');
-      RenderLog.write('inquiry_form_qty_hidden', 'true');
-      RenderLog.write('inquiry_form_pending_first', 'true');
+      RenderLog.write('inquiry_form_loaded',
+          '${items.length}_items_${widget.token.substring(0, 8)}');
+      RenderLog.write('inquiry_v11_public_form', 'true');
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _error = 'load_failed';
         _loading = false;
       });
-      RenderLog.write('inquiry_form_load_error', e.toString().substring(0, 40));
+      RenderLog.write('inquiry_form_load_error',
+          e.toString().substring(0, 40));
     }
   }
 
@@ -119,7 +116,8 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
       RenderLog.write('inquiry_form_submitted', '${toSubmit.length}_answers');
       await _load();
     } catch (e) {
-      RenderLog.write('inquiry_form_submit_error', e.toString().substring(0, 40));
+      RenderLog.write(
+          'inquiry_form_submit_error', e.toString().substring(0, 40));
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -201,7 +199,8 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
               isExpired
                   ? 'Please contact mediBO for a new link.'
                   : 'Please contact mediBO for assistance.',
-              style: const TextStyle(fontSize: 14, color: Color(0xFF6B7280)),
+              style: const TextStyle(
+                  fontSize: 14, color: Color(0xFF6B7280)),
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 32),
@@ -227,7 +226,7 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // ── Header ───────────────────────────────────────────────────────
+          // ── Header card ──────────────────────────────────────────────────
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
@@ -292,8 +291,8 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
                 Expanded(
                   child: Text(
                     'New items added — please respond below',
-                    style:
-                        TextStyle(fontSize: 13, color: Color(0xFF92400E)),
+                    style: TextStyle(
+                        fontSize: 13, color: Color(0xFF92400E)),
                   ),
                 ),
               ]),
@@ -328,7 +327,7 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
             const SizedBox(height: 16),
           ],
 
-          // ── Already Responded — collapsed dropdown (shown before pending) ─
+          // ── Already Responded (collapsed) ────────────────────────────────
           if (locked.isNotEmpty) ...[
             GestureDetector(
               onTap: () => setState(
@@ -355,29 +354,29 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
                       ),
                     ),
                   ),
-                  Builder(builder: (ctx) {
-                    RenderLog.write(
-                        'inquiry_form_responded_dropdown_collapsed',
-                        _respondedExpanded ? 'expanded' : 'collapsed');
-                    return Icon(
-                      _respondedExpanded
-                          ? Icons.keyboard_arrow_up_rounded
-                          : Icons.keyboard_arrow_down_rounded,
-                      size: 20,
-                      color: const Color(0xFF9CA3AF),
-                    );
-                  }),
+                  Icon(
+                    _respondedExpanded
+                        ? Icons.keyboard_arrow_up_rounded
+                        : Icons.keyboard_arrow_down_rounded,
+                    size: 20,
+                    color: const Color(0xFF9CA3AF),
+                  ),
                 ]),
               ),
             ),
             if (_respondedExpanded) ...[
               const SizedBox(height: 8),
-              ...locked.map(_buildLockedItem),
+              InquiryV11List(
+                key: const ValueKey('locked_v11'),
+                items: locked,
+                readOnly: true,
+                onAnswer: (_, __) {},
+              ),
             ],
             const SizedBox(height: 16),
           ],
 
-          // ── Pending items — shown AFTER the collapsed responded section ──
+          // ── Pending items — v11 grouped cards ────────────────────────────
           if (unanswered.isNotEmpty) ...[
             const Text(
               'PENDING RESPONSE — REQUIRED',
@@ -388,9 +387,24 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
                 letterSpacing: 1.0,
               ),
             ),
+            const SizedBox(height: 10),
+            InquiryV11List(
+              key: const ValueKey('pending_v11'),
+              items: unanswered,
+              answerOverrides: _selections,
+              onAnswer: (id, ans) =>
+                  setState(() => _selections[id] = ans),
+              onBulkAnswer: (ids, answer) {
+                setState(() {
+                  if (answer.isEmpty) {
+                    for (final id in ids) _selections.remove(id);
+                  } else {
+                    for (final id in ids) _selections[id] = answer;
+                  }
+                });
+              },
+            ),
             const SizedBox(height: 8),
-            ...unanswered.map(_buildAnswerItem),
-            const SizedBox(height: 24),
             SizedBox(
               width: double.infinity,
               height: 52,
@@ -417,7 +431,7 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
                       ),
               ),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 10),
             Center(
               child: Text(
                 'All fields are required before submitting',
@@ -441,245 +455,5 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
         ],
       ),
     );
-  }
-
-  Widget _buildLockedItem(Map<String, dynamic> item) {
-    final answer = item['answer'] as String? ?? '';
-    final imageUrl = item['image_url'] as String?;
-    return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF9FAFB),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
-      ),
-      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        _buildProductImage(imageUrl, size: 56, locked: true),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Expanded(child: _buildProductInfo(item, locked: true)),
-              const SizedBox(width: 8),
-              const Icon(Icons.lock_outline,
-                  size: 14, color: Color(0xFFD1D5DB)),
-            ]),
-            const SizedBox(height: 10),
-            Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              decoration: BoxDecoration(
-                color: _answerColor(answer).withValues(alpha: 0.10),
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: Text(
-                answer,
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: _answerColor(answer),
-                ),
-              ),
-            ),
-          ]),
-        ),
-      ]),
-    );
-  }
-
-  Widget _buildAnswerItem(Map<String, dynamic> item) {
-    final id = (item['inquiry_id'] as num).toInt();
-    final hasSelection = _selections.containsKey(id);
-    final imageUrl = item['image_url'] as String?;
-    return Builder(builder: (ctx) {
-      RenderLog.write('inquiry_form_item_card_4line', 'true');
-      return Container(
-        margin: const EdgeInsets.only(bottom: 12),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(
-            color: hasSelection ? _kGreen : const Color(0xFFE5E7EB),
-            width: hasSelection ? 1.5 : 1.0,
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.04),
-              blurRadius: 6,
-              offset: const Offset(0, 2),
-            ),
-          ],
-        ),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          // Cart-style: image left + 4-line info right
-          Padding(
-            padding: const EdgeInsets.fromLTRB(14, 14, 14, 12),
-            child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-              _buildProductImage(imageUrl, size: 72, locked: false),
-              const SizedBox(width: 12),
-              Expanded(
-                  child: _buildProductInfo(item, locked: false)),
-            ]),
-          ),
-          const Divider(height: 1, color: Color(0xFFE5E7EB)),
-          // 3 answer buttons
-          Padding(
-            padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
-            child: Column(
-              children:
-                  _kAnswers.map((ans) => _buildAnswerButton(id, ans)).toList(),
-            ),
-          ),
-        ]),
-      );
-    });
-  }
-
-  Widget _buildProductImage(String? imageUrl,
-      {required double size, required bool locked}) {
-    return Container(
-      width: size,
-      height: size,
-      decoration: BoxDecoration(
-        color: const Color(0xFFF3F4F6),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: imageUrl != null && imageUrl.isNotEmpty
-          ? Image.network(
-              imageUrl,
-              fit: BoxFit.contain,
-              errorBuilder: (_, __, ___) => _placeholderIcon(size),
-            )
-          : _placeholderIcon(size),
-    );
-  }
-
-  Widget _placeholderIcon(double containerSize) {
-    return Center(
-      child: Icon(Icons.medication_outlined,
-          size: containerSize * 0.45, color: const Color(0xFFD1D5DB)),
-    );
-  }
-
-  Widget _buildProductInfo(Map<String, dynamic> item,
-      {required bool locked}) {
-    final textColor =
-        locked ? const Color(0xFF9CA3AF) : const Color(0xFF111827);
-    final subColor =
-        locked ? const Color(0xFFD1D5DB) : const Color(0xFF6B7280);
-    final productName = item['product_name'] as String? ?? '';
-    final packSize = item['pack_size'] as String?;
-    final therapeuticClass = item['therapeutic_class'] as String?;
-    final company = item['company'] as String?;
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Text(
-        productName,
-        style: TextStyle(
-          fontSize: 14,
-          fontWeight: FontWeight.w600,
-          color: textColor,
-          height: 1.3,
-        ),
-        maxLines: 2,
-        overflow: TextOverflow.ellipsis,
-      ),
-      if (packSize != null && packSize.isNotEmpty) ...[
-        const SizedBox(height: 3),
-        Text(packSize,
-            style: TextStyle(fontSize: 12, color: subColor),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis),
-      ],
-      if (therapeuticClass != null && therapeuticClass.isNotEmpty) ...[
-        const SizedBox(height: 2),
-        Text(therapeuticClass,
-            style: TextStyle(fontSize: 12, color: subColor),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis),
-      ],
-      if (company != null && company.isNotEmpty) ...[
-        const SizedBox(height: 2),
-        Text(company,
-            style: TextStyle(
-                fontSize: 12,
-                color: subColor,
-                fontStyle: FontStyle.italic),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis),
-      ],
-    ]);
-  }
-
-  Widget _buildAnswerButton(int inquiryId, String answer) {
-    final selected = _selections[inquiryId] == answer;
-    return GestureDetector(
-      onTap: () => setState(() => _selections[inquiryId] = answer),
-      behavior: HitTestBehavior.opaque,
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 8),
-        padding:
-            const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
-        decoration: BoxDecoration(
-          color: selected
-              ? const Color(0xFFECFDF5)
-              : const Color(0xFFF9FAFB),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(
-            color: selected ? _kGreen : const Color(0xFFE5E7EB),
-            width: selected ? 1.5 : 1.0,
-          ),
-        ),
-        child: Row(children: [
-          Container(
-            width: 20,
-            height: 20,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              border: Border.all(
-                color: selected ? _kGreen : const Color(0xFFD1D5DB),
-                width: 2,
-              ),
-              color: selected ? _kGreen : Colors.white,
-            ),
-            child: selected
-                ? const Center(
-                    child: Icon(Icons.check,
-                        size: 12, color: Colors.white))
-                : null,
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text(
-              answer,
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight:
-                    selected ? FontWeight.w600 : FontWeight.w400,
-                color:
-                    selected ? _kGreen : const Color(0xFF374151),
-              ),
-            ),
-          ),
-        ]),
-      ),
-    );
-  }
-
-  Color _answerColor(String answer) {
-    switch (answer) {
-      case 'Available':
-        return _kGreen;
-      case 'Out of Stock':
-        return const Color(0xFFDC2626);
-      default:
-        return const Color(0xFF6B7280);
-    }
   }
 }

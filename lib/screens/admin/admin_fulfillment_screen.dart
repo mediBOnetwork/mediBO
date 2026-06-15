@@ -222,10 +222,21 @@ class _ReceiveScreenState extends State<_ReceiveScreen> {
   Future<void> _loadSuppliers() async {
     try {
       final res = await Supabase.instance.client
-          .rpc('get_fulfillment_suppliers') as List;
+          .from('order_items')
+          .select('assigned_supplier')
+          .not('assigned_supplier', 'is', null)
+          .neq('fulfillment_state', 'shipped')
+          .neq('fulfillment_state', 'cancelled') as List;
       if (!mounted) return;
+      final seen = <String>{};
+      final names = <String>[];
+      for (final r in res) {
+        final s = (r as Map)['assigned_supplier']?.toString();
+        if (s != null && seen.add(s)) names.add(s);
+      }
+      names.sort();
       setState(() {
-        _suppliers = res.map((r) => (r as Map)['supplier_name'].toString()).toList();
+        _suppliers = names;
         _loadingSuppliers = false;
       });
     } catch (e) {

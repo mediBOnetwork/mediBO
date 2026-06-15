@@ -2757,10 +2757,8 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     RenderLog.write('send_contact_popup_opened', supplierName);
     RenderLog.write('send_contact_groups_$totalRows', 'true');
 
-    showModalBottomSheet(
+    showDialog(
       context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
       builder: (_) => _ContactPickerSheet(
         supplierName: supplierName,
         message: message,
@@ -8679,6 +8677,7 @@ class _ContactPickerSheetState extends State<_ContactPickerSheet> {
 
   @override
   Widget build(BuildContext context) {
+    RenderLog.write('send_contact_minipopup_style', 'true');
     final wa = List<String>.from(widget.contactData['whatsapp'] as List? ?? []);
     final ct = List<String>.from(widget.contactData['contact']  as List? ?? []);
     final ph = List<String>.from(widget.contactData['phone']    as List? ?? []);
@@ -8686,27 +8685,27 @@ class _ContactPickerSheetState extends State<_ContactPickerSheet> {
     final em = widget.contactData['email'] as String?;
     final hasAny = wa.isNotEmpty || ct.isNotEmpty || ph.isNotEmpty || ot.isNotEmpty || em != null;
 
-    return SafeArea(
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      elevation: 0,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 32, vertical: 48),
       child: Container(
-        decoration: const BoxDecoration(
+        constraints: const BoxConstraints(maxWidth: 320, maxHeight: 460),
+        decoration: BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-        ),
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          // drag handle
-          Center(
-            child: Container(
-              margin: const EdgeInsets.only(top: 12, bottom: 6),
-              width: 40, height: 4,
-              decoration: BoxDecoration(
-                color: const Color(0xFFE5E7EB),
-                borderRadius: BorderRadius.circular(2),
-              ),
+          borderRadius: BorderRadius.circular(14),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.12),
+              blurRadius: 20,
+              offset: const Offset(0, 4),
             ),
-          ),
+          ],
+        ),
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
           // title row
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 4, 8, 8),
+            padding: const EdgeInsets.fromLTRB(16, 14, 8, 8),
             child: Row(children: [
               Expanded(
                 child: Text(
@@ -8723,7 +8722,7 @@ class _ContactPickerSheetState extends State<_ContactPickerSheet> {
             ]),
           ),
           const Divider(height: 1, color: Color(0xFFE5E7EB)),
-          // contact list (scrollable)
+          // contact list (scrollable inside compact card)
           if (!hasAny)
             const Padding(
               padding: EdgeInsets.all(24),
@@ -8731,10 +8730,7 @@ class _ContactPickerSheetState extends State<_ContactPickerSheet> {
                 style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
             )
           else
-            ConstrainedBox(
-              constraints: BoxConstraints(
-                maxHeight: MediaQuery.of(context).size.height * 0.55,
-              ),
+            Flexible(
               child: SingleChildScrollView(
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   _section('WHATSAPP NUMBER', wa),

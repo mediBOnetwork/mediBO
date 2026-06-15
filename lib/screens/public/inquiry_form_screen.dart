@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../utils/render_log.dart';
-import '../../widgets/inquiry_v11.dart';
+import '../../widgets/inquiry_v12.dart';
 
 const _kGreen = Color(0xFF1B7A43);
 
@@ -79,11 +79,15 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
         }
         _prevUnlockedIds = unlockedIds;
         _loading = false;
+        // Auto-expand locked section when all items are answered (complete form)
+        if (unlockedIds.isEmpty && items.isNotEmpty) {
+          _respondedExpanded = true;
+        }
       });
 
       RenderLog.write('inquiry_form_loaded',
           '${items.length}_items_${widget.token.substring(0, 8)}');
-      RenderLog.write('inquiry_v11_public_form', 'true');
+      RenderLog.write('inquiry_v12_public_form', 'true');
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -366,8 +370,8 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
             ),
             if (_respondedExpanded) ...[
               const SizedBox(height: 8),
-              InquiryV11List(
-                key: const ValueKey('locked_v11'),
+              InquiryAnswerList(
+                key: const ValueKey('locked_v12'),
                 items: locked,
                 readOnly: true,
                 onAnswer: (_, __) {},
@@ -388,13 +392,13 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
               ),
             ),
             const SizedBox(height: 10),
-            InquiryV11List(
-              key: const ValueKey('pending_v11'),
+            InquiryAnswerList(
+              key: const ValueKey('pending_v12'),
               items: unanswered,
               answerOverrides: _selections,
               onAnswer: (id, ans) =>
                   setState(() => _selections[id] = ans),
-              onBulkAnswer: (ids, answer) {
+              onBulk: (ids, answer) {
                 setState(() {
                   if (answer.isEmpty) {
                     for (final id in ids) _selections.remove(id);

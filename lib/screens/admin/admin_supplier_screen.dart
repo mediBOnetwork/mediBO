@@ -15,7 +15,7 @@ import 'package:syncfusion_flutter_pdf/pdf.dart';
 import 'package:xml/xml.dart' as xmlp;
 
 import '../../utils/render_log.dart';
-import '../../widgets/inquiry_v11.dart';
+import '../../widgets/inquiry_v12.dart';
 
 const _ocrEdgeFn =
     'https://swojhmarmaijkshsbeih.supabase.co/functions/v1/gemini-ocr';
@@ -1867,9 +1867,9 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
               ? const Text('No pending items for this supplier.',
                   style: TextStyle(fontSize: 13, color: Color(0xFF6B7280)))
               : Builder(builder: (_) {
-                  RenderLog.write('inquiry_v11_admin_dropdown', supName);
-                  return InquiryV11List(
-                    key: ValueKey('admin_v11_$supName'),
+                  RenderLog.write('inquiry_v12_admin_dropdown', supName);
+                  return InquiryAnswerList(
+                    key: ValueKey('admin_v12_$supName'),
                     items: _inquiryItems,
                     answeringIds: _settingAnswerFor,
                     onAnswer: (id, answer) => _adminSetInquiryAnswer(
@@ -1877,7 +1877,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                       supplierName: supName,
                       answer: answer,
                     ),
-                    onBulkAnswer: (ids, answer) =>
+                    onBulk: (ids, answer) =>
                         _adminBulkSetInquiryAnswer(
                       ids: ids,
                       supplierName: supName,

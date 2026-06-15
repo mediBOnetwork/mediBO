@@ -5,7 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../utils/render_log.dart';
 import '../../utils/toast.dart';
-import '../../widgets/inquiry_v11.dart';
+import '../../widgets/inquiry_v12.dart';
 
 class SupplierInquiryScreen extends StatefulWidget {
   final String? viewAsSupplierId;
@@ -44,7 +44,7 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen> {
               res.map((r) => Map<String, dynamic>.from(r as Map)).toList();
         });
         RenderLog.write('supplier_inquiry_rows_${_items.length}', 'true');
-        RenderLog.write('inquiry_v11_supplier_page', 'true');
+        RenderLog.write('inquiry_v12_supplier_page', 'true');
       }
     } catch (e) {
       RenderLog.write('supplier_inquiry_error', e.toString());
@@ -159,10 +159,10 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen> {
             ),
           ]),
           const SizedBox(height: 10),
-          InquiryV11List(
+          InquiryAnswerList(
             items: _items,
             onAnswer: _answer,
-            onBulkAnswer: _bulkAnswer,
+            onBulk: _bulkAnswer,
             answeringIds: _answering,
           ),
         ],

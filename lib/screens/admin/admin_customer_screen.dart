@@ -1119,9 +1119,30 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       ),
       child: Builder(builder: (_) {
         RenderLog.write('titles_removed_customers', 'true');
-        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          const Expanded(child: SizedBox.shrink()),
+        RenderLog.write('customer_tabs_horizontal_scroll', 'true');
+        // Single row: tabs scroll in Expanded, refresh pinned right — no vertical stacking.
+        return Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+          Expanded(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                _tab(_CustFilter.approvedCustomers,
+                    'Customers (${_approvedRows.length})'),
+                const SizedBox(width: 4),
+                _tab(_CustFilter.customerOrders,
+                    'Customer Orders (${_orderRows.length})'),
+                const SizedBox(width: 4),
+                _tab(_CustFilter.cartNotOrdered,
+                    'Cart (${_cartRows.length})'),
+                const SizedBox(width: 4),
+                _tab(_CustFilter.pendingRegistrations,
+                    'Pending Approval (${_regRows.length})'),
+                const SizedBox(width: 4),
+                _tab(_CustFilter.leads,
+                    'Leads (${_loggedInLeads.length + _otherLeads.length})'),
+              ]),
+            ),
+          ),
           IconButton(
             onPressed: _load,
             icon: const Icon(Icons.refresh_outlined,
@@ -1129,28 +1150,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
             tooltip: 'Refresh',
             visualDensity: VisualDensity.compact,
           ),
-        ]),
-        const SizedBox(height: 12),
-        SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Row(children: [
-            _tab(_CustFilter.approvedCustomers,
-                'Customers (${_approvedRows.length})'),
-            const SizedBox(width: 4),
-            _tab(_CustFilter.customerOrders,
-                'Customer Orders (${_orderRows.length})'),
-            const SizedBox(width: 4),
-            _tab(_CustFilter.cartNotOrdered,
-                'Cart (${_cartRows.length})'),
-            const SizedBox(width: 4),
-            _tab(_CustFilter.pendingRegistrations,
-                'Pending Approval (${_regRows.length})'),
-            const SizedBox(width: 4),
-            _tab(_CustFilter.leads,
-                'Leads (${_loggedInLeads.length + _otherLeads.length})'),
-          ]),
-        ),
-      ]);
+        ]);
       }),
     );
   }

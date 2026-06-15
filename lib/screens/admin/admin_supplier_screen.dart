@@ -2298,7 +2298,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       _buildDeletedSection(isDesktop),
       const SizedBox(height: 24),
       Builder(builder: (_) {
-        RenderLog.write('import_supplier_at_bottom', 'true');
+        RenderLog.write('import_supplier_at_top', 'true');
         RenderLog.write('import_supplier_only_suppliers_tab', 'true');
         return Padding(
           padding: EdgeInsets.fromLTRB(pad, 0, pad, 32),
@@ -7390,6 +7390,7 @@ class _ImportSupplierPopoverState extends State<_ImportSupplierPopover>
 
   @override
   Widget build(BuildContext context) {
+    RenderLog.write('import_supplier_popup_above', 'true');
     return Stack(children: [
       // Tap-outside barrier (no dark scrim — matches Clear Cart)
       Positioned.fill(
@@ -7399,16 +7400,16 @@ class _ImportSupplierPopoverState extends State<_ImportSupplierPopover>
           child: const SizedBox.expand(),
         ),
       ),
-      // Floating popover anchored below the Import Supplier button
+      // Floating popover anchored ABOVE the Import Supplier button
       CompositedTransformFollower(
         link: widget.link,
-        targetAnchor: Alignment.bottomRight,
-        followerAnchor: Alignment.topRight,
-        offset: const Offset(0, 6),
+        targetAnchor: Alignment.topRight,
+        followerAnchor: Alignment.bottomRight,
+        offset: const Offset(0, -6),
         showWhenUnlinked: false,
         child: ScaleTransition(
           scale: _scale,
-          alignment: Alignment.topRight,
+          alignment: Alignment.bottomRight,
           child: FadeTransition(
             opacity: _fade,
             child: Material(

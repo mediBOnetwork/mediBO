@@ -88,6 +88,8 @@ class InquiryAnswerList extends StatefulWidget {
   final void Function(List<int> ids, String answer)? onBulk;
   final Set<int> answeringIds;
   final bool readOnly;
+  /// Optional extra widget rendered at the bottom of each non-locked item card.
+  final Widget Function(Map<String, dynamic> item)? itemTrailingWidget;
 
   const InquiryAnswerList({
     super.key,
@@ -97,6 +99,7 @@ class InquiryAnswerList extends StatefulWidget {
     this.onBulk,
     this.answeringIds = const {},
     this.readOnly = false,
+    this.itemTrailingWidget,
   });
 
   @override
@@ -362,6 +365,7 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
     final isAnswering = widget.answeringIds.contains(id);
     final currentAnswer = _currentAnswer(item);
 
+    final trailing = !locked ? widget.itemTrailingWidget?.call(item) : null;
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       decoration: BoxDecoration(
@@ -376,77 +380,89 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
           ),
         ],
       ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            // 72×72 image tile
-            _buildImageTile(imageUrl, 72, locked: locked),
-            const SizedBox(width: 18),
-            // Middle: name + pill + company
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    productName,
-                    style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w500,
-                      color: locked
-                          ? const Color(0xFF9CA3AF)
-                          : const Color(0xFF111827),
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  if (tc.isNotEmpty) ...[
-                    const SizedBox(height: 5),
-                    _buildClassPill(tc),
-                  ],
-                  if (company.isNotEmpty) ...[
-                    const SizedBox(height: 4),
-                    Text(
-                      company,
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: locked
-                            ? const Color(0xFFD1D5DB)
-                            : const Color(0xFF6B7280),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                // 72×72 image tile
+                _buildImageTile(imageUrl, 72, locked: locked),
+                const SizedBox(width: 18),
+                // Middle: name + pill + company
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        productName,
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w500,
+                          color: locked
+                              ? const Color(0xFF9CA3AF)
+                              : const Color(0xFF111827),
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ],
-                ],
-              ),
+                      if (tc.isNotEmpty) ...[
+                        const SizedBox(height: 5),
+                        _buildClassPill(tc),
+                      ],
+                      if (company.isNotEmpty) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          company,
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: locked
+                                ? const Color(0xFFD1D5DB)
+                                : const Color(0xFF6B7280),
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 18),
+                // Right: chips or read-only answer
+                if (locked && currentAnswer != null && currentAnswer.isNotEmpty)
+                  Row(children: [
+                    _buildReadOnlyPill(currentAnswer),
+                    const SizedBox(width: 6),
+                    const Icon(Icons.lock_outline,
+                        size: 14, color: Color(0xFFD1D5DB)),
+                  ])
+                else if (locked)
+                  const SizedBox.shrink()
+                else if (noSup)
+                  _buildNoSupplierLabel()
+                else if (isAnswering)
+                  const SizedBox(
+                    height: 20,
+                    width: 20,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: Color(0xFF1B7A43)),
+                  )
+                else
+                  _buildWideChips(id, currentAnswer),
+              ],
             ),
-            const SizedBox(width: 18),
-            // Right: chips or read-only answer
-            if (locked && currentAnswer != null && currentAnswer.isNotEmpty)
-              Row(children: [
-                _buildReadOnlyPill(currentAnswer),
-                const SizedBox(width: 6),
-                const Icon(Icons.lock_outline,
-                    size: 14, color: Color(0xFFD1D5DB)),
-              ])
-            else if (locked)
-              const SizedBox.shrink()
-            else if (noSup)
-              _buildNoSupplierLabel()
-            else if (isAnswering)
-              const SizedBox(
-                height: 20,
-                width: 20,
-                child: CircularProgressIndicator(
-                    strokeWidth: 2, color: Color(0xFF1B7A43)),
-              )
-            else
-              _buildWideChips(id, currentAnswer),
+          ),
+          if (trailing != null) ...[
+            const Divider(height: 1, color: Color(0xFFF3F4F6)),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
+              child: trailing,
+            ),
           ],
-        ),
+        ],
       ),
     );
   }
@@ -604,6 +620,10 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
                 )
               else
                 _buildNarrowChips(id, currentAnswer),
+              if (widget.itemTrailingWidget != null) ...[
+                const SizedBox(height: 10),
+                widget.itemTrailingWidget!.call(item),
+              ],
             ],
           ],
         ),

@@ -211,6 +211,15 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   bool _orderAutoMeta = false;
   bool _orderAutoMetaLoading = false;
 
+  // ── Allocation mode toggle ────────────────────────────────────────────────
+  String _allocationMode = 'first_available'; // 'first_available' | 'fewest_baskets'
+  bool _allocationLoading = false;
+
+  // ── Manual move overlay (per inquiry_id) ─────────────────────────────────
+  OverlayEntry? _movePickerOverlay;
+  final Map<int, bool> _moveInFlight = {}; // inquiry_id -> loading
+  final Map<int, LayerLink> _moveLinks = {};
+
   // ── Auto-load guard (prevents concurrent/storm fetches) ──────────────────
   bool _loadInFlight = false;
   DateTime? _lastAutoLoad;
@@ -232,6 +241,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   void initState() {
     super.initState();
     _load();
+    _loadAllocationMode();
     _subscribeRealtime();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
@@ -267,6 +277,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     _channels.clear();
     _scrollCtrl.dispose();
     _closeSendPopover();
+    _closeMovePickerOverlay();
     super.dispose();
   }
 
@@ -831,6 +842,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
             }),
           ] else if (_filter == _SupFilter.inquiry) ...[
             const SizedBox(width: 4),
+            // Meta toggle
             Builder(builder: (_) {
               RenderLog.write('toggle_in_header_slot', 'true');
               RenderLog.write('send_all_removed', 'true');
@@ -846,6 +858,37 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                         materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                       ),
                     );
+            }),
+            const SizedBox(width: 4),
+            // Allocation toggle
+            Builder(builder: (_) {
+              RenderLog.write('allocation_toggle_rendered', _allocationMode);
+              final isOn = _allocationMode == 'fewest_baskets';
+              return Row(mainAxisSize: MainAxisSize.min, children: [
+                Text('Bundle', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF6B7280))),
+                const SizedBox(width: 2),
+                _allocationLoading
+                    ? const SizedBox(width: 28, height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF1B7A43)))
+                    : Transform.scale(
+                        scale: 0.75,
+                        child: Switch(
+                          value: isOn,
+                          onChanged: _allocationLoading ? null : (v) => _applyAllocationMode(v),
+                          activeColor: const Color(0xFF1B7A43),
+                          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                      ),
+                if (isOn && !_allocationLoading) ...[
+                  GestureDetector(
+                    onTap: _reoptimize,
+                    child: const Tooltip(
+                      message: 'Re-optimize bundles',
+                      child: Icon(Icons.auto_fix_high_outlined, size: 16, color: Color(0xFF1B7A43)),
+                    ),
+                  ),
+                ],
+              ]);
             }),
           ] else if (_filter == _SupFilter.orders) ...[
             const SizedBox(width: 4),
@@ -1032,6 +1075,186 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       if (mounted) {
         setState(() { _orderAutoMeta = !val; _orderAutoMetaLoading = false; });
         showToast(context, 'Failed to save setting: $e', isError: true);
+      }
+    }
+  }
+
+  // ── Allocation mode ──────────────────────────────────────────────────────
+
+  Future<void> _loadAllocationMode() async {
+    try {
+      final result = await Supabase.instance.client
+          .rpc('get_app_setting', params: {'p_key': 'allocation_mode'});
+      final mode = (result as String?) ?? 'first_available';
+      if (mounted) setState(() => _allocationMode = mode);
+      RenderLog.write('allocation_toggle_rendered', mode);
+    } catch (_) {}
+  }
+
+  Future<void> _applyAllocationMode(bool fewest) async {
+    if (_allocationLoading) return;
+    final newMode = fewest ? 'fewest_baskets' : 'first_available';
+    final prevMode = _allocationMode;
+    setState(() { _allocationMode = newMode; _allocationLoading = true; });
+    try {
+      final res = await Supabase.instance.client
+          .rpc('apply_allocation_mode', params: {'p_mode': newMode}) as Map;
+      if (!mounted) return;
+      if (res['status'] == 'ok') {
+        setState(() => _allocationLoading = false);
+        if (fewest) {
+          final detail = res['detail'] as Map? ?? {};
+          final n = detail['items_assigned'] ?? 0;
+          final b = detail['baskets'] ?? 0;
+          showToast(context, 'Bundled $n items into $b supplier baskets.');
+          RenderLog.write('allocation_mode_on', 'items:$n baskets:$b');
+        } else {
+          showToast(context, 'Back to first-available (by SPN).');
+          RenderLog.write('allocation_mode_off', 'true');
+        }
+        _fetchInquiryOverview(silent: true);
+        _fetchUnassignedItems(silent: true);
+      } else {
+        setState(() { _allocationMode = prevMode; _allocationLoading = false; });
+        showToast(context, 'Error: ${res['error'] ?? 'unknown'}', isError: true);
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() { _allocationMode = prevMode; _allocationLoading = false; });
+        showToast(context, 'Failed: $e', isError: true);
+      }
+    }
+  }
+
+  Future<void> _reoptimize() async {
+    if (_allocationLoading) return;
+    setState(() => _allocationLoading = true);
+    try {
+      final res = await Supabase.instance.client
+          .rpc('run_fewest_baskets_allocation') as Map;
+      if (!mounted) return;
+      setState(() => _allocationLoading = false);
+      if (res['status'] == 'ok') {
+        final n = res['items_assigned'] ?? 0;
+        final b = res['baskets'] ?? 0;
+        showToast(context, 'Re-optimized: $n items, $b baskets.');
+        RenderLog.write('allocation_reoptimize_ok', 'items:$n baskets:$b');
+        _fetchInquiryOverview(silent: true);
+        _fetchUnassignedItems(silent: true);
+      } else {
+        showToast(context, 'Error: ${res['error'] ?? 'unknown'}', isError: true);
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _allocationLoading = false);
+        showToast(context, 'Re-optimize failed: $e', isError: true);
+      }
+    }
+  }
+
+  // ── Manual move overlay ───────────────────────────────────────────────────
+
+  LayerLink _getMoveLink(int inquiryId) =>
+      _moveLinks.putIfAbsent(inquiryId, LayerLink.new);
+
+  void _closeMovePickerOverlay() {
+    _movePickerOverlay?.remove();
+    _movePickerOverlay = null;
+  }
+
+  Future<void> _openMovePicker(
+      BuildContext ctx, int inquiryId, String productName) async {
+    _closeMovePickerOverlay();
+    // 1. Resolve product_id from inquiry table
+    int productId;
+    try {
+      final row = await Supabase.instance.client
+          .from('inquiry')
+          .select('product_id')
+          .eq('id', inquiryId)
+          .single() as Map;
+      productId = (row['product_id'] as num).toInt();
+    } catch (e) {
+      if (mounted) showToast(context, 'Could not load product: $e', isError: true);
+      return;
+    }
+    // 2. Load options
+    List<Map<String, dynamic>> options;
+    try {
+      final rows = await Supabase.instance.client
+          .rpc('get_item_supplier_options', params: {'p_product_id': productId}) as List;
+      options = rows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
+    } catch (e) {
+      if (mounted) showToast(context, 'Could not load options: $e', isError: true);
+      return;
+    }
+    if (options.isEmpty) {
+      if (mounted) showToast(context, 'No eligible suppliers for this item.');
+      return;
+    }
+    // Sort: available first, then by SPN desc, then name
+    options.sort((a, b) {
+      final aAvail = a['is_available'] == true ? 0 : 1;
+      final bAvail = b['is_available'] == true ? 0 : 1;
+      if (aAvail != bAvail) return aAvail.compareTo(bAvail);
+      final aSpn = (a['spn'] as num?)?.toDouble() ?? 0.0;
+      final bSpn = (b['spn'] as num?)?.toDouble() ?? 0.0;
+      if (aSpn != bSpn) return bSpn.compareTo(aSpn);
+      return (a['supplier_name'] as String? ?? '').compareTo(b['supplier_name'] as String? ?? '');
+    });
+    if (!mounted) return;
+    // 3. Show overlay
+    final overlay = Overlay.of(ctx);
+    _movePickerOverlay = OverlayEntry(
+      builder: (_) => _MovePicker(
+        link: _getMoveLink(inquiryId),
+        options: options,
+        productName: productName,
+        onDismiss: _closeMovePickerOverlay,
+        onSelect: (supplierName) async {
+          _closeMovePickerOverlay();
+          await _doManualMove(inquiryId, productId, supplierName);
+        },
+        onClear: () async {
+          _closeMovePickerOverlay();
+          await _doManualMove(inquiryId, productId, '');
+        },
+      ),
+    );
+    overlay.insert(_movePickerOverlay!);
+  }
+
+  Future<void> _doManualMove(int inquiryId, int productId, String supplierName) async {
+    if (!mounted) return;
+    setState(() => _moveInFlight[inquiryId] = true);
+    try {
+      final res = await Supabase.instance.client.rpc(
+        'set_inquiry_manual_supplier',
+        params: {'p_product_id': productId, 'p_supplier_name': supplierName},
+      ) as Map;
+      if (!mounted) return;
+      setState(() => _moveInFlight.remove(inquiryId));
+      if (res['status'] == 'ok') {
+        final isClearing = supplierName.isEmpty;
+        if (isClearing) {
+          showToast(context, 'Pin cleared — auto-assigned.');
+          RenderLog.write('allocation_manual_clear_ok', '$inquiryId');
+        } else {
+          showToast(context, 'Moved to $supplierName.');
+          RenderLog.write('allocation_manual_move_ok', '$inquiryId:$supplierName');
+        }
+        // Refresh inquiry items for the expanded supplier
+        if (_expandedInquirySupplier != null) {
+          _fetchInquiryItems(_expandedInquirySupplier!);
+        }
+        _fetchInquiryOverview(silent: true);
+      } else {
+        showToast(context, 'Error: ${res['error'] ?? 'unknown'}', isError: true);
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _moveInFlight.remove(inquiryId));
+        showToast(context, 'Move failed: $e', isError: true);
       }
     }
   }
@@ -1868,8 +2091,12 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                   style: TextStyle(fontSize: 13, color: Color(0xFF6B7280)))
               : Builder(builder: (_) {
                   RenderLog.write('inquiry_v12_admin_dropdown', supName);
+                  final isFewest = _allocationMode == 'fewest_baskets';
+                  if (isFewest) {
+                    RenderLog.write('allocation_manual_control_shown', supName);
+                  }
                   return InquiryAnswerList(
-                    key: ValueKey('admin_v12_$supName'),
+                    key: ValueKey('admin_v12_${supName}_$_allocationMode'),
                     items: _inquiryItems,
                     answeringIds: _settingAnswerFor,
                     onAnswer: (id, answer) => _adminSetInquiryAnswer(
@@ -1883,8 +2110,57 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                       supplierName: supName,
                       answer: answer,
                     ),
+                    itemTrailingWidget: isFewest
+                        ? (item) => _buildMoveControl(item)
+                        : null,
                   );
                 }),
+    );
+  }
+
+  // ── Move control (shown per-item when allocation=fewest_baskets) ──────────
+
+  Widget _buildMoveControl(Map<String, dynamic> item) {
+    final inquiryId = (item['inquiry_id'] as num).toInt();
+    final productName = item['product_name'] as String? ?? '';
+    final isMoving = _moveInFlight[inquiryId] == true;
+    // current supplier from item data (role='current' means this supplier owns it)
+    final role = item['role'] as String? ?? 'current';
+    final isPinned = item['manual_pin'] == true;
+
+    return CompositedTransformTarget(
+      link: _getMoveLink(inquiryId),
+      child: GestureDetector(
+        onTap: isMoving ? null : () => _openMovePicker(context, inquiryId, productName),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: isPinned ? const Color(0xFFE6F1FB) : const Color(0xFFF3F4F6),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+              color: isPinned ? const Color(0xFF93C5FD) : const Color(0xFFD1D5DB),
+            ),
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            if (isPinned)
+              const Icon(Icons.push_pin, size: 12, color: Color(0xFF1E40AF))
+            else
+              const Icon(Icons.swap_horiz_rounded, size: 14, color: Color(0xFF6B7280)),
+            const SizedBox(width: 5),
+            if (isMoving)
+              const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF1B7A43)))
+            else
+              Text(
+                isPinned ? 'Pinned · Move' : 'Move supplier',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: isPinned ? const Color(0xFF1E40AF) : const Color(0xFF6B7280),
+                ),
+              ),
+          ]),
+        ),
+      ),
     );
   }
 
@@ -8957,5 +9233,159 @@ class _ContactPickerPopoverState extends State<_ContactPickerPopover>
         ),
       ),
     ]);
+  }
+}
+
+// ── Move-picker popover ───────────────────────────────────────────────────────
+
+class _MovePicker extends StatelessWidget {
+  final LayerLink link;
+  final List<Map<String, dynamic>> options;
+  final String productName;
+  final VoidCallback onDismiss;
+  final Future<void> Function(String supplierName) onSelect;
+  final Future<void> Function() onClear;
+
+  const _MovePicker({
+    required this.link,
+    required this.options,
+    required this.productName,
+    required this.onDismiss,
+    required this.onSelect,
+    required this.onClear,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(children: [
+      Positioned.fill(
+        child: GestureDetector(
+          onTap: onDismiss,
+          behavior: HitTestBehavior.translucent,
+          child: const SizedBox.expand(),
+        ),
+      ),
+      CompositedTransformFollower(
+        link: link,
+        showWhenUnlinked: false,
+        targetAnchor: Alignment.bottomLeft,
+        followerAnchor: Alignment.topLeft,
+        offset: const Offset(0, 4),
+        child: Material(
+          color: Colors.transparent,
+          child: Container(
+            width: 280,
+            constraints: const BoxConstraints(maxHeight: 360),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: const Color(0xFFE5E7EB)),
+              boxShadow: const [
+                BoxShadow(color: Color(0x1A000000), blurRadius: 16, offset: Offset(0, 4)),
+              ],
+            ),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(14, 12, 8, 8),
+                child: Row(children: [
+                  Expanded(child: Text(
+                    'Move · $productName',
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFF111827)),
+                    maxLines: 1, overflow: TextOverflow.ellipsis,
+                  )),
+                  GestureDetector(
+                    onTap: onDismiss,
+                    child: const Icon(Icons.close, size: 18, color: Color(0xFF9CA3AF)),
+                  ),
+                ]),
+              ),
+              const Divider(height: 1, color: Color(0xFFE5E7EB)),
+              Flexible(
+                child: SingleChildScrollView(
+                  child: Column(children: [
+                    ...options.map((opt) {
+                      final name = opt['supplier_name'] as String? ?? '';
+                      final spn = opt['spn'];
+                      final avail = opt['is_available'] == true;
+                      final isCurrent = opt['is_current'] == true;
+                      return _MovePickerRow(
+                        name: name,
+                        spn: spn?.toString() ?? '',
+                        available: avail,
+                        isCurrent: isCurrent,
+                        onTap: () => onSelect(name),
+                      );
+                    }),
+                    const Divider(height: 1, color: Color(0xFFE5E7EB)),
+                    InkWell(
+                      onTap: () => onClear(),
+                      child: const Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                        child: Row(children: [
+                          Icon(Icons.cancel_outlined, size: 14, color: Color(0xFF6B7280)),
+                          SizedBox(width: 8),
+                          Text('Clear pin (auto-assign)',
+                              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF6B7280))),
+                        ]),
+                      ),
+                    ),
+                  ]),
+                ),
+              ),
+            ]),
+          ),
+        ),
+      ),
+    ]);
+  }
+}
+
+class _MovePickerRow extends StatelessWidget {
+  final String name;
+  final String spn;
+  final bool available;
+  final bool isCurrent;
+  final VoidCallback onTap;
+  const _MovePickerRow({required this.name, required this.spn, required this.available, required this.isCurrent, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        child: Row(children: [
+          if (isCurrent)
+            const Padding(
+              padding: EdgeInsets.only(right: 6),
+              child: Icon(Icons.check_circle_rounded, size: 14, color: Color(0xFF1B7A43)),
+            ),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(name, style: TextStyle(
+              fontSize: 13,
+              fontWeight: isCurrent ? FontWeight.w700 : FontWeight.w600,
+              color: const Color(0xFF111827),
+            )),
+            if (spn.isNotEmpty)
+              Text('SPN: $spn', style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
+          ])),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: available ? const Color(0xFFE1F5EE) : const Color(0xFFF3F4F6),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Text(
+              available ? 'Available' : 'Out / N/A',
+              style: TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.w600,
+                color: available ? const Color(0xFF0F6E56) : const Color(0xFF9CA3AF),
+              ),
+            ),
+          ),
+        ]),
+      ),
+    );
   }
 }

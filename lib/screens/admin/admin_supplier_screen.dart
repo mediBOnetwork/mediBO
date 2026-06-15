@@ -2528,9 +2528,14 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                   key: ValueKey('status_${row.id}'),
                   supplierId: row.id,
                   initialStatus: row.status,
-                  onStatusChanged: (newStatus) {
+                  onStatusChanged: (newStatus, newSpn) {
                     row.rawData['status'] = newStatus;
-                    if (mounted) setState(() { _hasPendingChanges = true; });
+                    row.rawData['SPN'] = newSpn;
+                    if (mounted) {
+                      setState(_applySort);
+                      RenderLog.write('supplier_status_saved_readback', newStatus);
+                      RenderLog.write('supplier_list_resorted_live', _sortMode == _SupSortMode.spnDesc ? 'spn' : 'name');
+                    }
                   },
                 ),
                 const SizedBox(width: 14),
@@ -2601,14 +2606,14 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                     key: ValueKey('status_${row.id}'),
                     supplierId: row.id,
                     initialStatus: row.status,
-                    onStatusChanged: (newStatus) {
+                    onStatusChanged: (newStatus, newSpn) {
                       row.rawData['status'] = newStatus;
-                      _load(showSpinner: false).then((_) {
-                        if (mounted) {
-                          setState(_applySort);
-                          RenderLog.write('supplier_status_changed_refetched', newStatus);
-                        }
-                      });
+                      row.rawData['SPN'] = newSpn;
+                      if (mounted) {
+                        setState(_applySort);
+                        RenderLog.write('supplier_status_saved_readback', newStatus);
+                        RenderLog.write('supplier_list_resorted_live', _sortMode == _SupSortMode.spnDesc ? 'spn' : 'name');
+                      }
                     },
                   ),
                 ]),
@@ -3591,7 +3596,7 @@ class _StatusBadge extends StatelessWidget {
 class _StatusPill extends StatefulWidget {
   final String supplierId;
   final String initialStatus;
-  final void Function(String) onStatusChanged;
+  final void Function(String newStatus, num? spn) onStatusChanged;
   const _StatusPill({
     super.key,
     required this.supplierId,
@@ -3622,27 +3627,29 @@ class _StatusPillState extends State<_StatusPill> {
   Color get _color => _colors[_selected] ?? const Color(0xFF6B7280);
   String get _label => _selected.isNotEmpty ? _selected : 'Active';
 
-  Future<bool> _write(String newStatus) async {
+  // Returns the DB-recomputed SPN on success, or null on failure.
+  // SPN is a GENERATED column — must be read back; client cannot compute it.
+  Future<num?> _write(String newStatus) async {
     RenderLog.write('status_pill_write', '$_selected→$newStatus');
     try {
       final res = await Supabase.instance.client
           .from('supplier_profiles')
           .update({'status': newStatus})
           .eq('id', widget.supplierId)
-          .select('id')
+          .select('id, "SPN"')
           .timeout(const Duration(seconds: 8));
       RenderLog.write('status_pill_result', res.isEmpty ? 'EMPTY' : 'OK');
-      if (!mounted) return false;
+      if (!mounted) return null;
       if (res.isEmpty) {
         showToast(context, 'Save failed — try again', isError: true);
-        return false;
+        return null;
       }
       showToast(context, 'Status updated ✓', duration: const Duration(milliseconds: 800));
-      return true;
+      return res.first['SPN'] as num?;
     } catch (e) {
       RenderLog.write('status_pill_error', e.toString());
       if (mounted) showToast(context, 'Error: $e', isError: true);
-      return false;
+      return null;
     }
   }
 
@@ -3658,12 +3665,13 @@ class _StatusPillState extends State<_StatusPill> {
         if (val == _selected) return;
         final prev = _selected;
         setState(() => _selected = val);   // optimistic local update
-        final ok = await _write(val);
-        if (!ok) {
-          if (mounted) setState(() => _selected = prev); // revert on failure
+        final spn = await _write(val);
+        // _write returns null only on error (shows toast itself); SPN=0 is num 0, not null.
+        if (spn == null) {
+          if (mounted) setState(() => _selected = prev);
           return;
         }
-        widget.onStatusChanged(val);  // fire only after confirmed write
+        widget.onStatusChanged(val, spn);
       },
       itemBuilder: (_) => _options.map((opt) {
         final c = _colors[opt] ?? const Color(0xFF6B7280);

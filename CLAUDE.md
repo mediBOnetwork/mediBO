@@ -7,7 +7,15 @@
 - Cloudflare Pages auto-deploys medibo.in from the GitHub repo (build/web is committed)
 
 ## After every code change:
-Run ~/deploy.sh — this builds, commits, and pushes to production (Cloudflare Pages → medibo.in).
+Run ~/deploy.sh — this builds, commits, pushes to production (Cloudflare Pages → medibo.in), and automatically runs ~/render_verify.js to self-load the page and confirm the render-log.
+
+## HEADLESS SELF-VERIFICATION RULE (PERMANENT — overrides all prior habits)
+- After every deploy, ~/deploy.sh runs `node ~/render_verify.js --keys boot_status` automatically.
+- For feature-specific keys, run: `node ~/render_verify.js --keys key1,key2,...`
+- render_verify.js loads medibo.in as admin (headless Chromium), reads #medibo-render-log from the DOM, and asserts build-hash match + all required keys.
+- NEVER end a task with "render-log is stale / needs a real visit" — that is a FAILURE, not a pass. The script self-loads the page; stale render-log cannot happen.
+- NEVER substitute a DB-count check or source-code check for actual render-log verification. DB check is ADDITIONAL only.
+- If render_verify.js exits non-zero: fix the Flutter code and redeploy. Do not declare success.
 There is no local preview step. Every change goes straight to production via deploy.sh.
 
 ## VERIFICATION RULE (mandatory)

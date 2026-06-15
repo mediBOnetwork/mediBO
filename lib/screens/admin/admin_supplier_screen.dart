@@ -379,6 +379,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
             .order('deleted_at', ascending: false).catchError((_) => <dynamic>[]),
         client.from('supplier_company').select('supplier_id')
             .catchError((_) => <dynamic>[]),
+        client.rpc('get_supplier_inquiry_overview').catchError((_) => <dynamic>[]),
       ]);
 
       final profRows   = results[0] as List;
@@ -386,6 +387,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       final leadRows   = results[2] as List;
       final deletedR   = results[3] as List;
       final countRows  = results[4] as List;
+      final inquiryRaw = results[5] as List;
 
       final newCounts = <String, int>{};
       for (final r in countRows) {
@@ -425,22 +427,35 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         );
       }).toList();
 
+      // Build inquiry overview list (same sort as _fetchInquiryOverview)
+      final inquiryOverview = inquiryRaw
+          .map((r) => Map<String, dynamic>.from(r as Map))
+          .toList()
+        ..sort((a, b) {
+          final aC = (a['current_count'] as num?)?.toInt() ?? 0;
+          final bC = (b['current_count'] as num?)?.toInt() ?? 0;
+          if (aC != bC) return bC.compareTo(aC);
+          return (a['supplier_name'] as String? ?? '').compareTo(b['supplier_name'] as String? ?? '');
+        });
+
       if (mounted) {
         setState(() {
-          _suppliers   = approved;
-          _pending     = pending;
-          _orders      = orders;
-          _leads       = leads;
-          _deletedRows = deletedR.map((r) => Map<String, dynamic>.from(r as Map)).toList();
+          _suppliers      = approved;
+          _pending        = pending;
+          _orders         = orders;
+          _leads          = leads;
+          _inquiryOverview = inquiryOverview;
+          _deletedRows    = deletedR.map((r) => Map<String, dynamic>.from(r as Map)).toList();
           _companyCounts
             ..clear()
             ..addAll(newCounts);
-          _loading     = false;
+          _loading        = false;
           _applySort();
         });
         RenderLog.write('supplier_sort_default', 'spn_desc');
+        RenderLog.write('dashboard_counts_refreshed', 'true');
+        RenderLog.write('inquiry_tab_count_${inquiryOverview.length}', 'true');
       }
-      _fetchInquiryOverview(silent: true);
       _fetchUnassignedItems(silent: true);
       _fetchStaging();
     } catch (e) {

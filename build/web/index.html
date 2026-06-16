@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <meta name="build-commit" content="d239661">
+  <meta name="build-commit" content="757405e">
   <!--
     If you are serving your web app in a path other than the root, change the
     href value below to reflect the base path you are serving from.
@@ -28,7 +28,10 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
-  <meta name="description" content="B2B Pharmacy ordering platform">
+  <meta name="description" content="mediBO is a B2B ordering platform for licensed pharmacies and hospitals in India to order medicines and surgical supplies from verified wholesalers.">
+  <meta property="og:title" content="mediBO — B2B Pharmacy Ordering Platform">
+  <meta property="og:description" content="mediBO lets licensed pharmacies and hospitals order medicines and surgical supplies from verified suppliers.">
+  <meta property="og:url" content="https://medibo.in">
   <meta name="autocomplete" content="off">
   <!-- Prevent browsers from auto-detecting phone numbers, dates, addresses in
        Flutter's accessibility semantic layer (flt-semantics elements), which
@@ -126,7 +129,7 @@
   <!-- PWA manifest -->
   <link rel="manifest" href="manifest.json">
 
-  <title>mediBO</title>
+  <title>mediBO — B2B Pharmacy Ordering Platform</title>
   <script src="https://www.google.com/recaptcha/api.js" async defer></script>
 
   <!-- Google Identity Services — ID-token flow for signInWithIdToken -->
@@ -342,6 +345,13 @@
     <button onclick="closeRecaptcha()" style="margin-top:16px;width:100%;padding:10px;border:1px solid #ccc;border-radius:6px;cursor:pointer;font-size:14px;">Cancel</button>
   </div>
   <div id="recaptcha-overlay" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:9998;" onclick="closeRecaptcha()"></div>
+
+  <!-- SEO/bot-readable content — Flutter paints over this once mounted.
+       Google's crawler sees raw HTML; real users see the Flutter canvas. -->
+  <div id="seo-loading" style="font-family:sans-serif;max-width:680px;margin:40px auto;padding:0 16px;color:#1B7A43">
+    <h1>mediBO</h1>
+    <p style="color:#333">mediBO is a B2B pharmacy ordering platform for licensed pharmacies and hospitals in India. Order medicines and surgical supplies from verified wholesalers. See our <a href="https://medibo.in/privacy">Privacy Policy</a> and <a href="https://medibo.in/terms">Terms of Service</a>.</p>
+  </div>
 
   <script src="flutter_bootstrap.js?v=20260606" async></script>
   <script>

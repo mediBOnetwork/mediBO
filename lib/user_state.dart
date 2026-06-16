@@ -4,7 +4,7 @@ import 'package:flutter/widgets.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'models/user_profile.dart';
-import 'services/gis_auth.dart';
+import 'services/gis_auth.dart' show gisSignInWithNonce;
 import 'utils/render_log.dart';
 
 class AuthNotifier extends ChangeNotifier {
@@ -258,14 +258,16 @@ class AuthNotifier extends ChangeNotifier {
     // Sign out any stale session before starting the new flow.
     await Supabase.instance.client.auth.signOut();
 
-    // GIS popup — requests an ID token from OUR web client so the Google
-    // consent screen reads "Sign in to continue to mediBO" (not supabase.co).
-    final idToken = await gisGetIdToken();
-    if (idToken == null) throw Exception('Google sign-in cancelled or failed');
+    // GIS popup with nonce pair:
+    //   hashedNonce → GIS initialize (embedded in JWT nonce claim by Google)
+    //   rawNonce    → Supabase signInWithIdToken (Supabase re-hashes to verify)
+    final gis = await gisSignInWithNonce();
+    RenderLog.write('nonce_pair_ok', true);
 
     await Supabase.instance.client.auth.signInWithIdToken(
       provider: OAuthProvider.google,
-      idToken: idToken,
+      idToken: gis.idToken,
+      nonce: gis.rawNonce,
     );
     RenderLog.write('google_idtoken_exchange_ok', true);
   }

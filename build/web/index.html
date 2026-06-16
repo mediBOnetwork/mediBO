@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <meta name="build-commit" content="1e14be1">
+  <meta name="build-commit" content="a07bfd0">
   <!--
     If you are serving your web app in a path other than the root, change the
     href value below to reflect the base path you are serving from.
@@ -443,10 +443,12 @@
   </script>
 
   <!-- ═══════════════════════════════════════════════════════════════════════
-       GOOGLE IDENTITY SERVICES (GIS) BRIDGE
-       mediboGisSignIn(clientId) → Promise<idToken|null>
-       Opens a modal with the GIS sign-in button; resolves with the ID token
-       JWT or null/rejected on cancel.
+       GOOGLE IDENTITY SERVICES (GIS) BRIDGE  — nonce-aware
+       mediboGisSignIn(clientId, hashedNonce) → Promise<idToken string>
+       • hashedNonce  = SHA-256 hex of the raw nonce (computed by Dart)
+       • Resolves with the GIS credential (ID token JWT)
+       • GIS embeds hashedNonce in the JWT nonce claim; Supabase verifies
+         by re-hashing the raw nonce Dart passes to signInWithIdToken.
        ═══════════════════════════════════════════════════════════════════════ -->
   <!-- GIS modal overlay — shown when Flutter calls mediboGisSignIn() -->
   <div id="gis-overlay"
@@ -466,14 +468,17 @@
 
   <script>
     (function () {
-      // mediboGisSignIn(clientId) → Promise that resolves to the GIS ID token string,
-      // or rejects with 'dismissed' / 'gis-load-timeout' on failure.
-      window.mediboGisSignIn = function (clientId) {
+      // mediboGisSignIn(clientId, hashedNonce)
+      //   clientId    — Google OAuth web client ID
+      //   hashedNonce — SHA-256 hex string of the raw nonce (Dart-computed)
+      // Resolves with the GIS credential string (ID token JWT).
+      // Rejects with 'dismissed' or 'gis-load-timeout'.
+      window.mediboGisSignIn = function (clientId, hashedNonce) {
         return new Promise(function (resolve, reject) {
-          var overlay = document.getElementById('gis-overlay');
-          var btnDiv  = document.getElementById('gis-btn-container');
+          var overlay   = document.getElementById('gis-overlay');
+          var btnDiv    = document.getElementById('gis-btn-container');
           var cancelBtn = document.getElementById('gis-cancel-btn');
-          var settled = false;
+          var settled   = false;
 
           function settle(fn, val) {
             if (settled) return;
@@ -495,26 +500,29 @@
           function tryInit() {
             if (settled) return;
             if (window.google && window.google.accounts && window.google.accounts.id) {
-              // Clear any prior render
               btnDiv.innerHTML = '';
 
+              // Pass the SHA-256 hex hash of rawNonce to GIS; GIS embeds it
+              // verbatim in the JWT nonce claim. Supabase re-hashes rawNonce
+              // and compares — they match iff we got the pairing right.
               google.accounts.id.initialize({
-                client_id: clientId,
-                callback: function (response) {
+                client_id:   clientId,
+                nonce:        hashedNonce,
+                callback:    function (response) {
                   settle(resolve, response.credential);
                 },
-                ux_mode: 'popup',
+                ux_mode:     'popup',
                 auto_select: false,
               });
 
               google.accounts.id.renderButton(btnDiv, {
-                type: 'standard',
-                shape: 'rectangular',
-                theme: 'outline',
-                text: 'signin_with',
-                size: 'large',
+                type:          'standard',
+                shape:         'rectangular',
+                theme:         'outline',
+                text:          'signin_with',
+                size:          'large',
                 logo_alignment: 'left',
-                width: 260,
+                width:         260,
               });
 
               overlay.style.display = 'flex';

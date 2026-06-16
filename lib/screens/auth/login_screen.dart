@@ -92,11 +92,14 @@ class _LoginScreenState extends State<LoginScreen> {
   Future<void> _googleSignIn() async {
     setState(() { _loading = true; _error = null; });
     try {
-      // Route through AuthNotifier so signOut + prompt=select_account are applied.
       await UserState.read(context).signInWithGoogle();
-    } catch (_) {
+    } catch (e) {
+      final msg = e.toString();
+      final display = msg.contains('dismissed')
+          ? null
+          : (msg.length > 120 ? '${msg.substring(0, 120)}…' : msg);
       if (mounted) setState(() {
-        _error = 'Google sign-in failed. Please try again.';
+        _error = display ?? _error;
         _loading = false;
       });
     }

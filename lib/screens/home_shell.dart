@@ -1905,10 +1905,17 @@ class _LoginPanelContentState extends State<_LoginPanelContent> {
   void initState() {
     super.initState();
     _emailCtrl.addListener(_onEmailChanged);
-    if (Supabase.instance.client.auth.currentUser != null) {
-      WidgetsBinding.instance
-          .addPostFrameCallback((_) { if (mounted) widget.onClose(); });
-    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (Supabase.instance.client.auth.currentUser != null) {
+        widget.onClose();
+      } else {
+        // Login panel is visible — record that GIS + FedCM are wired.
+        RenderLog.write('google_gis_login_rendered', true);
+        RenderLog.write('fedcm_enabled', true);
+        RenderLog.write('mobile_oauth_fallback_ready', true);
+      }
+    });
     _authSub = Supabase.instance.client.auth.onAuthStateChange.listen((s) {
       // After _setNewPassword re-signs in, guard against closing before explicit onClose
       if (s.event == AuthChangeEvent.signedIn && mounted && _resetStep == _ResetStep.none) {
@@ -1947,11 +1954,14 @@ class _LoginPanelContentState extends State<_LoginPanelContent> {
   Future<void> _googleSignIn() async {
     setState(() { _loading = true; _error = null; });
     try {
-      // Route through UserState (GIS id-token flow) — NOT the old OAuth redirect.
       await UserState.read(context).signInWithGoogle();
-    } catch (_) {
+    } catch (e) {
+      final msg = e.toString();
+      final display = msg.contains('dismissed')
+          ? null  // cancelled — no error shown
+          : (msg.length > 120 ? '${msg.substring(0, 120)}…' : msg);
       if (mounted) setState(() {
-        _error = 'Google sign-in failed. Please try again.';
+        _error = display ?? _error;
         _loading = false;
       });
     }

@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <meta name="build-commit" content="a07bfd0">
+  <meta name="build-commit" content="1b76cd2">
   <!--
     If you are serving your web app in a path other than the root, change the
     href value below to reflect the base path you are serving from.
@@ -443,12 +443,14 @@
   </script>
 
   <!-- ═══════════════════════════════════════════════════════════════════════
-       GOOGLE IDENTITY SERVICES (GIS) BRIDGE  — nonce-aware
+       GOOGLE IDENTITY SERVICES (GIS) BRIDGE  — nonce-aware + FedCM
        mediboGisSignIn(clientId, hashedNonce) → Promise<idToken string>
        • hashedNonce  = SHA-256 hex of the raw nonce (computed by Dart)
        • Resolves with the GIS credential (ID token JWT)
        • GIS embeds hashedNonce in the JWT nonce claim; Supabase verifies
          by re-hashing the raw nonce Dart passes to signInWithIdToken.
+       • FedCM (use_fedcm_for_prompt + itp_support) enables cookie-free
+         sign-in on mobile Chrome where third-party cookies are blocked.
        ═══════════════════════════════════════════════════════════════════════ -->
   <!-- GIS modal overlay — shown when Flutter calls mediboGisSignIn() -->
   <div id="gis-overlay"
@@ -505,14 +507,18 @@
               // Pass the SHA-256 hex hash of rawNonce to GIS; GIS embeds it
               // verbatim in the JWT nonce claim. Supabase re-hashes rawNonce
               // and compares — they match iff we got the pairing right.
+              // use_fedcm_for_prompt + itp_support: enable FedCM — the
+              // browser-native credential flow that works on mobile Chrome
+              // even when third-party cookies are blocked (no popup required).
               google.accounts.id.initialize({
-                client_id:   clientId,
-                nonce:        hashedNonce,
-                callback:    function (response) {
+                client_id:             clientId,
+                nonce:                  hashedNonce,
+                callback:              function (response) {
                   settle(resolve, response.credential);
                 },
-                ux_mode:     'popup',
-                auto_select: false,
+                use_fedcm_for_prompt:  true,
+                itp_support:           true,
+                auto_select:           false,
               });
 
               google.accounts.id.renderButton(btnDiv, {

@@ -5,42 +5,217 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>mediBO</title>
   <meta name="description" content="mediBO is a B2B ordering platform for licensed pharmacies and hospitals in India to order medicines and surgical supplies from verified wholesale suppliers.">
+  <meta property="og:title" content="mediBO — About Us">
+  <meta property="og:description" content="mediBO is the B2B ordering platform of Jai Mahakal Medical And Surgical, a licensed wholesale pharmaceutical distributor supplying genuine medicines exclusively to pharmacies, hospitals, and clinics across India.">
+  <meta property="og:url" content="https://medibo.in/about">
   <style>
-    body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;color:#222;line-height:1.6;margin:0;background:#fff}
-    .wrap{max-width:760px;margin:0 auto;padding:48px 20px}
-    h1{color:#1B7A43;font-size:40px;margin:0 0 4px}
-    .tag{color:#1B7A43;font-weight:600;font-size:18px;margin:0 0 24px}
-    h2{font-size:20px;margin:32px 0 8px}
-    ul{padding-left:20px}
-    a{color:#1B7A43}
-    .cta{display:inline-block;margin-top:24px;background:#1B7A43;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:600}
-    footer{margin-top:40px;padding-top:20px;border-top:1px solid #eee;font-size:14px;color:#666}
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #fff;
+      color: #1F2A37;
+      line-height: 1.5;
+    }
+    a { color: #1B7A43; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* ── Layout ── */
+    .wrap { max-width: 680px; margin: 0 auto; padding: 32px 20px 64px; }
+
+    /* ── Header ── */
+    .hdr { display: flex; align-items: center; gap: 14px; padding-bottom: 24px; border-bottom: 1px solid #E5E7EB; margin-bottom: 28px; }
+    .hdr-icon { width: 48px; height: 48px; background: #E8F5EE; border-radius: 12px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .hdr-icon svg { width: 28px; height: 28px; }
+    .hdr-name { font-size: 28px; font-weight: 800; color: #1F2A37; letter-spacing: -0.5px; }
+    .hdr-tag  { font-size: 14px; color: #6B7280; margin-top: 2px; }
+
+    /* ── Sections ── */
+    .section { margin-bottom: 28px; }
+    .sec-heading { font-size: 18px; font-weight: 800; color: #1F2A37; margin-bottom: 10px; }
+    .body-text { font-size: 15px; line-height: 1.65; color: #1F2A37; }
+
+    /* ── Info card ── */
+    .card { border: 1px solid #E5E7EB; border-radius: 12px; overflow: hidden; }
+    .card-row { display: flex; align-items: flex-start; gap: 12px; padding: 14px 16px; }
+    .card-row + .card-row { border-top: 1px solid #E5E7EB; }
+    .card-icon { flex-shrink: 0; margin-top: 1px; }
+    .card-icon svg { width: 18px; height: 18px; display: block; }
+    .card-label { font-size: 13px; color: #6B7280; flex: 1; min-width: 0; }
+    .card-value { font-size: 13px; font-weight: 600; color: #1F2A37; text-align: right; flex: 1.5; min-width: 0; }
+
+    /* ── Doc tile ── */
+    .doc-tile { border: 1px solid #E5E7EB; border-radius: 12px; display: flex; align-items: center; gap: 12px; padding: 14px 16px; margin-bottom: 10px; color: #1F2A37; }
+    .doc-tile:last-child { margin-bottom: 0; }
+    .doc-tile svg { flex-shrink: 0; width: 18px; height: 18px; }
+    .doc-label { font-size: 13px; font-weight: 600; flex: 1; }
+    .doc-ext { color: #1B7A43; flex-shrink: 0; }
+
+    /* ── CTA button ── */
+    .cta { display: inline-block; margin: 8px 0 0; background: #1B7A43; color: #fff; font-size: 15px; font-weight: 600; padding: 13px 28px; border-radius: 10px; }
+    .cta:hover { background: #166336; text-decoration: none; }
+
+    /* ── Footer ── */
+    footer { margin-top: 40px; padding-top: 20px; border-top: 1px solid #E5E7EB; font-size: 13px; color: #6B7280; }
+    footer a { color: #6B7280; }
+    footer a:hover { color: #1B7A43; text-decoration: underline; }
+    .foot-links { display: flex; flex-wrap: wrap; gap: 8px 20px; margin-bottom: 10px; }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <h1>mediBO</h1>
-    <p class="tag">B2B pharmacy ordering platform</p>
+<div class="wrap">
 
-    <p><strong>mediBO</strong> is a business-to-business ordering platform built for licensed pharmacies and hospitals in India. mediBO lets verified pharmacy and hospital buyers order medicines and surgical supplies directly from approved wholesale suppliers and distributors, with live stock availability and order tracking.</p>
-
-    <h2>What mediBO does</h2>
-    <ul>
-      <li>Lets licensed pharmacies and hospitals browse and order medicines and surgical products.</li>
-      <li>Connects buyers to verified wholesale suppliers with real-time stock availability.</li>
-      <li>Tracks orders from placement through fulfilment and delivery.</li>
-      <li>Provides secure sign-in for verified business accounts.</li>
-    </ul>
-
-    <h2>Who it is for</h2>
-    <p>mediBO is intended only for licensed pharmacy businesses, hospitals, and registered wholesale drug suppliers operating in India.</p>
-
-    <a class="cta" href="https://medibo.in">Open the mediBO app</a>
-
-    <footer>
-      <p><a href="https://medibo.in/privacy">Privacy Policy</a> &nbsp;·&nbsp; <a href="https://medibo.in/terms">Terms of Service</a> &nbsp;·&nbsp; <a href="https://medibo.in/contact">Contact</a></p>
-      <p>mediBO — operated by Jai Mahakal Medical And Surgical, Chhattisgarh, India.</p>
-    </footer>
+  <!-- Header -->
+  <div class="hdr">
+    <div class="hdr-icon">
+      <!-- pharmacy cross icon -->
+      <svg viewBox="0 0 24 24" fill="none" stroke="#1B7A43" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 9h18v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9Z"/>
+        <path d="M3 9V7a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v2"/>
+        <line x1="12" y1="12" x2="12" y2="18"/>
+        <line x1="9" y1="15" x2="15" y2="15"/>
+      </svg>
+    </div>
+    <div>
+      <div class="hdr-name">mediBO</div>
+      <div class="hdr-tag">B2B Pharmacy Platform</div>
+    </div>
   </div>
+
+  <!-- About Us -->
+  <div class="section">
+    <div class="sec-heading">About Us</div>
+    <p class="body-text">
+      mediBO is the B2B ordering platform of Jai Mahakal Medical And Surgical,
+      a licensed wholesale pharmaceutical distributor supplying genuine medicines
+      and healthcare products exclusively to pharmacies, hospitals, and clinics across India.
+    </p>
+  </div>
+
+  <!-- Our Mission -->
+  <div class="section">
+    <div class="sec-heading">Our Mission</div>
+    <p class="body-text">
+      To simplify pharmaceutical procurement for pharmacies and clinics
+      by providing a reliable, transparent and efficient B2B ordering platform.
+    </p>
+  </div>
+
+  <!-- Registered Legal Entity -->
+  <div class="section">
+    <div class="sec-heading">Registered Legal Entity</div>
+    <div class="card">
+      <div class="card-row">
+        <div class="card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="#1B7A43" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/></svg></div>
+        <div class="card-label">Legal Name</div>
+        <div class="card-value">Anshu Jaiswal (Proprietor)</div>
+      </div>
+      <div class="card-row">
+        <div class="card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="#1B7A43" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg></div>
+        <div class="card-label">Business Name</div>
+        <div class="card-value">Jai Mahakal Medical And Surgical</div>
+      </div>
+      <div class="card-row">
+        <div class="card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="#1B7A43" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></div>
+        <div class="card-label">GSTIN</div>
+        <div class="card-value">22BXXPJ8518F1Z4</div>
+      </div>
+      <div class="card-row">
+        <div class="card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="#1B7A43" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13S3 17 3 10a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg></div>
+        <div class="card-label">Address</div>
+        <div class="card-value">P H No 19, Vill-Jaunda, R N M-Champaran, Tah-Gobra Nawapara, District-Raipur, Chhattisgarh - 493885</div>
+      </div>
+      <div class="card-row">
+        <div class="card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="#1B7A43" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></div>
+        <div class="card-label">Established</div>
+        <div class="card-value">2025</div>
+      </div>
+      <div class="card-row">
+        <div class="card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="#1B7A43" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></div>
+        <div class="card-label">Constitution</div>
+        <div class="card-value">Proprietorship</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Contact Details -->
+  <div class="section">
+    <div class="sec-heading">Contact Details</div>
+    <div class="card">
+      <div class="card-row">
+        <div class="card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="#1B7A43" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.99 12a19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 3.93 1h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 8.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg></div>
+        <div class="card-label">Phone</div>
+        <div class="card-value"><a href="tel:9329252090">9329252090</a></div>
+      </div>
+      <div class="card-row">
+        <div class="card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="#1B7A43" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg></div>
+        <div class="card-label">Email</div>
+        <div class="card-value"><a href="mailto:medibonetwork@gmail.com">medibonetwork@gmail.com</a></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Drug Licences -->
+  <div class="section">
+    <div class="sec-heading">Drug Licences</div>
+    <div class="card">
+      <div class="card-row">
+        <div class="card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="#1B7A43" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg></div>
+        <div class="card-label">Licence 20B</div>
+        <div class="card-value">WLF20B2025CT000337</div>
+      </div>
+      <div class="card-row">
+        <div class="card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="#1B7A43" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg></div>
+        <div class="card-label">Licence 21B</div>
+        <div class="card-value">WLF21B2025CT000337</div>
+      </div>
+      <div class="card-row">
+        <div class="card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="#1B7A43" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div>
+        <div class="card-label">Issuing Authority</div>
+        <div class="card-value">Food &amp; Drugs Administration Chhattisgarh, Raipur</div>
+      </div>
+      <div class="card-row">
+        <div class="card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="#1B7A43" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></div>
+        <div class="card-label">Valid Until</div>
+        <div class="card-value">23-Apr-2030</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Documents -->
+  <div class="section">
+    <div class="sec-heading">Documents</div>
+    <a class="doc-tile" href="https://drive.google.com/file/d/1BeFSWHTr8wQMnhpSPxMHK-fB22Q3nPjc/view?usp=sharing" target="_blank" rel="noopener">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#1B7A43" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+      <span class="doc-label">GST Certificate</span>
+      <span class="doc-ext"><svg viewBox="0 0 24 24" fill="none" stroke="#1B7A43" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="width:16px;height:16px"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg></span>
+    </a>
+    <a class="doc-tile" href="https://drive.google.com/file/d/12KFsiEpAEZESrSANJfoNiqmgqa_-zLE1/view?usp=sharing" target="_blank" rel="noopener">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#1B7A43" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+      <span class="doc-label">Drug Licence 20B</span>
+      <span class="doc-ext"><svg viewBox="0 0 24 24" fill="none" stroke="#1B7A43" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="width:16px;height:16px"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg></span>
+    </a>
+    <a class="doc-tile" href="https://drive.google.com/file/d/1RuXEv32644D7hr94dckOFVpZdviOxJVa/view?usp=sharing" target="_blank" rel="noopener">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#1B7A43" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+      <span class="doc-label">Drug Licence 21B</span>
+      <span class="doc-ext"><svg viewBox="0 0 24 24" fill="none" stroke="#1B7A43" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="width:16px;height:16px"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg></span>
+    </a>
+  </div>
+
+  <!-- CTA -->
+  <a class="cta" href="https://medibo.in">Open the mediBO app</a>
+
+  <!-- Footer -->
+  <footer>
+    <div class="foot-links">
+      <a href="https://medibo.in/privacy">Privacy Policy</a>
+      <a href="https://medibo.in/terms">Terms of Service</a>
+      <a href="https://medibo.in/refund">Refund Policy</a>
+      <a href="https://medibo.in/shipping">Shipping Policy</a>
+      <a href="https://medibo.in/contact">Contact Us</a>
+    </div>
+    <p>© 2025 mediBO — Jai Mahakal Medical And Surgical, Chhattisgarh, India.</p>
+  </footer>
+
+</div>
 </body>
 </html>

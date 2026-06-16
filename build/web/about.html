@@ -80,7 +80,7 @@
       </svg>
     </div>
     <div>
-      <div class="hdr-name">mediBO</div>
+      <a class="hdr-name" href="/" style="color:#1F2A37;text-decoration:none;">mediBO</a>
       <div class="hdr-tag">B2B Pharmacy Platform</div>
     </div>
   </div>
@@ -206,7 +206,7 @@
   </div>
 
   <!-- CTA -->
-  <a class="cta" href="https://medibo.in">Open the mediBO app</a>
+  <a class="cta" id="open-app-btn" href="https://medibo.in">Open the mediBO app</a>
 
   <!-- Footer -->
   <footer>
@@ -221,5 +221,14 @@
   </footer>
 
 </div>
+  <script>
+    try {
+      var p = new URLSearchParams(location.search);
+      if (p.get('from') === 'app') {
+        var b = document.getElementById('open-app-btn');
+        if (b) b.style.display = 'none';
+      }
+    } catch (e) {}
+  </script>
 </body>
 </html>

@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <meta name="build-commit" content="4ca3d1b">
+  <meta name="build-commit" content="92583b1">
   <!--
     If you are serving your web app in a path other than the root, change the
     href value below to reflect the base path you are serving from.
@@ -346,12 +346,15 @@
   </div>
   <div id="recaptcha-overlay" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:9998;" onclick="closeRecaptcha()"></div>
 
-  <!-- SEO/bot-readable content — Flutter paints over this once mounted.
-       Google's crawler sees raw HTML; real users see the Flutter canvas. -->
-  <div id="seo-loading" style="font-family:sans-serif;max-width:680px;margin:40px auto;padding:0 16px;color:#1B7A43">
-    <h1>mediBO</h1>
-    <p style="color:#333">mediBO is a B2B pharmacy ordering platform for licensed pharmacies and hospitals in India. Order medicines and surgical supplies from verified wholesalers. See our <a href="https://medibo.in/privacy">Privacy Policy</a> and <a href="https://medibo.in/terms">Terms of Service</a>.</p>
-  </div>
+  <!-- Fallback backdrop — sits at z-index:0 behind #flutter-loading.
+       Visible only during #flutter-loading's 0.25s fade-out while Flutter
+       completes its first paint. No text, no marketing copy. -->
+  <style>
+    #boot-loader{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#fff;z-index:0}
+    #boot-loader .spin{width:36px;height:36px;border:3px solid #e0e0e0;border-top-color:#1B7A43;border-radius:50%;animation:bspin .8s linear infinite}
+    @keyframes bspin{to{transform:rotate(360deg)}}
+  </style>
+  <div id="boot-loader"><div class="spin"></div></div>
 
   <script src="flutter_bootstrap.js?v=20260606" async></script>
   <script>

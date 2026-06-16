@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <meta name="build-commit" content="ad3b7d7">
+  <meta name="build-commit" content="4ee0fde">
   <!--
     If you are serving your web app in a path other than the root, change the
     href value below to reflect the base path you are serving from.
@@ -442,9 +442,19 @@
     })();
   </script>
 
+  <!-- mediboIsMobile(): true on phones/tablets (touch + mobile UA) -->
+  <script>
+    window.mediboIsMobile = function () {
+      var ua = navigator.userAgent || '';
+      var mobileUA = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini|Mobile/i.test(ua);
+      var touchOnly = navigator.maxTouchPoints > 1 && !/Macintosh/.test(ua);
+      return mobileUA || touchOnly;
+    };
+  </script>
+
   <!-- ═══════════════════════════════════════════════════════════════════════
        GOOGLE IDENTITY SERVICES (GIS) BRIDGE  — nonce-aware + FedCM
-       mediboGisSignIn(clientId, hashedNonce) → Promise<idToken string>
+       Desktop ONLY: mediboGisSignIn(clientId, hashedNonce) → Promise<idToken string>
        • hashedNonce  = SHA-256 hex of the raw nonce (computed by Dart)
        • Resolves with the GIS credential (ID token JWT)
        • GIS embeds hashedNonce in the JWT nonce claim; Supabase verifies

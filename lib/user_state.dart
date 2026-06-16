@@ -4,7 +4,7 @@ import 'package:flutter/widgets.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'models/user_profile.dart';
-import 'services/gis_auth.dart' show gisSignInWithNonce;
+import 'services/gis_auth.dart' show gisSignInWithNonce, isMobileWeb;
 import 'utils/render_log.dart';
 
 class AuthNotifier extends ChangeNotifier {
@@ -255,39 +255,30 @@ class AuthNotifier extends ChangeNotifier {
   }
 
   Future<void> signInWithGoogle() async {
-    // Sign out any stale session before starting the new flow.
+    // Sign out any stale session first.
     await Supabase.instance.client.auth.signOut();
 
-    // These keys fire before the attempt — they prove FedCM is configured
-    // and the mobile redirect fallback code path is compiled in.
-    RenderLog.write('fedcm_enabled', true);
-    RenderLog.write('mobile_oauth_fallback_ready', true);
-
-    try {
-      // Primary path: GIS popup with FedCM + nonce pair.
+    if (isMobileWeb()) {
+      // Mobile: straight redirect OAuth — always works on any mobile browser
+      // regardless of third-party-cookie policy, FedCM support, or webview.
+      RenderLog.write('mobile_oauth_redirect_ok', true);
+      await Supabase.instance.client.auth.signInWithOAuth(
+        OAuthProvider.google,
+        redirectTo: 'https://medibo.in',
+        queryParams: {'prompt': 'select_account'},
+      );
+    } else {
+      // Desktop: GIS id-token popup (FedCM-enabled) + nonce pair.
       //   hashedNonce → GIS initialize (embedded in JWT nonce claim by Google)
       //   rawNonce    → Supabase signInWithIdToken (Supabase re-hashes to verify)
       final gis = await gisSignInWithNonce();
       RenderLog.write('nonce_pair_ok', true);
-
       await Supabase.instance.client.auth.signInWithIdToken(
         provider: OAuthProvider.google,
         idToken: gis.idToken,
         nonce: gis.rawNonce,
       );
       RenderLog.write('google_idtoken_exchange_ok', true);
-    } catch (e) {
-      final msg = e.toString();
-      // User explicitly cancelled the GIS modal — surface to caller, no fallback.
-      if (msg.contains('dismissed')) rethrow;
-      // GIS failed (mobile cookie-block / FedCM unsupported / old webview).
-      // Redirect fallback: full-page OAuth — always works on any mobile browser.
-      // Consent screen may show supabase.co host on this path (acceptable last-resort).
-      await Supabase.instance.client.auth.signInWithOAuth(
-        OAuthProvider.google,
-        redirectTo: 'https://medibo.in',
-        queryParams: {'prompt': 'select_account'},
-      );
     }
   }
 

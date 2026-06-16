@@ -5,6 +5,15 @@ import 'dart:convert';
 const _kGisClientId =
     '565577322247-9ls2ocm01sjilq2sb17r5afm6se9jfr4.apps.googleusercontent.com';
 
+@JS('mediboIsMobile')
+external bool _mediboIsMobileJs();
+
+/// Returns true on mobile/tablet browsers (phones, touch-only devices).
+/// Defaults to false (desktop) if JS is unavailable.
+bool isMobileWeb() {
+  try { return _mediboIsMobileJs(); } catch (_) { return false; }
+}
+
 @JS('mediboGisSignIn')
 external JSPromise<JSString?> _mediboGisSignIn(JSString clientId, JSString hashedNonce);
 

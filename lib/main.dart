@@ -45,7 +45,7 @@ void main() {
         url: SupabaseConfig.url,
         anonKey: SupabaseConfig.anonKey,
         authOptions: const FlutterAuthClientOptions(
-          authFlowType: AuthFlowType.pkce,
+          authFlowType: AuthFlowType.implicit,
           autoRefreshToken: true,
           // persistSession defaults to true on web via localStorage.
         ),

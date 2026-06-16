@@ -115,10 +115,20 @@ class _HomeShellState extends State<HomeShell> {
   // Read the URL on first load and set initial shell state.
   void _initFromUrl() {
     final query = currentSearch();
-    if (query.contains('code=')) {
-      // OAuth callback — strip the code once Supabase has processed it.
+    final fragment = currentHash();
+    // PKCE callback (?code=) or implicit callback (#access_token= / #error=):
+    // strip the callback params once Supabase has processed them.
+    final hasCode = query.contains('code=');
+    final hasFragment = fragment.contains('access_token=') ||
+        fragment.contains('refresh_token=') ||
+        fragment.contains('error=');
+    if (hasCode || hasFragment) {
+      final cleaned = hasCode ? 'code' : 'fragment';
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) replaceUrl('/');
+        if (mounted) {
+          replaceUrl('/');
+          RenderLog.write('auth55_url_cleaned', 'stripped $cleaned after callback');
+        }
       });
       return;
     }

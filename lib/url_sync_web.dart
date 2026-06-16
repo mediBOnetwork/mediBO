@@ -3,6 +3,7 @@ import 'dart:html' as html;
 
 String currentPath() => html.window.location.pathname ?? '/';
 String currentSearch() => html.window.location.search ?? '';
+String currentHash() => html.window.location.hash;
 
 void pushUrl(String path) => html.window.history.pushState(null, '', path);
 void replaceUrl(String path) => html.window.history.replaceState(null, '', path);

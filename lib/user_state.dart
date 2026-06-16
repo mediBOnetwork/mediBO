@@ -54,10 +54,13 @@ class AuthNotifier extends ChangeNotifier {
   // Fast-path: if currentUser is already available synchronously (localStorage
   // restored session), resolve loading immediately so there's no blank splash.
   Future<void> _init() async {
+    RenderLog.write('auth55_flow', 'implicit');
     final session = Supabase.instance.client.auth.currentSession;
     final user = session?.user ?? Supabase.instance.client.auth.currentUser;
     if (user != null && !_initDone) {
       _initDone = true;
+      RenderLog.write('auth55_restore',
+          'initialSession user=${user.email ?? 'null'}; logged_in=true; from=restored_session');
       RenderLog.write('auth54_restore',
           'initialSession user=${user.email ?? 'null'}; from=restored_session');
       RenderLog.write('auth54_logged_in', 'true');
@@ -93,6 +96,8 @@ class AuthNotifier extends ChangeNotifier {
         final session = Supabase.instance.client.auth.currentSession;
         final user = session?.user ?? state.session?.user;
         final from = session != null ? 'restored_session' : 'none';
+        RenderLog.write('auth55_restore',
+            'initialSession user=${user?.email ?? 'null'}; logged_in=${user != null}; from=$from');
         RenderLog.write('auth54_restore',
             'initialSession user=${user?.email ?? 'null'}; from=$from');
         RenderLog.write('auth54_logged_in', '${user != null}');
@@ -281,22 +286,17 @@ class AuthNotifier extends ChangeNotifier {
   }
 
   Future<void> signInWithGoogle() async {
-    // Clear only THIS tab's stale session (local scope) — do NOT revoke other
-    // tabs/devices server-side, which would surprise-log them out.
-    RenderLog.write('auth54_signout', 'scope=local; reason=pre_login_cleanup');
-    await Supabase.instance.client.auth.signOut(scope: SignOutScope.local);
-
     if (isMobileWeb()) {
-      // Mobile: straight redirect OAuth — always works on any mobile browser
-      // regardless of third-party-cookie policy, FedCM support, or webview.
-      RenderLog.write('mobile_oauth_redirect_ok', true);
+      // Mobile: straight redirect OAuth with implicit flow.
+      // Do NOT signOut before redirect — the code_verifier created by PKCE would
+      // be lost across the redirect boundary on mobile in-app browsers, causing
+      // bad_code_verifier. Implicit flow returns tokens in the URL fragment instead.
       await Supabase.instance.client.auth.signInWithOAuth(
         OAuthProvider.google,
         redirectTo: 'https://medibo.in',
         queryParams: {'prompt': 'select_account'},
       );
-      // After redirect returns, the signedIn event fires — login_ok logged there.
-      RenderLog.write('auth54_login_ok', 'method=google_redirect; user=pending_redirect');
+      RenderLog.write('auth55_oauth_initiated', 'google redirect; response_type=expected_token');
     } else {
       // Desktop: GIS id-token popup (FedCM-enabled) + nonce pair.
       //   hashedNonce → GIS initialize (embedded in JWT nonce claim by Google)

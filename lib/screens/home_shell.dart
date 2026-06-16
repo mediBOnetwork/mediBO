@@ -1947,10 +1947,8 @@ class _LoginPanelContentState extends State<_LoginPanelContent> {
   Future<void> _googleSignIn() async {
     setState(() { _loading = true; _error = null; });
     try {
-      await Supabase.instance.client.auth.signInWithOAuth(
-        OAuthProvider.google,
-        redirectTo: 'https://medibo.in',
-      );
+      // Route through UserState (GIS id-token flow) — NOT the old OAuth redirect.
+      await UserState.read(context).signInWithGoogle();
     } catch (_) {
       if (mounted) setState(() {
         _error = 'Google sign-in failed. Please try again.';

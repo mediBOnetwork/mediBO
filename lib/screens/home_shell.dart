@@ -1963,15 +1963,16 @@ class _LoginPanelContentState extends State<_LoginPanelContent> {
 
   Future<void> _googleSignIn() async {
     setState(() { _loading = true; _error = null; });
+    RenderLog.write('auth55_login_attempt', 'started');
     try {
       await UserState.read(context).signInWithGoogle();
-      // Desktop: signInWithGoogle() returns only after signInWithIdToken resolves,
-      // so the session is guaranteed set here. Close the panel explicitly as a
-      // fallback in case the _authSub listener missed the signedIn event.
+      // Desktop: signInWithGoogle() returns only after signInWithIdToken resolves.
       // Mobile: signInWithOAuth redirects the page — this line is never reached.
+      RenderLog.write('auth55_login_attempt', 'gis_success');
       if (mounted) widget.onClose();
     } catch (e) {
       final msg = e.toString();
+      RenderLog.write('auth55_login_error', msg.length > 120 ? msg.substring(0, 120) : msg);
       final display = msg.contains('dismissed')
           ? null
           : (msg.length > 120 ? '${msg.substring(0, 120)}…' : msg);

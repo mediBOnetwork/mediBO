@@ -57,6 +57,7 @@ class AuthNotifier extends ChangeNotifier {
     RenderLog.write('auth55_flow', 'implicit');
     final session = Supabase.instance.client.auth.currentSession;
     final user = session?.user ?? Supabase.instance.client.auth.currentUser;
+    RenderLog.write('auth55_init_user', user?.email ?? 'null');
     if (user != null && !_initDone) {
       _initDone = true;
       RenderLog.write('auth55_restore',
@@ -122,12 +123,13 @@ class AuthNotifier extends ChangeNotifier {
       return;
     }
 
-    if (_loading) return; // wait for initialSession to finish first
+    if (_loading) {
+      RenderLog.write('auth55_event_blocked', '${state.event.name}_blocked_by_loading');
+      return;
+    }
 
     if (state.event == AuthChangeEvent.signedIn) {
-      // Use the user from the auth event directly — avoids a getUser() round-trip
-      // that can race with the preceding signOut() and silently fail, leaving
-      // _isAdmin=false. Role resolution via get_my_role() is still DB-authoritative.
+      RenderLog.write('auth55_signed_in', 'event_received');
       final user = state.session?.user ?? Supabase.instance.client.auth.currentUser;
       if (user != null) {
         RenderLog.write('auth_email', user.email ?? 'unknown');

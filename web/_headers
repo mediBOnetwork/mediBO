@@ -26,6 +26,15 @@
   Cache-Control: no-cache, no-store, must-revalidate
   Pragma: no-cache
 
+# ── Static info pages — never cache so CF/browsers always fetch fresh ──────
+/about
+  Cache-Control: no-cache, no-store, must-revalidate
+  Pragma: no-cache
+
+/about.html
+  Cache-Control: no-cache, no-store, must-revalidate
+  Pragma: no-cache
+
 # ── App bundle — no cache (Cloudflare overrides revalidate-only for .js) ────
 /main.dart.js
   Cache-Control: no-cache, no-store, must-revalidate

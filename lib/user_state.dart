@@ -51,19 +51,29 @@ class AuthNotifier extends ChangeNotifier {
     _init();
   }
 
-  // Fallback: if currentUser is already available synchronously (e.g. the
-  // initialSession stream event fired before we subscribed), resolve loading
-  // immediately so there is no blank splash on fast restores.
+  // Fast-path: if currentUser is already available synchronously (localStorage
+  // restored session), resolve loading immediately so there's no blank splash.
   Future<void> _init() async {
-    final user = Supabase.instance.client.auth.currentUser;
+    final session = Supabase.instance.client.auth.currentSession;
+    final user = session?.user ?? Supabase.instance.client.auth.currentUser;
     if (user != null && !_initDone) {
       _initDone = true;
-      await Future.wait([
-        _loadProfile(user.id),
-        _resolveRole(user.email ?? ''),
-      ]);
+      RenderLog.write('auth54_restore',
+          'initialSession user=${user.email ?? 'null'}; from=restored_session');
+      RenderLog.write('auth54_logged_in', 'true');
+      try {
+        await Future.wait([
+          _loadProfile(user.id),
+          _resolveRole(user.email ?? ''),
+        ]);
+        RenderLog.write('auth54_success',
+            'OK CHANGE #54 session restored on reload; logged_in=true; signout_scope=local; user=${user.email ?? 'unknown'}');
+      } catch (_) {
+        // Profile/role failure must NOT clear the session.
+      }
       if (_loading) {
         _loading = false;
+        RenderLog.write('auth54_stuck_guard', 'loading_cleared');
         notifyListeners();
       }
     }

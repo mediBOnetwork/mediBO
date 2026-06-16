@@ -162,13 +162,15 @@ class _InfoCard extends StatelessWidget {
                   children: [
                     Icon(items[i].icon, size: 18, color: Brand.green),
                     const SizedBox(width: 12),
-                    Text(items[i].label,
-                        style: const TextStyle(
-                            fontSize: 13, color: Brand.inkMuted)),
-                    const Spacer(),
-                    Flexible(
+                    SizedBox(
+                      width: 130,
+                      child: Text(items[i].label,
+                          style: const TextStyle(
+                              fontSize: 13, color: Brand.inkMuted)),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
                       child: Text(items[i].value,
-                          textAlign: TextAlign.right,
                           style: const TextStyle(
                               fontSize: 13,
                               fontWeight: FontWeight.w600,

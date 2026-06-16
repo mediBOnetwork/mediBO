@@ -1955,6 +1955,11 @@ class _LoginPanelContentState extends State<_LoginPanelContent> {
     setState(() { _loading = true; _error = null; });
     try {
       await UserState.read(context).signInWithGoogle();
+      // Desktop: signInWithGoogle() returns only after signInWithIdToken resolves,
+      // so the session is guaranteed set here. Close the panel explicitly as a
+      // fallback in case the _authSub listener missed the signedIn event.
+      // Mobile: signInWithOAuth redirects the page — this line is never reached.
+      if (mounted) widget.onClose();
     } catch (e) {
       final msg = e.toString();
       final display = msg.contains('dismissed')

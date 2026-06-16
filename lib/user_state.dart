@@ -95,9 +95,10 @@ class AuthNotifier extends ChangeNotifier {
     if (_loading) return; // wait for initialSession to finish first
 
     if (state.event == AuthChangeEvent.signedIn) {
-      // Server-validate: never trust the in-memory session user for role decisions.
-      final resp = await Supabase.instance.client.auth.getUser();
-      final user = resp.user;
+      // Use the user from the auth event directly — avoids a getUser() round-trip
+      // that can race with the preceding signOut() and silently fail, leaving
+      // _isAdmin=false. Role resolution via get_my_role() is still DB-authoritative.
+      final user = state.session?.user ?? Supabase.instance.client.auth.currentUser;
       if (user != null) {
         RenderLog.write('auth_email', user.email ?? 'unknown');
         _profileLoading = true;

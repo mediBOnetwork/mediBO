@@ -7,6 +7,7 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../utils/render_log.dart';
+import '../../utils/responsive.dart';
 import 'voice_receive.dart';
 
 // ── Color tokens ────────────────────────────────────────────────────────────
@@ -1282,10 +1283,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   }
 
   void _showTallySheet() {
-    showModalBottomSheet(
+    showResponsiveSheet(
       context: context,
-      shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
       builder: (_) {
         final tallyEntries = _tally.entries.toList();
         return Column(

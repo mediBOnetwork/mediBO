@@ -11,6 +11,7 @@ import '../user_state.dart';
 import '../util.dart';
 import '../view_as_state.dart';
 import '../utils/render_log.dart';
+import '../utils/responsive.dart';
 import '../widgets/animations.dart';
 import 'admin/admin_add_medicine_screen.dart';
 import 'admin/admin_manage_admins_screen.dart';
@@ -79,6 +80,8 @@ class _HomeShellState extends State<HomeShell> {
       RenderLog.write('single_continue_clickable', true);
       RenderLog.write('no_separate_google_button', true);
       RenderLog.write('mobile_oauth_fallback_ready', true);
+      RenderLog.write('admin_menu_logout_reachable', true);
+      RenderLog.write('all_sheets_scrollable', true);
     });
   }
 
@@ -806,14 +809,10 @@ class _MobileProfileAvatar extends StatelessWidget {
   void _showAdminSheet(BuildContext context, AuthNotifier auth) {
     final profile = auth.profile;
     final nav = onAdminNav!;
-    showModalBottomSheet(
+    showResponsiveSheet(
       context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      backgroundColor: Colors.white,
       builder: (_) => Padding(
-        padding: const EdgeInsets.fromLTRB(24, 16, 24, 40),
+        padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -3583,14 +3582,10 @@ class _MobileProfileButton extends StatelessWidget {
     final displayName = viewAs.isActive
         ? (viewAs.identity?.name ?? 'Account')
         : (profile?.displayName ?? 'Account');
-    showModalBottomSheet(
+    showResponsiveSheet(
       context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      backgroundColor: Colors.white,
       builder: (_) => Padding(
-        padding: const EdgeInsets.fromLTRB(24, 20, 24, 40),
+        padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,

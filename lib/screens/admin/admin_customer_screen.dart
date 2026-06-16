@@ -3660,7 +3660,7 @@ class _AdminAddItemDialogState extends State<_AdminAddItemDialog> {
     return Dialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 480, maxHeight: 580),
+        constraints: BoxConstraints(maxWidth: 480, maxHeight: MediaQuery.of(context).size.height * 0.88),
         child: Padding(
           padding: const EdgeInsets.all(20),
           child: Column(
@@ -4026,7 +4026,7 @@ class _CustomerEditDialogState extends State<_CustomerEditDialog> {
     return Dialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 580, maxHeight: 680),
+        constraints: BoxConstraints(maxWidth: 580, maxHeight: MediaQuery.of(context).size.height * 0.88),
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           // Header
           Padding(

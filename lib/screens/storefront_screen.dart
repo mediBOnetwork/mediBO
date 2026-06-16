@@ -16,8 +16,6 @@ import '../theme.dart';
 import '../util.dart';
 import '../widgets/animations.dart';
 import '../widgets/product_card.dart';
-import 'about_screen.dart';
-import 'contact_screen.dart';
 
 const double _kMaxContent = 1200;
 
@@ -1620,7 +1618,7 @@ class _Footer extends StatelessWidget {
         const Text('QUICK LINKS', style: _kHeading),
         const SizedBox(height: 16),
         _footerLink('About Us',
-            () => html.window.location.href = '/about?from=app'),
+            () => html.window.location.href = '/about'),
         _footerLink('Contact Us',
             () => Navigator.pushNamed(context, '/contact')),
       ],

@@ -147552,9 +147552,8 @@ A.bcR.prototype={
 $0(){return this.a.d.$1(this.b)},
 $S:0}
 A.bcX.prototype={
-$0(){var s="/about?from=app"
-window.location.href=s
-return s},
+$0(){window.location.href="/about"
+return"/about"},
 $S:0}
 A.bcY.prototype={
 $0(){return A.Ox(this.a,"/contact",t.X)},

@@ -1618,7 +1618,7 @@ class _Footer extends StatelessWidget {
         const Text('QUICK LINKS', style: _kHeading),
         const SizedBox(height: 16),
         _footerLink('About Us',
-            () => html.window.location.href = '/about'),
+            () => Navigator.pushNamed(context, '/about-app')),
         _footerLink('Contact Us',
             () => Navigator.pushNamed(context, '/contact')),
       ],

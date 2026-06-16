@@ -1,142 +1,115 @@
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../theme.dart';
+import '../utils/render_log.dart';
+import '../widgets/policy_page_layout.dart';
 
 class AboutScreen extends StatelessWidget {
   const AboutScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.white,
-      appBar: AppBar(
-        backgroundColor: Colors.white,
-        foregroundColor: Brand.ink,
-        elevation: 0,
-        surfaceTintColor: Colors.white,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new, size: 18),
-          onPressed: () => Navigator.of(context).pop(),
-        ),
-        title: const Text(
-          'About Us',
-          style: TextStyle(fontWeight: FontWeight.w700, fontSize: 17, color: Brand.ink),
-        ),
-      ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(24, 24, 24, 48),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 640),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Header
-              Row(
-                children: const [
-                  Icon(Icons.local_pharmacy, color: Brand.green, size: 36),
-                  SizedBox(width: 12),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('mediBO',
-                          style: TextStyle(
-                              fontSize: 28,
-                              fontWeight: FontWeight.w800,
-                              color: Brand.ink,
-                              letterSpacing: -0.5)),
-                      Text('B2B Pharmacy Platform',
-                          style: TextStyle(fontSize: 14, color: Brand.inkMuted)),
-                    ],
-                  ),
-                ],
-              ),
-              const SizedBox(height: 28),
-              const Divider(),
-              const SizedBox(height: 24),
+    // Post-frame: overwrite PolicyPageLayout's generic screen/layout keys
+    // so the render-log reports the correct in-app About identity.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      RenderLog.write('screen', 'about-app');
+      RenderLog.write('layout', 'policy_page_layout');
+      RenderLog.write('change', '#54');
+    });
 
-              _heading('About Us'),
-              const SizedBox(height: 10),
-              const Text(
-                'mediBO is the B2B ordering platform of Jai Mahakal Medical And Surgical, '
-                'a licensed wholesale pharmaceutical distributor supplying genuine medicines '
-                'and healthcare products exclusively to pharmacies, hospitals, and clinics across India.',
-                style: TextStyle(fontSize: 15, height: 1.65, color: Brand.ink),
-              ),
-              const SizedBox(height: 28),
-
-              _heading('Our Mission'),
-              const SizedBox(height: 10),
-              const Text(
-                'To simplify pharmaceutical procurement for pharmacies and clinics '
-                'by providing a reliable, transparent and efficient B2B ordering platform.',
-                style: TextStyle(fontSize: 15, height: 1.65, color: Brand.ink),
-              ),
-              const SizedBox(height: 28),
-
-              _heading('Registered Legal Entity'),
-              const SizedBox(height: 12),
-              _InfoCard(items: const [
-                _InfoRow(Icons.business_outlined,       'Legal Name',      'Anshu Jaiswal (Proprietor)'),
-                _InfoRow(Icons.storefront_outlined,     'Business Name',   'Jai Mahakal Medical And Surgical'),
-                _InfoRow(Icons.receipt_long_outlined,   'GSTIN',           '22BXXPJ8518F1Z4'),
-                _InfoRow(Icons.location_on_outlined,    'Address',
-                    'P H No 19, Vill-Jaunda, R N M-Champaran, Tah-Gobra Nawapara, District-Raipur, Chhattisgarh - 493885'),
-                _InfoRow(Icons.calendar_today_outlined, 'Established',     '2025'),
-                _InfoRow(Icons.account_balance_outlined,'Constitution',     'Proprietorship'),
-              ]),
-              const SizedBox(height: 28),
-
-              _heading('Contact Details'),
-              const SizedBox(height: 12),
-              _InfoCard(items: const [
-                _InfoRow(Icons.phone_outlined, 'Phone', '9329252090'),
-                _InfoRow(Icons.email_outlined, 'Email', 'medibonetwork@gmail.com'),
-              ]),
-              const SizedBox(height: 28),
-
-              _heading('Drug Licences'),
-              const SizedBox(height: 12),
-              _InfoCard(items: const [
-                _InfoRow(Icons.verified_outlined, 'Licence 20B', 'WLF20B2025CT000337'),
-                _InfoRow(Icons.verified_outlined, 'Licence 21B', 'WLF21B2025CT000337'),
-                _InfoRow(Icons.gavel_outlined,    'Issuing Authority',
-                    'Food & Drugs Administration Chhattisgarh, Raipur'),
-                _InfoRow(Icons.event_outlined,    'Valid Until', '23-Apr-2030'),
-              ]),
-              const SizedBox(height: 28),
-
-              _heading('Documents'),
-              const SizedBox(height: 12),
-              _DocTile(
-                icon: Icons.receipt_long_outlined,
-                label: 'GST Certificate',
-                url: 'https://drive.google.com/file/d/1BeFSWHTr8wQMnhpSPxMHK-fB22Q3nPjc/view?usp=sharing',
-              ),
-              const SizedBox(height: 10),
-              _DocTile(
-                icon: Icons.verified_outlined,
-                label: 'Drug Licence 20B',
-                url: 'https://drive.google.com/file/d/12KFsiEpAEZESrSANJfoNiqmgqa_-zLE1/view?usp=sharing',
-              ),
-              const SizedBox(height: 10),
-              _DocTile(
-                icon: Icons.verified_outlined,
-                label: 'Drug Licence 21B',
-                url: 'https://drive.google.com/file/d/1RuXEv32644D7hr94dckOFVpZdviOxJVa/view?usp=sharing',
-              ),
-            ],
+    return PolicyPageLayout(
+      title: 'About Us',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // ── About Us ──────────────────────────────────────────────────
+          const Text(
+            'mediBO is the B2B ordering platform of Jai Mahakal Medical And Surgical, '
+            'a licensed wholesale pharmaceutical distributor supplying genuine medicines '
+            'and healthcare products exclusively to pharmacies, hospitals, and clinics across India.',
+            style: TextStyle(fontSize: 15, height: 1.65, color: Brand.ink),
           ),
-        ),
+          const SizedBox(height: 28),
+
+          // ── Our Mission ───────────────────────────────────────────────
+          _heading('Our Mission'),
+          const SizedBox(height: 10),
+          const Text(
+            'To simplify pharmaceutical procurement for pharmacies and clinics '
+            'by providing a reliable, transparent and efficient B2B ordering platform.',
+            style: TextStyle(fontSize: 15, height: 1.65, color: Brand.ink),
+          ),
+          const SizedBox(height: 28),
+
+          // ── Registered Legal Entity ───────────────────────────────────
+          _heading('Registered Legal Entity'),
+          const SizedBox(height: 12),
+          _InfoCard(items: const [
+            _InfoRow(Icons.business_outlined,       'Legal Name',    'Anshu Jaiswal (Proprietor)'),
+            _InfoRow(Icons.storefront_outlined,     'Business Name', 'Jai Mahakal Medical And Surgical'),
+            _InfoRow(Icons.receipt_long_outlined,   'GSTIN',         '22BXXPJ8518F1Z4'),
+            _InfoRow(Icons.location_on_outlined,    'Address',
+                'P H No 19, Vill-Jaunda, R N M-Champaran, Tah-Gobra Nawapara, District-Raipur, Chhattisgarh - 493885'),
+            _InfoRow(Icons.calendar_today_outlined, 'Established',   '2025'),
+            _InfoRow(Icons.account_balance_outlined,'Constitution',  'Proprietorship'),
+          ]),
+          const SizedBox(height: 28),
+
+          // ── Contact Details ───────────────────────────────────────────
+          _heading('Contact Details'),
+          const SizedBox(height: 12),
+          _InfoCard(items: const [
+            _InfoRow(Icons.phone_outlined, 'Phone', '9329252090'),
+            _InfoRow(Icons.email_outlined, 'Email', 'medibonetwork@gmail.com'),
+          ]),
+          const SizedBox(height: 28),
+
+          // ── Drug Licences ─────────────────────────────────────────────
+          _heading('Drug Licences'),
+          const SizedBox(height: 12),
+          _InfoCard(items: const [
+            _InfoRow(Icons.verified_outlined, 'Licence 20B',       'WLF20B2025CT000337'),
+            _InfoRow(Icons.verified_outlined, 'Licence 21B',       'WLF21B2025CT000337'),
+            _InfoRow(Icons.gavel_outlined,    'Issuing Authority',
+                'Food & Drugs Administration Chhattisgarh, Raipur'),
+            _InfoRow(Icons.event_outlined,    'Valid Until',        '23-Apr-2030'),
+          ]),
+          const SizedBox(height: 28),
+
+          // ── Documents ─────────────────────────────────────────────────
+          _heading('Documents'),
+          const SizedBox(height: 12),
+          _DocTile(
+            icon: Icons.receipt_long_outlined,
+            label: 'GST Certificate',
+            url: 'https://drive.google.com/file/d/1BeFSWHTr8wQMnhpSPxMHK-fB22Q3nPjc/view?usp=sharing',
+          ),
+          const SizedBox(height: 10),
+          _DocTile(
+            icon: Icons.verified_outlined,
+            label: 'Drug Licence 20B',
+            url: 'https://drive.google.com/file/d/12KFsiEpAEZESrSANJfoNiqmgqa_-zLE1/view?usp=sharing',
+          ),
+          const SizedBox(height: 10),
+          _DocTile(
+            icon: Icons.verified_outlined,
+            label: 'Drug Licence 21B',
+            url: 'https://drive.google.com/file/d/1RuXEv32644D7hr94dckOFVpZdviOxJVa/view?usp=sharing',
+          ),
+        ],
       ),
     );
   }
 
-  static Widget _heading(String text) => Text(
-        text,
-        style: const TextStyle(
-            fontSize: 18, fontWeight: FontWeight.w800, color: Brand.ink),
+  static Widget _heading(String text) => Padding(
+        padding: const EdgeInsets.only(bottom: 0),
+        child: Text(text,
+            style: const TextStyle(
+                fontSize: 18, fontWeight: FontWeight.w800, color: Brand.ink)),
       );
 }
+
+// ─── Info card ────────────────────────────────────────────────────────────────
 
 class _InfoCard extends StatelessWidget {
   final List<_InfoRow> items;
@@ -195,6 +168,8 @@ class _InfoRow {
   const _InfoRow(this.icon, this.label, this.value);
 }
 
+// ─── Doc tile ─────────────────────────────────────────────────────────────────
+
 class _DocTile extends StatelessWidget {
   final IconData icon;
   final String label;
@@ -204,7 +179,8 @@ class _DocTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return InkWell(
-      onTap: () => launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication),
+      onTap: () =>
+          launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication),
       borderRadius: BorderRadius.circular(12),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
@@ -217,14 +193,11 @@ class _DocTile extends StatelessWidget {
             Icon(icon, size: 18, color: Brand.green),
             const SizedBox(width: 12),
             Expanded(
-              child: Text(
-                label,
-                style: const TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: Brand.ink,
-                ),
-              ),
+              child: Text(label,
+                  style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: Brand.ink)),
             ),
             const Icon(Icons.open_in_new, size: 16, color: Brand.green),
           ],

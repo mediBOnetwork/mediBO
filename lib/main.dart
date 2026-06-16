@@ -47,7 +47,7 @@ void main() {
         authOptions: const FlutterAuthClientOptions(
           authFlowType: AuthFlowType.implicit,
           autoRefreshToken: true,
-          // persistSession defaults to true on web via localStorage.
+          detectSessionInUri: true,
         ),
       );
     } catch (e) {

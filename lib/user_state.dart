@@ -51,6 +51,19 @@ class AuthNotifier extends ChangeNotifier {
     _init();
   }
 
+  // Fire-and-forget tracer — writes one row per event to auth_debug_log via RPC.
+  void _trace(String event, String detail) {
+    try {
+      final s = Supabase.instance.client.auth.currentSession;
+      Supabase.instance.client.rpc('log_auth_debug', params: {
+        'p_email': s?.user.email ??
+            (Supabase.instance.client.auth.currentUser?.email ?? ''),
+        'p_event': event,
+        'p_detail': detail,
+      });
+    } catch (_) {}
+  }
+
   // Fast-path: if currentUser is already available synchronously (localStorage
   // restored session), resolve loading immediately so there's no blank splash.
   Future<void> _init() async {
@@ -58,6 +71,10 @@ class AuthNotifier extends ChangeNotifier {
     final session = Supabase.instance.client.auth.currentSession;
     final user = session?.user ?? Supabase.instance.client.auth.currentUser;
     RenderLog.write('auth55_init_user', user?.email ?? 'null');
+    _trace('boot',
+        'flow=implicit; stored=${session != null}; '
+        'hasRefresh=${session?.refreshToken != null && (session!.refreshToken?.isNotEmpty ?? false)}; '
+        'frag=n/a; code=n/a; change=56');
     if (user != null && !_initDone) {
       _initDone = true;
       RenderLog.write('auth55_restore',
@@ -123,23 +140,50 @@ class AuthNotifier extends ChangeNotifier {
       return;
     }
 
-    if (_loading) {
+    // Allow signedIn/tokenRefreshed to break through the loading guard when a
+    // session is present — this handles the implicit-flow case where the SDK
+    // fires signedIn AFTER initialSession(null) during the OAuth callback.
+    final isSignIn = state.event == AuthChangeEvent.signedIn ||
+        state.event == AuthChangeEvent.tokenRefreshed;
+    final hasSession = state.session != null ||
+        Supabase.instance.client.auth.currentSession != null;
+    if (_loading && !(isSignIn && hasSession)) {
       RenderLog.write('auth55_event_blocked', '${state.event.name}_blocked_by_loading');
       return;
     }
 
-    if (state.event == AuthChangeEvent.signedIn) {
-      RenderLog.write('auth55_signed_in', 'event_received');
-      final user = state.session?.user ?? Supabase.instance.client.auth.currentUser;
+    if (state.event == AuthChangeEvent.signedIn ||
+        state.event == AuthChangeEvent.tokenRefreshed) {
+      RenderLog.write('auth55_signed_in', 'event_received; loading_was=$_loading');
+      final session = state.session ?? Supabase.instance.client.auth.currentSession;
+      _trace('signedIn',
+          'persisted_check stored=${session != null}; '
+          'hasRefresh=${session?.refreshToken != null && (session!.refreshToken?.isNotEmpty ?? false)}');
+      final user = session?.user ?? Supabase.instance.client.auth.currentUser;
       if (user != null) {
         RenderLog.write('auth_email', user.email ?? 'unknown');
-        _profileLoading = true;
-        notifyListeners();
-        await Future.wait([
-          _loadProfile(user.id),
-          _resolveRole(user.email ?? ''),
-        ]);
-        _profileLoading = false;
+        if (_loading) {
+          // We broke through the guard — take over loading state.
+          _initDone = true;
+          await Future.wait([
+            _loadProfile(user.id),
+            _resolveRole(user.email ?? ''),
+          ]);
+          _loading = false;
+          RenderLog.write('auth56_signin_cleared_loading', 'user=${user.email ?? 'unknown'}');
+          notifyListeners();
+        } else {
+          _profileLoading = true;
+          notifyListeners();
+          await Future.wait([
+            _loadProfile(user.id),
+            _resolveRole(user.email ?? ''),
+          ]);
+          _profileLoading = false;
+          notifyListeners();
+        }
+      } else if (_loading) {
+        _loading = false;
         notifyListeners();
       }
     } else if (state.event == AuthChangeEvent.signedOut) {
@@ -154,6 +198,7 @@ class AuthNotifier extends ChangeNotifier {
       _supplierStatus = null;
       _profileChannel?.unsubscribe();
       _profileChannel = null;
+      _trace('signedOut', 'app cleared state');
       RenderLog.write('auth_email', 'signed_out');
       RenderLog.write('auth_role', 'none');
       notifyListeners();

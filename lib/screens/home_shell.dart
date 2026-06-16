@@ -117,19 +117,14 @@ class _HomeShellState extends State<HomeShell> {
     final query = currentSearch();
     final fragment = currentHash();
     // PKCE callback (?code=) or implicit callback (#access_token= / #error=):
-    // strip the callback params once Supabase has processed them.
+    // strip the callback params, but ONLY after the SDK has persisted the session.
     final hasCode = query.contains('code=');
     final hasFragment = fragment.contains('access_token=') ||
         fragment.contains('refresh_token=') ||
         fragment.contains('error=');
     if (hasCode || hasFragment) {
       final cleaned = hasCode ? 'code' : 'fragment';
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
-          replaceUrl('/');
-          RenderLog.write('auth55_url_cleaned', 'stripped $cleaned after callback');
-        }
-      });
+      _stripOAuthUrlWhenReady(cleaned);
       return;
     }
     final path = currentPath();
@@ -139,6 +134,32 @@ class _HomeShellState extends State<HomeShell> {
       _index = 1;
     } else if (path == '/bulk-upload') {
       _index = 2;
+    }
+  }
+
+  // Poll until the SDK has written the session to localStorage, then strip the
+  // OAuth callback URL fragment. Never leaves tokens in the URL; worst case
+  // strips after a 5-second timeout if the SDK stalls.
+  Future<void> _stripOAuthUrlWhenReady(String cleaned) async {
+    const maxWaitMs = 5000;
+    const pollMs = 150;
+    final start = DateTime.now().millisecondsSinceEpoch;
+    while (true) {
+      await Future.delayed(const Duration(milliseconds: pollMs));
+      if (!mounted) return;
+      final elapsed = DateTime.now().millisecondsSinceEpoch - start;
+      final session = Supabase.instance.client.auth.currentSession;
+      if (session != null) {
+        replaceUrl('/');
+        RenderLog.write('auth56_url_cleaned',
+            'stripped $cleaned after session persisted; waited ${elapsed}ms');
+        return;
+      }
+      if (elapsed >= maxWaitMs) {
+        replaceUrl('/');
+        RenderLog.write('auth56_url_clean_timeout', 'no session after ${elapsed}ms; stripped anyway');
+        return;
+      }
     }
   }
 

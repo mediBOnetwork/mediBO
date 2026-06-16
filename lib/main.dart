@@ -44,6 +44,11 @@ void main() {
       await Supabase.initialize(
         url: SupabaseConfig.url,
         anonKey: SupabaseConfig.anonKey,
+        authOptions: const FlutterAuthClientOptions(
+          authFlowType: AuthFlowType.pkce,
+          autoRefreshToken: true,
+          // persistSession defaults to true on web via localStorage.
+        ),
       );
     } catch (e) {
       try { RenderLog.write('boot_error', 'supabase_init_failed'); } catch (_) {}

@@ -77,18 +77,33 @@ class AuthNotifier extends ChangeNotifier {
     if (state.event == AuthChangeEvent.initialSession) {
       if (_initDone) return; // synchronous _init() already handled it
       _initDone = true;
-      // Server-validate even the restored session so role is always fresh.
-      final resp = await Supabase.instance.client.auth.getUser();
-      final user = resp.user;
-      if (user != null) {
-        RenderLog.write('auth_email', user.email ?? 'unknown');
-        await Future.wait([
-          _loadProfile(user.id),
-          _resolveRole(user.email ?? ''),
-        ]);
+      try {
+        // Trust the restored session — do NOT gate logged-in on a getUser()
+        // network round-trip (slow/transient failures cause false logouts).
+        final session = Supabase.instance.client.auth.currentSession;
+        final user = session?.user ?? state.session?.user;
+        final from = session != null ? 'restored_session' : 'none';
+        RenderLog.write('auth54_restore',
+            'initialSession user=${user?.email ?? 'null'}; from=$from');
+        RenderLog.write('auth54_logged_in', '${user != null}');
+        if (user != null) {
+          RenderLog.write('auth_email', user.email ?? 'unknown');
+          try {
+            await Future.wait([
+              _loadProfile(user.id),
+              _resolveRole(user.email ?? ''),
+            ]);
+          } catch (_) {
+            // Profile/role failure must NOT clear the session — user stays logged in.
+          }
+          RenderLog.write('auth54_success',
+              'OK CHANGE #54 session restored on reload; logged_in=true; signout_scope=local; user=${user.email ?? 'unknown'}');
+        }
+      } finally {
+        _loading = false;
+        RenderLog.write('auth54_stuck_guard', 'loading_cleared');
+        notifyListeners();
       }
-      _loading = false;
-      notifyListeners();
       return;
     }
 
@@ -256,8 +271,10 @@ class AuthNotifier extends ChangeNotifier {
   }
 
   Future<void> signInWithGoogle() async {
-    // Sign out any stale session first.
-    await Supabase.instance.client.auth.signOut();
+    // Clear only THIS tab's stale session (local scope) — do NOT revoke other
+    // tabs/devices server-side, which would surprise-log them out.
+    RenderLog.write('auth54_signout', 'scope=local; reason=pre_login_cleanup');
+    await Supabase.instance.client.auth.signOut(scope: SignOutScope.local);
 
     if (isMobileWeb()) {
       // Mobile: straight redirect OAuth — always works on any mobile browser
@@ -268,6 +285,8 @@ class AuthNotifier extends ChangeNotifier {
         redirectTo: 'https://medibo.in',
         queryParams: {'prompt': 'select_account'},
       );
+      // After redirect returns, the signedIn event fires — login_ok logged there.
+      RenderLog.write('auth54_login_ok', 'method=google_redirect; user=pending_redirect');
     } else {
       // Desktop: GIS id-token popup (FedCM-enabled) + nonce pair.
       //   hashedNonce → GIS initialize (embedded in JWT nonce claim by Google)
@@ -280,11 +299,14 @@ class AuthNotifier extends ChangeNotifier {
         nonce: gis.rawNonce,
       );
       RenderLog.write('google_idtoken_exchange_ok', true);
+      final email = Supabase.instance.client.auth.currentUser?.email ?? 'unknown';
+      RenderLog.write('auth54_login_ok', 'method=google_idtoken; user=$email');
     }
   }
 
   Future<void> signOut() async {
-    await Supabase.instance.client.auth.signOut();
+    RenderLog.write('auth54_signout', 'scope=local; reason=manual_logout');
+    await Supabase.instance.client.auth.signOut(scope: SignOutScope.local);
   }
 
   @override

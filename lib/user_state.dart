@@ -4,6 +4,7 @@ import 'package:flutter/widgets.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'models/user_profile.dart';
+import 'services/gis_auth.dart';
 import 'utils/render_log.dart';
 
 class AuthNotifier extends ChangeNotifier {
@@ -254,17 +255,19 @@ class AuthNotifier extends ChangeNotifier {
   }
 
   Future<void> signInWithGoogle() async {
-    // Sign out any existing session first to prevent stale session bleed.
-    // This clears the Supabase auth token from localStorage/IndexedDB before
-    // the new OAuth flow starts, so the restored session is always the new one.
+    // Sign out any stale session before starting the new flow.
     await Supabase.instance.client.auth.signOut();
-    await Supabase.instance.client.auth.signInWithOAuth(
-      OAuthProvider.google,
-      redirectTo: 'https://medibo.in',
-      // Force Google to show the account chooser every time — never silently
-      // reuse a previous Google account.
-      queryParams: {'prompt': 'select_account'},
+
+    // GIS popup — requests an ID token from OUR web client so the Google
+    // consent screen reads "Sign in to continue to mediBO" (not supabase.co).
+    final idToken = await gisGetIdToken();
+    if (idToken == null) throw Exception('Google sign-in cancelled or failed');
+
+    await Supabase.instance.client.auth.signInWithIdToken(
+      provider: OAuthProvider.google,
+      idToken: idToken,
     );
+    RenderLog.write('google_idtoken_exchange_ok', true);
   }
 
   Future<void> signOut() async {

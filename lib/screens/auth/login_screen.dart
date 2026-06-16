@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../user_state.dart';
+import '../../utils/render_log.dart';
 
 enum _ResetStep { none, otpSent, newPassword }
 
@@ -46,6 +47,7 @@ class _LoginScreenState extends State<LoginScreen> {
       if (mounted && Supabase.instance.client.auth.currentUser != null) {
         _close();
       }
+      RenderLog.write('google_gis_login_rendered', true);
     });
     _authSub = Supabase.instance.client.auth.onAuthStateChange.listen((s) {
       if (s.event == AuthChangeEvent.signedIn && mounted && _resetStep == _ResetStep.none) {

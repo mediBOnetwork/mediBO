@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <meta name="build-commit" content="eb9a958">
+  <meta name="build-commit" content="ee430df">
   <!--
     If you are serving your web app in a path other than the root, change the
     href value below to reflect the base path you are serving from.
@@ -128,6 +128,9 @@
 
   <title>mediBO</title>
   <script src="https://www.google.com/recaptcha/api.js" async defer></script>
+
+  <!-- Google Identity Services — ID-token flow for signInWithIdToken -->
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
 
   <!-- ═══════════════════════════════════════════════════════════════════════
        ADMIN ALERT AUDIO  (Web Audio API — no file required)
@@ -435,6 +438,98 @@
             .then(function (token) { callback(token || null); })
             .catch(function (e) { console.warn('[FCM] getToken error:', e); callback(null); });
         }).catch(function () { callback(null); });
+      };
+    })();
+  </script>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       GOOGLE IDENTITY SERVICES (GIS) BRIDGE
+       mediboGisSignIn(clientId) → Promise<idToken|null>
+       Opens a modal with the GIS sign-in button; resolves with the ID token
+       JWT or null/rejected on cancel.
+       ═══════════════════════════════════════════════════════════════════════ -->
+  <!-- GIS modal overlay — shown when Flutter calls mediboGisSignIn() -->
+  <div id="gis-overlay"
+       aria-modal="true"
+       role="dialog"
+       aria-label="Sign in with Google"
+       style="display:none;position:fixed;inset:0;z-index:99999;align-items:center;justify-content:center;background:rgba(0,0,0,0.45);">
+    <div style="background:#fff;border-radius:14px;padding:32px 28px 24px;display:flex;flex-direction:column;align-items:center;gap:20px;box-shadow:0 8px 40px rgba(0,0,0,0.22);min-width:300px;max-width:340px;width:90%;">
+      <p style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:17px;font-weight:600;color:#111827;text-align:center;">Sign in with Google</p>
+      <div id="gis-btn-container" style="min-height:44px;"></div>
+      <button id="gis-cancel-btn"
+              style="background:none;border:none;color:#6B7280;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;cursor:pointer;padding:6px 16px;border-radius:8px;">
+        Cancel
+      </button>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      // mediboGisSignIn(clientId) → Promise that resolves to the GIS ID token string,
+      // or rejects with 'dismissed' / 'gis-load-timeout' on failure.
+      window.mediboGisSignIn = function (clientId) {
+        return new Promise(function (resolve, reject) {
+          var overlay = document.getElementById('gis-overlay');
+          var btnDiv  = document.getElementById('gis-btn-container');
+          var cancelBtn = document.getElementById('gis-cancel-btn');
+          var settled = false;
+
+          function settle(fn, val) {
+            if (settled) return;
+            settled = true;
+            overlay.style.display = 'none';
+            overlay.onclick = null;
+            if (cancelBtn) cancelBtn.onclick = null;
+            fn(val);
+          }
+
+          function onCancel() { settle(reject, 'dismissed'); }
+
+          overlay.onclick = function (e) {
+            if (e.target === overlay) onCancel();
+          };
+          if (cancelBtn) cancelBtn.onclick = onCancel;
+
+          var attempts = 0;
+          function tryInit() {
+            if (settled) return;
+            if (window.google && window.google.accounts && window.google.accounts.id) {
+              // Clear any prior render
+              btnDiv.innerHTML = '';
+
+              google.accounts.id.initialize({
+                client_id: clientId,
+                callback: function (response) {
+                  settle(resolve, response.credential);
+                },
+                ux_mode: 'popup',
+                auto_select: false,
+              });
+
+              google.accounts.id.renderButton(btnDiv, {
+                type: 'standard',
+                shape: 'rectangular',
+                theme: 'outline',
+                text: 'signin_with',
+                size: 'large',
+                logo_alignment: 'left',
+                width: 260,
+              });
+
+              overlay.style.display = 'flex';
+            } else {
+              attempts++;
+              if (attempts > 60) {
+                settle(reject, 'gis-load-timeout');
+              } else {
+                setTimeout(tryInit, 200);
+              }
+            }
+          }
+
+          tryInit();
+        });
       };
     })();
   </script>

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:pharma_b2b/utils/toast.dart';
 import '../theme.dart';
+import '../widgets/policy_page_layout.dart';
 
 class ContactScreen extends StatefulWidget {
   const ContactScreen({super.key});
@@ -49,31 +50,16 @@ class _ContactScreenState extends State<ContactScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.white,
-      appBar: AppBar(
-        backgroundColor: Colors.white,
-        foregroundColor: Brand.ink,
-        elevation: 0,
-        surfaceTintColor: Colors.white,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new, size: 18),
-          onPressed: () => Navigator.of(context).pop(),
-        ),
-        title: const Text(
-          'Contact Us',
-          style: TextStyle(
-              fontWeight: FontWeight.w700, fontSize: 17, color: Brand.ink),
-        ),
-      ),
-      body: _submitted ? _buildSuccess() : _buildForm(),
+    return PolicyPageLayout(
+      title: 'Contact Us',
+      child: _submitted ? _buildSuccess() : _buildForm(),
     );
   }
 
   Widget _buildSuccess() {
     return Center(
       child: Padding(
-        padding: const EdgeInsets.all(32),
+        padding: const EdgeInsets.symmetric(vertical: 32),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -115,92 +101,86 @@ class _ContactScreenState extends State<ContactScreen> {
   }
 
   Widget _buildForm() {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(24, 24, 24, 48),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 560),
-        child: Form(
-          key: _formKey,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('Get in Touch',
-                  style: TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.w800,
-                      color: Brand.ink)),
-              const SizedBox(height: 8),
-              const Text(
-                "We're here to help. Send us a message and we'll get back to you soon.",
-                style: TextStyle(
-                    fontSize: 14, color: Brand.inkMuted, height: 1.5),
-              ),
-              const SizedBox(height: 32),
-              _field('Full Name', 'Enter your full name', _nameCtrl),
-              const SizedBox(height: 16),
-              _field('Phone Number', 'Enter your phone number', _phoneCtrl,
-                  keyboard: TextInputType.phone),
-              const SizedBox(height: 16),
-              _field('Message', 'How can we help you?', _messageCtrl,
-                  maxLines: 5),
-              const SizedBox(height: 32),
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton(
-                  onPressed: _submitting ? null : _submit,
-                  style: FilledButton.styleFrom(
-                    backgroundColor: Brand.green,
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10)),
-                  ),
-                  child: _submitting
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(
-                              strokeWidth: 2, color: Colors.white),
-                        )
-                      : const Text('Send Message',
-                          style: TextStyle(
-                              fontSize: 16, fontWeight: FontWeight.w600)),
-                ),
-              ),
-              const SizedBox(height: 32),
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Brand.mint,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: const [
-                    Text('Direct Contact',
-                        style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w700,
-                            color: Brand.green)),
-                    SizedBox(height: 12),
-                    _ContactRow(Icons.business_outlined,
-                        'Jai Mahakal Medical And Surgical'),
-                    SizedBox(height: 8),
-                    _ContactRow(Icons.location_on_outlined,
-                        'P H No 19, Vill-Jaunda, R N M-Champaran, Tah-Gobra Nawapara, District-Raipur, Chhattisgarh - 493885'),
-                    SizedBox(height: 8),
-                    _ContactRow(Icons.phone_outlined, '9329252090'),
-                    SizedBox(height: 8),
-                    _ContactRow(
-                        Icons.email_outlined, 'medibonetwork@gmail.com'),
-                    SizedBox(height: 8),
-                    _ContactRow(Icons.receipt_long_outlined,
-                        'GSTIN: 22BXXPJ8518F1Z4'),
-                  ],
-                ),
-              ),
-            ],
+    return Form(
+      key: _formKey,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Get in Touch',
+              style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w800,
+                  color: Brand.ink)),
+          const SizedBox(height: 8),
+          const Text(
+            "We're here to help. Send us a message and we'll get back to you soon.",
+            style: TextStyle(
+                fontSize: 14, color: Brand.inkMuted, height: 1.5),
           ),
-        ),
+          const SizedBox(height: 32),
+          _field('Full Name', 'Enter your full name', _nameCtrl),
+          const SizedBox(height: 16),
+          _field('Phone Number', 'Enter your phone number', _phoneCtrl,
+              keyboard: TextInputType.phone),
+          const SizedBox(height: 16),
+          _field('Message', 'How can we help you?', _messageCtrl,
+              maxLines: 5),
+          const SizedBox(height: 32),
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton(
+              onPressed: _submitting ? null : _submit,
+              style: FilledButton.styleFrom(
+                backgroundColor: Brand.green,
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10)),
+              ),
+              child: _submitting
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: Colors.white),
+                    )
+                  : const Text('Send Message',
+                      style: TextStyle(
+                          fontSize: 16, fontWeight: FontWeight.w600)),
+            ),
+          ),
+          const SizedBox(height: 32),
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Brand.mint,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: const [
+                Text('Direct Contact',
+                    style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: Brand.green)),
+                SizedBox(height: 12),
+                _ContactRow(Icons.business_outlined,
+                    'Jai Mahakal Medical And Surgical'),
+                SizedBox(height: 8),
+                _ContactRow(Icons.location_on_outlined,
+                    'P H No 19, Vill-Jaunda, R N M-Champaran, Tah-Gobra Nawapara, District-Raipur, Chhattisgarh - 493885'),
+                SizedBox(height: 8),
+                _ContactRow(Icons.phone_outlined, '9329252090'),
+                SizedBox(height: 8),
+                _ContactRow(
+                    Icons.email_outlined, 'medibonetwork@gmail.com'),
+                SizedBox(height: 8),
+                _ContactRow(Icons.receipt_long_outlined,
+                    'GSTIN: 22BXXPJ8518F1Z4'),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

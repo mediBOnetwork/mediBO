@@ -19,9 +19,8 @@ class _LoginScreenState extends State<LoginScreen> {
   // ── Normal login ─────────────────────────────────────────────────────────────
   final _emailCtrl = TextEditingController();
   final _passCtrl  = TextEditingController();
-  bool _passVisible    = false;
-  bool _loading        = false;  // email/password in-progress
-  bool _googleLoading  = false;  // Google sign-in in-progress
+  bool _passVisible  = false;
+  bool _loading      = false;
   String? _error;
   bool _emailEmpty   = true;
   bool _showForgot   = false;
@@ -83,11 +82,15 @@ class _LoginScreenState extends State<LoginScreen> {
   // ── Normal login actions ──────────────────────────────────────────────────────
 
   Future<void> _onContinue() async {
-    await _passwordSignIn();
+    if (_emailEmpty) {
+      await _googleSignIn();
+    } else {
+      await _passwordSignIn();
+    }
   }
 
   Future<void> _googleSignIn() async {
-    setState(() { _googleLoading = true; _error = null; });
+    setState(() { _loading = true; _error = null; });
     try {
       await UserState.read(context).signInWithGoogle();
     } catch (e) {
@@ -97,7 +100,7 @@ class _LoginScreenState extends State<LoginScreen> {
           : (msg.length > 120 ? '${msg.substring(0, 120)}…' : msg);
       if (mounted) setState(() {
         _error = display ?? _error;
-        _googleLoading = false;
+        _loading = false;
       });
     }
   }
@@ -349,54 +352,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
         ),
 
-        const SizedBox(height: 20),
-        Row(children: [
-          const Expanded(child: Divider(color: Color(0xFFE5E7EB))),
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 12),
-            child: Text('OR', style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF), fontWeight: FontWeight.w500)),
-          ),
-          const Expanded(child: Divider(color: Color(0xFFE5E7EB))),
-        ]),
-        const SizedBox(height: 16),
-
-        SizedBox(
-          height: 54,
-          child: OutlinedButton(
-            onPressed: _googleLoading ? null : _googleSignIn,
-            style: OutlinedButton.styleFrom(
-              backgroundColor: Colors.white,
-              side: const BorderSide(color: Color(0xFFD1D5DB)),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-              elevation: 0,
-            ),
-            child: _googleLoading
-                ? const SizedBox(width: 22, height: 22,
-                    child: CircularProgressIndicator(strokeWidth: 2.5, color: Color(0xFF1B5E20)))
-                : Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      RichText(text: const TextSpan(
-                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
-                        children: [
-                          TextSpan(text: 'G', style: TextStyle(color: Color(0xFF4285F4))),
-                          TextSpan(text: 'o', style: TextStyle(color: Color(0xFFEA4335))),
-                          TextSpan(text: 'o', style: TextStyle(color: Color(0xFFFBBC05))),
-                          TextSpan(text: 'g', style: TextStyle(color: Color(0xFF4285F4))),
-                          TextSpan(text: 'l', style: TextStyle(color: Color(0xFF34A853))),
-                          TextSpan(text: 'e', style: TextStyle(color: Color(0xFFEA4335))),
-                        ],
-                      )),
-                      const SizedBox(width: 10),
-                      const Text('Sign in with Google',
-                          style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600,
-                              color: Color(0xFF374151))),
-                    ],
-                  ),
-          ),
-        ),
-
-        const SizedBox(height: 32),
+        const SizedBox(height: 40),
         const Text('By continuing you agree to our Terms & Privacy Policy',
             textAlign: TextAlign.center,
             style: TextStyle(fontSize: 11, color: Color(0xFF9CA3AF), height: 1.5)),

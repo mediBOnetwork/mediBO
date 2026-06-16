@@ -54,10 +54,6 @@
     .doc-label { font-size: 13px; font-weight: 600; flex: 1; }
     .doc-ext { color: #1B7A43; flex-shrink: 0; }
 
-    /* ── CTA button ── */
-    .cta { display: inline-block; margin: 8px 0 0; background: #1B7A43; color: #fff; font-size: 15px; font-weight: 600; padding: 13px 28px; border-radius: 10px; }
-    .cta:hover { background: #166336; text-decoration: none; }
-
     /* ── Footer ── */
     footer { margin-top: 40px; padding-top: 20px; border-top: 1px solid #E5E7EB; font-size: 13px; color: #6B7280; }
     footer a { color: #6B7280; }
@@ -205,9 +201,6 @@
     </a>
   </div>
 
-  <!-- CTA -->
-  <a class="cta" id="open-app-btn" href="https://medibo.in">Open the mediBO app</a>
-
   <!-- Footer -->
   <footer>
     <div class="foot-links">
@@ -221,14 +214,5 @@
   </footer>
 
 </div>
-  <script>
-    try {
-      var p = new URLSearchParams(location.search);
-      if (p.get('from') === 'app') {
-        var b = document.getElementById('open-app-btn');
-        if (b) b.style.display = 'none';
-      }
-    } catch (e) {}
-  </script>
 </body>
 </html>

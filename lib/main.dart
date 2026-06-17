@@ -63,24 +63,8 @@ void main() {
     }
     RenderLog.write('screen', 'boot');
 
-    // Belt-and-suspenders boot rehydration: if localStorage has the auth session
-    // but the SDK's in-memory session is null (e.g. SDK failed to load it),
-    // explicitly recover it so the user stays logged in after a cold reopen.
-    // This covers both Google and password logins — pure safety net, no-op when
-    // the SDK already loaded the session correctly.
-    try {
-      final lsRaw = RenderLog.getRawAuthSession();
-      if (lsRaw != null && Supabase.instance.client.auth.currentSession == null) {
-        final parsed = jsonDecode(lsRaw) as Map<String, dynamic>;
-        final refreshToken = parsed['refresh_token'] as String?;
-        if (refreshToken != null && refreshToken.isNotEmpty) {
-          await Supabase.instance.client.auth.setSession(refreshToken);
-          RenderLog.write('c59_boot_rehydrate', 'recovered_from_ls');
-        }
-      }
-    } catch (_) {
-      RenderLog.write('c59_boot_rehydrate', 'error');
-    }
+    // Session recovery moved to AuthNotifier._onAuthChange(initialSession):
+    // it fires after SDK restore attempt and retries if lskeys found but session null.
 
     runApp(const PharmaB2BApp());
   }, (error, stack) {

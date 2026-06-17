@@ -21,6 +21,7 @@ class AuthNotifier extends ChangeNotifier {
   String? _supplierId;
   String? _supplierStatus; // 'ok'|'pending_approval'|'not_found'|'conflict'
   RealtimeChannel? _profileChannel;
+  int _initStartMs = 0;
 
   bool get loading => _loading;
   bool get profileLoading => _profileLoading;
@@ -68,32 +69,29 @@ class AuthNotifier extends ChangeNotifier {
     } catch (_) {}
   }
 
-  // Fast-path: if currentUser is already available synchronously (localStorage
-  // restored session), resolve loading immediately so there's no blank splash.
+  // Fast-path: if currentUser is already available synchronously (SDK restored
+  // session before AuthNotifier was created), resolve loading immediately.
+  // Otherwise gate on _onAuthChange(initialSession) which fires from BehaviorSubject.
   Future<void> _init() async {
+    _initStartMs = DateTime.now().millisecondsSinceEpoch;
     RenderLog.write('auth55_flow', 'implicit');
     final session = Supabase.instance.client.auth.currentSession;
     final user = session?.user ?? Supabase.instance.client.auth.currentUser;
     RenderLog.write('auth55_init_user', user?.email ?? 'null');
-    final _mem = session != null;
-    _trace('boot',
-        '${RenderLog.authStorageInfo()}; '
-        'getSession=${_mem ? 'yes' : 'no'}; mem=${_mem ? 'yes' : 'no'}; '
-        'flow=implicit; build=${RenderLog.buildHash}; change=59');
     if (user != null && !_initDone) {
       _initDone = true;
+      final waitedMs = DateTime.now().millisecondsSinceEpoch - _initStartMs;
+      _trace('boot',
+          '${RenderLog.authStorageInfo()}; '
+          'getSession=yes; mem=yes; initEvent=sync; gate=in; '
+          'waitedMs=$waitedMs; flow=implicit; build=${RenderLog.buildHash}; change=60');
       RenderLog.write('auth55_restore',
           'initialSession user=${user.email ?? 'null'}; logged_in=true; from=restored_session');
-      RenderLog.write('auth54_restore',
-          'initialSession user=${user.email ?? 'null'}; from=restored_session');
-      RenderLog.write('auth54_logged_in', 'true');
       try {
         await Future.wait([
           _loadProfile(user.id),
           _resolveRole(user.email ?? ''),
         ]);
-        RenderLog.write('auth54_success',
-            'OK CHANGE #54 session restored on reload; logged_in=true; signout_scope=local; user=${user.email ?? 'unknown'}');
       } catch (_) {
         // Profile/role failure must NOT clear the session.
       }
@@ -103,44 +101,76 @@ class AuthNotifier extends ChangeNotifier {
         notifyListeners();
       }
     }
-    // If user is null here the session may still be restoring from localStorage;
-    // _onAuthChange(initialSession) will handle it and clear _loading.
+    // If user is null: session may still be restoring asynchronously.
+    // _onAuthChange(initialSession) will fire via BehaviorSubject replay and
+    // handle the gate decision — including a recovery attempt if lskeys found.
   }
 
   void _onAuthChange(AuthState state) async {
-    // initialSession fires on every startup — it carries the localStorage-restored
-    // session (or null). Must NOT be blocked by the _loading guard.
+    // initialSession fires on every startup — BehaviorSubject replays it to
+    // new subscribers. This is the definitive auth gate: if SDK restored a
+    // session it's in currentSession; if it failed, we attempt manual recovery.
     if (state.event == AuthChangeEvent.initialSession) {
-      if (_initDone) return; // synchronous _init() already handled it
+      if (_initDone) return; // fast-path in _init() already handled it
       _initDone = true;
+      final waitedMs = DateTime.now().millisecondsSinceEpoch - _initStartMs;
       try {
-        // Trust the restored session — do NOT gate logged-in on a getUser()
-        // network round-trip (slow/transient failures cause false logouts).
-        final session = Supabase.instance.client.auth.currentSession;
-        final user = session?.user ?? state.session?.user;
-        final from = session != null ? 'restored_session' : 'none';
-        RenderLog.write('auth55_restore',
-            'initialSession user=${user?.email ?? 'null'}; logged_in=${user != null}; from=$from');
-        RenderLog.write('auth54_restore',
-            'initialSession user=${user?.email ?? 'null'}; from=$from');
-        RenderLog.write('auth54_logged_in', '${user != null}');
+        Session? session = Supabase.instance.client.auth.currentSession ?? state.session;
+        User? user = session?.user;
+        String recoveryResult = 'none';
+
+        // Recovery: if SDK couldn't restore the session (setInitialSession threw)
+        // but the auth token is still in localStorage, try explicit token refresh.
+        // This uphold the INVARIANT: lskeys found → gate=in after cold reopen.
+        if (user == null) {
+          final lsRaw = RenderLog.getRawAuthSession();
+          if (lsRaw != null) {
+            try {
+              final parsed = jsonDecode(lsRaw) as Map<String, dynamic>;
+              final refreshToken = parsed['refresh_token'] as String?;
+              if (refreshToken != null && refreshToken.isNotEmpty) {
+                final resp = await Supabase.instance.client.auth.setSession(refreshToken);
+                session = resp.session;
+                user = session?.user;
+                recoveryResult = user != null ? 'ok' : 'no_user';
+              } else {
+                recoveryResult = 'no_refresh';
+              }
+            } catch (_) {
+              recoveryResult = 'failed';
+            }
+          }
+        }
+
+        final gate = user != null ? 'in' : 'out';
+        _trace('boot',
+            '${RenderLog.authStorageInfo()}; '
+            'getSession=${session != null ? 'yes' : 'no'}; '
+            'mem=${user != null ? 'yes' : 'no'}; '
+            'initEvent=initialSession; gate=$gate; '
+            'recovery=$recoveryResult; '
+            'waitedMs=$waitedMs; flow=implicit; '
+            'build=${RenderLog.buildHash}; change=60');
+
         if (user != null) {
           RenderLog.write('auth_email', user.email ?? 'unknown');
+          RenderLog.write('auth55_restore',
+              'initialSession user=${user.email ?? 'null'}; logged_in=true; from=restored_session');
           try {
             await Future.wait([
               _loadProfile(user.id),
               _resolveRole(user.email ?? ''),
             ]);
           } catch (_) {
-            // Profile/role failure must NOT clear the session — user stays logged in.
+            // Profile/role failure must NOT clear the session.
           }
-          RenderLog.write('auth54_success',
-              'OK CHANGE #54 session restored on reload; logged_in=true; signout_scope=local; user=${user.email ?? 'unknown'}');
         }
       } finally {
-        _loading = false;
-        RenderLog.write('auth54_stuck_guard', 'loading_cleared');
-        notifyListeners();
+        if (_loading) {
+          _loading = false;
+          RenderLog.write('auth54_stuck_guard', 'loading_cleared');
+          notifyListeners();
+        }
       }
       return;
     }
@@ -173,7 +203,7 @@ class AuthNotifier extends ChangeNotifier {
           '${RenderLog.authStorageInfo()}; '
           'mem=${session != null ? 'yes' : 'no'}; '
           'hasRefresh=${session?.refreshToken != null && (session!.refreshToken?.isNotEmpty ?? false)}; '
-          'build=${RenderLog.buildHash}; change=59');
+          'build=${RenderLog.buildHash}; change=60');
       final user = session?.user ?? Supabase.instance.client.auth.currentUser;
       if (user != null) {
         RenderLog.write('auth_email', user.email ?? 'unknown');
@@ -185,7 +215,6 @@ class AuthNotifier extends ChangeNotifier {
             _resolveRole(user.email ?? ''),
           ]);
           _loading = false;
-          RenderLog.write('auth56_signin_cleared_loading', 'user=${user.email ?? 'unknown'}');
           notifyListeners();
         } else {
           _profileLoading = true;

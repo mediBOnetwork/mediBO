@@ -32,16 +32,19 @@ class RenderLog {
   // The key supabase_flutter uses: sb-<project_ref>-auth-token
   static const _authKey = 'sb-svojhmarmaijkshsbeih-auth-token';
 
-  // Returns "ls_key=found|none; ss_key=found|none" by suffix-matching localStorage/sessionStorage.
+  // Returns "lskeys=<names>; sskeys=<names>" — actual key names for auth-token entries.
+  // change=60: upgraded from found|none to actual key names for root-cause diagnosis.
   static String authStorageInfo() {
     try {
       final ls = html.window.localStorage;
       final ss = html.window.sessionStorage;
-      final lsFound = ls.keys.any((k) => k.contains('auth-token') || k.contains('auth.token'));
-      final ssFound = ss.keys.any((k) => k.contains('auth-token') || k.contains('auth.token'));
-      return 'ls_key=${lsFound ? 'found' : 'none'}; ss_key=${ssFound ? 'found' : 'none'}';
+      final lsKeys = ls.keys.where((k) => k.contains('auth-token') || k.contains('auth.token')).toList();
+      final ssKeys = ss.keys.where((k) => k.contains('auth-token') || k.contains('auth.token')).toList();
+      final lskeys = lsKeys.isEmpty ? 'none' : lsKeys.join(',');
+      final sskeys = ssKeys.isEmpty ? 'none' : ssKeys.join(',');
+      return 'lskeys=$lskeys; sskeys=$sskeys';
     } catch (_) {
-      return 'ls_key=err; ss_key=err';
+      return 'lskeys=err; sskeys=err';
     }
   }
 

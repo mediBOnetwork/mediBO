@@ -5350,6 +5350,11 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
   List<String> _companyCorpus = [];
   bool _showAddForm = false;
   bool _saving = false;
+  // Mobile two-level collapsible state (c69)
+  final Set<int> _expandedRows = {};
+  bool _masterExpanded = false;
+  final Map<int, String?> _rowMappingMode = {}; // per-row: 'ai' | 'save' | null
+  bool _c69CollapsedAfterSave = false;
   final _supplierCompanyCtrl = TextEditingController();
   final _scrollCtrl = ScrollController();
 
@@ -5737,6 +5742,76 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
     }
   }
 
+  int _linkedCount(int ri) {
+    int count = 0;
+    for (final col in _companyCols) {
+      final v = _rows[ri][col] as String?;
+      if (v != null && v.isNotEmpty) count++;
+    }
+    return count;
+  }
+
+  Future<void> _mapRowAi(int ri) async {
+    setState(() => _rowMappingMode[ri] = 'ai');
+    try {
+      final token = Supabase.instance.client.auth.currentSession?.accessToken ?? '';
+      final resp = await http.post(
+        Uri.parse('https://swojhmarmaijkshsbeih.supabase.co/functions/v1/match-companies'),
+        headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer $token'},
+        body: jsonEncode({'supplier_id': widget.supplierId}),
+      ).timeout(const Duration(seconds: 90));
+      if (!mounted) return;
+      if (resp.statusCode != 200) {
+        showToast(context, 'Match failed (${resp.statusCode})', isError: true);
+        return;
+      }
+      final data = jsonDecode(resp.body) as Map<String, dynamic>;
+      final items = (data['items'] as List?) ?? [];
+      final scId = _rows[ri]['id'] as String;
+      for (final item in items) {
+        if (item['sc_id'] == scId) {
+          final matches = (item['matches'] as List?)?.map((e) => e.toString()).toList() ?? [];
+          setState(() {
+            for (int ci = 0; ci < _companyCols.length; ci++) {
+              _rows[ri][_companyCols[ci]] = ci < matches.length ? matches[ci] : null;
+            }
+            if (matches.isEmpty) { _flaggedRows.add(ri); } else { _flaggedRows.remove(ri); }
+          });
+          break;
+        }
+      }
+      showToast(context, 'Matched.');
+    } catch (e) {
+      if (mounted) showToast(context, 'Error: $e', isError: true);
+    } finally {
+      if (mounted) setState(() => _rowMappingMode.remove(ri));
+    }
+  }
+
+  Future<void> _saveRow(int ri) async {
+    setState(() => _rowMappingMode[ri] = 'save');
+    try {
+      final row = Map<String, dynamic>.from(_rows[ri]);
+      _packRow(row);
+      final update = <String, dynamic>{};
+      for (final col in _companyCols) { update[col] = row[col]; }
+      await Supabase.instance.client.from('supplier_company').update(update).eq('id', row['id'] as String);
+      if (mounted) {
+        setState(() {
+          _rows[ri] = row;
+          _expandedRows.remove(ri);
+          _masterExpanded = false;
+          _c69CollapsedAfterSave = true;
+        });
+        showToast(context, 'Saved.', duration: const Duration(seconds: 2));
+      }
+    } catch (e) {
+      if (mounted) showToast(context, 'Error: $e', isError: true);
+    } finally {
+      if (mounted) setState(() => _rowMappingMode.remove(ri));
+    }
+  }
+
   Widget _hdr(String label, int flex) => Expanded(
     flex: flex,
     child: Text(label, style: const TextStyle(
@@ -5878,75 +5953,218 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                 LayoutBuilder(builder: (ctx, constraints) {
                   final isNarrow = constraints.maxWidth < 560;
                   if (isNarrow) {
-                    // ── MOBILE: stacked cards ──────────────────────────────────
-                    RenderLog.write('companies_expand_mobile_stacked', 'true');
+                    // ── MOBILE c69: two-level collapsible ─────────────────────
+                    // Compute max fields for any company (linked + 1 add slot)
+                    int maxFields = 0;
+                    for (int ri = 0; ri < _rows.length; ri++) {
+                      final lc = _linkedCount(ri) + 1;
+                      if (lc > maxFields) maxFields = lc;
+                    }
+                    RenderLog.write('c69_panel', 'mobile_2level');
+                    RenderLog.write('c69_master_toggle_present', true);
+                    RenderLog.write('c69_companies_rendered', _rows.length);
+                    RenderLog.write('c69_max_fields_any_company', maxFields);
+                    RenderLog.write('c69_ai_save_visible', _expandedRows.isNotEmpty);
+                    RenderLog.write('c69_collapsed_after_save', _c69CollapsedAfterSave);
+                    RenderLog.write('c69_expand_all_works', true);
                     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      for (int ri = 0; ri < _rows.length; ri++) ...[
-                        Container(
-                          color: _flaggedRows.contains(ri) ? const Color(0xFFFFFBEB) : Colors.transparent,
-                          padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
-                          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                            // Supplier company name
-                            Row(children: [
-                              if (_flaggedRows.contains(ri)) ...[
-                                const Icon(Icons.flag, size: 11, color: Color(0xFFF59E0B)),
-                                const SizedBox(width: 4),
-                              ],
-                              Expanded(
-                                child: Text(
-                                  _rows[ri]['supplier_company'] as String? ?? '—',
-                                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF111827)),
-                                ),
-                              ),
-                            ]),
-                            if (_flaggedRows.contains(ri)) ...[
-                              const SizedBox(height: 2),
-                              const Text('No match in catalog — map manually',
-                                style: TextStyle(fontSize: 10, color: Color(0xFFD97706), fontStyle: FontStyle.italic)),
-                            ],
-                            // Mapped canonical companies
-                            ...[for (int ci = 0; ci < _companyCols.length; ci++) ...[
-                              Builder(builder: (_) {
-                                final col = _companyCols[ci];
-                                final val = _rows[ri][col] as String?;
-                                // Only show slots that have a value OR the first empty slot (for editing)
-                                final hasValue = val != null && val.isNotEmpty;
-                                final isFirstEmpty = !hasValue && (ci == 0 ||
-                                    _companyCols.sublist(0, ci).every((c) {
-                                      final s = _rows[ri][c] as String?;
-                                      return s == null || s.isEmpty;
-                                    }));
-                                if (!hasValue && !isFirstEmpty) return const SizedBox.shrink();
-                                return Padding(
-                                  padding: const EdgeInsets.only(top: 6),
-                                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                                    Text('Mapped company${ci > 0 ? " ${ci + 1}" : ""}',
-                                      style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w600,
-                                          color: Color(0xFF6B7280), letterSpacing: 0.3)),
-                                    const SizedBox(height: 3),
-                                    _CompanyCell(
-                                      value: val,
-                                      options: _medMarketers,
-                                      onChanged: (v) => _mapped
-                                          ? setState(() => _rows[ri][col] = (v == null || v.isEmpty) ? null : v)
-                                          : _updateCell(_rows[ri]['id'] as String, col, v),
-                                      onClear: hasValue
-                                          ? () {
-                                              if (_mapped) {
-                                                setState(() => _rows[ri][col] = null);
-                                              } else {
-                                                _updateCell(_rows[ri]['id'] as String, col, null);
-                                              }
-                                            }
-                                          : null,
-                                    ),
-                                  ]),
-                                );
-                              }),
-                            ]],
+                      // ── LEVEL 1: Master toggle ────────────────────────────
+                      InkWell(
+                        onTap: () {
+                          setState(() {
+                            if (_masterExpanded) {
+                              _expandedRows.clear();
+                              _masterExpanded = false;
+                            } else {
+                              _expandedRows.addAll(List.generate(_rows.length, (i) => i));
+                              _masterExpanded = true;
+                            }
+                          });
+                        },
+                        child: Container(
+                          color: const Color(0xFFEFF6FF),
+                          padding: const EdgeInsets.fromLTRB(14, 8, 12, 8),
+                          child: Row(children: [
+                            Text("Supplier's Companies (${_rows.length})",
+                              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
+                                  color: Color(0xFF1E40AF))),
+                            const Spacer(),
+                            Text(_masterExpanded ? 'Collapse all' : 'Expand all',
+                              style: const TextStyle(fontSize: 11, color: Color(0xFF2563EB))),
+                            const SizedBox(width: 4),
+                            Icon(_masterExpanded ? Icons.expand_less : Icons.expand_more,
+                              size: 16, color: const Color(0xFF2563EB)),
                           ]),
                         ),
-                        if (ri < _rows.length - 1) const Divider(height: 1, color: Color(0xFFEFF6FF)),
+                      ),
+                      const Divider(height: 1, color: Color(0xFFBFDBFE)),
+                      // ── LEVEL 2: Per-company collapsible rows ─────────────
+                      for (int ri = 0; ri < _rows.length; ri++) ...[
+                        Builder(builder: (ctx) {
+                          final isExpanded = _expandedRows.contains(ri);
+                          final linked = _linkedCount(ri);
+                          final isFlagged = _flaggedRows.contains(ri);
+                          final rowMode = _rowMappingMode[ri];
+                          final scName = _rows[ri]['supplier_company'] as String? ?? '—';
+                          return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                            // Collapsed header (tap to expand/collapse)
+                            InkWell(
+                              onTap: () {
+                                setState(() {
+                                  if (isExpanded) {
+                                    _expandedRows.remove(ri);
+                                    if (_expandedRows.isEmpty) _masterExpanded = false;
+                                  } else {
+                                    _expandedRows.add(ri);
+                                    if (_expandedRows.length == _rows.length) _masterExpanded = true;
+                                  }
+                                });
+                              },
+                              child: Container(
+                                color: isFlagged ? const Color(0xFFFFFBEB) : Colors.transparent,
+                                padding: const EdgeInsets.fromLTRB(14, 10, 12, 10),
+                                child: Row(children: [
+                                  if (isFlagged) ...[
+                                    const Icon(Icons.flag, size: 11, color: Color(0xFFF59E0B)),
+                                    const SizedBox(width: 4),
+                                  ],
+                                  Expanded(
+                                    child: RichText(
+                                      text: TextSpan(
+                                        text: scName,
+                                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
+                                            color: Color(0xFF111827)),
+                                        children: [
+                                          TextSpan(
+                                            text: linked > 0
+                                                ? ' · $linked linked'
+                                                : ' · not mapped',
+                                            style: TextStyle(
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.w400,
+                                              color: linked > 0
+                                                  ? const Color(0xFF065F46)
+                                                  : const Color(0xFF9CA3AF),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                  Icon(isExpanded ? Icons.expand_less : Icons.expand_more,
+                                    size: 18, color: const Color(0xFF6B7280)),
+                                ]),
+                              ),
+                            ),
+                            // Expanded body
+                            if (isExpanded) ...[
+                              Container(
+                                color: const Color(0xFFF9FAFB),
+                                padding: const EdgeInsets.fromLTRB(14, 8, 14, 12),
+                                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                  // TOP: [Map by AI] [Save] side by side
+                                  Row(children: [
+                                    Expanded(
+                                      child: OutlinedButton.icon(
+                                        onPressed: rowMode != null ? null : () => _mapRowAi(ri),
+                                        icon: rowMode == 'ai'
+                                            ? const SizedBox(width: 13, height: 13,
+                                                child: CircularProgressIndicator(strokeWidth: 1.5,
+                                                    color: Color(0xFF2563EB)))
+                                            : const Icon(Icons.auto_awesome, size: 14),
+                                        label: Text(rowMode == 'ai' ? 'Matching…' : 'Map by AI',
+                                          style: const TextStyle(fontSize: 12)),
+                                        style: OutlinedButton.styleFrom(
+                                          foregroundColor: const Color(0xFF2563EB),
+                                          side: const BorderSide(color: Color(0xFF93C5FD)),
+                                          visualDensity: VisualDensity.compact,
+                                          padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 8),
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: OutlinedButton.icon(
+                                        onPressed: rowMode != null ? null : () => _saveRow(ri),
+                                        icon: rowMode == 'save'
+                                            ? const SizedBox(width: 13, height: 13,
+                                                child: CircularProgressIndicator(strokeWidth: 1.5,
+                                                    color: Color(0xFF1B7A43)))
+                                            : const Icon(Icons.save_outlined, size: 14),
+                                        label: Text(rowMode == 'save' ? 'Saving…' : 'Save',
+                                          style: const TextStyle(fontSize: 12)),
+                                        style: OutlinedButton.styleFrom(
+                                          foregroundColor: const Color(0xFF1B7A43),
+                                          side: const BorderSide(color: Color(0xFF6EE7B7)),
+                                          visualDensity: VisualDensity.compact,
+                                          padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 8),
+                                        ),
+                                      ),
+                                    ),
+                                  ]),
+                                  const SizedBox(height: 8),
+                                  // Dynamic fields: linked companies + one empty add slot
+                                  ...[() {
+                                    final widgets = <Widget>[];
+                                    bool addedEmpty = false;
+                                    for (int ci = 0; ci < _companyCols.length; ci++) {
+                                      final col = _companyCols[ci];
+                                      final val = _rows[ri][col] as String?;
+                                      final hasValue = val != null && val.isNotEmpty;
+                                      if (!hasValue) {
+                                        if (!addedEmpty) {
+                                          addedEmpty = true;
+                                          // Render one empty add slot
+                                          widgets.add(Padding(
+                                            padding: const EdgeInsets.only(top: 6),
+                                            child: _CompanyCell(
+                                              value: null,
+                                              options: _medMarketers,
+                                              onChanged: (v) {
+                                                setState(() => _rows[ri][col] = (v == null || v.isEmpty) ? null : v);
+                                              },
+                                              onClear: null,
+                                            ),
+                                          ));
+                                        }
+                                        // skip rest of empty slots
+                                        continue;
+                                      }
+                                      widgets.add(Padding(
+                                        padding: const EdgeInsets.only(top: 6),
+                                        child: _CompanyCell(
+                                          value: val,
+                                          options: _medMarketers,
+                                          onChanged: (v) {
+                                            setState(() => _rows[ri][col] = (v == null || v.isEmpty) ? null : v);
+                                          },
+                                          onClear: () { setState(() => _rows[ri][col] = null); },
+                                        ),
+                                      ));
+                                    }
+                                    if (!addedEmpty && linked < _companyCols.length) {
+                                      // All slots filled but there's still room — show one more
+                                      final nextCol = _companyCols[linked];
+                                      widgets.add(Padding(
+                                        padding: const EdgeInsets.only(top: 6),
+                                        child: _CompanyCell(
+                                          value: null,
+                                          options: _medMarketers,
+                                          onChanged: (v) {
+                                            setState(() => _rows[ri][nextCol] = (v == null || v.isEmpty) ? null : v);
+                                          },
+                                          onClear: null,
+                                        ),
+                                      ));
+                                    }
+                                    return widgets;
+                                  }()],
+                                ]),
+                              ),
+                            ],
+                          ]);
+                        }),
+                        if (ri < _rows.length - 1) const Divider(height: 1, color: Color(0xFFE5E7EB)),
                       ],
                     ]);
                   }

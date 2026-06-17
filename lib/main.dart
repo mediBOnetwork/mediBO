@@ -54,6 +54,11 @@ void main() {
       try { RenderLog.write('boot_error', 'supabase_init_failed'); } catch (_) {}
     }
 
+    // Remove stale sv-typo key (sb-svojhmarmaijkshsbeih-auth-token) if left over from old builds.
+    try {
+      html.window.localStorage.remove('sb-svojhmarmaijkshsbeih-auth-token');
+    } catch (_) {}
+
     try {
       final raw = await html.HttpRequest.getString('/version.json');
       final info = jsonDecode(raw) as Map<String, dynamic>;

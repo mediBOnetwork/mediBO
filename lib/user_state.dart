@@ -48,6 +48,11 @@ class AuthNotifier extends ChangeNotifier {
   late final StreamSubscription<AuthState> _sub;
   // Prevents _init() and initialSession from both finalising loading state.
   bool _initDone = false;
+  // True once boot confirmed a valid session (fast-path or initialSession with user).
+  // Guards against spurious SDK signedOut events that fire after a valid boot session.
+  bool _bootHadSession = false;
+  // Set to true BEFORE calling auth.signOut() so the signedOut handler knows it's intentional.
+  bool _explicitSignOut = false;
 
   AuthNotifier() {
     _sub = Supabase.instance.client.auth.onAuthStateChange.listen(_onAuthChange);
@@ -81,11 +86,12 @@ class AuthNotifier extends ChangeNotifier {
     RenderLog.write('auth55_init_user', user?.email ?? 'null');
     if (user != null && !_initDone) {
       _initDone = true;
+      _bootHadSession = true;
       final waitedMs = DateTime.now().millisecondsSinceEpoch - _initStartMs;
       _trace('boot',
           '${RenderLog.authStorageInfo()}; '
           'getSession=yes; mem=yes; initEvent=sync; gate=in; '
-          'waitedMs=$waitedMs; flow=pkce; build=${RenderLog.buildHash}; change=63');
+          'waitedMs=$waitedMs; flow=pkce; build=${RenderLog.buildHash}; change=64');
       RenderLog.write('auth55_restore',
           'initialSession user=${user.email ?? 'null'}; logged_in=true; from=restored_session');
       try {
@@ -120,13 +126,14 @@ class AuthNotifier extends ChangeNotifier {
         final User? user = session?.user;
 
         final gate = user != null ? 'in' : 'out';
+        if (user != null) _bootHadSession = true;
         _trace('boot',
             '${RenderLog.authStorageInfo()}; '
             'getSession=${session != null ? 'yes' : 'no'}; '
             'mem=${user != null ? 'yes' : 'no'}; '
             'initEvent=initialSession; gate=$gate; '
             'waitedMs=$waitedMs; flow=pkce; '
-            'build=${RenderLog.buildHash}; change=63');
+            'build=${RenderLog.buildHash}; change=64');
 
         if (user != null) {
           RenderLog.write('auth_email', user.email ?? 'unknown');
@@ -167,11 +174,12 @@ class AuthNotifier extends ChangeNotifier {
         state.event == AuthChangeEvent.tokenRefreshed) {
       RenderLog.write('auth55_signed_in', 'event_received; loading_was=$_loading');
       final session = state.session ?? Supabase.instance.client.auth.currentSession;
+      _bootHadSession = true;
       _trace('signedIn',
           '${RenderLog.authStorageInfo()}; '
           'mem=${session != null ? 'yes' : 'no'}; '
           'hasRefresh=${session?.refreshToken != null && (session!.refreshToken?.isNotEmpty ?? false)}; '
-          'build=${RenderLog.buildHash}; change=63');
+          'build=${RenderLog.buildHash}; change=64');
       // Selftest hook: write selftest_login trace here, after SDK has persisted the session.
       final selftestEm = pendingSelftestEmail;
       if (selftestEm != null) {
@@ -184,7 +192,7 @@ class AuthNotifier extends ChangeNotifier {
               '${RenderLog.authStorageInfo()}; '
               'flow=pkce; '
               'getSession=${curSession != null ? 'yes' : 'no'}; '
-              'build=${RenderLog.buildHash}; change=63',
+              'build=${RenderLog.buildHash}; change=64',
         // ignore: unnecessary_lambdas
         }).then((_) {}).catchError((_) {});
       }
@@ -215,6 +223,28 @@ class AuthNotifier extends ChangeNotifier {
         notifyListeners();
       }
     } else if (state.event == AuthChangeEvent.signedOut) {
+      // Guard: if we confirmed a valid session at boot and this is NOT an explicit
+      // user-triggered signOut, treat as spurious (SDK fires signedOut for transient
+      // token-refresh failures on Google PKCE sessions). Leave session intact.
+      final spurious = _bootHadSession && !_explicitSignOut;
+      final storageInfo = RenderLog.authStorageInfo();
+      if (spurious) {
+        _trace('signedOut',
+            'reason=spurious_boot_sdk_event; caller=user_state:signedOut_guard; '
+            'getSessionBefore=${Supabase.instance.client.auth.currentSession != null ? 'yes' : 'no'}; '
+            'trigger=boot; $storageInfo; '
+            'build=${RenderLog.buildHash}; change=64');
+        // Reset flag so a subsequent real signedOut (user action) is not suppressed.
+        _bootHadSession = false;
+        return;
+      }
+      _trace('signedOut',
+          'reason=explicit_or_sdk_invalid; caller=user_state:signedOut_handler; '
+          'getSessionBefore=${Supabase.instance.client.auth.currentSession != null ? 'yes' : 'no'}; '
+          'explicit=$_explicitSignOut; $storageInfo; '
+          'build=${RenderLog.buildHash}; change=64');
+      _explicitSignOut = false;
+      _bootHadSession = false;
       _profile = null;
       _needsProfile = false;
       _profileLoading = false;
@@ -226,7 +256,6 @@ class AuthNotifier extends ChangeNotifier {
       _supplierStatus = null;
       _profileChannel?.unsubscribe();
       _profileChannel = null;
-      _trace('signedOut', 'app cleared state');
       RenderLog.write('auth_email', 'signed_out');
       RenderLog.write('auth_role', 'none');
       notifyListeners();
@@ -373,6 +402,7 @@ class AuthNotifier extends ChangeNotifier {
   }
 
   Future<void> signOut() async {
+    _explicitSignOut = true;
     RenderLog.write('auth54_signout', 'scope=local; reason=manual_logout');
     await Supabase.instance.client.auth.signOut(scope: SignOutScope.local);
   }

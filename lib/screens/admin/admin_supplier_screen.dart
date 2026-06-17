@@ -5742,6 +5742,60 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
     }
   }
 
+  List<Widget> _buildRowFields(int ri) {
+    final widgets = <Widget>[];
+    final linked = _linkedCount(ri);
+    bool addedEmpty = false;
+    for (int ci = 0; ci < _companyCols.length; ci++) {
+      final col = _companyCols[ci];
+      final val = _rows[ri][col] as String?;
+      final hasValue = val != null && val.isNotEmpty;
+      if (!hasValue) {
+        if (!addedEmpty) {
+          addedEmpty = true;
+          widgets.add(Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: _CompanyCell(
+              value: null,
+              options: _medMarketers,
+              onChanged: (v) {
+                setState(() => _rows[ri][col] = (v == null || v.isEmpty) ? null : v);
+              },
+              onClear: null,
+            ),
+          ));
+        }
+        continue;
+      }
+      widgets.add(Padding(
+        padding: const EdgeInsets.only(top: 6),
+        child: _CompanyCell(
+          value: val,
+          options: _medMarketers,
+          onChanged: (v) {
+            setState(() => _rows[ri][col] = (v == null || v.isEmpty) ? null : v);
+          },
+          onClear: () { setState(() => _rows[ri][col] = null); },
+        ),
+      ));
+    }
+    if (!addedEmpty && linked < _companyCols.length) {
+      final nextCol = _companyCols[linked];
+      widgets.add(Padding(
+        padding: const EdgeInsets.only(top: 6),
+        child: _CompanyCell(
+          value: null,
+          options: _medMarketers,
+          onChanged: (v) {
+            setState(() => _rows[ri][nextCol] = (v == null || v.isEmpty) ? null : v);
+          },
+          onClear: null,
+        ),
+      ));
+    }
+    return widgets;
+  }
+
   int _linkedCount(int ri) {
     int count = 0;
     for (final col in _companyCols) {
@@ -6104,61 +6158,7 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                                   ]),
                                   const SizedBox(height: 8),
                                   // Dynamic fields: linked companies + one empty add slot
-                                  ...[() {
-                                    final widgets = <Widget>[];
-                                    bool addedEmpty = false;
-                                    for (int ci = 0; ci < _companyCols.length; ci++) {
-                                      final col = _companyCols[ci];
-                                      final val = _rows[ri][col] as String?;
-                                      final hasValue = val != null && val.isNotEmpty;
-                                      if (!hasValue) {
-                                        if (!addedEmpty) {
-                                          addedEmpty = true;
-                                          // Render one empty add slot
-                                          widgets.add(Padding(
-                                            padding: const EdgeInsets.only(top: 6),
-                                            child: _CompanyCell(
-                                              value: null,
-                                              options: _medMarketers,
-                                              onChanged: (v) {
-                                                setState(() => _rows[ri][col] = (v == null || v.isEmpty) ? null : v);
-                                              },
-                                              onClear: null,
-                                            ),
-                                          ));
-                                        }
-                                        // skip rest of empty slots
-                                        continue;
-                                      }
-                                      widgets.add(Padding(
-                                        padding: const EdgeInsets.only(top: 6),
-                                        child: _CompanyCell(
-                                          value: val,
-                                          options: _medMarketers,
-                                          onChanged: (v) {
-                                            setState(() => _rows[ri][col] = (v == null || v.isEmpty) ? null : v);
-                                          },
-                                          onClear: () { setState(() => _rows[ri][col] = null); },
-                                        ),
-                                      ));
-                                    }
-                                    if (!addedEmpty && linked < _companyCols.length) {
-                                      // All slots filled but there's still room — show one more
-                                      final nextCol = _companyCols[linked];
-                                      widgets.add(Padding(
-                                        padding: const EdgeInsets.only(top: 6),
-                                        child: _CompanyCell(
-                                          value: null,
-                                          options: _medMarketers,
-                                          onChanged: (v) {
-                                            setState(() => _rows[ri][nextCol] = (v == null || v.isEmpty) ? null : v);
-                                          },
-                                          onClear: null,
-                                        ),
-                                      ));
-                                    }
-                                    return widgets;
-                                  }()],
+                                  ..._buildRowFields(ri),
                                 ]),
                               ),
                             ],

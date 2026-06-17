@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:flutter/widgets.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -84,7 +83,7 @@ class AuthNotifier extends ChangeNotifier {
       _trace('boot',
           '${RenderLog.authStorageInfo()}; '
           'getSession=yes; mem=yes; initEvent=sync; gate=in; '
-          'waitedMs=$waitedMs; flow=implicit; build=${RenderLog.buildHash}; change=60');
+          'waitedMs=$waitedMs; flow=implicit; build=${RenderLog.buildHash}; change=61');
       RenderLog.write('auth55_restore',
           'initialSession user=${user.email ?? 'null'}; logged_in=true; from=restored_session');
       try {
@@ -115,32 +114,8 @@ class AuthNotifier extends ChangeNotifier {
       _initDone = true;
       final waitedMs = DateTime.now().millisecondsSinceEpoch - _initStartMs;
       try {
-        Session? session = Supabase.instance.client.auth.currentSession ?? state.session;
-        User? user = session?.user;
-        String recoveryResult = 'none';
-
-        // Recovery: if SDK couldn't restore the session (setInitialSession threw)
-        // but the auth token is still in localStorage, try explicit token refresh.
-        // This uphold the INVARIANT: lskeys found → gate=in after cold reopen.
-        if (user == null) {
-          final lsRaw = RenderLog.getRawAuthSession();
-          if (lsRaw != null) {
-            try {
-              final parsed = jsonDecode(lsRaw) as Map<String, dynamic>;
-              final refreshToken = parsed['refresh_token'] as String?;
-              if (refreshToken != null && refreshToken.isNotEmpty) {
-                final resp = await Supabase.instance.client.auth.setSession(refreshToken);
-                session = resp.session;
-                user = session?.user;
-                recoveryResult = user != null ? 'ok' : 'no_user';
-              } else {
-                recoveryResult = 'no_refresh';
-              }
-            } catch (_) {
-              recoveryResult = 'failed';
-            }
-          }
-        }
+        final Session? session = Supabase.instance.client.auth.currentSession ?? state.session;
+        final User? user = session?.user;
 
         final gate = user != null ? 'in' : 'out';
         _trace('boot',
@@ -148,9 +123,8 @@ class AuthNotifier extends ChangeNotifier {
             'getSession=${session != null ? 'yes' : 'no'}; '
             'mem=${user != null ? 'yes' : 'no'}; '
             'initEvent=initialSession; gate=$gate; '
-            'recovery=$recoveryResult; '
             'waitedMs=$waitedMs; flow=implicit; '
-            'build=${RenderLog.buildHash}; change=60');
+            'build=${RenderLog.buildHash}; change=61');
 
         if (user != null) {
           RenderLog.write('auth_email', user.email ?? 'unknown');
@@ -191,19 +165,11 @@ class AuthNotifier extends ChangeNotifier {
         state.event == AuthChangeEvent.tokenRefreshed) {
       RenderLog.write('auth55_signed_in', 'event_received; loading_was=$_loading');
       final session = state.session ?? Supabase.instance.client.auth.currentSession;
-      // Belt-and-suspenders: explicitly write the session to localStorage under
-      // the SDK's own key so a cold reopen always finds it, regardless of whether
-      // the SDK's async persist stream ran before the tab was closed.
-      if (session != null) {
-        try {
-          RenderLog.persistAuthSession(jsonEncode(session.toJson()));
-        } catch (_) {}
-      }
       _trace('signedIn',
           '${RenderLog.authStorageInfo()}; '
           'mem=${session != null ? 'yes' : 'no'}; '
           'hasRefresh=${session?.refreshToken != null && (session!.refreshToken?.isNotEmpty ?? false)}; '
-          'build=${RenderLog.buildHash}; change=60');
+          'build=${RenderLog.buildHash}; change=61');
       final user = session?.user ?? Supabase.instance.client.auth.currentUser;
       if (user != null) {
         RenderLog.write('auth_email', user.email ?? 'unknown');

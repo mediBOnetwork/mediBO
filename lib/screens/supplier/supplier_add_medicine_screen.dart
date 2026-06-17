@@ -12,7 +12,7 @@ import '../../supabase_config.dart';
 import '../../utils/render_log.dart';
 import '../../utils/toast.dart';
 
-const _kOcrEdgeFn = 'https://svojhmarmaijkshsbeih.supabase.co/functions/v1/gemini-ocr';
+const _kOcrEdgeFn = 'https://swojhmarmaijkshsbeih.supabase.co/functions/v1/gemini-ocr';
 
 class SupplierAddMedicineScreen extends StatefulWidget {
   const SupplierAddMedicineScreen({super.key});

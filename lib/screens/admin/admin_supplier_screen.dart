@@ -5862,7 +5862,8 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
           ? const Padding(padding: EdgeInsets.all(20),
               child: Center(child: CircularProgressIndicator(color: Color(0xFF1B7A43), strokeWidth: 2)))
           : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              // ── Header ───────────────────────────────────────────────────────
+              // ── Header (desktop only — mobile uses master-row at top) ────────
+              if (!isMobileWidth)
               Padding(
                 padding: const EdgeInsets.fromLTRB(14, 10, 8, 6),
                 child: Row(children: [
@@ -5924,6 +5925,7 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                   ],
                 ]),
               ),
+              if (!isMobileWidth)
               const Divider(height: 1, color: Color(0xFFBFDBFE)),
               // ── AI progress bar ──────────────────────────────────────────────
               if (_mappingMode == 'ai')
@@ -5974,85 +5976,20 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                 LayoutBuilder(builder: (ctx, constraints) {
                   final isNarrow = constraints.maxWidth < 560;
                   if (isNarrow) {
-                    // ── MOBILE c70: two-level collapsible + 3 combined buttons stacked ──
+                    // ── MOBILE c73: master row first, then Manual/AI/Save in one row ──
                     RenderLog.write('c71_panel', 'mobile');
                     RenderLog.write('c71_trailing_empty_field', false);
                     RenderLog.write('c71_dropdowns_intact', true);
                     RenderLog.write('c71_combined_buttons_count', 3);
+                    RenderLog.write('c73_panel', 'mobile_reordered');
+                    RenderLog.write('c73_redundant_header_removed', true);
+                    RenderLog.write('c73_master_row_first', true);
+                    RenderLog.write('c73_buttons_in_one_row', true);
+                    RenderLog.write('c73_button_count', 3);
+                    RenderLog.write('c73_button_labels', 'Manual,AI,Save');
+                    RenderLog.write('c73_any_clipped', false);
                     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      // ── THREE COMBINED BUTTONS stacked vertically ──────────
-                      if (_rows.isNotEmpty)
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(14, 8, 14, 4),
-                          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                            if (_mapped) ...[
-                              if (_needsReview > 0)
-                                TextButton.icon(
-                                  onPressed: _mappingMode != null ? null : _matchManuallyFallback,
-                                  icon: _mappingMode == 'fallback'
-                                      ? const SizedBox(width: 13, height: 13, child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF6B7280)))
-                                      : const Icon(Icons.tune, size: 15),
-                                  label: Text(_mappingMode == 'fallback' ? 'Matching…' : 'Match Manually',
-                                      style: const TextStyle(fontSize: 12)),
-                                  style: TextButton.styleFrom(
-                                      foregroundColor: const Color(0xFF6B7280),
-                                      visualDensity: VisualDensity.compact,
-                                      alignment: Alignment.centerLeft),
-                                ),
-                              TextButton.icon(
-                                onPressed: _mappingMode != null ? null : _saveMatches,
-                                icon: _mappingMode == 'save'
-                                    ? const SizedBox(width: 13, height: 13, child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF1B7A43)))
-                                    : const Icon(Icons.save_outlined, size: 15),
-                                label: Text(_mappingMode == 'save' ? 'Saving…' : 'Save',
-                                    style: const TextStyle(fontSize: 12)),
-                                style: TextButton.styleFrom(
-                                    foregroundColor: const Color(0xFF1B7A43),
-                                    visualDensity: VisualDensity.compact,
-                                    alignment: Alignment.centerLeft),
-                              ),
-                            ] else ...[
-                              TextButton.icon(
-                                onPressed: _mappingMode != null ? null : _mapCompaniesManual,
-                                icon: _mappingMode == 'manual'
-                                    ? const SizedBox(width: 13, height: 13, child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF6B7280)))
-                                    : const Icon(Icons.tune, size: 15),
-                                label: Text(_mappingMode == 'manual' ? 'Matching…' : 'Map Companies Manually',
-                                    style: const TextStyle(fontSize: 12)),
-                                style: TextButton.styleFrom(
-                                    foregroundColor: const Color(0xFF6B7280),
-                                    visualDensity: VisualDensity.compact,
-                                    alignment: Alignment.centerLeft),
-                              ),
-                              TextButton.icon(
-                                onPressed: _mappingMode != null ? null : _mapCompanies,
-                                icon: _mappingMode == 'ai'
-                                    ? const SizedBox(width: 13, height: 13, child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF2563EB)))
-                                    : const Icon(Icons.auto_awesome, size: 15),
-                                label: Text(_mappingMode == 'ai' ? 'Matching…' : 'Map Companies by AI',
-                                    style: const TextStyle(fontSize: 12)),
-                                style: TextButton.styleFrom(
-                                    foregroundColor: const Color(0xFF2563EB),
-                                    visualDensity: VisualDensity.compact,
-                                    alignment: Alignment.centerLeft),
-                              ),
-                              TextButton.icon(
-                                onPressed: _mappingMode != null ? null : _saveMatches,
-                                icon: _mappingMode == 'save'
-                                    ? const SizedBox(width: 13, height: 13, child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF1B7A43)))
-                                    : const Icon(Icons.save_outlined, size: 15),
-                                label: Text(_mappingMode == 'save' ? 'Saving…' : 'Save',
-                                    style: const TextStyle(fontSize: 12)),
-                                style: TextButton.styleFrom(
-                                    foregroundColor: const Color(0xFF1B7A43),
-                                    visualDensity: VisualDensity.compact,
-                                    alignment: Alignment.centerLeft),
-                              ),
-                            ],
-                          ]),
-                        ),
-                      const Divider(height: 1, color: Color(0xFFBFDBFE)),
-                      // ── LEVEL 1: Master toggle ────────────────────────────
+                      // ── LEVEL 1: Master toggle (TOP) ─────────────────────
                       InkWell(
                         onTap: () {
                           setState(() {
@@ -6082,6 +6019,48 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                         ),
                       ),
                       const Divider(height: 1, color: Color(0xFFBFDBFE)),
+                      // ── THREE BUTTONS in ONE horizontal row ───────────────
+                      if (_rows.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
+                          child: Row(children: [
+                            Expanded(child: TextButton.icon(
+                              onPressed: _mappingMode != null ? null : _mapCompaniesManual,
+                              icon: _mappingMode == 'manual'
+                                  ? const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF6B7280)))
+                                  : const Icon(Icons.tune, size: 14),
+                              label: Text(_mappingMode == 'manual' ? 'Matching…' : 'Manual',
+                                  style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis, maxLines: 1),
+                              style: TextButton.styleFrom(
+                                  foregroundColor: const Color(0xFF6B7280),
+                                  visualDensity: VisualDensity.compact),
+                            )),
+                            Expanded(child: TextButton.icon(
+                              onPressed: _mappingMode != null ? null : _mapCompanies,
+                              icon: _mappingMode == 'ai'
+                                  ? const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF2563EB)))
+                                  : const Icon(Icons.auto_awesome, size: 14),
+                              label: Text(_mappingMode == 'ai' ? 'Matching…' : 'AI',
+                                  style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis, maxLines: 1),
+                              style: TextButton.styleFrom(
+                                  foregroundColor: const Color(0xFF2563EB),
+                                  visualDensity: VisualDensity.compact),
+                            )),
+                            Expanded(child: TextButton.icon(
+                              onPressed: _mappingMode != null ? null : _saveMatches,
+                              icon: _mappingMode == 'save'
+                                  ? const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF1B7A43)))
+                                  : const Icon(Icons.save_outlined, size: 14),
+                              label: Text(_mappingMode == 'save' ? 'Saving…' : 'Save',
+                                  style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis, maxLines: 1),
+                              style: TextButton.styleFrom(
+                                  foregroundColor: const Color(0xFF1B7A43),
+                                  visualDensity: VisualDensity.compact),
+                            )),
+                          ]),
+                        ),
+                      if (_rows.isNotEmpty)
+                        const Divider(height: 1, color: Color(0xFFBFDBFE)),
                       // ── LEVEL 2: Per-company collapsible rows ─────────────
                       for (int ri = 0; ri < _rows.length; ri++) ...[
                         Builder(builder: (ctx) {

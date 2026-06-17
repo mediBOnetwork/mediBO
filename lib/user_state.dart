@@ -52,6 +52,8 @@ class AuthNotifier extends ChangeNotifier {
   }
 
   // Fire-and-forget tracer — writes one row per event to auth_debug_log via RPC.
+  // postgrest-dart Futures are LAZY: .then() must be called to materialize the
+  // HTTP request; a bare unawaited rpc() call sends nothing.
   void _trace(String event, String detail) {
     try {
       final s = Supabase.instance.client.auth.currentSession;
@@ -60,7 +62,8 @@ class AuthNotifier extends ChangeNotifier {
             (Supabase.instance.client.auth.currentUser?.email ?? ''),
         'p_event': event,
         'p_detail': detail,
-      });
+      // ignore: unnecessary_lambdas
+      }).then((_) {}).catchError((_) {});
     } catch (_) {}
   }
 

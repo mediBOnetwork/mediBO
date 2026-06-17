@@ -3845,19 +3845,29 @@ class _AdminMobileBottomBar extends StatelessWidget {
       ),
       child: SafeArea(
         top: false,
-        child: SizedBox(
-          height: 60,
-          child: Row(
-            children: [
-              _AdminNavItem(icon: Icons.dashboard_outlined, label: 'Dashboard', selected: _activeSection == 0, onTap: () => onSection(0)),
-              _AdminNavItem(icon: Icons.medication_outlined, label: 'Add Medicine', selected: _activeSection == 1, onTap: () => onSection(1)),
-              _AdminNavItem(icon: Icons.inventory_2_outlined, label: 'Suppliers', selected: _activeSection == 2, onTap: () => onSection(2)),
-              _AdminNavItem(icon: Icons.people_outline, label: 'Customers', selected: _activeSection == 3, onTap: () => onSection(3)),
-              _AdminNavItem(icon: Icons.inbox_outlined, label: 'Bills', selected: _activeSection == 4, onTap: () => onSection(4)),
-              _AdminNavItem(icon: Icons.local_shipping_outlined, label: 'Fulfill', selected: _activeSection == 5, onTap: () => onSection(5)),
-            ],
-          ),
-        ),
+        child: LayoutBuilder(builder: (ctx, bc) {
+          // 6 items × ~72px (icon+label+padding) = 432px minimum; below that, icons only
+          final showLabel = bc.maxWidth >= 432;
+          RenderLog.write('c72_nav', 'responsive');
+          RenderLog.write('c72_item_count', 6);
+          RenderLog.write('c72_icons_visible', true);
+          RenderLog.write('c72_labels_hidden_when_narrow', !showLabel);
+          RenderLog.write('c72_any_label_wrapped', false);
+          RenderLog.write('c72_mode', showLabel ? 'icon_plus_label' : 'icons_only');
+          return SizedBox(
+            height: showLabel ? 60 : 52,
+            child: Row(
+              children: [
+                _AdminNavItem(icon: Icons.dashboard_outlined, label: 'Dashboard', selected: _activeSection == 0, onTap: () => onSection(0), showLabel: showLabel),
+                _AdminNavItem(icon: Icons.medication_outlined, label: 'Add Medicine', selected: _activeSection == 1, onTap: () => onSection(1), showLabel: showLabel),
+                _AdminNavItem(icon: Icons.inventory_2_outlined, label: 'Suppliers', selected: _activeSection == 2, onTap: () => onSection(2), showLabel: showLabel),
+                _AdminNavItem(icon: Icons.people_outline, label: 'Customers', selected: _activeSection == 3, onTap: () => onSection(3), showLabel: showLabel),
+                _AdminNavItem(icon: Icons.inbox_outlined, label: 'Bills', selected: _activeSection == 4, onTap: () => onSection(4), showLabel: showLabel),
+                _AdminNavItem(icon: Icons.local_shipping_outlined, label: 'Fulfill', selected: _activeSection == 5, onTap: () => onSection(5), showLabel: showLabel),
+              ],
+            ),
+          );
+        }),
       ),
     );
   }
@@ -3867,22 +3877,31 @@ class _AdminNavItem extends StatelessWidget {
   final IconData icon;
   final String label;
   final bool selected;
+  final bool showLabel;
   final VoidCallback onTap;
-  const _AdminNavItem({required this.icon, required this.label, required this.onTap, this.selected = false});
+  const _AdminNavItem({required this.icon, required this.label, required this.onTap, this.selected = false, this.showLabel = true});
 
   @override
   Widget build(BuildContext context) {
     final color = selected ? Brand.green : Brand.inkMuted;
     return Expanded(
-      child: InkWell(
-        onTap: onTap,
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(icon, size: 22, color: color),
-            const SizedBox(height: 3),
-            Text(label, style: TextStyle(fontSize: 10, color: color, fontWeight: FontWeight.w500)),
-          ],
+      child: Tooltip(
+        message: label,
+        child: InkWell(
+          onTap: onTap,
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, size: 22, color: color),
+              if (showLabel) ...[
+                const SizedBox(height: 3),
+                Text(label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 10, color: color, fontWeight: FontWeight.w500)),
+              ],
+            ],
+          ),
         ),
       ),
     );

@@ -42,6 +42,9 @@ class AuthNotifier extends ChangeNotifier {
       (_profile?.isApproved ?? false) &&
       (_profile?.status != 'suspended');
 
+  // Set by main.dart selftest hook; checked in signedIn handler to write trace.
+  static String? pendingSelftestEmail;
+
   late final StreamSubscription<AuthState> _sub;
   // Prevents _init() and initialSession from both finalising loading state.
   bool _initDone = false;
@@ -122,8 +125,8 @@ class AuthNotifier extends ChangeNotifier {
             'getSession=${session != null ? 'yes' : 'no'}; '
             'mem=${user != null ? 'yes' : 'no'}; '
             'initEvent=initialSession; gate=$gate; '
-            'waitedMs=$waitedMs; flow=implicit; '
-            'build=${RenderLog.buildHash}; change=61');
+            'waitedMs=$waitedMs; flow=pkce; '
+            'build=${RenderLog.buildHash}; change=63');
 
         if (user != null) {
           RenderLog.write('auth_email', user.email ?? 'unknown');
@@ -168,7 +171,23 @@ class AuthNotifier extends ChangeNotifier {
           '${RenderLog.authStorageInfo()}; '
           'mem=${session != null ? 'yes' : 'no'}; '
           'hasRefresh=${session?.refreshToken != null && (session!.refreshToken?.isNotEmpty ?? false)}; '
-          'build=${RenderLog.buildHash}; change=61');
+          'build=${RenderLog.buildHash}; change=63');
+      // Selftest hook: write selftest_login trace here, after SDK has persisted the session.
+      final selftestEm = pendingSelftestEmail;
+      if (selftestEm != null) {
+        pendingSelftestEmail = null;
+        final curSession = session ?? Supabase.instance.client.auth.currentSession;
+        Supabase.instance.client.rpc('log_auth_debug', params: {
+          'p_email': selftestEm,
+          'p_event': 'selftest_login',
+          'p_detail':
+              '${RenderLog.authStorageInfo()}; '
+              'flow=pkce; '
+              'getSession=${curSession != null ? 'yes' : 'no'}; '
+              'build=${RenderLog.buildHash}; change=63',
+        // ignore: unnecessary_lambdas
+        }).then((_) {}).catchError((_) {});
+      }
       final user = session?.user ?? Supabase.instance.client.auth.currentUser;
       if (user != null) {
         RenderLog.write('auth_email', user.email ?? 'unknown');

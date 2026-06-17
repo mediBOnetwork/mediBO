@@ -64,8 +64,9 @@ void main() {
     RenderLog.write('screen', 'boot');
 
     // Selftest hook (guarded; no-op without exact secret; mark for removal in #64).
-    // Enables harness to exercise signInWithPassword and prove durableKey=present
-    // without canvas clicks. Secret: ms62x9k7q.
+    // Triggers signInWithPassword then defers the selftest_login trace to the
+    // signedIn handler in user_state.dart where persistSession is guaranteed done.
+    // Secret: ms62x9k7q.
     try {
       final uri = Uri.parse(html.window.location.href);
       if (uri.queryParameters['selftest'] == 'ms62x9k7q' &&
@@ -73,27 +74,19 @@ void main() {
         final em = uri.queryParameters['em'] ?? '';
         final pw = uri.queryParameters['pw'] ?? '';
         if (em.isNotEmpty && pw.isNotEmpty) {
+          // Tell user_state.dart to write the selftest_login trace in signedIn handler.
+          AuthNotifier.pendingSelftestEmail = em;
           try {
             await Supabase.instance.client.auth.signInWithPassword(
               email: em, password: pw);
-          } catch (_) {}
-          final session = Supabase.instance.client.auth.currentSession;
-          final ls = html.window.localStorage;
-          final durableOk =
-              ls['sb-swojhmarmaijkshsbeih-auth-token'] != null ||
-              ls['flutter.sb-swojhmarmaijkshsbeih-auth-token'] != null;
-          final cvOk =
-              ls['flutter.supabase.auth.token-code-verifier'] != null;
-          Supabase.instance.client.rpc('log_auth_debug', params: {
-            'p_email': em,
-            'p_event': 'selftest_login',
-            'p_detail':
-                'flow=pkce; durableKey=${durableOk ? 'present' : 'absent'}; '
-                'cvKey=${cvOk ? 'present' : 'absent'}; '
-                'getSession=${session != null ? 'yes' : 'no'}; '
-                'build=${RenderLog.buildHash}; change=63',
-          }).then((_) {}).catchError((_) {});
-          await Future.delayed(const Duration(milliseconds: 800));
+          } catch (_) {
+            AuthNotifier.pendingSelftestEmail = null;
+          }
+          // Yield so BehaviorSubject delivers signedIn → persistSession completes
+          // before runApp starts. The trace is written from _onAuthChange(signedIn).
+          for (var i = 0; i < 8; i++) {
+            await Future<void>.delayed(Duration.zero);
+          }
         }
       }
     } catch (_) {}

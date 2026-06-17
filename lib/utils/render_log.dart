@@ -27,6 +27,41 @@ class RenderLog {
 
   static String get buildHash => (_log['build'] as String?) ?? 'unknown';
 
+  // ── Auth storage helpers (belt-and-suspenders for Google session persistence) ──
+
+  // The key supabase_flutter uses: sb-<project_ref>-auth-token
+  static const _authKey = 'sb-svojhmarmaijkshsbeih-auth-token';
+
+  // Returns "ls_key=found|none; ss_key=found|none" by suffix-matching localStorage/sessionStorage.
+  static String authStorageInfo() {
+    try {
+      final ls = html.window.localStorage;
+      final ss = html.window.sessionStorage;
+      final lsFound = ls.keys.any((k) => k.contains('auth-token') || k.contains('auth.token'));
+      final ssFound = ss.keys.any((k) => k.contains('auth-token') || k.contains('auth.token'));
+      return 'ls_key=${lsFound ? 'found' : 'none'}; ss_key=${ssFound ? 'found' : 'none'}';
+    } catch (_) {
+      return 'ls_key=err; ss_key=err';
+    }
+  }
+
+  // Explicitly write the session JSON to the SDK's localStorage key.
+  // Belt-and-suspenders in case the SDK's async persist stream fires late.
+  static void persistAuthSession(String sessionJson) {
+    try {
+      html.window.localStorage[_authKey] = sessionJson;
+    } catch (_) {}
+  }
+
+  // Returns the raw session JSON from localStorage (null if not present).
+  static String? getRawAuthSession() {
+    try {
+      return html.window.localStorage[_authKey];
+    } catch (_) {
+      return null;
+    }
+  }
+
   static void reset() {
     final build = _log['build'];
     _log.clear();

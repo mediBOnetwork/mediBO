@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/widgets.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -74,10 +75,11 @@ class AuthNotifier extends ChangeNotifier {
     final session = Supabase.instance.client.auth.currentSession;
     final user = session?.user ?? Supabase.instance.client.auth.currentUser;
     RenderLog.write('auth55_init_user', user?.email ?? 'null');
+    final _mem = session != null;
     _trace('boot',
-        'flow=implicit; stored=${session != null}; '
-        'hasRefresh=${session?.refreshToken != null && (session!.refreshToken?.isNotEmpty ?? false)}; '
-        'frag=n/a; code=n/a; build=${RenderLog.buildHash}; change=58');
+        '${RenderLog.authStorageInfo()}; '
+        'getSession=${_mem ? 'yes' : 'no'}; mem=${_mem ? 'yes' : 'no'}; '
+        'flow=implicit; build=${RenderLog.buildHash}; change=59');
     if (user != null && !_initDone) {
       _initDone = true;
       RenderLog.write('auth55_restore',
@@ -159,9 +161,19 @@ class AuthNotifier extends ChangeNotifier {
         state.event == AuthChangeEvent.tokenRefreshed) {
       RenderLog.write('auth55_signed_in', 'event_received; loading_was=$_loading');
       final session = state.session ?? Supabase.instance.client.auth.currentSession;
+      // Belt-and-suspenders: explicitly write the session to localStorage under
+      // the SDK's own key so a cold reopen always finds it, regardless of whether
+      // the SDK's async persist stream ran before the tab was closed.
+      if (session != null) {
+        try {
+          RenderLog.persistAuthSession(jsonEncode(session.toJson()));
+        } catch (_) {}
+      }
       _trace('signedIn',
-          'persisted_check stored=${session != null}; '
-          'hasRefresh=${session?.refreshToken != null && (session!.refreshToken?.isNotEmpty ?? false)}');
+          '${RenderLog.authStorageInfo()}; '
+          'mem=${session != null ? 'yes' : 'no'}; '
+          'hasRefresh=${session?.refreshToken != null && (session!.refreshToken?.isNotEmpty ?? false)}; '
+          'build=${RenderLog.buildHash}; change=59');
       final user = session?.user ?? Supabase.instance.client.auth.currentUser;
       if (user != null) {
         RenderLog.write('auth_email', user.email ?? 'unknown');

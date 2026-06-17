@@ -7413,6 +7413,8 @@ class _SupCardMultiImportDialogState extends State<_SupCardMultiImportDialog> {
 
   Future<void> _processAll() async {
     final total = widget.files.length;
+    // Collect one raw result per image; merge into a single supplier at the end.
+    final perImage = <_MultiExtractedSup>[];
     for (int i = 0; i < total; i++) {
       if (!mounted) return;
       setState(() => _progressText = 'Processing image ${i + 1} of $total…');
@@ -7436,7 +7438,6 @@ class _SupCardMultiImportDialogState extends State<_SupCardMultiImportDialog> {
           final dec = jsonDecode(jm.group(0)!) as Map<String, dynamic>;
           String sv(String k) => (dec[k] as String? ?? '').trim();
           final rawCos = dec['companies'] as List<dynamic>? ?? [];
-          // Store verbatim seen text — no resolution against corpus
           final companies = rawCos.map((e) {
             String seen, conf;
             if (e is Map<String, dynamic>) {
@@ -7449,7 +7450,7 @@ class _SupCardMultiImportDialogState extends State<_SupCardMultiImportDialog> {
             if (seen.isEmpty) return null;
             return (seen: seen, confidence: conf, matched: null as String?);
           }).whereType<({String seen, String confidence, String? matched})>().toList();
-          _extracted.add(_MultiExtractedSup(
+          perImage.add(_MultiExtractedSup(
             name: sv('supplier_name'), address: sv('address'), city: sv('city'),
             phone: sv('phone'), whatsapp: sv('whatsapp'), email: sv('email'),
             code: sv('supplier_code'), companies: companies,
@@ -7460,15 +7461,73 @@ class _SupCardMultiImportDialogState extends State<_SupCardMultiImportDialog> {
       }
     }
     if (!mounted) return;
-    if (_extracted.isEmpty) {
+    if (perImage.isEmpty) {
       setState(() => _error = 'Could not extract any supplier data from the selected images.');
       return;
     }
+
+    // CHANGE #66: merge ALL images into ONE supplier (front+back / multi-page card).
+    // name = first non-empty name (front card); contact = from the image with a name,
+    // fallback to whichever image has it; companies = pool from all images, deduped.
+    RenderLog.write('c66_ocr_images_count', perImage.length.toString());
+
+    // Pick the "anchor" image: prefer the one with a non-empty name.
+    final anchor = perImage.firstWhere((s) => s.name.isNotEmpty,
+        orElse: () => perImage.first);
+
+    // Merge distinct phones (comma-sep strings → split → dedup → rejoin).
+    Set<String> _splitPhone(String p) =>
+        p.split(RegExp(r'[,;/]')).map((s) => s.trim()).where((s) => s.isNotEmpty).toSet();
+    final allPhones = <String>{};
+    final allWhatsapp = <String>{};
+    for (final s in perImage) {
+      allPhones.addAll(_splitPhone(s.phone));
+      allWhatsapp.addAll(_splitPhone(s.whatsapp));
+    }
+
+    // Pool companies from all images; deduplicate case-insensitively by seen text.
+    // On dupes, keep highest confidence (high > medium > low).
+    int _confRank(String c) => c == 'high' ? 2 : c == 'medium' ? 1 : 0;
+    final seenMap = <String, ({String seen, String confidence, String? matched})>{};
+    for (final s in perImage) {
+      for (final co in s.companies) {
+        final key = co.seen.toLowerCase().trim();
+        final existing = seenMap[key];
+        if (existing == null || _confRank(co.confidence) > _confRank(existing.confidence)) {
+          seenMap[key] = co;
+        }
+      }
+    }
+    final pooledCompanies = seenMap.values.toList();
+
+    final merged = _MultiExtractedSup(
+      name: anchor.name,
+      address: anchor.address.isNotEmpty ? anchor.address :
+          perImage.firstWhere((s) => s.address.isNotEmpty, orElse: () => anchor).address,
+      city: anchor.city.isNotEmpty ? anchor.city :
+          perImage.firstWhere((s) => s.city.isNotEmpty, orElse: () => anchor).city,
+      phone: allPhones.join(', '),
+      whatsapp: allWhatsapp.join(', '),
+      email: anchor.email.isNotEmpty ? anchor.email :
+          perImage.firstWhere((s) => s.email.isNotEmpty, orElse: () => anchor).email,
+      code: anchor.code.isNotEmpty ? anchor.code :
+          perImage.firstWhere((s) => s.code.isNotEmpty, orElse: () => anchor).code,
+      companies: pooledCompanies,
+    );
+
+    RenderLog.write('c66_merged_supplier_name', merged.name.isNotEmpty ? merged.name : '(empty)');
+    RenderLog.write('c66_pooled_company_count', pooledCompanies.length.toString());
+
+    _extracted.add(merged);
+    RenderLog.write('c66_review_supplier_count', _extracted.length.toString());
+
     setState(() => _step = _MultiStep.review);
   }
 
   Future<void> _doImport() async {
-    final toImport = _extracted.where((s) => s.selected && s.name.isNotEmpty).toList();
+    // CHANGE #66: one import = one supplier. Allow import even if name is empty
+    // (user may have only a back-of-card scan; they can rename after import).
+    final toImport = _extracted.where((s) => s.selected).toList();
     if (toImport.isEmpty) {
       showToast(context, 'No suppliers selected to import', isError: true);
       return;
@@ -7556,7 +7615,7 @@ class _SupCardMultiImportDialogState extends State<_SupCardMultiImportDialog> {
     }
 
     // Review step
-    final selected = _extracted.where((s) => s.selected && s.name.isNotEmpty).length;
+    final selected = _extracted.where((s) => s.selected).length;
     return Dialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
@@ -7570,7 +7629,7 @@ class _SupCardMultiImportDialogState extends State<_SupCardMultiImportDialog> {
                 const Text('Review Extracted Suppliers',
                     style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
                 const SizedBox(height: 2),
-                Text('${widget.files.length} image${widget.files.length == 1 ? '' : 's'} · ${_extracted.length} supplier${_extracted.length == 1 ? '' : 's'} found',
+                Text('${widget.files.length} image${widget.files.length == 1 ? '' : 's'} · 1 supplier (all pages merged)',
                     style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
               ])),
               IconButton(icon: const Icon(Icons.close, size: 20), onPressed: () => Navigator.of(context).pop(),

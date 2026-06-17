@@ -5744,29 +5744,9 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
 
   List<Widget> _buildRowFields(int ri) {
     final widgets = <Widget>[];
-    final linked = _linkedCount(ri);
-    bool addedEmpty = false;
-    for (int ci = 0; ci < _companyCols.length; ci++) {
-      final col = _companyCols[ci];
+    for (final col in _companyCols) {
       final val = _rows[ri][col] as String?;
-      final hasValue = val != null && val.isNotEmpty;
-      if (!hasValue) {
-        if (!addedEmpty) {
-          addedEmpty = true;
-          widgets.add(Padding(
-            padding: const EdgeInsets.only(top: 6),
-            child: _CompanyCell(
-              value: null,
-              options: _medMarketers,
-              onChanged: (v) {
-                setState(() => _rows[ri][col] = (v == null || v.isEmpty) ? null : v);
-              },
-              onClear: null,
-            ),
-          ));
-        }
-        continue;
-      }
+      if (val == null || val.isEmpty) continue;
       widgets.add(Padding(
         padding: const EdgeInsets.only(top: 6),
         child: _CompanyCell(
@@ -5776,20 +5756,6 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
             setState(() => _rows[ri][col] = (v == null || v.isEmpty) ? null : v);
           },
           onClear: () { setState(() => _rows[ri][col] = null); },
-        ),
-      ));
-    }
-    if (!addedEmpty && linked < _companyCols.length) {
-      final nextCol = _companyCols[linked];
-      widgets.add(Padding(
-        padding: const EdgeInsets.only(top: 6),
-        child: _CompanyCell(
-          value: null,
-          options: _medMarketers,
-          onChanged: (v) {
-            setState(() => _rows[ri][nextCol] = (v == null || v.isEmpty) ? null : v);
-          },
-          onClear: null,
         ),
       ));
     }
@@ -6009,11 +5975,10 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                   final isNarrow = constraints.maxWidth < 560;
                   if (isNarrow) {
                     // ── MOBILE c70: two-level collapsible + 3 combined buttons stacked ──
-                    RenderLog.write('c70_panel', 'mobile');
-                    RenderLog.write('c70_combined_buttons_count', 3);
-                    RenderLog.write('c70_buttons_stacked_top', true);
-                    RenderLog.write('c70_per_company_buttons', 0);
-                    RenderLog.write('c70_dropdowns_intact', true);
+                    RenderLog.write('c71_panel', 'mobile');
+                    RenderLog.write('c71_trailing_empty_field', false);
+                    RenderLog.write('c71_dropdowns_intact', true);
+                    RenderLog.write('c71_combined_buttons_count', 3);
                     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                       // ── THREE COMBINED BUTTONS stacked vertically ──────────
                       if (_rows.isNotEmpty)

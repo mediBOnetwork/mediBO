@@ -91,7 +91,7 @@ class AuthNotifier extends ChangeNotifier {
       _trace('boot',
           '${RenderLog.authStorageInfo()}; '
           'getSession=yes; mem=yes; initEvent=sync; gate=in; '
-          'waitedMs=$waitedMs; flow=pkce; build=${RenderLog.buildHash}; change=64');
+          'waitedMs=$waitedMs; flow=pkce; build=${RenderLog.buildHash}; change=65');
       RenderLog.write('auth55_restore',
           'initialSession user=${user.email ?? 'null'}; logged_in=true; from=restored_session');
       try {
@@ -133,7 +133,7 @@ class AuthNotifier extends ChangeNotifier {
             'mem=${user != null ? 'yes' : 'no'}; '
             'initEvent=initialSession; gate=$gate; '
             'waitedMs=$waitedMs; flow=pkce; '
-            'build=${RenderLog.buildHash}; change=64');
+            'build=${RenderLog.buildHash}; change=65');
 
         if (user != null) {
           RenderLog.write('auth_email', user.email ?? 'unknown');
@@ -179,7 +179,7 @@ class AuthNotifier extends ChangeNotifier {
           '${RenderLog.authStorageInfo()}; '
           'mem=${session != null ? 'yes' : 'no'}; '
           'hasRefresh=${session?.refreshToken != null && (session!.refreshToken?.isNotEmpty ?? false)}; '
-          'build=${RenderLog.buildHash}; change=64');
+          'build=${RenderLog.buildHash}; change=65');
       // Selftest hook: write selftest_login trace here, after SDK has persisted the session.
       final selftestEm = pendingSelftestEmail;
       if (selftestEm != null) {
@@ -192,7 +192,7 @@ class AuthNotifier extends ChangeNotifier {
               '${RenderLog.authStorageInfo()}; '
               'flow=pkce; '
               'getSession=${curSession != null ? 'yes' : 'no'}; '
-              'build=${RenderLog.buildHash}; change=64',
+              'build=${RenderLog.buildHash}; change=65',
         // ignore: unnecessary_lambdas
         }).then((_) {}).catchError((_) {});
       }
@@ -223,28 +223,52 @@ class AuthNotifier extends ChangeNotifier {
         notifyListeners();
       }
     } else if (state.event == AuthChangeEvent.signedOut) {
-      // Guard: if we confirmed a valid session at boot and this is NOT an explicit
-      // user-triggered signOut, treat as spurious (SDK fires signedOut for transient
-      // token-refresh failures on Google PKCE sessions). Leave session intact.
-      final spurious = _bootHadSession && !_explicitSignOut;
       final storageInfo = RenderLog.authStorageInfo();
-      if (spurious) {
+      _bootHadSession = false;
+
+      if (_explicitSignOut) {
+        // Real user-triggered logout: clear state immediately.
+        _explicitSignOut = false;
         _trace('signedOut',
-            'reason=spurious_boot_sdk_event; caller=user_state:signedOut_guard; '
+            'reason=explicit; caller=user_state:signedOut_handler; '
             'getSessionBefore=${Supabase.instance.client.auth.currentSession != null ? 'yes' : 'no'}; '
-            'trigger=boot; $storageInfo; '
-            'build=${RenderLog.buildHash}; change=64');
-        // Reset flag so a subsequent real signedOut (user action) is not suppressed.
-        _bootHadSession = false;
+            'explicit=true; $storageInfo; '
+            'build=${RenderLog.buildHash}; change=65');
+        _profile = null;
+        _needsProfile = false;
+        _profileLoading = false;
+        _isAdmin = false;
+        _isSuperAdmin = false;
+        _isSupplier = false;
+        _supplierName = null;
+        _supplierId = null;
+        _supplierStatus = null;
+        _profileChannel?.unsubscribe();
+        _profileChannel = null;
+        RenderLog.write('auth_email', 'signed_out');
+        RenderLog.write('auth_role', 'none');
+        notifyListeners();
         return;
       }
+
+      // SDK-originated signedOut (e.g. bad_code_verifier from double PKCE exchange,
+      // or other transient errors). Wait 300ms then re-check: if a valid session
+      // exists, ignore this event entirely. Only clear state if truly no session.
+      await Future.delayed(const Duration(milliseconds: 300));
+      final session = Supabase.instance.client.auth.currentSession;
+      if (session != null) {
+        _trace('signedOut',
+            'reason=ignored_sdk_transient_session_present; caller=user_state:signedOut_handler; '
+            'getSessionBefore=yes; explicit=false; $storageInfo; '
+            'build=${RenderLog.buildHash}; change=65');
+        return;
+      }
+      // No session after delay: SDK confirmed no active session — treat as real.
       _trace('signedOut',
-          'reason=explicit_or_sdk_invalid; caller=user_state:signedOut_handler; '
-          'getSessionBefore=${Supabase.instance.client.auth.currentSession != null ? 'yes' : 'no'}; '
-          'explicit=$_explicitSignOut; $storageInfo; '
-          'build=${RenderLog.buildHash}; change=64');
+          'reason=sdk_confirmed_no_session; caller=user_state:signedOut_handler; '
+          'getSessionBefore=no; explicit=false; $storageInfo; '
+          'build=${RenderLog.buildHash}; change=65');
       _explicitSignOut = false;
-      _bootHadSession = false;
       _profile = null;
       _needsProfile = false;
       _profileLoading = false;

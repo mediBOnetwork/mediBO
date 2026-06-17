@@ -54,6 +54,22 @@ void main() {
       try { RenderLog.write('boot_error', 'supabase_init_failed'); } catch (_) {}
     }
 
+    // One-shot URL cleanup: strip ?code= / #access_token= immediately after SDK processes them.
+    // Prevents browser session-restore from re-presenting the OAuth callback URL on reopen,
+    // which would trigger a second PKCE exchange (400 bad_code_verifier) → spurious signedOut.
+    try {
+      final href = html.window.location.href;
+      final uri = Uri.parse(href);
+      final hasCode = uri.queryParameters.containsKey('code');
+      final hasFragment = uri.fragment.contains('access_token=') ||
+          uri.fragment.contains('refresh_token=') ||
+          uri.fragment.contains('error=');
+      if (hasCode || hasFragment) {
+        html.window.history.replaceState(null, '', '/');
+        RenderLog.write('auth56_url_stripped', 'main_init; hadCode=$hasCode; hadFragment=$hasFragment');
+      }
+    } catch (_) {}
+
     // Remove stale sv-typo key (sb-svojhmarmaijkshsbeih-auth-token) if left over from old builds.
     try {
       html.window.localStorage.remove('sb-svojhmarmaijkshsbeih-auth-token');

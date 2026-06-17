@@ -40,9 +40,10 @@ class RenderLog {
           .where((k) => k.contains('auth-token') || k.contains('auth.token'))
           .toList();
       final lskeys = lsKeys.isEmpty ? 'none' : lsKeys.join(',');
-      const durableKey = 'flutter.sb-swojhmarmaijkshsbeih-auth-token';
+      const durableKeyDirect = 'sb-swojhmarmaijkshsbeih-auth-token';
+      const durableKeyShared = 'flutter.sb-swojhmarmaijkshsbeih-auth-token';
       const cvKeyName = 'flutter.supabase.auth.token-code-verifier';
-      final durablePresent = ls.keys.any((k) => k == durableKey);
+      final durablePresent = ls.keys.any((k) => k == durableKeyDirect || k == durableKeyShared);
       final cvPresent = ls.keys.any((k) => k == cvKeyName);
       return 'lskeys=$lskeys; durableKey=${durablePresent ? 'present' : 'absent'}; cvKey=${cvPresent ? 'present' : 'absent'}';
     } catch (_) {

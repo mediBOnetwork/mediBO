@@ -79,8 +79,9 @@ void main() {
           } catch (_) {}
           final session = Supabase.instance.client.auth.currentSession;
           final ls = html.window.localStorage;
-          final durableOk = ls.keys.any(
-              (k) => k == 'flutter.sb-swojhmarmaijkshsbeih-auth-token');
+          final durableOk = ls.keys.any((k) =>
+              k == 'sb-swojhmarmaijkshsbeih-auth-token' ||
+              k == 'flutter.sb-swojhmarmaijkshsbeih-auth-token');
           final cvOk = ls.keys.any(
               (k) => k == 'flutter.supabase.auth.token-code-verifier');
           Supabase.instance.client.rpc('log_auth_debug', params: {

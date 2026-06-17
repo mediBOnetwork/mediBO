@@ -5876,13 +5876,14 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
 
   @override
   Widget build(BuildContext context) {
+    final isMobileWidth = MediaQuery.of(context).size.width < 560;
     // ── Render-log instrumentation ──────────────────────────────────────────
     if (!_loading) {
       RenderLog.write('screen', 'supplier_companies');
       RenderLog.write('supplier', widget.supplierName);
       RenderLog.write('company_rows', _rows.length);
-      RenderLog.write('spn_buttons', 0); // SPN moved to supplier header row
-      RenderLog.write('map_buttons', 2); // Map by AI + Map Manually always rendered
+      RenderLog.write('spn_buttons', 0);
+      RenderLog.write('map_buttons', 2);
       RenderLog.write('save_button', _mapped ? 1 : 0);
     }
     // ───────────────────────────────────────────────────────────────────────
@@ -5902,7 +5903,7 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                   const Text("Supplier's Companies",
                       style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF374151))),
                   const Spacer(),
-                  if (_rows.isNotEmpty) ...[
+                  if (_rows.isNotEmpty && !isMobileWidth) ...[
                     if (_mapped) ...[
                       // Fallback: show only when AI left flagged rows
                       if (_needsReview > 0)
@@ -6007,21 +6008,85 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                 LayoutBuilder(builder: (ctx, constraints) {
                   final isNarrow = constraints.maxWidth < 560;
                   if (isNarrow) {
-                    // ── MOBILE c69: two-level collapsible ─────────────────────
-                    // Compute max fields for any company (linked + 1 add slot)
-                    int maxFields = 0;
-                    for (int ri = 0; ri < _rows.length; ri++) {
-                      final lc = _linkedCount(ri) + 1;
-                      if (lc > maxFields) maxFields = lc;
-                    }
-                    RenderLog.write('c69_panel', 'mobile_2level');
-                    RenderLog.write('c69_master_toggle_present', true);
-                    RenderLog.write('c69_companies_rendered', _rows.length);
-                    RenderLog.write('c69_max_fields_any_company', maxFields);
-                    RenderLog.write('c69_ai_save_visible', _expandedRows.isNotEmpty);
-                    RenderLog.write('c69_collapsed_after_save', _c69CollapsedAfterSave);
-                    RenderLog.write('c69_expand_all_works', true);
+                    // ── MOBILE c70: two-level collapsible + 3 combined buttons stacked ──
+                    RenderLog.write('c70_panel', 'mobile');
+                    RenderLog.write('c70_combined_buttons_count', 3);
+                    RenderLog.write('c70_buttons_stacked_top', true);
+                    RenderLog.write('c70_per_company_buttons', 0);
+                    RenderLog.write('c70_dropdowns_intact', true);
                     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      // ── THREE COMBINED BUTTONS stacked vertically ──────────
+                      if (_rows.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(14, 8, 14, 4),
+                          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                            if (_mapped) ...[
+                              if (_needsReview > 0)
+                                TextButton.icon(
+                                  onPressed: _mappingMode != null ? null : _matchManuallyFallback,
+                                  icon: _mappingMode == 'fallback'
+                                      ? const SizedBox(width: 13, height: 13, child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF6B7280)))
+                                      : const Icon(Icons.tune, size: 15),
+                                  label: Text(_mappingMode == 'fallback' ? 'Matching…' : 'Match Manually',
+                                      style: const TextStyle(fontSize: 12)),
+                                  style: TextButton.styleFrom(
+                                      foregroundColor: const Color(0xFF6B7280),
+                                      visualDensity: VisualDensity.compact,
+                                      alignment: Alignment.centerLeft),
+                                ),
+                              TextButton.icon(
+                                onPressed: _mappingMode != null ? null : _saveMatches,
+                                icon: _mappingMode == 'save'
+                                    ? const SizedBox(width: 13, height: 13, child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF1B7A43)))
+                                    : const Icon(Icons.save_outlined, size: 15),
+                                label: Text(_mappingMode == 'save' ? 'Saving…' : 'Save',
+                                    style: const TextStyle(fontSize: 12)),
+                                style: TextButton.styleFrom(
+                                    foregroundColor: const Color(0xFF1B7A43),
+                                    visualDensity: VisualDensity.compact,
+                                    alignment: Alignment.centerLeft),
+                              ),
+                            ] else ...[
+                              TextButton.icon(
+                                onPressed: _mappingMode != null ? null : _mapCompaniesManual,
+                                icon: _mappingMode == 'manual'
+                                    ? const SizedBox(width: 13, height: 13, child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF6B7280)))
+                                    : const Icon(Icons.tune, size: 15),
+                                label: Text(_mappingMode == 'manual' ? 'Matching…' : 'Map Companies Manually',
+                                    style: const TextStyle(fontSize: 12)),
+                                style: TextButton.styleFrom(
+                                    foregroundColor: const Color(0xFF6B7280),
+                                    visualDensity: VisualDensity.compact,
+                                    alignment: Alignment.centerLeft),
+                              ),
+                              TextButton.icon(
+                                onPressed: _mappingMode != null ? null : _mapCompanies,
+                                icon: _mappingMode == 'ai'
+                                    ? const SizedBox(width: 13, height: 13, child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF2563EB)))
+                                    : const Icon(Icons.auto_awesome, size: 15),
+                                label: Text(_mappingMode == 'ai' ? 'Matching…' : 'Map Companies by AI',
+                                    style: const TextStyle(fontSize: 12)),
+                                style: TextButton.styleFrom(
+                                    foregroundColor: const Color(0xFF2563EB),
+                                    visualDensity: VisualDensity.compact,
+                                    alignment: Alignment.centerLeft),
+                              ),
+                              TextButton.icon(
+                                onPressed: _mappingMode != null ? null : _saveMatches,
+                                icon: _mappingMode == 'save'
+                                    ? const SizedBox(width: 13, height: 13, child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF1B7A43)))
+                                    : const Icon(Icons.save_outlined, size: 15),
+                                label: Text(_mappingMode == 'save' ? 'Saving…' : 'Save',
+                                    style: const TextStyle(fontSize: 12)),
+                                style: TextButton.styleFrom(
+                                    foregroundColor: const Color(0xFF1B7A43),
+                                    visualDensity: VisualDensity.compact,
+                                    alignment: Alignment.centerLeft),
+                              ),
+                            ],
+                          ]),
+                        ),
+                      const Divider(height: 1, color: Color(0xFFBFDBFE)),
                       // ── LEVEL 1: Master toggle ────────────────────────────
                       InkWell(
                         onTap: () {
@@ -6058,10 +6123,8 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                           final isExpanded = _expandedRows.contains(ri);
                           final linked = _linkedCount(ri);
                           final isFlagged = _flaggedRows.contains(ri);
-                          final rowMode = _rowMappingMode[ri];
                           final scName = _rows[ri]['supplier_company'] as String? ?? '—';
                           return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                            // Collapsed header (tap to expand/collapse)
                             InkWell(
                               onTap: () {
                                 setState(() {
@@ -6090,9 +6153,7 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                                             color: Color(0xFF111827)),
                                         children: [
                                           TextSpan(
-                                            text: linked > 0
-                                                ? ' · $linked linked'
-                                                : ' · not mapped',
+                                            text: linked > 0 ? ' · $linked linked' : ' · not mapped',
                                             style: TextStyle(
                                               fontSize: 11,
                                               fontWeight: FontWeight.w400,
@@ -6110,58 +6171,14 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                                 ]),
                               ),
                             ),
-                            // Expanded body
-                            if (isExpanded) ...[
+                            // Expanded body: only linked fields, no per-company buttons
+                            if (isExpanded)
                               Container(
                                 color: const Color(0xFFF9FAFB),
-                                padding: const EdgeInsets.fromLTRB(14, 8, 14, 12),
-                                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                                  // TOP: [Map by AI] [Save] side by side
-                                  Row(children: [
-                                    Expanded(
-                                      child: OutlinedButton.icon(
-                                        onPressed: rowMode != null ? null : () => _mapRowAi(ri),
-                                        icon: rowMode == 'ai'
-                                            ? const SizedBox(width: 13, height: 13,
-                                                child: CircularProgressIndicator(strokeWidth: 1.5,
-                                                    color: Color(0xFF2563EB)))
-                                            : const Icon(Icons.auto_awesome, size: 14),
-                                        label: Text(rowMode == 'ai' ? 'Matching…' : 'Map by AI',
-                                          style: const TextStyle(fontSize: 12)),
-                                        style: OutlinedButton.styleFrom(
-                                          foregroundColor: const Color(0xFF2563EB),
-                                          side: const BorderSide(color: Color(0xFF93C5FD)),
-                                          visualDensity: VisualDensity.compact,
-                                          padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 8),
-                                        ),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    Expanded(
-                                      child: OutlinedButton.icon(
-                                        onPressed: rowMode != null ? null : () => _saveRow(ri),
-                                        icon: rowMode == 'save'
-                                            ? const SizedBox(width: 13, height: 13,
-                                                child: CircularProgressIndicator(strokeWidth: 1.5,
-                                                    color: Color(0xFF1B7A43)))
-                                            : const Icon(Icons.save_outlined, size: 14),
-                                        label: Text(rowMode == 'save' ? 'Saving…' : 'Save',
-                                          style: const TextStyle(fontSize: 12)),
-                                        style: OutlinedButton.styleFrom(
-                                          foregroundColor: const Color(0xFF1B7A43),
-                                          side: const BorderSide(color: Color(0xFF6EE7B7)),
-                                          visualDensity: VisualDensity.compact,
-                                          padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 8),
-                                        ),
-                                      ),
-                                    ),
-                                  ]),
-                                  const SizedBox(height: 8),
-                                  // Dynamic fields: linked companies + one empty add slot
-                                  ..._buildRowFields(ri),
-                                ]),
+                                padding: const EdgeInsets.fromLTRB(14, 6, 14, 10),
+                                child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: _buildRowFields(ri)),
                               ),
-                            ],
                           ]);
                         }),
                         if (ri < _rows.length - 1) const Divider(height: 1, color: Color(0xFFE5E7EB)),

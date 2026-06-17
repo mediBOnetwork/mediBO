@@ -6838,7 +6838,14 @@ class _SupOptField {
 
 // All optional supplier_profiles columns (excludes OCR-filled, points, SPN, system cols).
 // Columns OCR fills: supplier_name, street_address, city, contact_no, whatsapp_no, email, supplier_code.
-List<_SupOptField> _buildOptionalFields() => [
+List<_SupOptField> _buildSpnFields() => [
+  _SupOptField(column: 'margin',        label: 'Margin'),
+  _SupOptField(column: 'cd_condition',  label: 'CD Condition', options: ['', 'NO CONDITION', '2K+ BILL', '3K+ BILL']),
+  _SupOptField(column: 'behaviour',     label: 'Behaviour'),
+  _SupOptField(column: 'payment_term',  label: 'Payment Term'),
+];
+
+List<_SupOptField> _buildOtherFields() => [
   _SupOptField(column: 'contact_name',   label: 'Contact Name'),
   _SupOptField(column: 'contact_person', label: 'Contact Person'),
   _SupOptField(column: 'phone',          label: 'Phone (alt)'),
@@ -6850,20 +6857,71 @@ List<_SupOptField> _buildOptionalFields() => [
   _SupOptField(column: 'drug_license',   label: 'Drug License'),
   _SupOptField(column: 'dl_1',           label: 'Drug License 1'),
   _SupOptField(column: 'dl_2',           label: 'Drug License 2'),
-  _SupOptField(column: 'payment_term',   label: 'Payment Term'),
-  _SupOptField(column: 'payment_type',   label: 'Payment Type',   options: ['', 'cash', 'credit']),
-  _SupOptField(column: 'cd_condition',   label: 'CD Condition',   options: ['', 'NO CONDITION', '2K+ BILL', '3K+ BILL']),
+  _SupOptField(column: 'payment_type',   label: 'Payment Type', options: ['', 'cash', 'credit']),
   _SupOptField(column: 'store_type',     label: 'Store Type'),
   _SupOptField(column: 'stockist_type',  label: 'Stockist Type'),
   _SupOptField(column: 'range_zone',     label: 'Range / Zone'),
-  _SupOptField(column: 'margin',         label: 'Margin'),
-  _SupOptField(column: 'behaviour',      label: 'Behaviour'),
   _SupOptField(column: 'deal',           label: 'Deal'),
   _SupOptField(column: 'other_contact',  label: 'Other Contact'),
   _SupOptField(column: 'map_link',       label: 'Map Link'),
   _SupOptField(column: 'address',        label: 'Address (alt)'),
   _SupOptField(column: 'notes',          label: 'Notes'),
 ];
+
+// Shared helper: builds the widget list for one set of optional fields.
+List<Widget> _buildOptFieldWidgets(List<_SupOptField> fields, void Function(void Function()) setSt) =>
+    List.generate(fields.length, (i) {
+      final f = fields[i];
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 10),
+        child: f.options != null
+            ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(f.label, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
+                    color: Color(0xFF6B7280), letterSpacing: 0.3)),
+                const SizedBox(height: 4),
+                StatefulBuilder(builder: (ctx, innerSet) => DropdownButtonFormField<String>(
+                  value: f._dropValue,
+                  isExpanded: true,
+                  decoration: InputDecoration(
+                    filled: true, fillColor: const Color(0xFFF5F6F8),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                        borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+                    enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                        borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+                    focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                        borderSide: const BorderSide(color: Color(0xFF1B7A43), width: 1.5)),
+                  ),
+                  items: f.options!.map((v) => DropdownMenuItem(
+                    value: v.isEmpty ? null : v,
+                    child: Text(v.isEmpty ? '— select —' : v,
+                        style: TextStyle(fontSize: 13,
+                            color: v.isEmpty ? const Color(0xFF9CA3AF) : const Color(0xFF111827))),
+                  )).toList(),
+                  onChanged: (v) { innerSet(() => f._dropValue = v); setSt(() {}); },
+                )),
+              ])
+            : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(f.label, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
+                    color: Color(0xFF6B7280), letterSpacing: 0.3)),
+                const SizedBox(height: 4),
+                TextField(
+                  controller: f.ctrl,
+                  style: const TextStyle(fontSize: 13, color: Color(0xFF111827)),
+                  decoration: InputDecoration(
+                    filled: true, fillColor: const Color(0xFFF5F6F8),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                        borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+                    enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                        borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+                    focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                        borderSide: const BorderSide(color: Color(0xFF1B7A43), width: 1.5)),
+                  ),
+                ),
+              ]),
+      );
+    });
 
 class _SupCardImportDialogState extends State<_SupCardImportDialog> {
   _SupCardStep _step = _SupCardStep.reading;
@@ -6882,14 +6940,17 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
   List<_ResolvedCompany> _companies = [];
   final _newCompCtrl = TextEditingController();
 
-  // Optional extra fields
-  late final List<_SupOptField> _optFields;
-  bool _extraExpanded = false;
+  // Optional extra fields — split into SPN points and Other details
+  late final List<_SupOptField> _spnFields;
+  late final List<_SupOptField> _otherFields;
+  bool _spnExpanded = false;
+  bool _otherExpanded = false;
 
   @override
   void initState() {
     super.initState();
-    _optFields = _buildOptionalFields();
+    _spnFields = _buildSpnFields();
+    _otherFields = _buildOtherFields();
     _ocr();
   }
 
@@ -6897,7 +6958,7 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
   void dispose() {
     for (final c in [_nameCtrl,_addrCtrl,_cityCtrl,_phoneCtrl,_waCtrl,_emailCtrl,_codeCtrl,_newCompCtrl]) c.dispose();
     for (final c in _companies) c.dispose();
-    for (final f in _optFields) f.dispose();
+    for (final f in [..._spnFields, ..._otherFields]) f.dispose();
     super.dispose();
   }
 
@@ -6980,6 +7041,12 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
         _codeCtrl.text  = s('supplier_code');
         _companies = companies;
         _step = _SupCardStep.review;
+        RenderLog.write('c66_path', 'form');
+        RenderLog.write('c66_image_count', '1');
+        RenderLog.write('c66_pooled_company_count', companies.length.toString());
+        RenderLog.write('c66_dropdown1_present', 'true');
+        RenderLog.write('c66_dropdown2_present', 'true');
+        RenderLog.write('c66_dropdown2_field_count', _buildOtherFields().length.toString());
       });
     } catch (e) {
       if (mounted) setState(() => _error = e.toString().replaceFirst('Exception: ', ''));
@@ -7010,7 +7077,7 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
       if (_emailCtrl.text.trim().isNotEmpty) rec['email'] = _emailCtrl.text.trim();
       if (_codeCtrl.text.trim().isNotEmpty) rec['supplier_code'] = _codeCtrl.text.trim();
       // Optional extra fields filled by admin
-      for (final f in _optFields) {
+      for (final f in [..._spnFields, ..._otherFields]) {
         final v = f.value;
         if (v.isNotEmpty) rec[f.column] = v;
       }
@@ -7151,56 +7218,44 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
               const SizedBox(height: 4),
               const Divider(color: Color(0xFFE5E7EB)),
               const SizedBox(height: 4),
-              // ── Optional unfilled details ──────────────────────────────────
+              // ── Dropdown 1: SPN points ─────────────────────────────────────
               InkWell(
-                onTap: () => setState(() => _extraExpanded = !_extraExpanded),
+                onTap: () => setState(() => _spnExpanded = !_spnExpanded),
                 borderRadius: BorderRadius.circular(8),
                 child: Padding(
                   padding: const EdgeInsets.symmetric(vertical: 8),
                   child: Row(children: [
-                    const Expanded(child: Text('Other unfilled details (optional)',
+                    const Expanded(child: Text('SPN points (optional)',
                         style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF6B7280)))),
-                    Icon(_extraExpanded ? Icons.expand_less : Icons.expand_more,
+                    Icon(_spnExpanded ? Icons.expand_less : Icons.expand_more,
                         size: 18, color: const Color(0xFF9CA3AF)),
                   ]),
                 ),
               ),
-              if (_extraExpanded) ...[
+              if (_spnExpanded) ...[
                 const SizedBox(height: 4),
-                ...List.generate(_optFields.length, (i) {
-                  final f = _optFields[i];
-                  return Padding(
-                    padding: const EdgeInsets.only(bottom: 10),
-                    child: f.options != null
-                        ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                            Text(f.label, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
-                                color: Color(0xFF6B7280), letterSpacing: 0.3)),
-                            const SizedBox(height: 4),
-                            StatefulBuilder(builder: (ctx, setSt) => DropdownButtonFormField<String>(
-                              value: f._dropValue,
-                              isExpanded: true,
-                              decoration: InputDecoration(
-                                filled: true, fillColor: const Color(0xFFF5F6F8),
-                                contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
-                                    borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
-                                enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
-                                    borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
-                                focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
-                                    borderSide: const BorderSide(color: Color(0xFF1B7A43), width: 1.5)),
-                              ),
-                              items: f.options!.map((v) => DropdownMenuItem(
-                                value: v.isEmpty ? null : v,
-                                child: Text(v.isEmpty ? '— select —' : v,
-                                    style: TextStyle(fontSize: 13,
-                                        color: v.isEmpty ? const Color(0xFF9CA3AF) : const Color(0xFF111827))),
-                              )).toList(),
-                              onChanged: (v) => setSt(() => f._dropValue = v),
-                            )),
-                          ])
-                        : _field(f.label, f.ctrl),
-                  );
-                }),
+                ..._buildOptFieldWidgets(_spnFields, setState),
+                const SizedBox(height: 4),
+              ],
+              const Divider(color: Color(0xFFE5E7EB)),
+              const SizedBox(height: 4),
+              // ── Dropdown 2: Other details ──────────────────────────────────
+              InkWell(
+                onTap: () => setState(() => _otherExpanded = !_otherExpanded),
+                borderRadius: BorderRadius.circular(8),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: Row(children: [
+                    const Expanded(child: Text('Other details (optional)',
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF6B7280)))),
+                    Icon(_otherExpanded ? Icons.expand_less : Icons.expand_more,
+                        size: 18, color: const Color(0xFF9CA3AF)),
+                  ]),
+                ),
+              ),
+              if (_otherExpanded) ...[
+                const SizedBox(height: 4),
+                ..._buildOptFieldWidgets(_otherFields, setState),
                 const SizedBox(height: 4),
               ],
               const Divider(color: Color(0xFFE5E7EB)),
@@ -7367,7 +7422,23 @@ class _SupCardMultiImportDialogState extends State<_SupCardMultiImportDialog> {
   _MultiStep _step = _MultiStep.processing;
   String _progressText = '';
   String? _error;
-  final List<_MultiExtractedSup> _extracted = [];
+
+  // Same editable fields as single-image form, populated from merged OCR
+  final _nameCtrl  = TextEditingController();
+  final _addrCtrl  = TextEditingController();
+  final _cityCtrl  = TextEditingController();
+  final _phoneCtrl = TextEditingController();
+  final _waCtrl    = TextEditingController();
+  final _emailCtrl = TextEditingController();
+  final _codeCtrl  = TextEditingController();
+  final _newCompCtrl = TextEditingController();
+
+  List<_ResolvedCompany> _companies = [];
+
+  late final List<_SupOptField> _spnFields;
+  late final List<_SupOptField> _otherFields;
+  bool _spnExpanded = false;
+  bool _otherExpanded = false;
 
   static const _prompt =
       'This is a pharma supplier business card or company-grid image.\n'
@@ -7394,7 +7465,17 @@ class _SupCardMultiImportDialogState extends State<_SupCardMultiImportDialog> {
   @override
   void initState() {
     super.initState();
+    _spnFields = _buildSpnFields();
+    _otherFields = _buildOtherFields();
     _processAll();
+  }
+
+  @override
+  void dispose() {
+    for (final c in [_nameCtrl,_addrCtrl,_cityCtrl,_phoneCtrl,_waCtrl,_emailCtrl,_codeCtrl,_newCompCtrl]) c.dispose();
+    for (final c in _companies) c.dispose();
+    for (final f in [..._spnFields, ..._otherFields]) f.dispose();
+    super.dispose();
   }
 
   String _mimeFor(String ext) => switch (ext) {
@@ -7413,8 +7494,12 @@ class _SupCardMultiImportDialogState extends State<_SupCardMultiImportDialog> {
 
   Future<void> _processAll() async {
     final total = widget.files.length;
-    // Collect one raw result per image; merge into a single supplier at the end.
-    final perImage = <_MultiExtractedSup>[];
+    final perImage = <({
+      String name, String address, String city, String phone, String whatsapp,
+      String email, String code,
+      List<({String seen, String confidence})> companies,
+    })>[];
+
     for (int i = 0; i < total; i++) {
       if (!mounted) return;
       setState(() => _progressText = 'Processing image ${i + 1} of $total…');
@@ -7438,140 +7523,114 @@ class _SupCardMultiImportDialogState extends State<_SupCardMultiImportDialog> {
           final dec = jsonDecode(jm.group(0)!) as Map<String, dynamic>;
           String sv(String k) => (dec[k] as String? ?? '').trim();
           final rawCos = dec['companies'] as List<dynamic>? ?? [];
-          final companies = rawCos.map((e) {
+          final cos = rawCos.map((e) {
             String seen, conf;
             if (e is Map<String, dynamic>) {
               seen = (e['seen'] as String? ?? '').trim();
               conf = (e['confidence'] as String? ?? 'medium').trim();
-            } else {
-              seen = e.toString().trim();
-              conf = 'medium';
-            }
+            } else { seen = e.toString().trim(); conf = 'medium'; }
             if (seen.isEmpty) return null;
-            return (seen: seen, confidence: conf, matched: null as String?);
-          }).whereType<({String seen, String confidence, String? matched})>().toList();
-          perImage.add(_MultiExtractedSup(
+            return (seen: seen, confidence: conf);
+          }).whereType<({String seen, String confidence})>().toList();
+          perImage.add((
             name: sv('supplier_name'), address: sv('address'), city: sv('city'),
             phone: sv('phone'), whatsapp: sv('whatsapp'), email: sv('email'),
-            code: sv('supplier_code'), companies: companies,
+            code: sv('supplier_code'), companies: cos,
           ));
         }
-      } catch (e) {
-        // Skip failed images but continue
-      }
+      } catch (_) {}
     }
+
     if (!mounted) return;
     if (perImage.isEmpty) {
       setState(() => _error = 'Could not extract any supplier data from the selected images.');
       return;
     }
 
-    // CHANGE #66: merge ALL images into ONE supplier (front+back / multi-page card).
-    // name = first non-empty name (front card); contact = from the image with a name,
-    // fallback to whichever image has it; companies = pool from all images, deduped.
-    RenderLog.write('c66_ocr_images_count', perImage.length.toString());
+    // Merge all images into ONE supplier (front+back/multi-page card).
+    final anchor = perImage.firstWhere((s) => s.name.isNotEmpty, orElse: () => perImage.first);
 
-    // Pick the "anchor" image: prefer the one with a non-empty name.
-    final anchor = perImage.firstWhere((s) => s.name.isNotEmpty,
-        orElse: () => perImage.first);
-
-    // Merge distinct phones (comma-sep strings → split → dedup → rejoin).
-    Set<String> _splitPhone(String p) =>
+    Set<String> splitPhone(String p) =>
         p.split(RegExp(r'[,;/]')).map((s) => s.trim()).where((s) => s.isNotEmpty).toSet();
     final allPhones = <String>{};
     final allWhatsapp = <String>{};
     for (final s in perImage) {
-      allPhones.addAll(_splitPhone(s.phone));
-      allWhatsapp.addAll(_splitPhone(s.whatsapp));
+      allPhones.addAll(splitPhone(s.phone));
+      allWhatsapp.addAll(splitPhone(s.whatsapp));
     }
 
-    // Pool companies from all images; deduplicate case-insensitively by seen text.
-    // On dupes, keep highest confidence (high > medium > low).
-    int _confRank(String c) => c == 'high' ? 2 : c == 'medium' ? 1 : 0;
-    final seenMap = <String, ({String seen, String confidence, String? matched})>{};
+    int confRank(String c) => c == 'high' ? 2 : c == 'medium' ? 1 : 0;
+    final seenMap = <String, ({String seen, String confidence})>{};
     for (final s in perImage) {
       for (final co in s.companies) {
         final key = co.seen.toLowerCase().trim();
-        final existing = seenMap[key];
-        if (existing == null || _confRank(co.confidence) > _confRank(existing.confidence)) {
-          seenMap[key] = co;
-        }
+        final ex = seenMap[key];
+        if (ex == null || confRank(co.confidence) > confRank(ex.confidence)) seenMap[key] = co;
       }
     }
-    final pooledCompanies = seenMap.values.toList();
+    final pooled = seenMap.values.toList();
 
-    final merged = _MultiExtractedSup(
-      name: anchor.name,
-      address: anchor.address.isNotEmpty ? anchor.address :
-          perImage.firstWhere((s) => s.address.isNotEmpty, orElse: () => anchor).address,
-      city: anchor.city.isNotEmpty ? anchor.city :
-          perImage.firstWhere((s) => s.city.isNotEmpty, orElse: () => anchor).city,
-      phone: allPhones.join(', '),
-      whatsapp: allWhatsapp.join(', '),
-      email: anchor.email.isNotEmpty ? anchor.email :
-          perImage.firstWhere((s) => s.email.isNotEmpty, orElse: () => anchor).email,
-      code: anchor.code.isNotEmpty ? anchor.code :
-          perImage.firstWhere((s) => s.code.isNotEmpty, orElse: () => anchor).code,
-      companies: pooledCompanies,
-    );
+    // Populate form controllers
+    _nameCtrl.text  = anchor.name;
+    _addrCtrl.text  = anchor.address.isNotEmpty ? anchor.address :
+        perImage.firstWhere((s) => s.address.isNotEmpty, orElse: () => anchor).address;
+    _cityCtrl.text  = anchor.city.isNotEmpty ? anchor.city :
+        perImage.firstWhere((s) => s.city.isNotEmpty, orElse: () => anchor).city;
+    _phoneCtrl.text = allPhones.join(', ');
+    _waCtrl.text    = allWhatsapp.join(', ');
+    _emailCtrl.text = anchor.email.isNotEmpty ? anchor.email :
+        perImage.firstWhere((s) => s.email.isNotEmpty, orElse: () => anchor).email;
+    _codeCtrl.text  = anchor.code.isNotEmpty ? anchor.code :
+        perImage.firstWhere((s) => s.code.isNotEmpty, orElse: () => anchor).code;
+    _companies = pooled.map((co) => _ResolvedCompany(seen: co.seen, confidence: co.confidence)).toList();
 
-    RenderLog.write('c66_merged_supplier_name', merged.name.isNotEmpty ? merged.name : '(empty)');
-    RenderLog.write('c66_pooled_company_count', pooledCompanies.length.toString());
+    RenderLog.write('c66_image_count', total.toString());
+    RenderLog.write('c66_pooled_company_count', pooled.length.toString());
+    RenderLog.write('c66_path', 'form');
+    RenderLog.write('c66_dropdown1_present', 'true');
+    RenderLog.write('c66_dropdown2_present', 'true');
+    RenderLog.write('c66_dropdown2_field_count', _otherFields.length.toString());
 
-    _extracted.add(merged);
-    RenderLog.write('c66_review_supplier_count', _extracted.length.toString());
-
-    setState(() => _step = _MultiStep.review);
+    if (mounted) setState(() => _step = _MultiStep.review);
   }
 
   Future<void> _doImport() async {
-    // CHANGE #66: one import = one supplier. Allow import even if name is empty
-    // (user may have only a back-of-card scan; they can rename after import).
-    final toImport = _extracted.where((s) => s.selected).toList();
-    if (toImport.isEmpty) {
-      showToast(context, 'No suppliers selected to import', isError: true);
+    final name = _nameCtrl.text.trim();
+    if (name.isEmpty) {
+      showToast(context, 'Supplier name is required', isError: true);
       return;
     }
     setState(() => _step = _MultiStep.importing);
     try {
       final client = Supabase.instance.client;
-      int imported = 0;
-      for (final sup in toImport) {
-        final rec = <String, dynamic>{
-          'supplier_name': sup.name, 'status': 'Active', 'approved': true, 'is_deleted': false,
-        };
-        if (sup.address.isNotEmpty) rec['street_address'] = sup.address;
-        if (sup.city.isNotEmpty) rec['city'] = sup.city;
-        if (sup.phone.isNotEmpty) rec['contact_no'] = sup.phone;
-        if (sup.whatsapp.isNotEmpty) rec['whatsapp_no'] = sup.whatsapp;
-        if (sup.email.isNotEmpty) rec['email'] = sup.email;
-        if (sup.code.isNotEmpty) rec['supplier_code'] = sup.code;
-        final inserted = await client.from('supplier_profiles').insert(rec).select('id').single();
-        final supplierId = inserted['id'] as String;
-        if (sup.companies.isNotEmpty) {
-          // Upsert verbatim names into company master
-          for (final co in sup.companies) {
-            if (co.seen.isNotEmpty) {
-              try {
-                await client.from('company')
-                    .upsert({'company_name': co.seen}, onConflict: 'company_name');
-              } catch (_) {}
-            }
-          }
-          final scRows = sup.companies
-              .where((co) => co.seen.isNotEmpty)
-              .map((co) => <String, dynamic>{
-                'supplier_id': supplierId, 'supplier_name': sup.name, 'supplier_company': co.seen,
-              }).toList();
-          await client.from('supplier_company').insert(scRows);
-        }
-        imported++;
+      final rec = <String, dynamic>{
+        'supplier_name': name, 'status': 'Active', 'approved': true, 'is_deleted': false,
+      };
+      if (_addrCtrl.text.trim().isNotEmpty) rec['street_address'] = _addrCtrl.text.trim();
+      if (_cityCtrl.text.trim().isNotEmpty) rec['city'] = _cityCtrl.text.trim();
+      if (_phoneCtrl.text.trim().isNotEmpty) rec['contact_no'] = _phoneCtrl.text.trim();
+      if (_waCtrl.text.trim().isNotEmpty) rec['whatsapp_no'] = _waCtrl.text.trim();
+      if (_emailCtrl.text.trim().isNotEmpty) rec['email'] = _emailCtrl.text.trim();
+      if (_codeCtrl.text.trim().isNotEmpty) rec['supplier_code'] = _codeCtrl.text.trim();
+      for (final f in [..._spnFields, ..._otherFields]) {
+        final v = f.value; if (v.isNotEmpty) rec[f.column] = v;
       }
-      RenderLog.write('multi_image_ocr_imported', imported.toString());
+      final inserted = await client.from('supplier_profiles').insert(rec).select('id').single();
+      final supplierId = inserted['id'] as String;
+      final companies = _companies.where((c) => c.canonical.isNotEmpty).toList();
+      if (companies.isNotEmpty) {
+        for (final co in companies) {
+          try { await client.from('company').upsert({'company_name': co.canonical}, onConflict: 'company_name'); } catch (_) {}
+        }
+        await client.from('supplier_company').insert(companies.map((co) => <String, dynamic>{
+          'supplier_id': supplierId, 'supplier_name': name, 'supplier_company': co.canonical,
+        }).toList());
+      }
+      RenderLog.write('multi_image_ocr_imported', '1');
       if (mounted) {
         Navigator.of(context).pop();
         widget.onImported();
-        showToast(context, 'Imported $imported supplier${imported == 1 ? '' : 's'} from ${widget.files.length} image${widget.files.length == 1 ? '' : 's'}', duration: const Duration(seconds: 5));
+        showToast(context, 'Imported $name with ${companies.length} compan${companies.length == 1 ? 'y' : 'ies'} from ${widget.files.length} image${widget.files.length == 1 ? '' : 's'}', duration: const Duration(seconds: 5));
       }
     } catch (e) {
       if (mounted) {
@@ -7580,6 +7639,29 @@ class _SupCardMultiImportDialogState extends State<_SupCardMultiImportDialog> {
       }
     }
   }
+
+  Widget _field(String label, TextEditingController ctrl, {int maxLines = 1}) =>
+      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(label, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
+            color: Color(0xFF6B7280), letterSpacing: 0.3)),
+        const SizedBox(height: 4),
+        TextField(
+          controller: ctrl,
+          maxLines: maxLines,
+          style: const TextStyle(fontSize: 13, color: Color(0xFF111827)),
+          decoration: InputDecoration(
+            filled: true, fillColor: const Color(0xFFF5F6F8),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+            enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+            focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                borderSide: const BorderSide(color: Color(0xFF1B7A43), width: 1.5)),
+          ),
+        ),
+        const SizedBox(height: 10),
+      ]);
 
   @override
   Widget build(BuildContext context) {
@@ -7606,7 +7688,7 @@ class _SupCardMultiImportDialogState extends State<_SupCardMultiImportDialog> {
             const CircularProgressIndicator(color: Color(0xFF1B7A43), strokeWidth: 2),
             const SizedBox(height: 16),
             Text(
-              _step == _MultiStep.processing ? _progressText : 'Importing suppliers…',
+              _step == _MultiStep.processing ? _progressText : 'Importing supplier…',
               textAlign: TextAlign.center,
               style: const TextStyle(fontSize: 14, color: Color(0xFF6B7280)),
             ),
@@ -7614,22 +7696,21 @@ class _SupCardMultiImportDialogState extends State<_SupCardMultiImportDialog> {
       );
     }
 
-    // Review step
-    final selected = _extracted.where((s) => s.selected).length;
+    // Review form — same layout as single-image
     return Dialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
       child: ConstrainedBox(
-        constraints: BoxConstraints(maxWidth: 600, maxHeight: MediaQuery.of(context).size.height * 0.85),
+        constraints: BoxConstraints(maxWidth: 640, maxHeight: MediaQuery.of(context).size.height * 0.9),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(24, 20, 16, 0),
             child: Row(children: [
               Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                const Text('Review Extracted Suppliers',
+                const Text('Import from Image — Review',
                     style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
                 const SizedBox(height: 2),
-                Text('${widget.files.length} image${widget.files.length == 1 ? '' : 's'} · 1 supplier (all pages merged)',
+                Text('${widget.files.length} image${widget.files.length == 1 ? '' : 's'} · all pages merged',
                     style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
               ])),
               IconButton(icon: const Icon(Icons.close, size: 20), onPressed: () => Navigator.of(context).pop(),
@@ -7638,69 +7719,172 @@ class _SupCardMultiImportDialogState extends State<_SupCardMultiImportDialog> {
           ),
           const SizedBox(height: 12),
           const Divider(height: 1, color: Color(0xFFE5E7EB)),
-          Flexible(child: ListView.separated(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            itemCount: _extracted.length,
-            separatorBuilder: (_, __) => const SizedBox(height: 8),
-            itemBuilder: (_, i) {
-              final sup = _extracted[i];
-              return Container(
-                decoration: BoxDecoration(
-                  color: sup.selected ? const Color(0xFFF0FDF4) : const Color(0xFFF9FAFB),
-                  border: Border.all(color: sup.selected ? const Color(0xFF1B7A43) : const Color(0xFFE5E7EB)),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: CheckboxListTile(
-                  value: sup.selected,
-                  onChanged: (v) => setState(() => sup.selected = v ?? false),
-                  activeColor: const Color(0xFF1B7A43),
-                  controlAffinity: ListTileControlAffinity.leading,
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                  title: Text(
-                    sup.name.isNotEmpty ? sup.name : '(No name extracted)',
-                    style: TextStyle(
-                      fontSize: 14, fontWeight: FontWeight.w600,
-                      color: sup.name.isNotEmpty ? const Color(0xFF111827) : const Color(0xFF9CA3AF),
-                    ),
-                  ),
-                  subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    if (sup.city.isNotEmpty || sup.phone.isNotEmpty)
-                      Text(
-                        [if (sup.city.isNotEmpty) sup.city, if (sup.phone.isNotEmpty) sup.phone].join(' · '),
-                        style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
-                      ),
-                    if (sup.companies.isNotEmpty)
-                      Text(
-                        '${sup.companies.length} compan${sup.companies.length == 1 ? 'y' : 'ies'}: ${sup.companies.take(3).map((c) => c.matched ?? c.seen).join(', ')}${sup.companies.length > 3 ? '…' : ''}',
-                        style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
-                      ),
+          Flexible(child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(24, 16, 24, 8),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text('SUPPLIER DETAILS', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700,
+                  color: Color(0xFF6B7280), letterSpacing: 0.5)),
+              const SizedBox(height: 10),
+              _field('Supplier Name *', _nameCtrl),
+              _field('Address', _addrCtrl, maxLines: 2),
+              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Expanded(child: _field('City', _cityCtrl)),
+                const SizedBox(width: 12),
+                Expanded(child: _field('Supplier Code', _codeCtrl)),
+              ]),
+              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Expanded(child: _field('Phone', _phoneCtrl)),
+                const SizedBox(width: 12),
+                Expanded(child: _field('WhatsApp / Mobile', _waCtrl)),
+              ]),
+              _field('Email', _emailCtrl),
+              const SizedBox(height: 4),
+              const Divider(color: Color(0xFFE5E7EB)),
+              const SizedBox(height: 4),
+              // Dropdown 1: SPN points
+              InkWell(
+                onTap: () => setState(() => _spnExpanded = !_spnExpanded),
+                borderRadius: BorderRadius.circular(8),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: Row(children: [
+                    const Expanded(child: Text('SPN points (optional)',
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF6B7280)))),
+                    Icon(_spnExpanded ? Icons.expand_less : Icons.expand_more, size: 18, color: const Color(0xFF9CA3AF)),
                   ]),
                 ),
-              );
-            },
+              ),
+              if (_spnExpanded) ...[
+                const SizedBox(height: 4),
+                ..._buildOptFieldWidgets(_spnFields, setState),
+                const SizedBox(height: 4),
+              ],
+              const Divider(color: Color(0xFFE5E7EB)),
+              const SizedBox(height: 4),
+              // Dropdown 2: Other details
+              InkWell(
+                onTap: () => setState(() => _otherExpanded = !_otherExpanded),
+                borderRadius: BorderRadius.circular(8),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: Row(children: [
+                    const Expanded(child: Text('Other details (optional)',
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF6B7280)))),
+                    Icon(_otherExpanded ? Icons.expand_less : Icons.expand_more, size: 18, color: const Color(0xFF9CA3AF)),
+                  ]),
+                ),
+              ),
+              if (_otherExpanded) ...[
+                const SizedBox(height: 4),
+                ..._buildOptFieldWidgets(_otherFields, setState),
+                const SizedBox(height: 4),
+              ],
+              const Divider(color: Color(0xFFE5E7EB)),
+              const SizedBox(height: 10),
+              Row(children: [
+                const Expanded(child: Text('COMPANY LIST', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700,
+                    color: Color(0xFF6B7280), letterSpacing: 0.5))),
+                Text('${_companies.length} compan${_companies.length == 1 ? 'y' : 'ies'}',
+                    style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
+              ]),
+              const SizedBox(height: 10),
+              if (_companies.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.only(bottom: 8),
+                  child: Text('No companies extracted. Add manually below.',
+                      style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
+                ),
+              ...List.generate(_companies.length, (i) {
+                final co = _companies[i];
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(color: const Color(0xFFE6F4EA), borderRadius: BorderRadius.circular(16)),
+                      child: Text(co.seen, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: Color(0xFF1B7F3B)),
+                          overflow: TextOverflow.ellipsis, maxLines: 1),
+                    ),
+                    const SizedBox(height: 4),
+                    Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+                      Expanded(child: TextField(
+                        controller: co.ctrl,
+                        style: const TextStyle(fontSize: 13, color: Color(0xFF111827)),
+                        decoration: InputDecoration(
+                          filled: true, fillColor: const Color(0xFFF5F6F8),
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                              borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+                          enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                              borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+                          focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                              borderSide: const BorderSide(color: Color(0xFF1B7A43), width: 1.5)),
+                        ),
+                      )),
+                      const SizedBox(width: 12),
+                      IconButton(
+                        icon: const Icon(Icons.remove_circle_outline, size: 18, color: Color(0xFFDC2626)),
+                        onPressed: () => setState(() { _companies[i].dispose(); _companies.removeAt(i); }),
+                        padding: EdgeInsets.zero, constraints: const BoxConstraints(),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                    ]),
+                  ]),
+                );
+              }),
+              const SizedBox(height: 6),
+              Row(children: [
+                Expanded(child: TextField(
+                  controller: _newCompCtrl,
+                  style: const TextStyle(fontSize: 13),
+                  decoration: InputDecoration(
+                    hintText: 'Add company…',
+                    hintStyle: const TextStyle(color: Color(0xFF9CA3AF)),
+                    filled: true, fillColor: const Color(0xFFF5F6F8),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                        borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+                    enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                        borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+                    focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                        borderSide: const BorderSide(color: Color(0xFF1B7A43), width: 1.5)),
+                  ),
+                  onSubmitted: (v) {
+                    final s = v.trim();
+                    if (s.isNotEmpty) setState(() { _companies.add(_ResolvedCompany(seen: s, confidence: 'high')); _newCompCtrl.clear(); });
+                  },
+                )),
+                const SizedBox(width: 6),
+                IconButton(
+                  icon: const Icon(Icons.add_circle_outline, size: 20, color: Color(0xFF1B7A43)),
+                  onPressed: () {
+                    final s = _newCompCtrl.text.trim();
+                    if (s.isNotEmpty) setState(() { _companies.add(_ResolvedCompany(seen: s, confidence: 'high')); _newCompCtrl.clear(); });
+                  },
+                  padding: EdgeInsets.zero, constraints: const BoxConstraints(),
+                ),
+              ]),
+              const SizedBox(height: 16),
+            ]),
           )),
           const Divider(height: 1, color: Color(0xFFE5E7EB)),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-            child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-              Text('$selected of ${_extracted.length} selected',
-                  style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
-              Row(children: [
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('Cancel', style: TextStyle(color: Color(0xFF6B7280))),
+            child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('Cancel', style: TextStyle(color: Color(0xFF6B7280))),
+              ),
+              const SizedBox(width: 8),
+              FilledButton(
+                onPressed: _doImport,
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFF1B7A43),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
                 ),
-                const SizedBox(width: 8),
-                FilledButton(
-                  onPressed: selected > 0 ? _doImport : null,
-                  style: FilledButton.styleFrom(
-                    backgroundColor: const Color(0xFF1B7A43),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                  ),
-                  child: Text('Import $selected', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-                ),
-              ]),
+                child: const Text('Import', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+              ),
             ]),
           ),
         ]),

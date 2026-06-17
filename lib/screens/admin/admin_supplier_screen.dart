@@ -7055,20 +7055,26 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
 
   Future<void> _doImport() async {
     final name = _nameCtrl.text.trim();
+    RenderLog.write('c67_import_tapped', 'true');
     if (name.isEmpty) {
+      RenderLog.write('c67_insert_attempted', 'false');
       showToast(context, 'Supplier name is required', isError: true);
       return;
     }
+    RenderLog.write('c67_insert_attempted', 'true');
+    RenderLog.write('c67_insert_table', 'supplier_profiles');
     setState(() => _step = _SupCardStep.importing);
     try {
       final client = Supabase.instance.client;
 
       // 1. Insert supplier_profiles row
+      final uid = client.auth.currentUser?.id;
       final rec = <String, dynamic>{
         'supplier_name': name,
         'status': 'Active',
         'approved': true,
         'is_deleted': false,
+        if (uid != null) 'user_id': uid,
       };
       if (_addrCtrl.text.trim().isNotEmpty) rec['street_address'] = _addrCtrl.text.trim();
       if (_cityCtrl.text.trim().isNotEmpty) rec['city'] = _cityCtrl.text.trim();
@@ -7076,7 +7082,6 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
       if (_waCtrl.text.trim().isNotEmpty) rec['whatsapp_no'] = _waCtrl.text.trim();
       if (_emailCtrl.text.trim().isNotEmpty) rec['email'] = _emailCtrl.text.trim();
       if (_codeCtrl.text.trim().isNotEmpty) rec['supplier_code'] = _codeCtrl.text.trim();
-      // Optional extra fields filled by admin
       for (final f in [..._spnFields, ..._otherFields]) {
         final v = f.value;
         if (v.isNotEmpty) rec[f.column] = v;
@@ -7084,24 +7089,31 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
 
       final inserted = await client.from('supplier_profiles').insert(rec).select('id').single();
       final supplierId = inserted['id'] as String;
+      RenderLog.write('c67_new_supplier_id', supplierId);
 
-      // 2. Insert supplier_company rows — store verbatim seen text, no resolution
+      // 2. Upsert supplier_company rows — ignoreDuplicates handles UNIQUE (supplier_id, supplier_company)
       final companies = _companies.where((c) => c.canonical.isNotEmpty).toList();
+      int companiesWritten = 0;
       if (companies.isNotEmpty) {
-        // Upsert company names verbatim into master (ON CONFLICT DO NOTHING)
         for (final co in companies) {
           try {
             await client.from('company')
                 .upsert({'company_name': co.canonical}, onConflict: 'company_name');
           } catch (_) {}
         }
-        final scRows = companies.map((co) => <String, dynamic>{
-          'supplier_id': supplierId,
-          'supplier_name': name,
-          'supplier_company': co.canonical,
-        }).toList();
-        await client.from('supplier_company').insert(scRows);
+        await client.from('supplier_company').upsert(
+          companies.map((co) => <String, dynamic>{
+            'supplier_id': supplierId,
+            'supplier_name': name,
+            'supplier_company': co.canonical,
+          }).toList(),
+          onConflict: 'supplier_id,supplier_company',
+          ignoreDuplicates: true,
+        );
+        companiesWritten = companies.length;
       }
+      RenderLog.write('c67_insert_status', 'ok');
+      RenderLog.write('c67_companies_written', companiesWritten.toString());
 
       if (mounted) {
         Navigator.of(context).pop();
@@ -7109,9 +7121,10 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
         showToast(context, 'Imported $name with ${companies.length} compan${companies.length == 1 ? 'y' : 'ies'}', duration: const Duration(seconds: 5));
       }
     } catch (e) {
+      RenderLog.write('c67_insert_status', 'error:${e.toString().substring(0, e.toString().length > 80 ? 80 : e.toString().length)}');
       if (mounted) {
         setState(() => _step = _SupCardStep.review);
-        showToast(context, 'Import failed: $e', isError: true);
+        showToast(context, 'Import failed: ${e.toString().replaceFirst('Exception: ', '')}', isError: true, duration: const Duration(seconds: 8));
       }
     }
   }
@@ -7596,15 +7609,21 @@ class _SupCardMultiImportDialogState extends State<_SupCardMultiImportDialog> {
 
   Future<void> _doImport() async {
     final name = _nameCtrl.text.trim();
+    RenderLog.write('c67_import_tapped', 'true');
     if (name.isEmpty) {
+      RenderLog.write('c67_insert_attempted', 'false');
       showToast(context, 'Supplier name is required', isError: true);
       return;
     }
+    RenderLog.write('c67_insert_attempted', 'true');
+    RenderLog.write('c67_insert_table', 'supplier_profiles');
     setState(() => _step = _MultiStep.importing);
     try {
       final client = Supabase.instance.client;
+      final uid = client.auth.currentUser?.id;
       final rec = <String, dynamic>{
         'supplier_name': name, 'status': 'Active', 'approved': true, 'is_deleted': false,
+        if (uid != null) 'user_id': uid,
       };
       if (_addrCtrl.text.trim().isNotEmpty) rec['street_address'] = _addrCtrl.text.trim();
       if (_cityCtrl.text.trim().isNotEmpty) rec['city'] = _cityCtrl.text.trim();
@@ -7617,15 +7636,24 @@ class _SupCardMultiImportDialogState extends State<_SupCardMultiImportDialog> {
       }
       final inserted = await client.from('supplier_profiles').insert(rec).select('id').single();
       final supplierId = inserted['id'] as String;
+      RenderLog.write('c67_new_supplier_id', supplierId);
       final companies = _companies.where((c) => c.canonical.isNotEmpty).toList();
+      int companiesWritten = 0;
       if (companies.isNotEmpty) {
         for (final co in companies) {
           try { await client.from('company').upsert({'company_name': co.canonical}, onConflict: 'company_name'); } catch (_) {}
         }
-        await client.from('supplier_company').insert(companies.map((co) => <String, dynamic>{
-          'supplier_id': supplierId, 'supplier_name': name, 'supplier_company': co.canonical,
-        }).toList());
+        await client.from('supplier_company').upsert(
+          companies.map((co) => <String, dynamic>{
+            'supplier_id': supplierId, 'supplier_name': name, 'supplier_company': co.canonical,
+          }).toList(),
+          onConflict: 'supplier_id,supplier_company',
+          ignoreDuplicates: true,
+        );
+        companiesWritten = companies.length;
       }
+      RenderLog.write('c67_insert_status', 'ok');
+      RenderLog.write('c67_companies_written', companiesWritten.toString());
       RenderLog.write('multi_image_ocr_imported', '1');
       if (mounted) {
         Navigator.of(context).pop();
@@ -7633,9 +7661,10 @@ class _SupCardMultiImportDialogState extends State<_SupCardMultiImportDialog> {
         showToast(context, 'Imported $name with ${companies.length} compan${companies.length == 1 ? 'y' : 'ies'} from ${widget.files.length} image${widget.files.length == 1 ? '' : 's'}', duration: const Duration(seconds: 5));
       }
     } catch (e) {
+      RenderLog.write('c67_insert_status', 'error:${e.toString().substring(0, e.toString().length > 80 ? 80 : e.toString().length)}');
       if (mounted) {
         setState(() => _step = _MultiStep.review);
-        showToast(context, 'Import failed: ${e.toString().replaceFirst('Exception: ', '')}', isError: true);
+        showToast(context, 'Import failed: ${e.toString().replaceFirst('Exception: ', '')}', isError: true, duration: const Duration(seconds: 8));
       }
     }
   }

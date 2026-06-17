@@ -25,6 +25,8 @@ class RenderLog {
     _scheduleSupabaseFlush(hash);
   }
 
+  static String get buildHash => (_log['build'] as String?) ?? 'unknown';
+
   static void reset() {
     final build = _log['build'];
     _log.clear();

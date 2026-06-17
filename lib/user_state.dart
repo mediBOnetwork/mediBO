@@ -74,7 +74,7 @@ class AuthNotifier extends ChangeNotifier {
     _trace('boot',
         'flow=implicit; stored=${session != null}; '
         'hasRefresh=${session?.refreshToken != null && (session!.refreshToken?.isNotEmpty ?? false)}; '
-        'frag=n/a; code=n/a; change=56');
+        'frag=n/a; code=n/a; build=${RenderLog.buildHash}; change=57');
     if (user != null && !_initDone) {
       _initDone = true;
       RenderLog.write('auth55_restore',

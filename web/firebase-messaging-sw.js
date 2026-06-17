@@ -5,6 +5,12 @@
 //   Also replace VAPID_KEY in index.html with your Web Push certificate key.
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Activate immediately and take control of all clients so updates reach users
+// without requiring a tab close. This SW does NOT intercept fetch requests (no
+// fetch handler) so it cannot serve stale app shell.
+self.addEventListener('install', e => e.waitUntil(self.skipWaiting()));
+self.addEventListener('activate', e => e.waitUntil(clients.claim()));
+
 importScripts('https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/10.12.2/firebase-messaging-compat.js');
 

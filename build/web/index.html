@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <meta name="build-commit" content="3a71963">
+  <meta name="build-commit" content="afe38c3">
   <!--
     If you are serving your web app in a path other than the root, change the
     href value below to reflect the base path you are serving from.
@@ -310,12 +310,50 @@
   </script>
 
   <!-- ═══════════════════════════════════════════════════════════════════════
+       VERSION FRESHNESS GUARD
+       Fetches /version.json with no-store (bypasses all caches). If the live
+       commit doesn't match the baked-in build-commit meta tag, reloads once
+       to pick up the new bundle. A sessionStorage flag prevents reload loops.
+       ═══════════════════════════════════════════════════════════════════════ -->
+  <script>
+    (function () {
+      var RELOAD_KEY = '__medibo_reloaded_57__';
+      var bundleCommit = (document.querySelector('meta[name="build-commit"]') || {}).content || '';
+      if (!bundleCommit) return; // no meta tag yet (first build); skip guard
+      if (sessionStorage.getItem(RELOAD_KEY)) return; // already reloaded once this session
+      fetch('/version.json', { cache: 'no-store' })
+        .then(function (r) { return r.json(); })
+        .then(function (v) {
+          if (v && v.commit && v.commit !== bundleCommit) {
+            sessionStorage.setItem(RELOAD_KEY, '1');
+            if ('serviceWorker' in navigator) {
+              navigator.serviceWorker.getRegistrations().then(function (regs) {
+                var updates = regs.map(function (r) {
+                  return r.update().then(function () {
+                    if (r.waiting) r.waiting.postMessage({ type: 'SKIP_WAITING' });
+                  });
+                });
+                Promise.all(updates).then(function () { location.reload(true); });
+              });
+            } else {
+              location.reload(true);
+            }
+          }
+        })
+        .catch(function () {}); // silently ignore network errors
+    })();
+  </script>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
        SERVICE WORKER REGISTRATION
-       Registers firebase-messaging-sw.js for background push.
+       Registers firebase-messaging-sw.js for push notifications only.
+       Scoped to /firebase-cloud-messaging-push-scope so it does NOT control
+       the main page — prevents it from ever serving a stale app shell.
        ═══════════════════════════════════════════════════════════════════════ -->
   <script>
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/firebase-messaging-sw.js', { scope: '/' })
+      navigator.serviceWorker.register('/firebase-messaging-sw.js',
+          { scope: '/firebase-cloud-messaging-push-scope' })
         .then(function (reg) {
           console.info('[SW] FCM service worker registered:', reg.scope);
           reg.update(); // check for SW update on every page load

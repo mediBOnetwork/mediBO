@@ -1,6 +1,9 @@
 <!DOCTYPE html>
 <html>
 <head>
+  <!-- CHANGE #58: SW killswitch — unregisters ALL service workers + clears all caches, then reloads ONCE.
+       Runs before Flutter loader so even devices with stale SW get fresh bundle next load. -->
+  <script>(function(){try{if('serviceWorker'in navigator){navigator.serviceWorker.getRegistrations().then(function(rs){var had=rs&&rs.length>0;return Promise.all((rs||[]).map(function(r){return r.unregister();})).then(function(){return had;});}).then(function(had){if(window.caches&&caches.keys){return caches.keys().then(function(k){return Promise.all(k.map(function(x){return caches.delete(x);}));}).then(function(){return had;});}return had;}).then(function(had){if(had&&!sessionStorage.getItem('sw_killed_58')){sessionStorage.setItem('sw_killed_58','1');location.reload();}}).catch(function(){});}}catch(e){}})();</script>
   <!--
     If you are serving your web app in a path other than the root, change the
     href value below to reflect the base path you are serving from.
@@ -305,41 +308,6 @@
           try { window.location.hash = '#/customers/pending'; } catch (_) {}
         }
       });
-    })();
-  </script>
-
-  <!-- ═══════════════════════════════════════════════════════════════════════
-       VERSION FRESHNESS GUARD
-       Fetches /version.json with no-store (bypasses all caches). If the live
-       commit doesn't match the baked-in build-commit meta tag, reloads once
-       to pick up the new bundle. A sessionStorage flag prevents reload loops.
-       ═══════════════════════════════════════════════════════════════════════ -->
-  <script>
-    (function () {
-      var RELOAD_KEY = '__medibo_reloaded_57__';
-      var bundleCommit = (document.querySelector('meta[name="build-commit"]') || {}).content || '';
-      if (!bundleCommit) return; // no meta tag yet (first build); skip guard
-      if (sessionStorage.getItem(RELOAD_KEY)) return; // already reloaded once this session
-      fetch('/version.json', { cache: 'no-store' })
-        .then(function (r) { return r.json(); })
-        .then(function (v) {
-          if (v && v.commit && v.commit !== bundleCommit) {
-            sessionStorage.setItem(RELOAD_KEY, '1');
-            if ('serviceWorker' in navigator) {
-              navigator.serviceWorker.getRegistrations().then(function (regs) {
-                var updates = regs.map(function (r) {
-                  return r.update().then(function () {
-                    if (r.waiting) r.waiting.postMessage({ type: 'SKIP_WAITING' });
-                  });
-                });
-                Promise.all(updates).then(function () { location.reload(true); });
-              });
-            } else {
-              location.reload(true);
-            }
-          }
-        })
-        .catch(function () {}); // silently ignore network errors
     })();
   </script>
 

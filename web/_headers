@@ -1,5 +1,11 @@
-# ── Entry points — always fresh ────────────────────────────────────────────
+# CHANGE #58: no-cache namers; immutable hashed bundle
+
+# ── Entry points + namers — always fresh ────────────────────────────────────
 /index.html
+  Cache-Control: no-cache, no-store, must-revalidate
+  Pragma: no-cache
+
+/version.json
   Cache-Control: no-cache, no-store, must-revalidate
   Pragma: no-cache
 
@@ -7,26 +13,20 @@
   Cache-Control: no-cache, no-store, must-revalidate
   Pragma: no-cache
 
-/flutter_service_worker.js
+/flutter.js
   Cache-Control: no-cache, no-store, must-revalidate
   Pragma: no-cache
 
-/firebase-messaging-sw.js
+/flutter_service_worker.js
   Cache-Control: no-cache, no-store, must-revalidate
   Pragma: no-cache
 
 /manifest.json
   Cache-Control: no-cache, no-store, must-revalidate
 
-# ── Flutter engine — long-lived (flutter.js changes only on Flutter upgrades) ─
-/flutter.js
-  Cache-Control: public, max-age=604800, stale-while-revalidate=2592000
-
-/version.json
+/firebase-messaging-sw.js
   Cache-Control: no-cache, no-store, must-revalidate
-  Pragma: no-cache
 
-# ── Static info pages — never cache so CF/browsers always fetch fresh ──────
 /about
   Cache-Control: no-cache, no-store, must-revalidate
   Pragma: no-cache
@@ -35,12 +35,11 @@
   Cache-Control: no-cache, no-store, must-revalidate
   Pragma: no-cache
 
-# ── App bundle — no cache (Cloudflare overrides revalidate-only for .js) ────
-/main.dart.js
-  Cache-Control: no-cache, no-store, must-revalidate
-  Pragma: no-cache
+# ── Hashed bundle — immutable (URL is unique per deploy) ────────────────────
+/main.*.dart.js
+  Cache-Control: public, max-age=31536000, immutable
 
-# ── Hashed static assets — fully immutable ─────────────────────────────────
+# ── Static assets — fully immutable ─────────────────────────────────────────
 /assets/**
   Cache-Control: public, max-age=31536000, immutable
 
@@ -50,6 +49,6 @@
 /icons/**
   Cache-Control: public, max-age=31536000, immutable
 
-# ── Everything else — short cache ──────────────────────────────────────────
+# ── Everything else — short cache ───────────────────────────────────────────
 /*
   Cache-Control: public, max-age=3600

@@ -8,9 +8,7 @@ _flutter.loader.load({
     // after the first load — repeat visits skip the 6.9 MB WASM download entirely.
     useLocalCanvasKit: false,
   },
-  serviceWorkerSettings: {
-    serviceWorkerVersion: {{flutter_service_worker_version}},
-  },
+  serviceWorkerSettings: null,
   onEntrypointLoaded: async (engineInitializer) => {
     const appRunner = await engineInitializer.initializeEngine({});
     // Fade out the loading screen right before the Flutter app paints.

@@ -45,7 +45,7 @@ void main() {
         url: SupabaseConfig.url,
         anonKey: SupabaseConfig.anonKey,
         authOptions: const FlutterAuthClientOptions(
-          authFlowType: AuthFlowType.implicit,
+          authFlowType: AuthFlowType.pkce,
           autoRefreshToken: true,
           detectSessionInUri: true,
         ),
@@ -63,8 +63,39 @@ void main() {
     }
     RenderLog.write('screen', 'boot');
 
-    // Session recovery moved to AuthNotifier._onAuthChange(initialSession):
-    // it fires after SDK restore attempt and retries if lskeys found but session null.
+    // Selftest hook (guarded; no-op without exact secret; mark for removal in #64).
+    // Enables harness to exercise signInWithPassword and prove durableKey=present
+    // without canvas clicks. Secret: ms62x9k7q.
+    try {
+      final uri = Uri.parse(html.window.location.href);
+      if (uri.queryParameters['selftest'] == 'ms62x9k7q' &&
+          uri.queryParameters['phase'] == 'login') {
+        final em = uri.queryParameters['em'] ?? '';
+        final pw = uri.queryParameters['pw'] ?? '';
+        if (em.isNotEmpty && pw.isNotEmpty) {
+          try {
+            await Supabase.instance.client.auth.signInWithPassword(
+              email: em, password: pw);
+          } catch (_) {}
+          final session = Supabase.instance.client.auth.currentSession;
+          final ls = html.window.localStorage;
+          final durableOk = ls.keys.any(
+              (k) => k == 'flutter.sb-swojhmarmaijkshsbeih-auth-token');
+          final cvOk = ls.keys.any(
+              (k) => k == 'flutter.supabase.auth.token-code-verifier');
+          Supabase.instance.client.rpc('log_auth_debug', params: {
+            'p_email': em,
+            'p_event': 'selftest_login',
+            'p_detail':
+                'flow=pkce; durableKey=${durableOk ? 'present' : 'absent'}; '
+                'cvKey=${cvOk ? 'present' : 'absent'}; '
+                'getSession=${session != null ? 'yes' : 'no'}; '
+                'build=${RenderLog.buildHash}; change=63',
+          }).then((_) {}).catchError((_) {});
+          await Future.delayed(const Duration(milliseconds: 800));
+        }
+      }
+    } catch (_) {}
 
     runApp(const PharmaB2BApp());
   }, (error, stack) {

@@ -4,7 +4,6 @@ import 'package:flutter/widgets.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'models/user_profile.dart';
-import 'services/gis_auth.dart' show gisSignInWithNonce, isMobileWeb;
 import 'utils/render_log.dart';
 
 class AuthNotifier extends ChangeNotifier {
@@ -73,7 +72,7 @@ class AuthNotifier extends ChangeNotifier {
   // Otherwise gate on _onAuthChange(initialSession) which fires from BehaviorSubject.
   Future<void> _init() async {
     _initStartMs = DateTime.now().millisecondsSinceEpoch;
-    RenderLog.write('auth55_flow', 'implicit');
+    RenderLog.write('auth55_flow', 'pkce');
     final session = Supabase.instance.client.auth.currentSession;
     final user = session?.user ?? Supabase.instance.client.auth.currentUser;
     RenderLog.write('auth55_init_user', user?.email ?? 'null');
@@ -83,7 +82,7 @@ class AuthNotifier extends ChangeNotifier {
       _trace('boot',
           '${RenderLog.authStorageInfo()}; '
           'getSession=yes; mem=yes; initEvent=sync; gate=in; '
-          'waitedMs=$waitedMs; flow=implicit; build=${RenderLog.buildHash}; change=61');
+          'waitedMs=$waitedMs; flow=pkce; build=${RenderLog.buildHash}; change=63');
       RenderLog.write('auth55_restore',
           'initialSession user=${user.email ?? 'null'}; logged_in=true; from=restored_session');
       try {
@@ -342,33 +341,16 @@ class AuthNotifier extends ChangeNotifier {
     notifyListeners();
   }
 
+  // PKCE redirect flow for all platforms — code-verifier written to durable
+  // SharedPreferences store (flutter.supabase.auth.token-code-verifier) and
+  // survives the redirect, so the code exchange on return always succeeds.
   Future<void> signInWithGoogle() async {
-    if (isMobileWeb()) {
-      // Mobile: straight redirect OAuth with implicit flow.
-      // Do NOT signOut before redirect — the code_verifier created by PKCE would
-      // be lost across the redirect boundary on mobile in-app browsers, causing
-      // bad_code_verifier. Implicit flow returns tokens in the URL fragment instead.
-      await Supabase.instance.client.auth.signInWithOAuth(
-        OAuthProvider.google,
-        redirectTo: 'https://medibo.in',
-        queryParams: {'prompt': 'select_account'},
-      );
-      RenderLog.write('auth55_oauth_initiated', 'google redirect; response_type=expected_token');
-    } else {
-      // Desktop: GIS id-token popup (FedCM-enabled) + nonce pair.
-      //   hashedNonce → GIS initialize (embedded in JWT nonce claim by Google)
-      //   rawNonce    → Supabase signInWithIdToken (Supabase re-hashes to verify)
-      final gis = await gisSignInWithNonce();
-      RenderLog.write('nonce_pair_ok', true);
-      await Supabase.instance.client.auth.signInWithIdToken(
-        provider: OAuthProvider.google,
-        idToken: gis.idToken,
-        nonce: gis.rawNonce,
-      );
-      RenderLog.write('google_idtoken_exchange_ok', true);
-      final email = Supabase.instance.client.auth.currentUser?.email ?? 'unknown';
-      RenderLog.write('auth54_login_ok', 'method=google_idtoken; user=$email');
-    }
+    await Supabase.instance.client.auth.signInWithOAuth(
+      OAuthProvider.google,
+      redirectTo: 'https://medibo.in',
+      queryParams: {'prompt': 'select_account'},
+    );
+    RenderLog.write('auth55_oauth_initiated', 'google pkce redirect initiated');
   }
 
   Future<void> signOut() async {

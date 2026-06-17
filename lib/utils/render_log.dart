@@ -29,9 +29,10 @@ class RenderLog {
 
   // ── Auth storage diagnostics ──────────────────────────────────────────────
 
-  // Returns "lskeys=<names>; durableKey=<present|absent>" for boot/signedIn traces.
-  // lskeys: all localStorage keys containing 'auth-token' or 'sb-' auth patterns.
-  // durableKey: whether the SDK's durable SharedPreferences key is present.
+  // Returns "lskeys=<names>; durableKey=<present|absent>; cvKey=<present|absent>"
+  // lskeys: all auth-token keys in localStorage.
+  // durableKey: flutter.sb-swojhmarmaijkshsbeih-auth-token (SDK durable session store).
+  // cvKey: flutter.supabase.auth.token-code-verifier (PKCE code-verifier; absent for password).
   static String authStorageInfo() {
     try {
       final ls = html.window.localStorage;
@@ -39,15 +40,13 @@ class RenderLog {
           .where((k) => k.contains('auth-token') || k.contains('auth.token'))
           .toList();
       final lskeys = lsKeys.isEmpty ? 'none' : lsKeys.join(',');
-
-      // The durable key written by supabase_flutter's SharedPreferences store.
-      // Exists when the SDK uses SharedPreferences (_useWebLocalStorage=false),
-      // signalling the session will survive cold reopen.
       const durableKey = 'flutter.sb-swojhmarmaijkshsbeih-auth-token';
+      const cvKeyName = 'flutter.supabase.auth.token-code-verifier';
       final durablePresent = ls.keys.any((k) => k == durableKey);
-      return 'lskeys=$lskeys; durableKey=${durablePresent ? 'present' : 'absent'}';
+      final cvPresent = ls.keys.any((k) => k == cvKeyName);
+      return 'lskeys=$lskeys; durableKey=${durablePresent ? 'present' : 'absent'}; cvKey=${cvPresent ? 'present' : 'absent'}';
     } catch (_) {
-      return 'lskeys=err; durableKey=err';
+      return 'lskeys=err; durableKey=err; cvKey=err';
     }
   }
 

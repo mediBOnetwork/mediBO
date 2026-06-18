@@ -54,11 +54,11 @@ class MedicineRepository {
   /// via the `medicine_category_counts` RPC. Categories are never hardcoded.
   /// Uses the planner-stats estimate for the grand total (avoids exact count).
   Future<CatalogMeta> fetchCatalogMeta() async {
-    final results = await Future.wait([
+    final results = await Future.wait<dynamic>([
       _client.rpc('medicine_category_counts'),
       fetchTotalEstimate(),
     ]);
-    final rows = ((results[0] as dynamic) as List).cast<Map<String, dynamic>>();
+    final rows = (results[0] as List).cast<Map<String, dynamic>>();
     final estimate = results[1] as int;
     final categories = rows
         .map((r) => CategoryCount(

@@ -18,6 +18,14 @@ class CatalogMeta {
   const CatalogMeta(this.categories, this.total);
 }
 
+/// Columns fetched for list/search cards — excludes heavy text blobs
+/// (uses, benefits, side_effects, how_it_works, PS1-PS30, etc.).
+/// This cuts payload ~10× vs SELECT * on the 60-column MEDICINE table.
+const String _kListCols =
+    'id,product_name,salt_composition,marketer,therapeutic_class,'
+    'image_url_1,pack_qty,pack_size,mrp,gst_percent,'
+    'status,rx_required,sales_count,has_scheme,has_image';
+
 /// Fetches medicines from the Supabase `MEDICINE` table.
 ///
 /// Reads are paginated: the storefront pulls [pageSize] rows at a time and
@@ -84,7 +92,7 @@ class MedicineRepository {
             .toList(growable: false);
       } catch (_) {
         final pat = '%$term%';
-        var fb = _client.from('MEDICINE').select();
+        var fb = _client.from('MEDICINE').select(_kListCols);
         if (category != 'All') fb = fb.eq('therapeutic_class', category);
         final rows = await fb
             .or('product_name.ilike.$pat,salt_composition.ilike.$pat,marketer.ilike.$pat')
@@ -105,7 +113,7 @@ class MedicineRepository {
           .map((r) => Product.fromMap(r as Map<String, dynamic>))
           .toList(growable: false);
     } catch (_) {
-      var fb = _client.from('MEDICINE').select();
+      var fb = _client.from('MEDICINE').select(_kListCols);
       if (category != 'All') fb = fb.eq('therapeutic_class', category);
       final rows = await fb
           .order('sales_count', ascending: false)

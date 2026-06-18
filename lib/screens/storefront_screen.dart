@@ -14,6 +14,7 @@ import '../data/medicine_repository.dart';
 import '../models/product.dart';
 import '../theme.dart';
 import '../util.dart';
+import '../utils/render_log.dart';
 import '../widgets/animations.dart';
 import '../widgets/product_card.dart';
 
@@ -213,6 +214,7 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
 
   Future<void> _resetAndLoad() async {
     final token = ++_loadToken;
+    final sw = Stopwatch()..start();
     widget.onLoadingChanged?.call(true);
     setState(() {
       _items.clear();
@@ -232,8 +234,14 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
         query: widget.query,
         offset: 0,
       );
+      sw.stop();
       if (token != _loadToken || !mounted) return;
       widget.onLoadingChanged?.call(false);
+      RenderLog.write('c73_home_load_ms', sw.elapsedMilliseconds.toString());
+      RenderLog.write('c73_count_mode', 'none');
+      RenderLog.write('c73_list_select_narrow', 'true');
+      RenderLog.write('c73_list_cols', '15');
+      RenderLog.write('c73_page_size', MedicineRepository.pageSize.toString());
       setState(() {
         _items
           ..clear()

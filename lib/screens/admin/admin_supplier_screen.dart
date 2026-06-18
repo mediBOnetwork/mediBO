@@ -14,6 +14,7 @@ import 'package:pharma_b2b/utils/toast.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart';
 import 'package:xml/xml.dart' as xmlp;
 
+import '../../services/match_status_service.dart';
 import '../../utils/render_log.dart';
 import '../../widgets/inquiry_v12.dart';
 
@@ -203,6 +204,10 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   // Accordion state: which unassigned dropdown is open ('no_supplier' | 'all_oos' | null)
   String? _openUnassignedDropdown;
 
+  // ── Match status service (change #76) ────────────────────────────────────
+  late final MatchStatusService _matchService;
+  void Function()? _matchServiceListener;
+
   // ── Auto-meta toggle (persisted via get/set_app_setting) ─────────────────
   bool _autoMeta = false;
   bool _autoMetaLoading = false;
@@ -240,6 +245,9 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   @override
   void initState() {
     super.initState();
+    _matchService = MatchStatusService();
+    _matchServiceListener = () { if (mounted) setState(() {}); };
+    _matchService.statuses.addListener(_matchServiceListener!);
     _load();
     _loadAllocationMode();
     _subscribeRealtime();
@@ -271,6 +279,10 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
 
   @override
   void dispose() {
+    if (_matchServiceListener != null) {
+      _matchService.statuses.removeListener(_matchServiceListener!);
+    }
+    _matchService.dispose();
     _debounce?.cancel();
     _inquiryPollTimer?.cancel();
     for (final ch in _channels) ch.unsubscribe();
@@ -500,6 +512,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           _loading        = false;
           _applySort();
         });
+        _matchService.setVisibleIds(_suppliers.map((r) => r.id).toList());
         RenderLog.write('supplier_sort_default', 'spn_desc');
         RenderLog.write('dashboard_counts_refreshed', 'true');
         RenderLog.write('inquiry_tab_count_${inquiryOverview.length}', 'true');
@@ -2892,6 +2905,8 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                     isOpen: _companiesSupplierId == row.id,
                   ),
                 ),
+                const SizedBox(width: 8),
+                _MatchStatusChip(status: _matchService.statuses.value[row.id], supplierId: row.id),
                 const SizedBox(width: 10),
                 _StatusPill(
                   key: ValueKey('status_${row.id}'),
@@ -2926,6 +2941,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         _CompaniesInlineSection(
           supplierId: row.id,
           supplierName: row.supplierName,
+          matchService: _matchService,
           onCompanyAdded: () => _reloadCompanyCount(row.id),
         ),
       if (_spnSupplierId == row.id)
@@ -2994,7 +3010,9 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                   if (row.paymentTerm.isNotEmpty)  _mobileField('Payment', row.paymentTerm),
                   if (row.city.isNotEmpty)          _mobileField('City', [row.city, row.state].where((s) => s.isNotEmpty).join(', ')),
                 ]),
-                const SizedBox(height: 12),
+                const SizedBox(height: 8),
+                _MatchStatusChip(status: _matchService.statuses.value[row.id], supplierId: row.id),
+                const SizedBox(height: 8),
                 // Last action row: [SPN] [Companies (N)] [Edit] [Delete]
                 Wrap(spacing: 8, runSpacing: 6, children: [
                   GestureDetector(
@@ -3027,6 +3045,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
               _CompaniesInlineSection(
                 supplierId: row.id,
                 supplierName: row.supplierName,
+                matchService: _matchService,
                 onCompanyAdded: () => _reloadCompanyCount(row.id),
               ),
             ],
@@ -5025,8 +5044,18 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
         final parts = <String>[];
         parts.add('$profilesInserted new supplier${profilesInserted == 1 ? "" : "s"}');
         if (profilesSkipped > 0) parts.add('$profilesSkipped already existed');
-        if (hasCompanyCol) parts.add('$scInserted company row${scInserted == 1 ? "" : "s"} saved (company_1–5 empty, fill via Refresh)');
-        showToast(context, 'Imported: ${parts.join(" · ")}', duration: const Duration(seconds: 6));
+        if (hasCompanyCol) {
+          parts.add('$scInserted company row${scInserted == 1 ? "" : "s"} saved');
+          RenderLog.write('change76_import_inserted_background',
+              {'rowCount': scInserted, 'suppliers': supplierMap.length});
+        }
+        showToast(
+          context,
+          hasCompanyCol
+              ? 'Imported: ${parts.join(" · ")}. Matching companies in the background…'
+              : 'Imported: ${parts.join(" · ")}',
+          duration: const Duration(seconds: 6),
+        );
       }
     } catch (e) {
       if (mounted) {
@@ -5320,13 +5349,183 @@ class _SupplierCompaniesButton extends StatelessWidget {
   }
 }
 
+// ── Match status chip (shown on every supplier list card) ─────────────────────
+
+class _MatchStatusChip extends StatelessWidget {
+  final MatchStatus? status;
+  final String supplierId;
+  const _MatchStatusChip({required this.status, required this.supplierId});
+
+  @override
+  Widget build(BuildContext context) {
+    final s = status;
+    if (s == null || s.total == 0) return const SizedBox.shrink();
+
+    // Render-log instrumentation (change #76).
+    RenderLog.write('change76_status_chip_rendered', {
+      'supplierId': supplierId,
+      'matched': s.matched,
+      'pending': s.pending,
+      'isMatching': s.isMatching,
+    });
+
+    if (s.isMatching) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFEF3C7),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: const Color(0xFFF59E0B).withValues(alpha: 0.5)),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          const SizedBox(
+            width: 10, height: 10,
+            child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF92400E)),
+          ),
+          const SizedBox(width: 5),
+          Text(
+            'Matching… ${s.pending} left',
+            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: Color(0xFF92400E)),
+          ),
+        ]),
+      );
+    }
+
+    return Row(mainAxisSize: MainAxisSize.min, children: [
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: const Color(0xFFD1FAE5),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: const Color(0xFF065F46).withValues(alpha: 0.3)),
+        ),
+        child: Text(
+          '${s.matched}/${s.total} matched',
+          style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: Color(0xFF065F46)),
+        ),
+      ),
+      if (s.needsReview > 0) ...[
+        const SizedBox(width: 4),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFEF3C7),
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Text(
+            '${s.needsReview} review',
+            style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w500, color: Color(0xFF92400E)),
+          ),
+        ),
+      ],
+    ]);
+  }
+}
+
+// ── Match status header strip (shown inside _CompaniesInlineSection) ──────────
+
+class _MatchStatusHeader extends StatelessWidget {
+  final String supplierId;
+  final MatchStatusService matchService;
+  const _MatchStatusHeader({required this.supplierId, required this.matchService});
+
+  @override
+  Widget build(BuildContext context) {
+    final s = matchService.statuses.value[supplierId];
+    if (s == null || s.total == 0) return const SizedBox.shrink();
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      decoration: const BoxDecoration(
+        color: Color(0xFFEFF6FF),
+        border: Border(bottom: BorderSide(color: Color(0xFFBFDBFE))),
+      ),
+      child: s.isMatching
+          ? Row(children: [
+              const SizedBox(
+                width: 12, height: 12,
+                child: CircularProgressIndicator(strokeWidth: 1.8, color: Color(0xFF2563EB)),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(
+                    'Matching… ${s.pending} of ${s.total} remaining',
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF1E40AF)),
+                  ),
+                  const SizedBox(height: 4),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(4),
+                    child: LinearProgressIndicator(
+                      value: s.total > 0 ? s.matched / s.total : 0,
+                      minHeight: 4,
+                      backgroundColor: const Color(0xFFBFDBFE),
+                      color: const Color(0xFF2563EB),
+                    ),
+                  ),
+                ]),
+              ),
+            ])
+          : Text(
+              '${s.matched}/${s.total} matched'
+              '${s.noMatch > 0 ? ' · ${s.noMatch} no match' : ''}'
+              '${s.needsReview > 0 ? ' · ${s.needsReview} need review' : ''}',
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: Color(0xFF1E40AF)),
+            ),
+    );
+  }
+}
+
+// ── Re-match (AI) button (change #76) ─────────────────────────────────────────
+
+class _ReMatchButton extends StatelessWidget {
+  final String supplierId;
+  final MatchStatusService matchService;
+  const _ReMatchButton({required this.supplierId, required this.matchService});
+
+  @override
+  Widget build(BuildContext context) {
+    final s = matchService.statuses.value[supplierId];
+    final isMatching = s?.isMatching ?? false;
+    return TextButton.icon(
+      onPressed: isMatching ? null : () async {
+        try {
+          await matchService.reMatch(supplierId);
+        } catch (e) {
+          if (context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+              content: Text('Re-match failed: $e'),
+              backgroundColor: const Color(0xFFDC2626),
+              duration: const Duration(seconds: 4),
+            ));
+          }
+        }
+      },
+      icon: isMatching
+          ? const SizedBox(width: 13, height: 13, child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF2563EB)))
+          : const Icon(Icons.auto_awesome, size: 15),
+      label: Text(isMatching ? 'Matching…' : 'Re-match (AI)',
+          style: const TextStyle(fontSize: 12)),
+      style: TextButton.styleFrom(
+          foregroundColor: const Color(0xFF2563EB),
+          visualDensity: VisualDensity.compact),
+    );
+  }
+}
+
 // ── Inline companies section (expands below row, not a popup) ─────────────────
 
 class _CompaniesInlineSection extends StatefulWidget {
   final String supplierId;
   final String supplierName;
+  final MatchStatusService matchService;
   final VoidCallback onCompanyAdded;
-  const _CompaniesInlineSection({required this.supplierId, required this.supplierName, required this.onCompanyAdded});
+  const _CompaniesInlineSection({
+    required this.supplierId,
+    required this.supplierName,
+    required this.matchService,
+    required this.onCompanyAdded,
+  });
 
   @override
   State<_CompaniesInlineSection> createState() => _CompaniesInlineSectionState();
@@ -5358,11 +5557,41 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
   final _supplierCompanyCtrl = TextEditingController();
   final _scrollCtrl = ScrollController();
 
-  @override
-  void initState() { super.initState(); _load(); }
+  // Match-status listener (change #76)
+  bool _wasMatching = false;
+  void Function()? _statusListener;
 
   @override
-  void dispose() { _supplierCompanyCtrl.dispose(); _scrollCtrl.dispose(); super.dispose(); }
+  void initState() {
+    super.initState();
+    _load();
+    // Ensure this supplier is included in visible IDs for polling.
+    widget.matchService.setVisibleIds(
+      List.unmodifiable({...widget.matchService.statuses.value.keys, widget.supplierId}.toList()),
+    );
+    _wasMatching = widget.matchService.statuses.value[widget.supplierId]?.isMatching ?? false;
+    _statusListener = () {
+      final s = widget.matchService.statuses.value[widget.supplierId];
+      final nowMatching = s?.isMatching ?? false;
+      if (_wasMatching && !nowMatching) {
+        // Matching just finished — reload company rows to show updated matches.
+        _load();
+      }
+      _wasMatching = nowMatching;
+      if (mounted) setState(() {});
+    };
+    widget.matchService.statuses.addListener(_statusListener!);
+  }
+
+  @override
+  void dispose() {
+    if (_statusListener != null) {
+      widget.matchService.statuses.removeListener(_statusListener!);
+    }
+    _supplierCompanyCtrl.dispose();
+    _scrollCtrl.dispose();
+    super.dispose();
+  }
 
   Future<void> _load() async {
     if (mounted) setState(() => _loading = true);
@@ -5408,7 +5637,12 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
       _supplierCompanyCtrl.clear();
       if (mounted) setState(() { _showAddForm = false; _saving = false; });
       widget.onCompanyAdded();
+      // Background auto-match — no waiting (change #76).
+      widget.matchService.setVisibleIds([widget.supplierId]);
+      RenderLog.write('change76_import_inserted_background',
+          {'supplierId': widget.supplierId, 'rowCount': 1});
       await _load();
+      if (mounted) showToast(context, 'Saved. Matching companies in the background…');
     } catch (_) {
       if (mounted) setState(() => _saving = false);
     }
@@ -5862,6 +6096,11 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
           ? const Padding(padding: EdgeInsets.all(20),
               child: Center(child: CircularProgressIndicator(color: Color(0xFF1B7A43), strokeWidth: 2)))
           : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              // ── Match status header (change #76) ─────────────────────────────
+              _MatchStatusHeader(
+                supplierId: widget.supplierId,
+                matchService: widget.matchService,
+              ),
               // ── Header (desktop only — mobile uses master-row at top) ────────
               if (!isMobileWidth)
               Padding(
@@ -5910,16 +6149,9 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                             visualDensity: VisualDensity.compact),
                       ),
                       const SizedBox(width: 4),
-                      TextButton.icon(
-                        onPressed: _mappingMode != null ? null : _mapCompanies,
-                        icon: _mappingMode == 'ai'
-                            ? const SizedBox(width: 13, height: 13, child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF2563EB)))
-                            : const Icon(Icons.auto_awesome, size: 15),
-                        label: Text(_mappingMode == 'ai' ? 'Matching…' : 'Map Companies by AI',
-                            style: const TextStyle(fontSize: 12)),
-                        style: TextButton.styleFrom(
-                            foregroundColor: const Color(0xFF2563EB),
-                            visualDensity: VisualDensity.compact),
+                      _ReMatchButton(
+                        supplierId: widget.supplierId,
+                        matchService: widget.matchService,
                       ),
                     ],
                   ],

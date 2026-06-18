@@ -8,6 +8,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../utils/render_log.dart';
 import '../../utils/responsive.dart';
+import '../../services/voice_receive_service.dart';
 import 'voice_receive.dart';
 
 // ── Color tokens ────────────────────────────────────────────────────────────
@@ -270,6 +271,33 @@ class _VoiceEcho {
   });
 }
 
+// ── Pending voice confirmation (one per edge-function item) ──────────────────
+
+class _PendingConfirmation {
+  final String heardName;
+  final int? quantity;       // from edge function (may be null)
+  final String? unit;
+  final MatchResult matchResult;
+  int? selectedProductId;
+  String selectedProductName;
+  final String rawTranscript;
+  late final TextEditingController qtyCtrl;
+
+  _PendingConfirmation({
+    required this.heardName,
+    required this.quantity,
+    required this.unit,
+    required this.matchResult,
+    required this.selectedProductId,
+    required this.selectedProductName,
+    required this.rawTranscript,
+  }) {
+    qtyCtrl = TextEditingController(text: (quantity ?? 1).toString());
+  }
+
+  void dispose() => qtyCtrl.dispose();
+}
+
 // ── PICK-TO-LIGHT SCREEN ─────────────────────────────────────────────────────
 
 class _PickToLightScreen extends StatefulWidget {
@@ -307,12 +335,17 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   String? _bagScanMsg;
   bool _bagConfirming = false;
 
+  // ── Voice service (Vertex Gemini edge function) ──
+  final _voiceService = VoiceReceiveService();
+  bool _recStarted = false;
+
   // ── Voice state ──
-  bool _voiceSupported = false;
+  bool _voiceSupported = true;   // always true; set false on mic deny
   bool _voiceListening = false;
   bool _voiceProcessing = false;
   String _voiceInterim = '';
   String _voiceError = '';
+  String _lastTranscript = '';
   bool _showVoiceText = false;   // text fallback field
   final _voiceTextCtrl = TextEditingController();
 
@@ -322,11 +355,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   final List<List<Map<String, dynamic>>> _undoStack = [];   // each = rows from one call
   final Map<int, num> _tally = {};  // product_id -> total allocated this session
 
-  // ── Voice pending (qty prompt / disambiguation) ──
-  ParsedItem? _pendingParsed;   // parsed item awaiting qty
-  int? _pendingProductId;       // product awaiting qty input
-  String? _pendingProductName;
-  int _pendingQtyDraft = 1;
+  // ── Voice confirmations (edge-function items awaiting user confirm) ──
+  List<_PendingConfirmation> _pendingConfirmations = [];
 
   // ── Computed ──
   Map<String, dynamic>? get _currentItem =>
@@ -355,22 +385,18 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   @override
   void dispose() {
-    stopVoiceListen();
+    _voiceService.dispose();
+    for (final c in _pendingConfirmations) { c.dispose(); }
     _echoTimer?.cancel();
     _voiceTextCtrl.dispose();
     super.dispose();
   }
 
   void _initVoice() {
-    final supported = voiceApiSupported;
-    if (mounted) {
-      setState(() => _voiceSupported = supported);
-    }
-    if (supported) {
-      RenderLog.write('voice_receive_rendered', 'true');
-    } else {
-      RenderLog.write('voice_receive_unavailable', 'true');
-    }
+    // MediaRecorder is universally supported; we always show the mic button.
+    if (mounted) setState(() => _voiceSupported = true);
+    RenderLog.write('77_voice_screen_mounted', 'true');
+    RenderLog.write('voice_receive_rendered', 'true');
   }
 
   // ── Settings / suppliers / box ─────────────────────────────────────────────
@@ -414,13 +440,17 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   }
 
   Future<void> _loadBox(String supplier) async {
-    // Stop any in-flight recognition before replacing box
-    stopVoiceListen();
+    // Stop any in-flight recording before replacing box
+    if (_voiceListening) {
+      _voiceService.cancel().ignore();
+      _recStarted = false;
+    }
+    for (final c in _pendingConfirmations) { c.dispose(); }
     setState(() {
       _loadingBox = true; _error = null; _items = []; _focusIdx = 0;
       _voiceListening = false; _voiceInterim = ''; _lastEcho = null;
-      _undoStack.clear(); _tally.clear(); _pendingParsed = null;
-      _pendingProductId = null;
+      _pendingConfirmations = [];
+      _undoStack.clear(); _tally.clear();
     });
     try {
       final res = await Supabase.instance.client
@@ -597,57 +627,128 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     } catch (_) {}
   }
 
-  // ── VOICE ──────────────────────────────────────────────────────────────────
+  // ── VOICE (Vertex Gemini via voice-receive edge function) ──────────────────
 
-  void _startListening() {
+  Future<void> _startRecording() async {
     if (!_voiceSupported || _voiceListening || _voiceProcessing) return;
+    // Clear prior confirmations
+    for (final c in _pendingConfirmations) { c.dispose(); }
     setState(() {
-      _voiceListening = true; _voiceInterim = ''; _voiceError = '';
-      _pendingParsed = null; _pendingProductId = null;
+      _voiceListening = true; _voiceInterim = 'Recording…'; _voiceError = '';
+      _pendingConfirmations = [];
     });
-
-    startVoiceListen(
-      onInterim: (t) {
-        if (!mounted) return;
-        setState(() => _voiceInterim = t);
-      },
-      onFinal: (t) {
-        if (!mounted) return;
-        setState(() { _voiceListening = false; _voiceInterim = ''; });
-        if (t.isNotEmpty) {
-          _handleVoiceTranscript(t);
-        } else {
-          setState(() { _voiceProcessing = false; _voiceError = 'no-speech'; });
-          Future.delayed(const Duration(seconds: 2), () {
-            if (mounted) setState(() => _voiceError = '');
-          });
-        }
-      },
-      onError: (e) {
-        if (!mounted) return;
-        final isPermission = e == 'not-allowed' || e == 'service-not-available';
-        setState(() {
-          _voiceListening = false; _voiceProcessing = false; _voiceInterim = '';
-          if (isPermission) {
-            _voiceSupported = false;
-            RenderLog.write('voice_receive_unavailable', 'permission-denied');
-          } else if (e != 'aborted') {
-            _voiceError = e;
-            Future.delayed(const Duration(seconds: 2), () {
-              if (mounted) setState(() => _voiceError = '');
-            });
-          }
+    RenderLog.write('77_rec_start', 'attempt');
+    try {
+      await _voiceService.start();
+      _recStarted = true;
+    } catch (e) {
+      _recStarted = false;
+      if (!mounted) return;
+      if (e is MicPermissionException) {
+        setState(() { _voiceListening = false; _voiceInterim = ''; _voiceSupported = false; });
+        RenderLog.write('77_error', 'mic-denied');
+        _showSnack('Allow microphone access to use voice receiving');
+      } else {
+        setState(() { _voiceListening = false; _voiceInterim = ''; _voiceError = e.toString(); });
+        RenderLog.write('77_error', e.toString());
+        Future.delayed(const Duration(seconds: 3), () {
+          if (mounted) setState(() => _voiceError = '');
         });
-      },
-    );
+      }
+    }
   }
 
-  void _stopListening() {
-    stopVoiceListen();
-    if (mounted) setState(() { _voiceListening = false; _voiceInterim = ''; });
+  Future<void> _stopAndTranscribe() async {
+    if (!_voiceListening) return;
+    setState(() { _voiceListening = false; _voiceInterim = ''; });
+    if (!_recStarted) return;
+    _recStarted = false;
+    setState(() => _voiceProcessing = true);
+    try {
+      final result = await _voiceService.stop();
+      if (!mounted) return;
+      if (result == null) {
+        setState(() { _voiceProcessing = false; _voiceError = 'No audio captured — try again'; });
+        Future.delayed(const Duration(seconds: 3), () {
+          if (mounted) setState(() => _voiceError = '');
+        });
+        return;
+      }
+      final (:bytes, :mime) = result;
+      RenderLog.write('77_rec_stop_bytes', '${bytes.length}');
+
+      final hintNames = _items
+          .map((i) => i['product_name']?.toString())
+          .whereType<String>()
+          .take(200)
+          .toList();
+      RenderLog.write('77_invoke_sent', 'hints=${hintNames.length}');
+
+      final (:items, :transcript) = await _voiceService.transcribe(
+        bytes, mime, hintNames: hintNames.isEmpty ? null : hintNames,
+      );
+      if (!mounted) return;
+      RenderLog.write('77_invoke_items', '${items.length}');
+
+      if (items.isEmpty) {
+        setState(() {
+          _voiceProcessing = false;
+          _voiceError = "Didn't catch that — try again";
+          _lastTranscript = transcript;
+        });
+        Future.delayed(const Duration(seconds: 3), () {
+          if (mounted) setState(() => _voiceError = '');
+        });
+        return;
+      }
+      _handleEdgeItems(items, transcript);
+    } catch (e) {
+      if (!mounted) return;
+      final msg = e.toString();
+      RenderLog.write('77_error', msg);
+      setState(() { _voiceProcessing = false; _voiceError = msg; });
+      Future.delayed(const Duration(seconds: 4), () {
+        if (mounted) setState(() => _voiceError = '');
+      });
+    }
   }
 
-  // Called from text fallback OR the voice engine
+  void _handleEdgeItems(List<Map<dynamic, dynamic>> items, String transcript) {
+    setState(() => _voiceProcessing = false);
+    final confirmations = <_PendingConfirmation>[];
+    for (final item in items) {
+      final heardName = (item['name'] ?? '').toString();
+      final quantityRaw = item['quantity'];
+      final qty = quantityRaw is num ? quantityRaw.toInt() : null;
+      final unit = item['unit']?.toString();
+
+      final matchResult = matchToBox(heardName, _items);
+      RenderLog.write('77_match_done',
+          matchResult is MatchConfident ? matchResult.productName : 'none');
+
+      int? selId;
+      String selName = heardName;
+      if (matchResult is MatchConfident) {
+        selId = matchResult.productId;
+        selName = matchResult.productName;
+      } else if (matchResult is MatchAmbiguous && matchResult.candidates.isNotEmpty) {
+        selId = matchResult.candidates.first.productId;
+        selName = matchResult.candidates.first.productName;
+      }
+      confirmations.add(_PendingConfirmation(
+        heardName: heardName,
+        quantity: qty,
+        unit: unit,
+        matchResult: matchResult,
+        selectedProductId: selId,
+        selectedProductName: selName,
+        rawTranscript: transcript,
+      ));
+    }
+    setState(() => _pendingConfirmations = confirmations);
+  }
+
+  // Called from text fallback field only (typed text → local parse → match)
   Future<void> _handleVoiceTranscript(String transcript) async {
     setState(() => _voiceProcessing = true);
 
@@ -788,6 +889,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       ));
 
       RenderLog.write('voice_receive_ok', '$productName:$allocated');
+      RenderLog.write('77_marked_received', '$productName');
 
       // Optional TTS
       _speakEcho(productName, allocated, unit, leftover);
@@ -1086,9 +1188,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                   style: TextStyle(fontSize: 13, color: _kSub)),
             ),
           ] else ...[
-            // Mic button
+            // Mic button — push-to-talk (hold to record, release to transcribe)
             GestureDetector(
-              onTap: _voiceListening ? _stopListening : _startListening,
+              onTapDown: (_) => _startRecording(),
+              onTapUp: (_) => _stopAndTranscribe(),
+              onTapCancel: () => _stopAndTranscribe(),
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 200),
                 width: 48, height: 48,
@@ -1110,7 +1214,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             Expanded(
               child: _voiceListening
                   ? Text(
-                      _voiceInterim.isNotEmpty ? _voiceInterim : 'Listening…',
+                      _voiceInterim.isNotEmpty ? _voiceInterim : 'Recording…',
                       style: TextStyle(
                           fontSize: 14,
                           fontStyle: _voiceInterim.isEmpty ? FontStyle.italic : FontStyle.normal,
@@ -1122,13 +1226,18 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                           SizedBox(width: 16, height: 16,
                               child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2)),
                           SizedBox(width: 8),
-                          Text('Processing…', style: TextStyle(fontSize: 13, color: _kSub)),
+                          Text('Sending to Gemini…', style: TextStyle(fontSize: 13, color: _kSub)),
                         ])
                       : _voiceError.isNotEmpty
-                          ? Text(_voiceError == 'no-speech' ? 'No speech detected — try again'
-                                : 'Error: $_voiceError',
-                              style: const TextStyle(fontSize: 13, color: _kWrongFg))
-                          : const Text('Tap mic and say item name + qty',
+                          ? Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+                              Text(_voiceError,
+                                  style: const TextStyle(fontSize: 13, color: _kWrongFg)),
+                              if (_lastTranscript.isNotEmpty)
+                                Text('Heard: $_lastTranscript',
+                                    style: const TextStyle(fontSize: 11, color: _kSub),
+                                    maxLines: 1, overflow: TextOverflow.ellipsis),
+                            ])
+                          : const Text('Hold mic · say item name + qty · release',
                               style: TextStyle(fontSize: 13, color: _kSub)),
             ),
             // Tally chip
@@ -1234,8 +1343,145 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           ]),
         ],
 
+        // ── Pending confirmation rows (from edge function) ──
+        if (_pendingConfirmations.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          ..._pendingConfirmations.asMap().entries.map((e) =>
+              _buildConfirmationRow(e.value, e.key)),
+        ],
+
         // ── Echo banner ──
         if (_lastEcho != null) _buildEchoBanner(_lastEcho!),
+      ]),
+    );
+  }
+
+  Widget _buildConfirmationRow(_PendingConfirmation conf, int idx) {
+    final isNone = conf.matchResult is MatchNone;
+    final isAmbiguous = conf.matchResult is MatchAmbiguous;
+    final candidates = isAmbiguous
+        ? (conf.matchResult as MatchAmbiguous).candidates
+        : <MatchCandidate>[];
+    final allCandidates = <MatchCandidate>[
+      if (!isNone && !isAmbiguous && conf.selectedProductId != null)
+        MatchCandidate(conf.selectedProductId!, conf.selectedProductName, 1.0),
+      ...candidates,
+    ];
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: isNone ? _kShortBg : _kBg,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: isNone ? _kShortFg.withValues(alpha: 0.3) : _kBorder),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // Heard name
+        Row(children: [
+          const Icon(Icons.graphic_eq_rounded, size: 14, color: _kSub),
+          const SizedBox(width: 4),
+          Expanded(
+            child: Text('Heard: "${conf.heardName}"',
+                style: const TextStyle(fontSize: 11, color: _kSub),
+                maxLines: 1, overflow: TextOverflow.ellipsis),
+          ),
+          GestureDetector(
+            onTap: () {
+              conf.dispose();
+              setState(() => _pendingConfirmations.removeAt(idx));
+            },
+            child: const Icon(Icons.close_rounded, size: 14, color: _kSub),
+          ),
+        ]),
+        const SizedBox(height: 6),
+        if (isNone) ...[
+          Text('No match found for "${conf.heardName}"',
+              style: const TextStyle(fontSize: 13, color: _kShortFg, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 4),
+          const Text('Tap an item below or type instead',
+              style: TextStyle(fontSize: 12, color: _kSub)),
+        ] else ...[
+          // Product selector (dropdown if ambiguous, chip if confident)
+          if (allCandidates.length > 1)
+            DropdownButtonHideUnderline(
+              child: DropdownButton<int>(
+                value: conf.selectedProductId,
+                isExpanded: true,
+                style: const TextStyle(fontSize: 14, color: _kText, fontWeight: FontWeight.w600),
+                items: allCandidates.map((c) => DropdownMenuItem(
+                  value: c.productId,
+                  child: Text(c.productName, style: const TextStyle(fontSize: 14, color: _kText)),
+                )).toList(),
+                onChanged: (id) {
+                  if (id == null) return;
+                  final match = allCandidates.firstWhere((c) => c.productId == id);
+                  setState(() {
+                    conf.selectedProductId = match.productId;
+                    conf.selectedProductName = match.productName;
+                  });
+                },
+              ),
+            )
+          else
+            Text(conf.selectedProductName,
+                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _kText)),
+          const SizedBox(height: 8),
+          // Qty + unit + confirm row
+          Row(children: [
+            const Text('Qty:', style: TextStyle(fontSize: 13, color: _kSub)),
+            const SizedBox(width: 6),
+            SizedBox(
+              width: 64,
+              height: 32,
+              child: TextField(
+                controller: conf.qtyCtrl,
+                keyboardType: TextInputType.number,
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _kText),
+                decoration: InputDecoration(
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 0),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(6),
+                    borderSide: const BorderSide(color: _kBorder),
+                  ),
+                  filled: true, fillColor: Colors.white,
+                ),
+              ),
+            ),
+            if (conf.unit != null) ...[
+              const SizedBox(width: 6),
+              Text(conf.unit!, style: const TextStyle(fontSize: 12, color: _kSub)),
+            ],
+            const Spacer(),
+            FilledButton(
+              style: FilledButton.styleFrom(
+                backgroundColor: _kGreen,
+                minimumSize: const Size(80, 36),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              onPressed: () async {
+                final productId = conf.selectedProductId;
+                if (productId == null) return;
+                final qty = double.tryParse(conf.qtyCtrl.text.trim());
+                if (qty == null || qty <= 0) {
+                  _showSnack('Enter a valid quantity');
+                  return;
+                }
+                conf.dispose();
+                setState(() => _pendingConfirmations.removeAt(idx));
+                await _voiceMarkProduct(
+                  productId: productId,
+                  productName: conf.selectedProductName,
+                  qty: qty,
+                  unit: conf.unit,
+                  rawSegment: conf.heardName,
+                );
+              },
+              child: const Text('Confirm', style: TextStyle(fontSize: 13, color: Colors.white)),
+            ),
+          ]),
+        ],
       ]),
     );
   }

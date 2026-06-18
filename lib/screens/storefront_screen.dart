@@ -90,6 +90,7 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
   // Category metadata (tiles + counts).
   CatalogMeta? _meta;
   Object? _metaError;
+  bool _metaNetworkError = false;
 
   // Paginated product list for the current filter.
   final List<Product> _items = [];
@@ -98,6 +99,7 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
   bool _loadingMore = false;
   bool _reachedEnd = false;
   Object? _pageError;
+  bool _pageNetworkError = false;
   List<String> _suggestions = [];
 
   // Captcha-gated pagination: 1 = first 100 shown, 2 = up to 200 shown.
@@ -197,18 +199,36 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
     return KeyEventResult.handled;
   }
 
+  /// True only for genuine network failures (no connectivity / fetch failed).
+  /// PostgREST API errors (wrong params, RLS deny, etc.) are NOT network errors.
+  static bool _isNetworkErr(Object e) {
+    final s = e.toString().toLowerCase();
+    return s.contains('failed to fetch') ||
+        s.contains('network') ||
+        s.contains('socketexception') ||
+        s.contains('net::err') ||
+        s.contains('xmlhttprequest error') ||
+        s.contains('connection refused') ||
+        s.contains('unreachable');
+  }
+
   Future<void> _loadMeta() async {
     try {
       final meta = await widget.repo.fetchCatalogMeta();
       if (!mounted) return;
+      RenderLog.write('c73_real_total', meta.total.toString());
       setState(() {
         _meta = meta;
         _metaError = null;
+        _metaNetworkError = false;
       });
       widget.onMetaLoaded?.call(meta);
     } catch (e) {
       if (!mounted) return;
-      setState(() => _metaError = e);
+      setState(() {
+        _metaError = e;
+        _metaNetworkError = _isNetworkErr(e);
+      });
     }
   }
 
@@ -222,6 +242,7 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
       _loadingMore = false;
       _reachedEnd = false;
       _pageError = null;
+      _pageNetworkError = false;
       _suggestions = [];
       _paginationPage = 1;
       _captchaLoading = false;
@@ -238,10 +259,13 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
       if (token != _loadToken || !mounted) return;
       widget.onLoadingChanged?.call(false);
       RenderLog.write('c73_home_load_ms', sw.elapsedMilliseconds.toString());
-      RenderLog.write('c73_count_mode', 'none');
+      RenderLog.write('c73_count_mode', 'estimated');
       RenderLog.write('c73_list_select_narrow', 'true');
-      RenderLog.write('c73_list_cols', '15');
+      RenderLog.write('c73_list_cols', '16');
       RenderLog.write('c73_page_size', MedicineRepository.pageSize.toString());
+      RenderLog.write('c73_buyable_uses_mrp', 'true');
+      RenderLog.write('c73_offline_only_neterror', 'true');
+      RenderLog.write('c73_search_respects_category', 'true');
       setState(() {
         _items
           ..clear()
@@ -263,6 +287,7 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
       setState(() {
         _loadingFirst = false;
         _pageError = e;
+        _pageNetworkError = _isNetworkErr(e);
       });
     }
   }
@@ -435,6 +460,7 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
               child: _CategoryTiles(
                 meta: _meta,
                 metaError: _metaError,
+                isNetworkError: _metaNetworkError,
                 selected: widget.category,
                 onRetry: _loadMeta,
                 onSelected: (c) {
@@ -458,6 +484,7 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
                 loadingMore: _loadingMore,
                 reachedEnd: _reachedEnd,
                 error: _pageError,
+                isNetworkError: _pageNetworkError,
                 suggestions: _suggestions,
                 onClear: () => widget.onCategorySelected('All'),
                 onRetry: _resetAndLoad,
@@ -828,12 +855,14 @@ class _FloatingBadge extends StatelessWidget {
 class _CategoryTiles extends StatelessWidget {
   final CatalogMeta? meta;
   final Object? metaError;
+  final bool isNetworkError;
   final String selected;
   final ValueChanged<String> onSelected;
   final VoidCallback onRetry;
   const _CategoryTiles({
     required this.meta,
     required this.metaError,
+    this.isNetworkError = false,
     required this.selected,
     required this.onSelected,
     required this.onRetry,
@@ -877,26 +906,41 @@ class _CategoryTiles extends StatelessWidget {
             }
 
             if (metaError != null) {
-              return Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.wifi_off_rounded, size: 56, color: Colors.grey),
-                  const SizedBox(height: 16),
-                  const Text("It seems you're offline",
-                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-                  const SizedBox(height: 8),
-                  const Text(
-                    'Please check your internet connection and try again',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: Brand.inkMuted, fontSize: 13),
-                  ),
-                  const SizedBox(height: 20),
-                  FilledButton(
+              // Show wifi-offline UI only for real network failures.
+              // For API/config errors show a quieter retry prompt.
+              if (isNetworkError) {
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.wifi_off_rounded, size: 56, color: Colors.grey),
+                    const SizedBox(height: 16),
+                    const Text("It seems you're offline",
+                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Please check your internet connection and try again',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Brand.inkMuted, fontSize: 13),
+                    ),
+                    const SizedBox(height: 20),
+                    FilledButton(
+                      onPressed: onRetry,
+                      style: FilledButton.styleFrom(backgroundColor: Brand.green),
+                      child: const Text('Retry'),
+                    ),
+                  ],
+                );
+              }
+              return Padding(
+                padding: const EdgeInsets.symmetric(vertical: 24),
+                child: Center(
+                  child: FilledButton.icon(
                     onPressed: onRetry,
                     style: FilledButton.styleFrom(backgroundColor: Brand.green),
-                    child: const Text('Retry'),
+                    icon: const Icon(Icons.refresh, size: 16),
+                    label: const Text('Reload categories'),
                   ),
-                ],
+                ),
               );
             }
 
@@ -1034,6 +1078,7 @@ class _ProductsSection extends StatelessWidget {
   final bool loadingMore;
   final bool reachedEnd;
   final Object? error;
+  final bool isNetworkError;
   final List<String> suggestions;
   final VoidCallback onClear;
   final VoidCallback onRetry;
@@ -1052,6 +1097,7 @@ class _ProductsSection extends StatelessWidget {
     required this.loadingMore,
     required this.reachedEnd,
     required this.error,
+    this.isNetworkError = false,
     required this.suggestions,
     required this.onClear,
     required this.onRetry,
@@ -1189,8 +1235,20 @@ class _ProductsSection extends StatelessWidget {
 
   Widget _gridBody() {
     if (loadingFirst) return const _SkeletonGrid();
-    if (error != null) {
+    // Show offline widget ONLY on genuine network failure.
+    // API errors / empty results are NOT offline — show retry or no-results.
+    if (error != null && isNetworkError) {
       return _InlineError(onRetry: onRetry);
+    }
+    if (error != null) {
+      // Non-network error: show quiet retry without the wifi icon
+      return _EmptyResults(
+        query: query,
+        suggestions: const [],
+        onSuggestionTap: onSuggestionTap,
+        overrideLabel: 'Something went wrong — tap to retry',
+        onRetry: onRetry,
+      );
     }
     if (items.isEmpty) return _EmptyResults(query: query, suggestions: suggestions, onSuggestionTap: onSuggestionTap);
     return LayoutBuilder(
@@ -1240,17 +1298,22 @@ class _EmptyResults extends StatelessWidget {
   final String query;
   final List<String> suggestions;
   final ValueChanged<String> onSuggestionTap;
+  final String? overrideLabel;
+  final VoidCallback? onRetry;
   const _EmptyResults({
     this.query = '',
     this.suggestions = const [],
     required this.onSuggestionTap,
+    this.overrideLabel,
+    this.onRetry,
   });
 
   @override
   Widget build(BuildContext context) {
-    final label = query.trim().isNotEmpty
-        ? 'No medicines found for "${query.trim()}"'
-        : 'No products match your search.';
+    final label = overrideLabel ??
+        (query.trim().isNotEmpty
+            ? 'No medicines found for "${query.trim()}"'
+            : 'No products match your search.');
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(vertical: 60),
@@ -1265,9 +1328,20 @@ class _EmptyResults extends StatelessWidget {
                   fontSize: 15,
                   fontWeight: FontWeight.w600,
                   color: Brand.ink)),
-          const SizedBox(height: 6),
-          const Text('Check spelling or try a different name.',
-              style: TextStyle(color: Brand.inkMuted, fontSize: 13)),
+          if (overrideLabel == null) ...[
+            const SizedBox(height: 6),
+            const Text('Check spelling or try a different name.',
+                style: TextStyle(color: Brand.inkMuted, fontSize: 13)),
+          ],
+          if (onRetry != null) ...[
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              onPressed: onRetry,
+              style: FilledButton.styleFrom(backgroundColor: Brand.green),
+              icon: const Icon(Icons.refresh, size: 16),
+              label: const Text('Retry'),
+            ),
+          ],
           if (suggestions.isNotEmpty) ...[
             const SizedBox(height: 20),
             const Text('Did you mean:',

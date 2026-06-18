@@ -287,7 +287,7 @@ class _CartControlState extends State<_CartControl>
               )
             : ScaleTransition(
                 scale: _popAnim,
-                child: widget.product.inStock
+                child: widget.product.hasMrp
                     ? PressEffect(
                         key: const ValueKey('add'),
                         child: SizedBox.expand(

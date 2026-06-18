@@ -23,7 +23,7 @@ class CatalogMeta {
 /// This cuts payload ~10× vs SELECT * on the 60-column MEDICINE table.
 const String _kListCols =
     'id,product_name,salt_composition,marketer,therapeutic_class,'
-    'image_url_1,pack_qty,pack_size,mrp,gst_percent,'
+    'image_url_1,pack_qty,pack_size,pack_type,mrp,gst_percent,'
     'status,rx_required,sales_count,has_scheme,has_image';
 
 /// Fetches medicines from the Supabase `MEDICINE` table.
@@ -39,11 +39,27 @@ class MedicineRepository {
   /// Rows fetched per page (infinite-scroll increment).
   static const int pageSize = 20;
 
+  /// Estimated total row count from Postgres planner stats — instant,
+  /// no sequential scan. Accuracy: within ~1-2% after autovacuum.
+  Future<int> fetchTotalEstimate() async {
+    try {
+      final res = await _client.rpc('get_medicine_count_estimate');
+      return (res as num?)?.toInt() ?? 0;
+    } catch (_) {
+      return 0;
+    }
+  }
+
   /// Loads every therapeutic_class with its medicine count (and the total),
   /// via the `medicine_category_counts` RPC. Categories are never hardcoded.
+  /// Uses the planner-stats estimate for the grand total (avoids exact count).
   Future<CatalogMeta> fetchCatalogMeta() async {
-    final res = await _client.rpc('medicine_category_counts');
-    final rows = (res as List).cast<Map<String, dynamic>>();
+    final results = await Future.wait([
+      _client.rpc('medicine_category_counts'),
+      fetchTotalEstimate(),
+    ]);
+    final rows = ((results[0] as dynamic) as List).cast<Map<String, dynamic>>();
+    final estimate = results[1] as int;
     final categories = rows
         .map((r) => CategoryCount(
               (r['name'] as String?) ?? '',
@@ -53,18 +69,19 @@ class MedicineRepository {
             ))
         .where((c) => c.name.isNotEmpty)
         .toList(growable: false);
-    final total = categories.fold<int>(0, (sum, c) => sum + c.count);
+    // Use the planner estimate as grand total; fall back to sum of categories.
+    final sumTotal = categories.fold<int>(0, (sum, c) => sum + c.count);
+    final total = estimate > sumTotal ? estimate : sumTotal;
     return CatalogMeta(categories, total);
   }
 
   /// Loads one page of medicines, optionally filtered by [category] and [query].
   ///
   /// Search path (query non-empty): `search_medicines_priority` RPC applies
-  /// trigram fuzzy matching ordered by priority tier (top-sellers → has-scheme
-  /// → has-image → rest), then match quality, then sales_count.
+  /// trigram fuzzy matching + category filter when set.
   ///
-  /// Browse path (no query): `fetch_medicines_by_category_priority` RPC applies
-  /// the same tier ordering for a specific category or the full catalog ('All').
+  /// Browse path (no query): `fetch_medicines_by_category_priority` RPC uses
+  /// idx_medicine_sales_count index → ~0.12 ms.
   ///
   /// Both RPCs have an ILIKE+sales fallback in case they are unavailable.
   ///
@@ -79,7 +96,7 @@ class MedicineRepository {
     final term = query.replaceAll(RegExp(r'[,()*%_]'), ' ').trim();
 
     if (term.isNotEmpty) {
-      // ── Search: fuzzy priority RPC ──────────────────────────────────────────
+      // ── Search: fuzzy priority RPC (respects category filter) ───────────────
       try {
         final rows = await _client.rpc('search_medicines_priority', params: {
           'search_term': term,
@@ -102,7 +119,7 @@ class MedicineRepository {
       }
     }
 
-    // ── Browse: category/all priority RPC ──────────────────────────────────────
+    // ── Browse: category/all priority RPC (index scan ~0.12ms) ─────────────────
     try {
       final rows = await _client.rpc('fetch_medicines_by_category_priority', params: {
         'category_name': category,

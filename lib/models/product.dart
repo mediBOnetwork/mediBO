@@ -108,13 +108,18 @@ class Product {
       therapeuticClass: tClass,
       imageUrl: allImages.isNotEmpty ? allImages[0] : '',
       imageUrls: allImages,
-      // pack_size is null in MEDICINE; pack_qty holds "10 tablets in 1 strip"
-      packSize: (map['pack_qty'] as String?) ?? (map['pack_size'] as String?) ?? '',
+      // pack_qty preferred; fall back to pack_size then pack_type (e.g. "Strip")
+      packSize: (map['pack_qty'] as String?)?.isNotEmpty == true
+          ? map['pack_qty'] as String
+          : (map['pack_size'] as String?)?.isNotEmpty == true
+              ? map['pack_size'] as String
+              : (map['pack_type'] as String?) ?? '',
       mrp: mrp,
       b2bPrice: b2bPrice,
       gstPercent: (map['gst_percent'] as num?)?.toDouble() ?? 12.0,
       moq: 1,
-      stock: status == 'Available' ? 100 : 0,
+      // Stock flag kept for legacy compat; buyability now uses hasMrp getter.
+      stock: mrp > 0 ? 100 : 0,
       schedule: isPrescription ? 'Schedule H' : 'OTC',
       requiresPrescription: isPrescription,
       discount: 0.0,
@@ -206,4 +211,9 @@ class Product {
   double get marginPercent => mrp <= 0 ? 0 : ((mrp - b2bPrice) / mrp) * 100;
 
   bool get inStock => stock > 0;
+
+  /// True when the product has a price — the correct buyability signal.
+  /// Replaces old status='active' / stock checks which relied on fields
+  /// the 1mg import didn't populate.
+  bool get hasMrp => mrp > 0;
 }

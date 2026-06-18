@@ -1075,32 +1075,19 @@ class _MobileSearchBar extends StatefulWidget {
 
 class _MobileSearchBarState extends State<_MobileSearchBar> {
   Timer? _debounce;
-  Timer? _suggestDebounce;
   bool _hasText = false;
-  final _focusNode = FocusNode();
-  final _link = LayerLink();
-  final _barKey = GlobalKey();
-  OverlayEntry? _overlay;
-  List<String> _suggestions = [];
-  int _suggestSeq = 0;
-  final _repo = MedicineRepository();
 
   @override
   void initState() {
     super.initState();
     widget.controller.addListener(_onControllerChange);
     _hasText = widget.controller.text.isNotEmpty;
-    _focusNode.addListener(_onFocusChange);
   }
 
   @override
   void dispose() {
     widget.controller.removeListener(_onControllerChange);
-    _focusNode.removeListener(_onFocusChange);
-    _focusNode.dispose();
     _debounce?.cancel();
-    _suggestDebounce?.cancel();
-    _hideOverlay();
     super.dispose();
   }
 
@@ -1109,122 +1096,15 @@ class _MobileSearchBarState extends State<_MobileSearchBar> {
     if (hasText != _hasText) setState(() => _hasText = hasText);
   }
 
-  void _onFocusChange() {
-    if (!_focusNode.hasFocus) {
-      Future.delayed(const Duration(milliseconds: 150), () {
-        if (mounted && !_focusNode.hasFocus) _hideOverlay();
-      });
-    }
-  }
-
   void _onChanged(String v) {
     _debounce?.cancel();
     _debounce = Timer(const Duration(milliseconds: 150), () {
       widget.onSearch(v);
     });
-    _suggestDebounce?.cancel();
-    if (v.trim().length >= 2) {
-      _suggestDebounce = Timer(const Duration(milliseconds: 120), () => _fetchSuggestions(v));
-    } else {
-      _hideOverlay();
-    }
-  }
-
-  Future<void> _fetchSuggestions(String v) async {
-    final seq = ++_suggestSeq;
-    final sw = Stopwatch()..start();
-    final results = await _repo.fetchSuggestions(v);
-    sw.stop();
-    if (seq != _suggestSeq || !mounted) return;
-    _suggestions = results.take(8).toList();
-    if (_suggestions.isEmpty) { _hideOverlay(); return; }
-    try {
-      final log = sw.elapsedMilliseconds;
-      // ignore: invalid_use_of_protected_member
-      (context as Element).markNeedsBuild();
-    } catch (_) {}
-    _showOverlay();
-  }
-
-  void _showOverlay() {
-    if (_overlay != null) {
-      _overlay!.markNeedsBuild();
-      return;
-    }
-    if (!mounted) return;
-    _overlay = OverlayEntry(builder: (_) => _buildDropdown());
-    Overlay.of(context).insert(_overlay!);
-  }
-
-  void _hideOverlay() {
-    _overlay?.remove();
-    _overlay = null;
-  }
-
-  void _selectSuggestion(String s) {
-    _hideOverlay();
-    widget.controller.text = s;
-    widget.controller.selection = TextSelection.collapsed(offset: s.length);
-    _debounce?.cancel();
-    widget.onSearch(s);
-    widget.onScrollToResults();
-    FocusManager.instance.primaryFocus?.unfocus();
-  }
-
-  double get _barWidth {
-    final box = _barKey.currentContext?.findRenderObject() as RenderBox?;
-    return box?.size.width ?? 340;
-  }
-
-  Widget _buildDropdown() {
-    return CompositedTransformFollower(
-      link: _link,
-      showWhenUnlinked: false,
-      targetAnchor: Alignment.bottomLeft,
-      followerAnchor: Alignment.topLeft,
-      child: Material(
-        elevation: 6,
-        borderRadius: BorderRadius.circular(12),
-        child: SizedBox(
-          width: _barWidth,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              for (int i = 0; i < _suggestions.length; i++) ...[
-                if (i > 0) const Divider(height: 1, color: Color(0xFFE5E7EB)),
-                InkWell(
-                  onTap: () => _selectSuggestion(_suggestions[i]),
-                  borderRadius: i == 0
-                      ? const BorderRadius.vertical(top: Radius.circular(12))
-                      : i == _suggestions.length - 1
-                          ? const BorderRadius.vertical(bottom: Radius.circular(12))
-                          : BorderRadius.zero,
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.search, size: 15, color: Color(0xFF9CA3AF)),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Text(_suggestions[i],
-                              style: const TextStyle(fontSize: 14, color: Color(0xFF111827)),
-                              maxLines: 1, overflow: TextOverflow.ellipsis),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-            ],
-          ),
-        ),
-      ),
-    );
   }
 
   void _submitNow() {
     _debounce?.cancel();
-    _hideOverlay();
     final text = widget.controller.text;
     widget.onSearch(text);
     if (text.trim().length >= 2) widget.onScrollToResults();
@@ -1233,7 +1113,6 @@ class _MobileSearchBarState extends State<_MobileSearchBar> {
 
   void _clearSearch() {
     _debounce?.cancel();
-    _hideOverlay();
     widget.controller.clear();
     widget.onSearch('');
     FocusManager.instance.primaryFocus?.unfocus();
@@ -1241,10 +1120,7 @@ class _MobileSearchBarState extends State<_MobileSearchBar> {
 
   @override
   Widget build(BuildContext context) {
-    return CompositedTransformTarget(
-      link: _link,
-      child: Container(
-      key: _barKey,
+    return Container(
       color: Colors.white,
       padding: const EdgeInsets.fromLTRB(14, 8, 14, 8),
       child: Container(
@@ -1261,7 +1137,6 @@ class _MobileSearchBarState extends State<_MobileSearchBar> {
             Expanded(
               child: TextField(
                 controller: widget.controller,
-                focusNode: _focusNode,
                 onChanged: _onChanged,
                 onSubmitted: (_) => _submitNow(),
                 textInputAction: TextInputAction.search,
@@ -1305,7 +1180,6 @@ class _MobileSearchBarState extends State<_MobileSearchBar> {
               ),
           ],
         ),
-      ),
       ),
     );
   }
@@ -3323,32 +3197,19 @@ class _DesktopSearchRow extends StatefulWidget {
 
 class _DesktopSearchRowState extends State<_DesktopSearchRow> {
   Timer? _debounce;
-  Timer? _suggestDebounce;
   bool _hasText = false;
-  final _focusNode = FocusNode();
-  final _link = LayerLink();
-  final _barKey = GlobalKey();
-  OverlayEntry? _overlay;
-  List<String> _suggestions = [];
-  int _suggestSeq = 0;
-  final _repo = MedicineRepository();
 
   @override
   void initState() {
     super.initState();
     widget.controller.addListener(_onControllerChange);
     _hasText = widget.controller.text.isNotEmpty;
-    _focusNode.addListener(_onFocusChange);
   }
 
   @override
   void dispose() {
     widget.controller.removeListener(_onControllerChange);
-    _focusNode.removeListener(_onFocusChange);
-    _focusNode.dispose();
     _debounce?.cancel();
-    _suggestDebounce?.cancel();
-    _hideOverlay();
     super.dispose();
   }
 
@@ -3357,115 +3218,15 @@ class _DesktopSearchRowState extends State<_DesktopSearchRow> {
     if (hasText != _hasText) setState(() => _hasText = hasText);
   }
 
-  void _onFocusChange() {
-    if (!_focusNode.hasFocus) {
-      Future.delayed(const Duration(milliseconds: 150), () {
-        if (mounted && !_focusNode.hasFocus) _hideOverlay();
-      });
-    }
-  }
-
   void _onChanged(String v) {
     _debounce?.cancel();
     _debounce = Timer(const Duration(milliseconds: 150), () {
       widget.onSearch(v);
     });
-    _suggestDebounce?.cancel();
-    if (v.trim().length >= 2) {
-      _suggestDebounce = Timer(const Duration(milliseconds: 120), () => _fetchSuggestions(v));
-    } else {
-      _hideOverlay();
-    }
-  }
-
-  Future<void> _fetchSuggestions(String v) async {
-    final seq = ++_suggestSeq;
-    final results = await _repo.fetchSuggestions(v);
-    if (seq != _suggestSeq || !mounted) return;
-    _suggestions = results.take(8).toList();
-    if (_suggestions.isEmpty) { _hideOverlay(); return; }
-    _showOverlay();
-  }
-
-  void _showOverlay() {
-    if (_overlay != null) {
-      _overlay!.markNeedsBuild();
-      return;
-    }
-    if (!mounted) return;
-    _overlay = OverlayEntry(builder: (_) => _buildDropdown());
-    Overlay.of(context).insert(_overlay!);
-  }
-
-  void _hideOverlay() {
-    _overlay?.remove();
-    _overlay = null;
-  }
-
-  void _selectSuggestion(String s) {
-    _hideOverlay();
-    widget.controller.text = s;
-    widget.controller.selection = TextSelection.collapsed(offset: s.length);
-    _debounce?.cancel();
-    widget.onSearch(s);
-    widget.onScrollToResults();
-    FocusManager.instance.primaryFocus?.unfocus();
-  }
-
-  double get _barWidth {
-    final box = _barKey.currentContext?.findRenderObject() as RenderBox?;
-    return box?.size.width ?? 500;
-  }
-
-  Widget _buildDropdown() {
-    return CompositedTransformFollower(
-      link: _link,
-      showWhenUnlinked: false,
-      targetAnchor: Alignment.bottomLeft,
-      followerAnchor: Alignment.topLeft,
-      child: Material(
-        elevation: 6,
-        borderRadius: BorderRadius.circular(12),
-        child: SizedBox(
-          width: _barWidth,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              for (int i = 0; i < _suggestions.length; i++) ...[
-                if (i > 0) const Divider(height: 1, color: Color(0xFFE5E7EB)),
-                InkWell(
-                  onTap: () => _selectSuggestion(_suggestions[i]),
-                  borderRadius: i == 0
-                      ? const BorderRadius.vertical(top: Radius.circular(12))
-                      : i == _suggestions.length - 1
-                          ? const BorderRadius.vertical(bottom: Radius.circular(12))
-                          : BorderRadius.zero,
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.search, size: 15, color: Color(0xFF9CA3AF)),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Text(_suggestions[i],
-                              style: const TextStyle(fontSize: 14, color: Color(0xFF111827)),
-                              maxLines: 1, overflow: TextOverflow.ellipsis),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-            ],
-          ),
-        ),
-      ),
-    );
   }
 
   void _submitNow() {
     _debounce?.cancel();
-    _hideOverlay();
     final text = widget.controller.text;
     widget.onSearch(text);
     if (text.trim().length >= 2) widget.onScrollToResults();
@@ -3474,7 +3235,6 @@ class _DesktopSearchRowState extends State<_DesktopSearchRow> {
 
   void _clearSearch() {
     _debounce?.cancel();
-    _hideOverlay();
     widget.controller.clear();
     widget.onSearch('');
     FocusManager.instance.primaryFocus?.unfocus();
@@ -3482,10 +3242,7 @@ class _DesktopSearchRowState extends State<_DesktopSearchRow> {
 
   @override
   Widget build(BuildContext context) {
-    return CompositedTransformTarget(
-      link: _link,
-      child: Container(
-      key: _barKey,
+    return Container(
       color: Colors.white,
       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
       child: Container(
@@ -3504,7 +3261,6 @@ class _DesktopSearchRowState extends State<_DesktopSearchRow> {
             Expanded(
               child: TextField(
                 controller: widget.controller,
-                focusNode: _focusNode,
                 onChanged: _onChanged,
                 onSubmitted: (_) => _submitNow(),
                 textInputAction: TextInputAction.search,
@@ -3567,7 +3323,6 @@ class _DesktopSearchRowState extends State<_DesktopSearchRow> {
             ),
           ],
         ),
-      ),
       ),
     );
   }

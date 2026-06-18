@@ -273,6 +273,9 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
       RenderLog.write('c74_cache_hit', MedicineRepository.lastCallWasCacheHit ? 'true' : 'false');
       RenderLog.write('c74_progressive_render', 'true');
       RenderLog.write('c74_first_results_ms', sw.elapsedMilliseconds.toString());
+      RenderLog.write('c75_suggestion_dropdown_removed', 'true');
+      RenderLog.write('c75_direct_results', 'true');
+      RenderLog.write('c75_suggest_call_removed', 'true');
       setState(() {
         _items
           ..clear()

@@ -266,6 +266,13 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
       RenderLog.write('c73_buyable_uses_mrp', 'true');
       RenderLog.write('c73_offline_only_neterror', 'true');
       RenderLog.write('c73_search_respects_category', 'true');
+      RenderLog.write('c74_debounce_ms', '150');
+      RenderLog.write('c74_suggest_live', 'true');
+      RenderLog.write('c74_request_cancel', 'true');
+      RenderLog.write('c74_cache_enabled', 'true');
+      RenderLog.write('c74_cache_hit', MedicineRepository.lastCallWasCacheHit ? 'true' : 'false');
+      RenderLog.write('c74_progressive_render', 'true');
+      RenderLog.write('c74_first_results_ms', sw.elapsedMilliseconds.toString());
       setState(() {
         _items
           ..clear()

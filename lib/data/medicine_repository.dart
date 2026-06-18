@@ -18,6 +18,19 @@ class CatalogMeta {
   const CatalogMeta(this.categories, this.total);
 }
 
+// ─── Session-scoped in-memory caches (cleared on app restart) ────────────────
+// Keyed by "$term|$category|$offset". Cap at 50 entries per cache (LRU-evict).
+final Map<String, List<Product>> _resultCache = {};
+final Map<String, List<String>> _suggestCache = {};
+const int _kMaxCacheEntries = 50;
+
+void _cacheSet<V>(Map<String, V> cache, String key, V value) {
+  if (cache.length >= _kMaxCacheEntries) {
+    cache.remove(cache.keys.first); // evict oldest entry
+  }
+  cache[key] = value;
+}
+
 /// Columns fetched for list/search cards — excludes heavy text blobs
 /// (uses, benefits, side_effects, how_it_works, PS1-PS30, etc.).
 /// This cuts payload ~10× vs SELECT * on the 60-column MEDICINE table.
@@ -38,6 +51,9 @@ class MedicineRepository {
 
   /// Rows fetched per page (infinite-scroll increment).
   static const int pageSize = 20;
+
+  /// Set to true when the last [fetchPage] call was served from cache.
+  static bool lastCallWasCacheHit = false;
 
   /// Estimated total row count from Postgres planner stats — instant,
   /// no sequential scan. Accuracy: within ~1-2% after autovacuum.
@@ -95,8 +111,17 @@ class MedicineRepository {
     // Strip characters that break PostgREST's or()/ilike syntax.
     final term = query.replaceAll(RegExp(r'[,()*%_]'), ' ').trim();
 
+    final cacheKey = '${term.toLowerCase()}|$category|$offset';
+    final cached = _resultCache[cacheKey];
+    if (cached != null) {
+      lastCallWasCacheHit = true;
+      return cached;
+    }
+    lastCallWasCacheHit = false;
+
     if (term.isNotEmpty) {
       // ── Search: fuzzy priority RPC (respects category filter) ───────────────
+      List<Product> result;
       try {
         final rows = await _client.rpc('search_medicines_priority', params: {
           'search_term': term,
@@ -104,7 +129,7 @@ class MedicineRepository {
           'page_offset': offset,
           'page_limit': limit,
         });
-        return (rows as List)
+        result = (rows as List)
             .map((r) => Product.fromMap(r as Map<String, dynamic>))
             .toList(growable: false);
       } catch (_) {
@@ -115,18 +140,21 @@ class MedicineRepository {
             .or('product_name.ilike.$pat,salt_composition.ilike.$pat,marketer.ilike.$pat')
             .order('sales_count', ascending: false)
             .range(offset, offset + limit - 1);
-        return rows.map((r) => Product.fromMap(r)).toList(growable: false);
+        result = rows.map((r) => Product.fromMap(r)).toList(growable: false);
       }
+      _cacheSet(_resultCache, cacheKey, result);
+      return result;
     }
 
     // ── Browse: category/all priority RPC (index scan ~0.12ms) ─────────────────
+    List<Product> result;
     try {
       final rows = await _client.rpc('fetch_medicines_by_category_priority', params: {
         'category_name': category,
         'page_offset': offset,
         'page_limit': limit,
       });
-      return (rows as List)
+      result = (rows as List)
           .map((r) => Product.fromMap(r as Map<String, dynamic>))
           .toList(growable: false);
     } catch (_) {
@@ -135,8 +163,10 @@ class MedicineRepository {
       final rows = await fb
           .order('sales_count', ascending: false)
           .range(offset, offset + limit - 1);
-      return rows.map((r) => Product.fromMap(r)).toList(growable: false);
+      result = rows.map((r) => Product.fromMap(r)).toList(growable: false);
     }
+    _cacheSet(_resultCache, cacheKey, result);
+    return result;
   }
 
   /// Returns up to 3 product names similar to [query] for "Did you mean?"
@@ -144,12 +174,17 @@ class MedicineRepository {
   Future<List<String>> fetchSuggestions(String query) async {
     final term = query.replaceAll(RegExp(r'[,()*%_]'), ' ').trim();
     if (term.isEmpty) return const [];
+    final key = term.toLowerCase();
+    final cached = _suggestCache[key];
+    if (cached != null) return cached;
     try {
       final rows = await _client.rpc('suggest_medicines', params: {'search_term': term});
-      return (rows as List)
+      final result = (rows as List)
           .map((r) => (r as Map<String, dynamic>)['product_name'] as String? ?? '')
           .where((s) => s.isNotEmpty)
           .toList();
+      _cacheSet(_suggestCache, key, result);
+      return result;
     } catch (_) {
       return const [];
     }

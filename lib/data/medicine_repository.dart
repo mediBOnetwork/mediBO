@@ -117,8 +117,6 @@ class MedicineRepository {
       if (category != 'All') fb = fb.eq('therapeutic_class', category);
       final rows = await fb
           .order('sales_count', ascending: false)
-          .order('has_scheme', ascending: false)
-          .order('has_image', ascending: false)
           .range(offset, offset + limit - 1);
       return rows.map((r) => Product.fromMap(r)).toList(growable: false);
     }

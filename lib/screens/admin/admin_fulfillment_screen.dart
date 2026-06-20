@@ -2032,42 +2032,50 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
         // 3. "N spoken" pill (left of bar) + progress bar + "N/N" count
         if (_items.isNotEmpty) ...[
-          // #95: constant reserved slot — always same width; pill visible only when tally>0
+          // #96: constant reserved slot — always visible; muted style at 0, active style at N
           const SizedBox(width: 12),
           SizedBox(
             width: 110, // kSpokenSlotW — constant so bar never shifts
-            child: Visibility(
-              visible: _tally.isNotEmpty,
-              maintainSize: true,
-              maintainAnimation: true,
-              maintainState: true,
-              child: GestureDetector(
-                onTap: _showTallySheet,
-                child: Builder(builder: (ctx) {
-                  RenderLog.write('change_92_spoken_pill', '1');
-                  RenderLog.write('change_92_no_overlap', '1');
-                  RenderLog.write('change_95_spoken_slot_fixed', '1');
-                  RenderLog.write('change_95_no_shift', '1');
-                  return Container(
-                    height: 24,
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: _kReceivedBg,
-                      borderRadius: BorderRadius.circular(999),
-                      border: Border.all(color: _kReceivedFg.withValues(alpha: 0.25)),
+            child: Builder(builder: (ctx) {
+              RenderLog.write('change_92_spoken_pill', '1');
+              RenderLog.write('change_95_spoken_slot_fixed', '1');
+              RenderLog.write('change_95_no_shift', '1');
+              RenderLog.write('change_96_spoken_always', '1');
+              final hasTally = _tally.isNotEmpty;
+              return GestureDetector(
+                onTap: hasTally ? _showTallySheet : null,
+                child: Container(
+                  height: 24,
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: hasTally ? _kReceivedBg : const Color(0xFFF3F4F6),
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(
+                      color: hasTally
+                          ? _kReceivedFg.withValues(alpha: 0.25)
+                          : const Color(0xFFD1D5DB),
                     ),
-                    child: Row(mainAxisSize: MainAxisSize.min, children: [
-                      const Icon(Icons.check_rounded, size: 11, color: _kReceivedFg),
-                      const SizedBox(width: 4),
-                      Text('${_tally.length} spoken',
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                              fontSize: 12.5, fontWeight: FontWeight.w600, color: _kReceivedFg)),
-                    ]),
-                  );
-                }),
-              ),
-            ),
+                  ),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Icon(
+                      Icons.check_rounded,
+                      size: 11,
+                      color: hasTally ? _kReceivedFg : const Color(0xFF9CA3AF),
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      '${_tally.length} spoken',
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w600,
+                        color: hasTally ? _kReceivedFg : const Color(0xFF9CA3AF),
+                      ),
+                    ),
+                  ]),
+                ),
+              );
+            }),
           ),
           const SizedBox(width: 12),
           ConstrainedBox(

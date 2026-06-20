@@ -355,6 +355,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // ── Voice results ──
   _VoiceEcho? _lastEcho;
   Timer? _echoTimer;
+  Timer? _idleTimer;              // 90s auto-stop safety
+  DateTime? _recStartTime;        // when current recording started
   final List<List<Map<String, dynamic>>> _undoStack = [];   // each = rows from one call
   final Map<int, num> _tally = {};  // product_id -> total allocated this session
 
@@ -394,6 +396,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     _voiceService.dispose();
     for (final c in _pendingConfirmations) { c.dispose(); }
     _echoTimer?.cancel();
+    _idleTimer?.cancel();
     _voiceTextCtrl.dispose();
     super.dispose();
   }
@@ -464,6 +467,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     if (_voiceListening) {
       _voiceService.cancel().ignore();
       _recStarted = false;
+      _idleTimer?.cancel();
     }
     for (final c in _pendingConfirmations) { c.dispose(); }
     setState(() {
@@ -675,6 +679,37 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   // ── VOICE (Vertex Gemini via voice-receive edge function) ──────────────────
 
+  // Tap-to-toggle: one tap = start, next tap = stop+send.
+  Future<void> _toggleRecording() async {
+    if (_voiceProcessing) return; // busy — ignore double-tap
+    if (_voiceListening) {
+      // Stop
+      _idleTimer?.cancel();
+      final secs = _recStartTime != null
+          ? DateTime.now().difference(_recStartTime!).inSeconds
+          : 0;
+      RenderLog.write('80_mic_tap_stop', 'true');
+      RenderLog.write('80_rec_seconds', '$secs');
+      await _stopAndTranscribe();
+    } else {
+      // Start
+      RenderLog.write('80_mic_tap_start', 'true');
+      await _startRecording();
+      if (_voiceListening) {
+        _recStartTime = DateTime.now();
+        _idleTimer?.cancel();
+        _idleTimer = Timer(const Duration(seconds: 90), _autoStopIdle);
+      }
+    }
+  }
+
+  Future<void> _autoStopIdle() async {
+    if (!_voiceListening) return;
+    RenderLog.write('80_auto_stop_idle', 'true');
+    if (mounted) _showSnack('Mic stopped automatically.');
+    await _stopAndTranscribe();
+  }
+
   Future<void> _startRecording() async {
     if (!_voiceSupported || _voiceListening || _voiceProcessing) return;
     // Clear prior confirmations
@@ -763,6 +798,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       if (!mounted) return;
       RenderLog.write('77_invoke_items', '${items.length}');
       RenderLog.write('79_voice_items', '${items.length}');
+      RenderLog.write('80_voice_items', '${items.length}');
 
       if (items.isEmpty) {
         setState(() {
@@ -1257,21 +1293,45 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // ── Voice panel ─────────────────────────────────────────────────────────────
 
   Widget _buildVoicePanel() {
-    final isActive = _voiceListening || _voiceProcessing;
-
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 10, 16, 0),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        color: isActive
-            ? _kGreen.withValues(alpha: 0.06)
-            : _kBg,
+        color: _voiceListening
+            ? _kWrongFg.withValues(alpha: 0.05)
+            : _voiceProcessing
+                ? _kGreen.withValues(alpha: 0.06)
+                : _kBg,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: isActive ? _kGreen.withValues(alpha: 0.4) : _kBorder,
+          color: _voiceListening
+              ? _kWrongFg.withValues(alpha: 0.35)
+              : _voiceProcessing
+                  ? _kGreen.withValues(alpha: 0.4)
+                  : _kBorder,
         ),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // ── "All counted" reminder banner (shown while recording if all items done) ──
+        if (_voiceListening && _allDone) ...[
+          Builder(builder: (_) {
+            RenderLog.write('80_all_counted_banner_shown', 'true');
+            return Container(
+              width: double.infinity,
+              margin: const EdgeInsets.only(bottom: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              decoration: BoxDecoration(
+                color: _kReceivedBg,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: _kReceivedFg.withValues(alpha: 0.4)),
+              ),
+              child: const Text(
+                '✅ All items counted — tap the mic to stop recording.',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _kReceivedFg),
+              ),
+            );
+          }),
+        ],
         // ── Top row: mic button + tally + type fallback ──
         Row(children: [
           if (!_voiceSupported) ...[
@@ -1282,45 +1342,51 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                   style: TextStyle(fontSize: 13, color: _kSub)),
             ),
           ] else ...[
-            // Mic button — push-to-talk (hold to record, release to transcribe)
+            // Mic button — tap to start, tap again to stop
             GestureDetector(
-              onTapDown: (_) => _startRecording(),
-              onTapUp: (_) => _stopAndTranscribe(),
-              onTapCancel: () => _stopAndTranscribe(),
+              onTap: _toggleRecording,
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 200),
-                width: 48, height: 48,
+                width: 56, height: 56,
                 decoration: BoxDecoration(
-                  color: _voiceListening ? _kGreen : _kGreen.withValues(alpha: 0.12),
+                  color: _voiceListening
+                      ? _kWrongFg
+                      : _voiceProcessing
+                          ? _kSub
+                          : _kGreen.withValues(alpha: 0.12),
                   shape: BoxShape.circle,
                   boxShadow: _voiceListening
-                      ? [BoxShadow(color: _kGreen.withValues(alpha: 0.4), blurRadius: 12, spreadRadius: 2)]
+                      ? [BoxShadow(color: _kWrongFg.withValues(alpha: 0.45), blurRadius: 16, spreadRadius: 3)]
                       : [],
                 ),
                 child: Icon(
-                  _voiceListening ? Icons.mic_rounded : Icons.mic_none_rounded,
-                  color: _voiceListening ? Colors.white : _kGreen,
-                  size: 22,
+                  _voiceListening
+                      ? Icons.stop_rounded
+                      : _voiceProcessing
+                          ? Icons.hourglass_top_rounded
+                          : Icons.mic_none_rounded,
+                  color: (_voiceListening || _voiceProcessing) ? Colors.white : _kGreen,
+                  size: 24,
                 ),
               ),
             ),
             const SizedBox(width: 10),
             Expanded(
               child: _voiceListening
-                  ? Text(
-                      _voiceInterim.isNotEmpty ? _voiceInterim : 'Recording…',
-                      style: TextStyle(
-                          fontSize: 14,
-                          fontStyle: _voiceInterim.isEmpty ? FontStyle.italic : FontStyle.normal,
-                          color: _voiceInterim.isNotEmpty ? _kText : _kSub),
-                      maxLines: 2, overflow: TextOverflow.ellipsis,
-                    )
+                  ? Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+                      const Text('● Recording… tap to stop',
+                          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: _kWrongFg)),
+                      if (_voiceInterim.isNotEmpty)
+                        Text(_voiceInterim,
+                            style: const TextStyle(fontSize: 12, color: _kSub),
+                            maxLines: 1, overflow: TextOverflow.ellipsis),
+                    ])
                   : _voiceProcessing
                       ? const Row(children: [
                           SizedBox(width: 16, height: 16,
                               child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2)),
                           SizedBox(width: 8),
-                          Text('Sending to Gemini…', style: TextStyle(fontSize: 13, color: _kSub)),
+                          Text('Processing…', style: TextStyle(fontSize: 13, color: _kSub)),
                         ])
                       : _voiceError.isNotEmpty
                           ? Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
@@ -1331,7 +1397,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                                     style: const TextStyle(fontSize: 11, color: _kSub),
                                     maxLines: 1, overflow: TextOverflow.ellipsis),
                             ])
-                          : const Text('Hold mic · say item name + qty · release',
+                          : const Text('Tap to start recording',
                               style: TextStyle(fontSize: 13, color: _kSub)),
             ),
             // Tally chip

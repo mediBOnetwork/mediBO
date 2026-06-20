@@ -42,6 +42,10 @@ class Product {
   /// Units currently available in the distributor's stock.
   final int stock;
 
+  /// #102: true = at least one PS1–30 supplier exists → item is orderable.
+  /// null (during backfill) is treated as false (unavailable) for safety.
+  final bool? buyable;
+
   /// Regulatory schedule, e.g. "Schedule H", "OTC".
   final String schedule;
 
@@ -68,6 +72,7 @@ class Product {
     required this.b2bPrice,
     required this.moq,
     required this.stock,
+    this.buyable,
     required this.schedule,
     required this.requiresPrescription,
     required this.discount,
@@ -118,8 +123,9 @@ class Product {
       b2bPrice: b2bPrice,
       gstPercent: (map['gst_percent'] as num?)?.toDouble() ?? 12.0,
       moq: 1,
-      // Stock flag kept for legacy compat; buyability now uses hasMrp getter.
+      // Stock flag kept for legacy compat; buyability now uses isBuyable getter.
       stock: mrp > 0 ? 100 : 0,
+      buyable: map['buyable'] as bool?,
       schedule: isPrescription ? 'Schedule H' : 'OTC',
       requiresPrescription: isPrescription,
       discount: 0.0,
@@ -142,6 +148,7 @@ class Product {
         'gstPercent': gstPercent,
         'moq': moq,
         'stock': stock,
+        'buyable': buyable,
         'schedule': schedule,
         'requiresPrescription': requiresPrescription,
         'discount': discount,
@@ -167,6 +174,7 @@ class Product {
       gstPercent: (map['gstPercent'] as num?)?.toDouble() ?? 12.0,
       moq: (map['moq'] as int?) ?? 1,
       stock: (map['stock'] as int?) ?? 0,
+      buyable: map['buyable'] as bool?,
       schedule: (map['schedule'] as String?) ?? 'OTC',
       requiresPrescription: (map['requiresPrescription'] as bool?) ?? false,
       discount: (map['discount'] as num?)?.toDouble() ?? 0.0,
@@ -212,8 +220,10 @@ class Product {
 
   bool get inStock => stock > 0;
 
-  /// True when the product has a price — the correct buyability signal.
-  /// Replaces old status='active' / stock checks which relied on fields
-  /// the 1mg import didn't populate.
+  /// True when the product has a price — legacy check still used for MRP display.
   bool get hasMrp => mrp > 0;
+
+  /// #102: True only when buyable==true (at least one PS supplier).
+  /// null (during backfill) is treated as false (unavailable) for safety.
+  bool get isBuyable => buyable == true;
 }

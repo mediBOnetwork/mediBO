@@ -37,7 +37,7 @@ void _cacheSet<V>(Map<String, V> cache, String key, V value) {
 const String _kListCols =
     'id,product_name,salt_composition,marketer,therapeutic_class,'
     'image_url_1,pack_qty,pack_size,pack_type,mrp,gst_percent,'
-    'status,rx_required,sales_count,has_scheme,has_image';
+    'status,rx_required,sales_count,has_scheme,has_image,buyable';
 
 /// Fetches medicines from the Supabase `MEDICINE` table.
 ///

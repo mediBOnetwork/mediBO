@@ -152,6 +152,19 @@ class _CartScreenState extends State<CartScreen> {
     }
     RenderLog.write('order_approval_passed', 'approved:true');
 
+    // #102: block order if any cart line is unavailable (no supplier).
+    final unavailableLines = cart.lines.where((l) => !l.product.isBuyable).toList();
+    if (unavailableLines.isNotEmpty) {
+      RenderLog.write('change_102_order_blocked', '1');
+      final names = unavailableLines.map((l) => l.product.name).join(', ');
+      if (mounted) {
+        showToast(context,
+            'Remove unavailable item(s) before ordering: $names',
+            isError: true);
+      }
+      return;
+    }
+
     setState(() => _orderInProgress = true);
     final profile = auth.profile;
     final userId = Supabase.instance.client.auth.currentUser?.id;

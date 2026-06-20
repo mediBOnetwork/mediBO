@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../app_state.dart';
 import '../data/medicine_repository.dart';
+import '../utils/render_log.dart';
 import '../utils/toast.dart';
 import '../models/product.dart';
 import '../screens/auth/login_screen.dart';
@@ -29,6 +30,12 @@ class ProductCard extends StatelessWidget {
         child: PressEffect(
           scale: 0.98,
           child: Container(
+            foregroundDecoration: product.isBuyable
+                ? null
+                : BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.45),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
             decoration: BoxDecoration(
               color: Colors.white,
               borderRadius: BorderRadius.circular(14),
@@ -266,6 +273,9 @@ class _CartControlState extends State<_CartControl>
     final cart = AppState.of(context);
     final qty = cart.quantityOf(widget.product.id);
 
+    RenderLog.write('change_102_buyable_read', '1');
+    if (!widget.product.isBuyable) RenderLog.write('change_102_unavailable_ui', '1');
+
     return SizedBox(
       width: double.infinity,
       height: 48,
@@ -287,7 +297,7 @@ class _CartControlState extends State<_CartControl>
               )
             : ScaleTransition(
                 scale: _popAnim,
-                child: widget.product.hasMrp
+                child: widget.product.isBuyable
                     ? PressEffect(
                         key: const ValueKey('add'),
                         child: SizedBox.expand(

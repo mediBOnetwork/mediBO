@@ -1273,16 +1273,21 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     ]);
   }
 
-  // ── Wide layout (>= 900px) — desktop redesign ────────────────────────────────
+  // ── Wide layout (>= 900px) — #87: single-line bar ───────────────────────────
   Widget _buildCollectWide(bool isAdmin) {
+    RenderLog.write('change_87_layout', 'wide');
     RenderLog.write('change_86_layout', 'wide');
+    final agentPhase = _agentPhase;
+    final showBanner = agentPhase != AgentPhase.idle && _agentReply.isNotEmpty;
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      // ── Supplier bar ────────────────────────────────────────────────────────
-      _buildWideSupplierBar(),
-      const SizedBox(height: 12),
-      // ── Voice toolbar (pills + agent banner) ────────────────────────────────
-      if (_suppliers.isNotEmpty) _buildWideVoiceToolbar(isAdmin),
-      if (_suppliers.isNotEmpty) const SizedBox(height: 12),
+      // ── Single merged bar ────────────────────────────────────────────────────
+      _buildWideSingleBar(isAdmin),
+      // ── Agent banner (below bar, only when agent active) ─────────────────────
+      if (showBanner) ...[
+        const SizedBox(height: 8),
+        _buildWideAgentBanner(isAdmin),
+      ],
+      const SizedBox(height: 16),
       // ── Item table ──────────────────────────────────────────────────────────
       if (_loadingBox)
         const Expanded(child: Center(child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2)))
@@ -1299,25 +1304,37 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     ]);
   }
 
-  // ── B1: Wide supplier bar ─────────────────────────────────────────────────────
-  Widget _buildWideSupplierBar() {
+  // ── #87: Single merged bar — dropdown + progress + both pills in ONE row ──────
+  Widget _buildWideSingleBar(bool isAdmin) {
+    RenderLog.write('change_87_single_bar_present', '1');
+    RenderLog.write('change_87_pills_inline', '1');
+    RenderLog.write('change_86_voice_pills_present', '1');
     final doneCount = _items.length - _pendingCount;
     final total = _items.length;
+    final countingDisabled = _agentPhase != AgentPhase.idle;
+    final agentDisabled = _voiceListening || _voiceProcessing;
+    final agentPhase = _agentPhase;
+    final bool agentBusy = agentPhase == AgentPhase.thinking || agentPhase == AgentPhase.speaking;
+    final bool agentListening = agentPhase == AgentPhase.listening;
+    final bool confirming = agentPhase == AgentPhase.confirming;
+
     return Container(
       margin: const EdgeInsets.fromLTRB(24, 12, 24, 0),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: _kBorder),
         boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 6, offset: const Offset(0, 2))],
       ),
-      child: Row(children: [
-        // Dropdown — fills available space
-        Expanded(
+      child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+
+        // 1. Supplier dropdown (Flexible so long names ellipsize and don't crowd right side)
+        Flexible(
+          flex: 3,
           child: _suppliers.isEmpty
               ? const Text('No supplier orders to collect yet',
-                  style: TextStyle(fontSize: 14, color: _kSub))
+                  style: TextStyle(fontSize: 14, color: _kSub), overflow: TextOverflow.ellipsis)
               : DropdownButtonHideUnderline(
                   child: DropdownButton<String>(
                     isExpanded: true,
@@ -1327,7 +1344,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                     items: _suppliers
                         .map((s) => DropdownMenuItem(
                               value: s,
-                              child: Text(s, style: const TextStyle(fontSize: 15, color: _kText)),
+                              child: Text(s, style: const TextStyle(fontSize: 15, color: _kText),
+                                  overflow: TextOverflow.ellipsis),
                             ))
                         .toList(),
                     onChanged: (v) {
@@ -1339,11 +1357,15 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                   ),
                 ),
         ),
-        // Progress bar + count (only when a box is loaded)
+
+        // 2. Spacer
+        const Expanded(child: SizedBox()),
+
+        // 3. Progress bar + "N/N" count (only when box is loaded)
         if (_items.isNotEmpty) ...[
-          const SizedBox(width: 20),
-          SizedBox(
-            width: 200,
+          const SizedBox(width: 12),
+          ConstrainedBox(
+            constraints: const BoxConstraints(minWidth: 120, maxWidth: 200),
             child: LinearProgressIndicator(
               value: total == 0 ? 0 : doneCount / total,
               backgroundColor: _kBorder,
@@ -1352,65 +1374,50 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
               borderRadius: BorderRadius.circular(4),
             ),
           ),
-          const SizedBox(width: 10),
+          const SizedBox(width: 8),
           Text(
             '$doneCount/$total',
             style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
           ),
         ],
-      ]),
-    );
-  }
 
-  // ── B2: Wide voice toolbar ────────────────────────────────────────────────────
-  Widget _buildWideVoiceToolbar(bool isAdmin) {
-    RenderLog.write('change_86_voice_pills_present', '1');
-    final countingDisabled = _agentPhase != AgentPhase.idle;
-    final agentDisabled = _voiceListening || _voiceProcessing;
-    final agentPhase = _agentPhase;
-    final bool agentBusy = agentPhase == AgentPhase.thinking || agentPhase == AgentPhase.speaking;
-    final bool agentListening = agentPhase == AgentPhase.listening;
-    final bool confirming = agentPhase == AgentPhase.confirming;
+        // 4. Count items pill
+        if (_voiceSupported) ...[
+          const SizedBox(width: 16),
+          _buildWidePill(
+            icon: _voiceListening
+                ? Icons.stop_rounded
+                : _voiceProcessing
+                    ? Icons.hourglass_top_rounded
+                    : Icons.mic_none_rounded,
+            label: _voiceListening
+                ? 'Stop'
+                : _voiceProcessing
+                    ? 'Processing…'
+                    : 'Count items',
+            active: _voiceListening,
+            activeColor: _kWrongFg,
+            disabled: countingDisabled && !_voiceListening,
+            spinning: _voiceProcessing,
+            onTap: _toggleRecording,
+          ),
+        ],
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 24),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        // Pills row — right-aligned
-        Row(mainAxisAlignment: MainAxisAlignment.end, children: [
-          // Count items pill
-          if (_voiceSupported) ...[
-            _buildWidePill(
-              icon: _voiceListening
-                  ? Icons.stop_rounded
-                  : _voiceProcessing
-                      ? Icons.hourglass_top_rounded
-                      : Icons.mic_none_rounded,
-              label: _voiceListening
-                  ? 'Stop recording'
-                  : _voiceProcessing
-                      ? 'Processing…'
-                      : 'Count items',
-              active: _voiceListening,
-              activeColor: _kWrongFg,
-              disabled: countingDisabled && !_voiceListening,
-              spinning: _voiceProcessing,
-              onTap: _toggleRecording,
-            ),
-            const SizedBox(width: 10),
-          ],
-          // Ask mediBO pill (admin only)
-          if (isAdmin) _buildWidePill(
+        // 5. Ask mediBO pill (admin only)
+        if (isAdmin) ...[
+          const SizedBox(width: 10),
+          _buildWidePill(
             icon: agentListening
                 ? Icons.stop_rounded
                 : agentBusy
                     ? Icons.hourglass_top_rounded
                     : Icons.record_voice_over_rounded,
             label: agentListening
-                ? 'Stop listening'
+                ? 'Stop'
                 : agentBusy
                     ? (agentPhase == AgentPhase.thinking ? 'Thinking…' : 'Speaking…')
                     : confirming
-                        ? 'Confirming…'
+                        ? 'Confirm…'
                         : 'Ask mediBO',
             active: agentListening,
             activeColor: _kAgentAccent,
@@ -1425,87 +1432,84 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
               }
             },
           ),
-        ]),
+        ],
 
-        // Agent inline banner (shown when agent phase != idle)
-        if (agentPhase != AgentPhase.idle && _agentReply.isNotEmpty) ...[
-          const SizedBox(height: 8),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-            decoration: BoxDecoration(
-              color: _kAgentAccent.withValues(alpha: 0.06),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: _kAgentAccent.withValues(alpha: 0.25)),
-            ),
-            child: confirming
-                ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    // Reply text
-                    Text(_agentReply,
-                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: _kText)),
-                    // Product chip
-                    if (_pendingAction != null) ...[
-                      const SizedBox(height: 6),
-                      Row(children: [
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFF5F6F8),
-                            borderRadius: BorderRadius.circular(6),
-                            border: Border.all(color: _kBorder),
-                          ),
-                          child: Text(
-                            '${_pendingAction!['product_name'] ?? ''}'
-                            '${_pendingAction!['qty'] != null ? ' — qty ${(_pendingAction!['qty'] as num).toInt()}' : ''}',
-                            style: const TextStyle(fontSize: 12, color: _kText, fontWeight: FontWeight.w500),
-                          ),
-                        ),
-                        const Spacer(),
-                        // Haan button
-                        GestureDetector(
-                          onTap: _commitPending,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-                            decoration: BoxDecoration(
-                              color: _kGreen,
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: const Text('✓ Haan',
-                                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.white)),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        // Nahi button
-                        GestureDetector(
-                          onTap: _cancelPending,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(color: _kBorder),
-                            ),
-                            child: const Text('✗ Nahi',
-                                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _kText)),
-                          ),
-                        ),
-                      ]),
-                    ],
-                  ])
-                : Row(children: [
-                    Icon(
-                      agentBusy ? Icons.hourglass_top_rounded : Icons.volume_up_rounded,
-                      size: 14, color: _kAgentAccent,
+      ]),
+    );
+  }
+
+  // ── #87: Agent banner — shown below the single bar when agent active ───────────
+  Widget _buildWideAgentBanner(bool isAdmin) {
+    final agentPhase = _agentPhase;
+    final bool agentBusy = agentPhase == AgentPhase.thinking || agentPhase == AgentPhase.speaking;
+    final bool confirming = agentPhase == AgentPhase.confirming;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: _kAgentAccent.withValues(alpha: 0.06),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: _kAgentAccent.withValues(alpha: 0.25)),
+        ),
+        child: confirming
+            ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(_agentReply,
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: _kText)),
+                if (_pendingAction != null) ...[
+                  const SizedBox(height: 6),
+                  Row(children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF5F6F8),
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(color: _kBorder),
+                      ),
+                      child: Text(
+                        '${_pendingAction!['product_name'] ?? ''}'
+                        '${_pendingAction!['qty'] != null ? ' — qty ${(_pendingAction!['qty'] as num).toInt()}' : ''}',
+                        style: const TextStyle(fontSize: 12, color: _kText, fontWeight: FontWeight.w500),
+                      ),
+                    ),
+                    const Spacer(),
+                    GestureDetector(
+                      onTap: _commitPending,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                        decoration: BoxDecoration(color: _kGreen, borderRadius: BorderRadius.circular(8)),
+                        child: const Text('✓ Haan',
+                            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.white)),
+                      ),
                     ),
                     const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(_agentReply,
-                          style: const TextStyle(fontSize: 13, color: _kText),
-                          maxLines: 2, overflow: TextOverflow.ellipsis),
+                    GestureDetector(
+                      onTap: _cancelPending,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: _kBorder),
+                        ),
+                        child: const Text('✗ Nahi',
+                            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _kText)),
+                      ),
                     ),
                   ]),
-          ),
-        ],
-      ]),
+                ],
+              ])
+            : Row(children: [
+                Icon(agentBusy ? Icons.hourglass_top_rounded : Icons.volume_up_rounded,
+                    size: 14, color: _kAgentAccent),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(_agentReply,
+                      style: const TextStyle(fontSize: 13, color: _kText),
+                      maxLines: 2, overflow: TextOverflow.ellipsis),
+                ),
+              ]),
+      ),
     );
   }
 

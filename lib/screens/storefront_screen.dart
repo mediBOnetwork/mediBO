@@ -235,13 +235,16 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
     }
   }
 
-  /// True only when browsing a SPECIFIC category with no search query.
+  /// True for ANY browse (home/All + category) with no search query.
   /// In this mode only buyable=true items are fetched and shown.
-  bool get _onlyBuyable => widget.category != 'All' && widget.query.isEmpty;
+  /// Search (query.isNotEmpty) always returns false → shows all items.
+  bool get _onlyBuyable => widget.query.isEmpty;
 
   Future<void> _fetchBuyableCategoryTotal() async {
     final cat = widget.category;
-    final total = await widget.repo.fetchBuyableCategoryCount(cat);
+    final total = cat == 'All'
+        ? await widget.repo.fetchBuyableTotal()
+        : await widget.repo.fetchBuyableCategoryCount(cat);
     if (!mounted || widget.category != cat) return;
     setState(() => _buyableCategoryTotal = total);
   }
@@ -293,8 +296,12 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
       RenderLog.write('c75_suggestion_dropdown_removed', 'true');
       RenderLog.write('c75_direct_results', 'true');
       RenderLog.write('c75_suggest_call_removed', 'true');
-      if (_onlyBuyable) RenderLog.write('change_104_category_buyable_only', '1');
-      if (widget.query.trim().isNotEmpty) RenderLog.write('change_104_search_unfiltered', '1');
+      if (_onlyBuyable && widget.category != 'All') RenderLog.write('change_104_category_buyable_only', '1');
+      if (_onlyBuyable && widget.category == 'All') RenderLog.write('change_105_home_buyable_only', '1');
+      if (widget.query.trim().isNotEmpty) {
+        RenderLog.write('change_104_search_unfiltered', '1');
+        RenderLog.write('change_105_search_unfiltered', '1');
+      }
       setState(() {
         _items
           ..clear()
@@ -456,8 +463,9 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
   }
 
   int _categoryTotal() {
-    // In buyable-only category mode, use the buyable-specific count.
+    // Buyable-only mode (home/All + category, NOT search): use the buyable count.
     if (_onlyBuyable) return _buyableCategoryTotal ?? _items.length;
+    // Search mode: total from meta if available.
     final meta = _meta;
     if (meta == null) return _items.length;
     if (widget.category == 'All') return meta.total;

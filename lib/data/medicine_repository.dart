@@ -103,8 +103,8 @@ class MedicineRepository {
   ///
   /// Throws if the request fails so callers can show an error/retry state.
   ///
-  /// When [onlyBuyable] is true, the CATEGORY browse path filters to
-  /// buyable=true only. Search and All-products paths ignore this flag.
+  /// When [onlyBuyable] is true (home/All + category browse, NOT search),
+  /// the fetch filters to buyable=true only. Search always passes false.
   Future<List<Product>> fetchPage({
     String category = 'All',
     String query = '',
@@ -116,7 +116,7 @@ class MedicineRepository {
     final term = query.replaceAll(RegExp(r'[,()*%_]'), ' ').trim();
 
     // Buyable-only cache uses a distinct key to avoid poisoning the all-items cache.
-    final cacheKey = onlyBuyable && term.isEmpty && category != 'All'
+    final cacheKey = onlyBuyable && term.isEmpty
         ? '${term.toLowerCase()}|$category|$offset|buyable'
         : '${term.toLowerCase()}|$category|$offset';
     final cached = _resultCache[cacheKey];
@@ -153,13 +153,11 @@ class MedicineRepository {
       return result;
     }
 
-    // ── Browse buyable-only: direct query, category != 'All', no RPC needed ─────
-    if (onlyBuyable && category != 'All') {
-      final rows = await _client
-          .from('MEDICINE')
-          .select(_kListCols)
-          .eq('therapeutic_class', category)
-          .eq('buyable', true)
+    // ── Browse buyable-only: home/All + category, no RPC needed ─────────────────
+    if (onlyBuyable) {
+      var fb = _client.from('MEDICINE').select(_kListCols).eq('buyable', true);
+      if (category != 'All') fb = fb.eq('therapeutic_class', category);
+      final rows = await fb
           .order('sales_count', ascending: false)
           .range(offset, offset + limit - 1);
       final result = rows.map((r) => Product.fromMap(r)).toList(growable: false);
@@ -198,6 +196,19 @@ class MedicineRepository {
           .from('MEDICINE')
           .count(CountOption.exact)
           .eq('therapeutic_class', category)
+          .eq('buyable', true);
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  /// Returns the total count of ALL buyable=true medicines (across all categories).
+  /// Used to show accurate "Showing N of M" totals on the home/All grid.
+  Future<int> fetchBuyableTotal() async {
+    try {
+      return await _client
+          .from('MEDICINE')
+          .count(CountOption.exact)
           .eq('buyable', true);
     } catch (_) {
       return 0;

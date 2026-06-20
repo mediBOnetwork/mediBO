@@ -315,11 +315,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   _VoiceEcho? _lastEcho;
   Timer? _echoTimer;
   Timer? _idleTimer;
-  Timer? _segmentTimer;          // fires every 3s to process realtime segments
-  int _segmentCount = 0;
-  final Set<String> _segmentSeenKeys = {};  // "$productId:$qty" dedup within one recording
   DateTime? _recStartTime;
-  final List<List<Map<String, dynamic>>> _undoStack = [];
+  int _voiceCallsDuringRecord = 0; // must stay 0; guard for B1
+  int _voiceCallsAfterStop = 0;
   final Map<int, num> _tally = {};
 
   // ── supplier_orders items for reconciliation expected list ──
@@ -353,7 +351,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     _voiceService.dispose();
     _echoTimer?.cancel();
     _idleTimer?.cancel();
-    _segmentTimer?.cancel();
     _voiceTextCtrl.dispose();
     super.dispose();
   }
@@ -365,6 +362,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('82_result_cards_removed', 'true');
     RenderLog.write('82_bag_refs_removed', 'true');
     RenderLog.write('83_banners_removed', 'true');
+    RenderLog.write('84_chunking_removed', 'true');
+    RenderLog.write('84_voicecalls_during_record', '0');
     _probeRecorder();
   }
 
@@ -420,7 +419,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       _loadingBox = true; _error = null; _items = []; _focusIdx = 0;
       _voiceListening = false; _voiceInterim = ''; _lastEcho = null;
       _supplierOrderItems = [];
-      _undoStack.clear(); _tally.clear(); _segmentSeenKeys.clear();
+      _tally.clear();
+      _voiceCallsDuringRecord = 0; _voiceCallsAfterStop = 0;
     });
     try {
       final res = await Supabase.instance.client
@@ -572,8 +572,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   Future<void> _startRecording() async {
     if (!_voiceSupported || _voiceListening || _voiceProcessing) return;
-    _segmentSeenKeys.clear();
-    _segmentCount = 0;
+    _voiceCallsDuringRecord = 0;
     setState(() {
       _voiceListening = true; _voiceInterim = 'Recording…'; _voiceError = '';
     });
@@ -582,21 +581,15 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       await _voiceService.start();
       _recStarted = true;
       RenderLog.write('79_rec_start_ok', 'true');
-      // Kick off 3-second realtime segments
-      _segmentTimer?.cancel();
-      _segmentTimer = Timer.periodic(const Duration(seconds: 3), (_) => _processSegment());
     } catch (e) {
       _recStarted = false;
       if (!mounted) return;
       final msg = e.toString();
       if (e is MicPermissionException) {
         setState(() { _voiceListening = false; _voiceInterim = ''; _voiceSupported = false; });
-        RenderLog.write('77_error', 'mic-denied');
         _showSnack('Allow microphone access to use voice receiving');
       } else {
         setState(() { _voiceListening = false; _voiceInterim = ''; _voiceError = msg; });
-        RenderLog.write('77_error', msg);
-        RenderLog.write('79_recorder_error', msg.substring(0, msg.length.clamp(0, 80)));
         Future.delayed(const Duration(seconds: 3), () {
           if (mounted) setState(() => _voiceError = '');
         });
@@ -604,64 +597,47 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     }
   }
 
-  // Fires every 3s during recording: stop current clip, send to voice-receive, restart.
-  Future<void> _processSegment() async {
-    if (!_voiceListening || !_recStarted) return;
-    _recStarted = false;
-    try {
-      final result = await _voiceService.stop();
-      // Restart recording immediately so the next segment captures while we process
-      if (_voiceListening && mounted) {
-        await _voiceService.start();
-        _recStarted = true;
-      }
-      if (result == null || result.bytes.length < 5000) return; // silent / too short
-      final expected = _buildExpectedList();
-      final (:items, :transcript) = await _voiceService.transcribe(
-        result.bytes, result.mime, expected: expected.isEmpty ? null : expected,
-      );
-      if (!mounted || items.isEmpty) return;
-      _segmentCount++;
-      RenderLog.write('82_segment_processed', '$_segmentCount');
-      await _handleEdgeItemsRealtime(items);
-    } catch (_) {
-      // Segment errors are silent — continue recording
-      if (_voiceListening && mounted && !_recStarted) {
-        try { await _voiceService.start(); _recStarted = true; } catch (_) {}
-      }
-    }
-  }
-
+  // Single-shot: stop recording → ONE voice-receive call → idempotent set per product.
   Future<void> _stopAndTranscribe() async {
-    _segmentTimer?.cancel();
-    _segmentTimer = null;
     if (!_voiceListening) return;
     setState(() { _voiceListening = false; _voiceInterim = ''; });
     if (!_recStarted) return;
     _recStarted = false;
     setState(() => _voiceProcessing = true);
+    RenderLog.write('84_voicecalls_during_record', '$_voiceCallsDuringRecord');
     try {
       final result = await _voiceService.stop();
       if (!mounted) { setState(() => _voiceProcessing = false); return; }
-      if (result == null || result.bytes.length < 1500) {
-        setState(() => _voiceProcessing = false);
-        return; // trailing silence — nothing to do
+      if (result == null || result.bytes.length < 2000) {
+        setState(() { _voiceProcessing = false; _voiceError = 'No audio — try again'; });
+        Future.delayed(const Duration(seconds: 3), () {
+          if (mounted) setState(() => _voiceError = '');
+        });
+        return;
       }
       RenderLog.write('77_rec_stop_bytes', '${result.bytes.length}');
       final expected = _buildExpectedList();
-      RenderLog.write('77_invoke_sent', 'expected=${expected.length}');
+      _voiceCallsAfterStop++;
       final (:items, :transcript) = await _voiceService.transcribe(
         result.bytes, result.mime, expected: expected.isEmpty ? null : expected,
       );
       if (!mounted) { setState(() => _voiceProcessing = false); return; }
-      _segmentCount++;
-      RenderLog.write('82_segment_processed', '$_segmentCount');
-      if (items.isNotEmpty) await _handleEdgeItemsRealtime(items);
+      RenderLog.write('84_voicecalls_after_stop', '$_voiceCallsAfterStop');
+      if (items.isEmpty) {
+        setState(() {
+          _voiceProcessing = false;
+          _voiceError = "Didn't catch that — try again";
+          _lastTranscript = transcript;
+        });
+        Future.delayed(const Duration(seconds: 3), () {
+          if (mounted) setState(() => _voiceError = '');
+        });
+        return;
+      }
+      await _commitVoiceItems(items);
     } catch (e) {
       if (!mounted) return;
-      final msg = e.toString();
-      RenderLog.write('77_error', msg);
-      setState(() { _voiceError = msg; });
+      setState(() { _voiceError = e.toString(); });
       Future.delayed(const Duration(seconds: 4), () {
         if (mounted) setState(() => _voiceError = '');
       });
@@ -687,8 +663,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           'name': name,
           'ordered_qty': (row['ordered_qty'] as num?)?.toInt() ?? 1,
         };
-        final unit = row['pack_type']?.toString();
-        if (unit != null && unit.isNotEmpty) entry['unit'] = unit;
+        final pt = row['pack_type']?.toString();
+        if (pt != null && pt.isNotEmpty) entry['unit'] = pt;
         expected.add(entry);
         if (expected.length >= 200) break;
       }
@@ -696,26 +672,29 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     return expected;
   }
 
-  // Directly commit voice items — ONLY items the user actually spoke.
-  // Guard: heardName must be non-empty; empty heard = Gemini guess from expected list, not speech.
-  Future<void> _handleEdgeItemsRealtime(List<Map<dynamic, dynamic>> items) async {
-    int matched = 0;
+  // Aggregate by product, SET absolute qty, skip items with no quantity spoken.
+  Future<void> _commitVoiceItems(List<Map<dynamic, dynamic>> items) async {
+    final supplier = _selectedSupplier;
+    if (supplier == null) return;
+
+    // Aggregate by product_id: sum received_qty for duplicates in one response.
+    final Map<int, ({String name, double qty, String heard})> byProduct = {};
     int skipped = 0;
+
     for (final item in items) {
-      final status = (item['status'] ?? 'not_on_order').toString();
-      if (status == 'not_on_order') { skipped++; continue; }
-
       final matchedName = item['matched_name']?.toString();
-      final heardName = (item['heard'] ?? item['name'] ?? '').toString().trim();
-      final receivedQty = (item['received_qty'] as num?)?.toInt() ?? 1;
+      final heardName = (item['heard'] ?? '').toString().trim();
+      final rawQty = item['received_qty'];
 
-      // CRITICAL: skip if no actual speech was transcribed for this item.
-      // voice-receive fills expected items with empty 'heard' when it guesses from context.
-      if (heardName.isEmpty || heardName.length < 3) {
-        skipped++;
-        continue;
-      }
+      // B2.4: no qty spoken → skip, don't default to ordered
+      if (rawQty == null) { skipped++; continue; }
+      // Guard: empty heard = Gemini guess, not actual speech
+      if (heardName.isEmpty || heardName.length < 2) { skipped++; continue; }
 
+      final receivedQty = (rawQty as num).toDouble();
+      if (receivedQty <= 0) { skipped++; continue; }
+
+      // Look up product_id from box list
       int? productId;
       if (matchedName != null) {
         for (final row in _items) {
@@ -727,27 +706,39 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       }
       if (productId == null) { skipped++; continue; }
 
-      // Dedup: skip same product+qty already committed this recording session
-      final dedupeKey = '$productId:$receivedQty';
-      if (_segmentSeenKeys.contains(dedupeKey)) continue;
-      _segmentSeenKeys.add(dedupeKey);
+      if (byProduct.containsKey(productId)) {
+        // Sum duplicates into one SET value
+        byProduct[productId] = (
+          name: byProduct[productId]!.name,
+          qty: byProduct[productId]!.qty + receivedQty,
+          heard: heardName,
+        );
+      } else {
+        byProduct[productId] = (name: matchedName ?? heardName, qty: receivedQty, heard: heardName);
+      }
+    }
 
-      await _commitVoiceItem(
+    if (skipped > 0) RenderLog.write('84_skipped_no_qty', '$skipped');
+
+    // One SET call per product (idempotent)
+    for (final entry in byProduct.entries) {
+      final productId = entry.key;
+      final productName = entry.value.name;
+      final qty = entry.value.qty;
+      final heard = entry.value.heard;
+
+      await _setVoiceReceived(
         productId: productId,
-        productName: matchedName ?? heardName,
-        qty: receivedQty.toDouble(),
-        rawSegment: heardName,
+        productName: productName,
+        qty: qty,
+        rawSegment: heard,
       );
       if (!mounted) return;
-      matched++;
-      RenderLog.write('83_committed_from_speech', '${matchedName ?? heardName}:$receivedQty/${item['ordered_qty'] ?? '?'}');
     }
-    RenderLog.write('83_segment_matched_count', '$matched');
-    if (skipped > 0) RenderLog.write('83_skipped_unmatched', '$skipped');
-    final done = _items.length - _pendingCount;
-    RenderLog.write('83_progress', '$done/${_items.length}');
-  }
 
+    final done = _items.length - _pendingCount;
+    RenderLog.write('84_progress', '$done/${_items.length}');
+  }
   // Called from text fallback field only (typed text → local parse → match)
   Future<void> _handleVoiceTranscript(String transcript) async {
     setState(() => _voiceProcessing = true);
@@ -765,7 +756,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     for (final item in parsed) {
       // Command handling
       if (item.itemPhrase == 'undo') {
-        await _voiceUndo();
+        _showSnack('Undo not available — tap the item to adjust qty');
         continue;
       }
       if ({'stop', 'done', 'finish', 'cancel'}.contains(item.itemPhrase)) {
@@ -792,23 +783,24 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       if (match is MatchAmbiguous) {
         final chosen = await _showAmbiguityPicker(match.candidates);
         if (chosen == null) continue;
-        await _voiceMarkProduct(
+        final resolvedQty = item.qty ?? (chosen.productId > 0 ? 1.0 : null);
+        if (resolvedQty == null) { _showSnack('Quantity not detected for ${chosen.productName}'); continue; }
+        await _setVoiceReceived(
           productId: chosen.productId,
           productName: chosen.productName,
-          qty: item.qty,
-          unit: item.unit,
+          qty: resolvedQty,
           rawSegment: item.rawSegment,
         );
         continue;
       }
 
       if (match is MatchConfident) {
-        RenderLog.write('82_realtime_commit', match.productName);
-        await _voiceMarkProduct(
+        final resolvedQty = item.qty ?? 1.0;
+        RenderLog.write('84_typed_commit', match.productName);
+        await _setVoiceReceived(
           productId: match.productId,
           productName: match.productName,
-          qty: item.qty,
-          unit: item.unit,
+          qty: resolvedQty,
           rawSegment: item.rawSegment,
         );
       }
@@ -817,8 +809,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     if (mounted) setState(() => _voiceProcessing = false);
   }
 
-  // Commits one item immediately (no _voiceProcessing toggle — used by auto-commit in _handleEdgeItems).
-  Future<void> _commitVoiceItem({
+  // Idempotent SET via set_voice_received RPC, then re-pulls DB truth.
+  Future<void> _setVoiceReceived({
     required int productId,
     required String productName,
     required double qty,
@@ -827,169 +819,40 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     final supplier = _selectedSupplier;
     if (supplier == null) return;
     try {
-      final res = await Supabase.instance.client.rpc('receive_product_qty', params: {
+      await Supabase.instance.client.rpc('set_voice_received', params: {
         'p_supplier_name': supplier,
         'p_product_id': productId,
-        'p_add_qty': qty,
+        'p_qty': qty,
         'p_note': 'voice: $rawSegment',
       });
       if (!mounted) return;
-      final resMap = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
-      if (resMap['error'] != null) { _showSnack('Commit error: ${resMap['error']}'); return; }
-
-      final allocated = (resMap['allocated'] as num?) ?? 0;
-      final leftover  = (resMap['leftover']  as num?) ?? 0;
-      final rawRows   = resMap['rows'] as List? ?? [];
-      final rows      = rawRows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
-
-      for (final row in rows) {
-        final oiid = row['order_item_id']?.toString();
-        if (oiid == null) continue;
-        final idx = _items.indexWhere((i) => i['order_item_id'] == oiid);
-        if (idx >= 0) {
-          final nowQty  = (row['now']     as num?) ?? 0;
-          final ordered = (row['ordered'] as num?) ?? 0;
-          setState(() {
-            _items[idx]['received_qty']     = nowQty;
-            _items[idx]['fulfillment_state'] = nowQty >= ordered ? 'received' : 'short';
-          });
-          RenderLog.write('82_row_marked_live', '$productName:${nowQty.toInt()}/${ordered.toInt()}');
-        }
-      }
-      if (rows.isNotEmpty) _undoStack.add(rows);
-      setState(() { _tally[productId] = (_tally[productId] ?? 0) + allocated; });
-
-      final done = _items.length - _pendingCount;
-      RenderLog.write('82_progress', '$done/${_items.length}');
-      _speakEcho(productName, allocated, null, leftover);
+      RenderLog.write('84_committed', '$productName:set${qty.toInt()}');
+      setState(() { _tally[productId] = qty; });
+      await _reloadItemsFromDB();
     } catch (e) {
       if (mounted) _showSnack('Commit error: $e');
     }
   }
 
-  Future<void> _voiceMarkProduct({
-    required int productId,
-    required String productName,
-    required double? qty,
-    required String? unit,
-    required String rawSegment,
-  }) async {
-    if (qty == null) {
-      // Qty not detected — show inline prompt
-      final confirmed = await _showQtyPrompt(productName, productId);
-      if (confirmed == null) return;
-      qty = confirmed;
-    }
-
-    // Call receive_product_qty RPC
+  Future<void> _reloadItemsFromDB() async {
     final supplier = _selectedSupplier;
     if (supplier == null) return;
-
-    setState(() => _voiceProcessing = true);
     try {
-      final res = await Supabase.instance.client.rpc('receive_product_qty', params: {
-        'p_supplier_name': supplier,
-        'p_product_id': productId,
-        'p_add_qty': qty,
-        'p_note': 'voice: $rawSegment',
-      });
+      final res = await Supabase.instance.client
+          .rpc('get_receiving_box', params: {'p_supplier_name': supplier}) as List;
       if (!mounted) return;
-
-      final resMap = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
-      if (resMap['error'] != null) {
-        _showSnack('Voice mark error: ${resMap['error']}');
-        return;
-      }
-
-      final allocated = (resMap['allocated'] as num?) ?? 0;
-      final leftover  = (resMap['leftover']  as num?) ?? 0;
-      final rawRows   = resMap['rows'] as List? ?? [];
-      final rows      = rawRows
-          .map((r) => Map<String, dynamic>.from(r as Map))
-          .toList();
-
-      // Update local _items
-      for (final row in rows) {
-        final oiid = row['order_item_id']?.toString();
-        if (oiid == null) continue;
-        final idx = _items.indexWhere((i) => i['order_item_id'] == oiid);
-        if (idx >= 0) {
-          final nowQty  = (row['now']     as num?) ?? 0;
-          final ordered = (row['ordered'] as num?) ?? 0;
-          setState(() {
-            _items[idx]['received_qty']     = nowQty;
-            _items[idx]['fulfillment_state'] = nowQty >= ordered ? 'received' : 'short';
-          });
-        }
-      }
-
-      // Push to undo stack
-      if (rows.isNotEmpty) _undoStack.add(rows);
-
-      // Update tally
-      setState(() {
-        _tally[productId] = (_tally[productId] ?? 0) + allocated;
+      final items = res.map((r) => Map<String, dynamic>.from(r as Map)).toList();
+      items.sort((a, b) {
+        final aPend = (a['fulfillment_state'] as String?) == 'pending' ? 0 : 1;
+        final bPend = (b['fulfillment_state'] as String?) == 'pending' ? 0 : 1;
+        if (aPend != bPend) return aPend - bPend;
+        return (a['product_name'] ?? '').toString().compareTo((b['product_name'] ?? '').toString());
       });
-
-      // Show echo
-      _showEcho(_VoiceEcho(
-        productName: productName,
-        allocated: allocated,
-        leftover: leftover,
-        rows: rows,
-      ));
-
-      RenderLog.write('voice_receive_ok', '$productName:$allocated');
-      RenderLog.write('77_marked_received', '$productName');
-
-      // Optional TTS
-      _speakEcho(productName, allocated, unit, leftover);
-
-      // Auto-advance PTL if focused item was just received
-      _advanceIfReceived();
-    } catch (e) {
-      if (!mounted) return;
-      _showSnack('Voice error: $e');
-    } finally {
-      if (mounted) setState(() => _voiceProcessing = false);
-    }
+      setState(() => _items = items);
+    } catch (_) {}
   }
 
-  Future<void> _voiceUndo() async {
-    if (_undoStack.isEmpty) { _showSnack('Nothing to undo'); return; }
-    final rows = _undoStack.removeLast();
-    setState(() => _voiceProcessing = true);
-    try {
-      for (final row in rows) {
-        final oiid = row['order_item_id']?.toString();
-        final gave = (row['gave'] as num?) ?? 0;
-        if (oiid == null || gave == 0) continue;
-        final undoRes = await Supabase.instance.client.rpc('add_item_receiving', params: {
-          'p_order_item_id': oiid,
-          'p_delta': -gave,
-          'p_note': 'voice undo',
-        });
-        if (!mounted) return;
-        final resMap = undoRes is Map ? Map<String, dynamic>.from(undoRes) : <String, dynamic>{};
-        if (resMap['status'] == 'ok') {
-          final idx = _items.indexWhere((i) => i['order_item_id'] == oiid);
-          if (idx >= 0) {
-            setState(() {
-              _items[idx]['received_qty']     = resMap['received_qty'];
-              _items[idx]['fulfillment_state'] = resMap['state'];
-            });
-          }
-        }
-      }
-      RenderLog.write('voice_receive_undo_ok', '${rows.length}_rows');
-      _showSnack('↩ Undone', isGood: true);
-    } catch (e) {
-      if (!mounted) return;
-      _showSnack('Undo failed: $e');
-    } finally {
-      if (mounted) setState(() => _voiceProcessing = false);
-    }
-  }
+  // Undo removed — set_voice_received is idempotent SET; delta-undo is not applicable.
 
   void _advanceIfReceived() {
     final item = _currentItem;
@@ -1314,17 +1177,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                         style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: _kReceivedFg)),
                   ]),
                 ),
-              ),
-            ],
-            // Undo button
-            if (_undoStack.isNotEmpty) ...[
-              const SizedBox(width: 6),
-              IconButton(
-                onPressed: _voiceUndo,
-                icon: const Icon(Icons.undo_rounded, size: 18, color: _kSub),
-                tooltip: 'Undo last voice mark',
-                padding: const EdgeInsets.all(4),
-                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
               ),
             ],
           ],

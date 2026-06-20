@@ -720,7 +720,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       if (!mounted) { setState(() => _voiceProcessing = false); return; }
       if (loudness == null) {
         RenderLog.write('change_93_rms_skip', '1'); // decode failed — fall open
-      } else if (loudness.rms < _kVoiceRmsMin && loudness.peak < _kVoiceRmsMin * 4) {
+      } else if (loudness.rms < _kVoiceRmsMin && loudness.peak < _kVoicePeakMin) {
         setState(() => _voiceProcessing = false);
         RenderLog.write('change_93_quiet_dropped', '1');
         _showSnack('Bahut dheere — phone ke paas boliye');
@@ -1969,8 +1969,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // Button constants — fixed size applied at call site via SizedBox
   static const double _kVoiceBtnW = 150;
   static const double _kVoiceBtnH = 44;
-  // #93: loudness gate — RMS below this on a -1..1 scale = too quiet / background
-  static const double _kVoiceRmsMin = 0.015;
+  // #94: relaxed thresholds — only drop near-silent clips; when unsure SEND
+  static const double _kVoiceRmsMin  = 0.006; // RMS on -1..1 scale
+  static const double _kVoicePeakMin = 0.030; // peak amplitude
 
   Widget _buildWideSingleBar(bool isAdmin) {
     RenderLog.write('change_88_fixed_btn_size', '150x44');

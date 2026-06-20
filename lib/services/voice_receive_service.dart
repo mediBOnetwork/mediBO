@@ -75,6 +75,7 @@ class VoiceReceiveService {
         'audio_base64': b64,
         'mime_type': mime,
         if (expected != null && expected.isNotEmpty) 'expected': expected,
+        'min_confidence': 0.55, // #94: relax from 0.72 default; name+qty rule still enforced
       },
     );
     final data = res.data;

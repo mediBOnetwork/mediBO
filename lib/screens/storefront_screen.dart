@@ -240,15 +240,6 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
   /// Search (query.isNotEmpty) always returns false → shows all items.
   bool get _onlyBuyable => widget.query.isEmpty;
 
-  Future<void> _fetchBuyableCategoryTotal() async {
-    final cat = widget.category;
-    final total = cat == 'All'
-        ? await widget.repo.fetchBuyableTotal()
-        : await widget.repo.fetchBuyableCategoryCount(cat);
-    if (!mounted || widget.category != cat) return;
-    setState(() => _buyableCategoryTotal = total);
-  }
-
   Future<void> _resetAndLoad() async {
     final token = ++_loadToken;
     final sw = Stopwatch()..start();
@@ -267,9 +258,8 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
       _animatedFrom = 0;
       _buyableCategoryTotal = null;
     });
-    if (_onlyBuyable) _fetchBuyableCategoryTotal();
     try {
-      final page = await widget.repo.fetchPage(
+      final pageResult = await widget.repo.fetchPage(
         category: widget.category,
         query: widget.query,
         offset: 0,
@@ -297,10 +287,21 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
       RenderLog.write('c75_direct_results', 'true');
       RenderLog.write('c75_suggest_call_removed', 'true');
       if (_onlyBuyable && widget.category != 'All') RenderLog.write('change_104_category_buyable_only', '1');
-      if (_onlyBuyable && widget.category == 'All') RenderLog.write('change_105_home_buyable_only', '1');
+      if (_onlyBuyable && widget.category == 'All') {
+        RenderLog.write('change_105_home_buyable_only', '1');
+        RenderLog.write('change_106_all_total', '1');
+      }
+      if (_onlyBuyable && widget.category != 'All') RenderLog.write('change_106_exact_count', '1');
       if (widget.query.trim().isNotEmpty) {
         RenderLog.write('change_104_search_unfiltered', '1');
         RenderLog.write('change_105_search_unfiltered', '1');
+        RenderLog.write('change_106_search_all', '1');
+      }
+      final page = pageResult.items;
+      // Exact buyable count from the list query — only for specific categories.
+      // All view M uses the full catalog total (meta.total), not the buyable subset.
+      if (pageResult.exactCount != null && widget.category != 'All') {
+        setState(() => _buyableCategoryTotal = pageResult.exactCount);
       }
       setState(() {
         _items
@@ -341,13 +342,17 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
     final token = _loadToken;
     setState(() => _loadingMore = true);
     try {
-      final page = await widget.repo.fetchPage(
+      final pageResult = await widget.repo.fetchPage(
         category: widget.category,
         query: widget.query,
         offset: _items.length,
         onlyBuyable: _onlyBuyable,
       );
       if (token != _loadToken || !mounted) return;
+      final page = pageResult.items;
+      if (pageResult.exactCount != null && widget.category != 'All') {
+        setState(() => _buyableCategoryTotal = pageResult.exactCount);
+      }
       setState(() {
         _items.addAll(page);
         _loadingMore = false;
@@ -378,7 +383,7 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
     final loadToken = _loadToken;
     final offset = _items.length;
     try {
-      final page = await widget.repo.fetchPage(
+      final pageResult = await widget.repo.fetchPage(
         category: widget.category,
         query: widget.query,
         offset: offset,
@@ -386,6 +391,10 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
         onlyBuyable: _onlyBuyable,
       );
       if (loadToken != _loadToken || !mounted) return;
+      final page = pageResult.items;
+      if (pageResult.exactCount != null && widget.category != 'All') {
+        setState(() => _buyableCategoryTotal = pageResult.exactCount);
+      }
       // Record where new items start so _gridBody can animate them,
       // then switch from captcha-spinner to the drip-feed phase.
       setState(() {
@@ -463,10 +472,14 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
   }
 
   int _categoryTotal() {
-    // Buyable-only mode (home/All + category, NOT search): use the buyable count.
-    if (_onlyBuyable) return _buyableCategoryTotal ?? _items.length;
-    // Search mode: total from meta if available.
     final meta = _meta;
+    if (_onlyBuyable) {
+      // All/Best Sellers: M = full catalog total (not buyable subset).
+      if (widget.category == 'All') return meta?.total ?? _items.length;
+      // Specific category: M = exact buyable count from the list query.
+      return _buyableCategoryTotal ?? _items.length;
+    }
+    // Search mode: use meta totals.
     if (meta == null) return _items.length;
     if (widget.category == 'All') return meta.total;
     for (final c in meta.categories) {

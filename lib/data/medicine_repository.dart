@@ -18,9 +18,13 @@ class CatalogMeta {
   const CatalogMeta(this.categories, this.total);
 }
 
+/// Result of a page fetch. [exactCount] is the total filtered row count from
+/// the same query (buyable paths only); null for search/non-buyable paths.
+typedef FetchPageResult = ({List<Product> items, int? exactCount});
+
 // ─── Session-scoped in-memory caches (cleared on app restart) ────────────────
-// Keyed by "$term|$category|$offset". Cap at 50 entries per cache (LRU-evict).
-final Map<String, List<Product>> _resultCache = {};
+// Keyed by "$term|$category|$offset[|buyable]". Cap at 50 entries per cache.
+final Map<String, FetchPageResult> _resultCache = {};
 final Map<String, List<String>> _suggestCache = {};
 const int _kMaxCacheEntries = 50;
 
@@ -103,9 +107,13 @@ class MedicineRepository {
   ///
   /// Throws if the request fails so callers can show an error/retry state.
   ///
+  /// Returns a [FetchPageResult] with [items] (the page) and [exactCount]
+  /// (total filtered rows from the SAME query — never mismatches).
+  /// [exactCount] is null for search paths (which show all items).
+  ///
   /// When [onlyBuyable] is true (home/All + category browse, NOT search),
-  /// the fetch filters to buyable=true only. Search always passes false.
-  Future<List<Product>> fetchPage({
+  /// filters to buyable=true and includes an exact count. Search passes false.
+  Future<FetchPageResult> fetchPage({
     String category = 'All',
     String query = '',
     required int offset,
@@ -127,8 +135,8 @@ class MedicineRepository {
     lastCallWasCacheHit = false;
 
     if (term.isNotEmpty) {
-      // ── Search: fuzzy priority RPC (respects category filter) ───────────────
-      List<Product> result;
+      // ── Search: fuzzy priority RPC — returns ALL items incl. unavailable ────
+      List<Product> items;
       try {
         final rows = await _client.rpc('search_medicines_priority', params: {
           'search_term': term,
@@ -136,7 +144,7 @@ class MedicineRepository {
           'page_offset': offset,
           'page_limit': limit,
         });
-        result = (rows as List)
+        items = (rows as List)
             .map((r) => Product.fromMap(r as Map<String, dynamic>))
             .toList(growable: false);
       } catch (_) {
@@ -147,33 +155,38 @@ class MedicineRepository {
             .or('product_name.ilike.$pat,salt_composition.ilike.$pat,marketer.ilike.$pat')
             .order('sales_count', ascending: false)
             .range(offset, offset + limit - 1);
-        result = rows.map((r) => Product.fromMap(r)).toList(growable: false);
+        items = rows.map((r) => Product.fromMap(r)).toList(growable: false);
       }
+      final result = (items: items, exactCount: null);
       _cacheSet(_resultCache, cacheKey, result);
       return result;
     }
 
-    // ── Browse buyable-only: home/All + category, no RPC needed ─────────────────
+    // ── Browse buyable-only: home/All + category. Count comes from same query ──
     if (onlyBuyable) {
       var fb = _client.from('MEDICINE').select(_kListCols).eq('buyable', true);
       if (category != 'All') fb = fb.eq('therapeutic_class', category);
-      final rows = await fb
+      final res = await fb
           .order('sales_count', ascending: false)
-          .range(offset, offset + limit - 1);
-      final result = rows.map((r) => Product.fromMap(r)).toList(growable: false);
+          .range(offset, offset + limit - 1)
+          .count(CountOption.exact);
+      final items = (res.data as List)
+          .map((r) => Product.fromMap(r as Map<String, dynamic>))
+          .toList(growable: false);
+      final result = (items: items, exactCount: res.count);
       _cacheSet(_resultCache, cacheKey, result);
       return result;
     }
 
-    // ── Browse: category/all priority RPC (index scan ~0.12ms) ─────────────────
-    List<Product> result;
+    // ── Browse non-buyable: category/all priority RPC ─────────────────────────
+    List<Product> items;
     try {
       final rows = await _client.rpc('fetch_medicines_by_category_priority', params: {
         'category_name': category,
         'page_offset': offset,
         'page_limit': limit,
       });
-      result = (rows as List)
+      items = (rows as List)
           .map((r) => Product.fromMap(r as Map<String, dynamic>))
           .toList(growable: false);
     } catch (_) {
@@ -182,37 +195,11 @@ class MedicineRepository {
       final rows = await fb
           .order('sales_count', ascending: false)
           .range(offset, offset + limit - 1);
-      result = rows.map((r) => Product.fromMap(r)).toList(growable: false);
+      items = rows.map((r) => Product.fromMap(r)).toList(growable: false);
     }
+    final result = (items: items, exactCount: null);
     _cacheSet(_resultCache, cacheKey, result);
     return result;
-  }
-
-  /// Returns the count of buyable=true medicines in a specific category.
-  /// Used to show accurate "Showing N of M" totals in category-only view.
-  Future<int> fetchBuyableCategoryCount(String category) async {
-    try {
-      return await _client
-          .from('MEDICINE')
-          .count(CountOption.exact)
-          .eq('therapeutic_class', category)
-          .eq('buyable', true);
-    } catch (_) {
-      return 0;
-    }
-  }
-
-  /// Returns the total count of ALL buyable=true medicines (across all categories).
-  /// Used to show accurate "Showing N of M" totals on the home/All grid.
-  Future<int> fetchBuyableTotal() async {
-    try {
-      return await _client
-          .from('MEDICINE')
-          .count(CountOption.exact)
-          .eq('buyable', true);
-    } catch (_) {
-      return 0;
-    }
   }
 
   /// Returns up to 3 product names similar to [query] for "Did you mean?"

@@ -423,24 +423,26 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   }
 
   Future<void> _loadSuppliers() async {
+    RenderLog.write('78_collect_dropdown_query_sent', 'true');
     try {
       final res = await Supabase.instance.client
-          .from('order_items')
-          .select('assigned_supplier')
-          .not('assigned_supplier', 'is', null)
-          .neq('fulfillment_state', 'shipped')
-          .neq('fulfillment_state', 'cancelled') as List;
+          .from('supplier_orders')
+          .select('supplier_name')
+          .inFilter('status', ['pending', 'sent'])
+          .order('created_at', ascending: false) as List;
       if (!mounted) return;
       final seen = <String>{};
       final names = <String>[];
       for (final r in res) {
-        final s = (r as Map)['assigned_supplier']?.toString();
-        if (s != null && seen.add(s)) names.add(s);
+        final s = (r as Map)['supplier_name']?.toString();
+        if (s != null && s.isNotEmpty && seen.add(s)) names.add(s);
       }
       names.sort();
+      RenderLog.write('78_collect_suppliers_count', '${names.length}');
       setState(() { _suppliers = names; _loadingSuppliers = false; });
     } catch (e) {
       if (!mounted) return;
+      RenderLog.write('78_collect_query_error', e.toString().substring(0, e.toString().length.clamp(0, 80)));
       setState(() { _loadingSuppliers = false; _error = e.toString(); });
     }
   }
@@ -508,6 +510,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             .toList();
       });
       RenderLog.write('77_supplier_order_items', '${_supplierOrderItems.length}');
+      RenderLog.write('78_collect_items_loaded', '${_supplierOrderItems.length}');
     } catch (_) {
       if (mounted) setState(() => _supplierOrderItems = []);
     }
@@ -1740,6 +1743,13 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           ]),
           const SizedBox(height: 8),
         ],
+        if (!_loadingSuppliers && _suppliers.isEmpty && _error == null)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: Text('No supplier orders to collect yet',
+                style: const TextStyle(fontSize: 13, color: _kSub)),
+          ),
+        if (_suppliers.isNotEmpty)
         Container(
           height: 48,
           padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -1764,6 +1774,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                       .toList(),
                   onChanged: (v) {
                     if (v == null) return;
+                    RenderLog.write('78_collect_supplier_selected', v);
                     setState(() => _selectedSupplier = v);
                     _loadBox(v);
                   },

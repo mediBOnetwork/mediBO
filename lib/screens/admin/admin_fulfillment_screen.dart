@@ -2893,6 +2893,7 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen> {
   final Set<String> _marking = {};
   bool _arrivalsLive = false;
   bool _redesignLogged = false;
+  bool _arrivalsHintDismissed = false;
 
   // realtime + debounce
   RealtimeChannel? _channel;
@@ -3081,34 +3082,46 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen> {
       ));
     }
 
-    return Column(children: [
-      // ── Banner (B1) ──────────────────────────────────────────────────────────
-      Container(
-        width: double.infinity,
-        margin: const EdgeInsets.fromLTRB(16, 14, 16, 0),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        decoration: BoxDecoration(
-          color: _kPendingBg,
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: _kPendingFg.withValues(alpha: 0.3)),
-        ),
-        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Icon(Icons.info_outline_rounded, size: 16, color: _kPendingFg),
-          const SizedBox(width: 10),
-          const Expanded(
-            child: Text(
-              'Stock you counted at the supplier shows here while it\'s on the way. '
-              'Mark it arrived once the boxes physically reach your warehouse — '
-              'only then can you pack it.',
-              style: TextStyle(fontSize: 12, color: _kPendingFg),
-            ),
-          ),
-        ]),
-      ),
+    // log banner key once
+    if (!_arrivalsHintDismissed) {
+      RenderLog.write('change_88_banner_slim', '1');
+    }
 
-      // ── Header row: count + auto-refresh indicator (B2) ─────────────────────
+    return Column(children: [
+      // ── Slim dismissible banner ───────────────────────────────────────────────
+      if (!_arrivalsHintDismissed)
+        Container(
+          width: double.infinity,
+          margin: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+          decoration: BoxDecoration(
+            color: _kPendingBg,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: _kPendingFg.withValues(alpha: 0.25)),
+          ),
+          child: Row(children: [
+            const Icon(Icons.info_outline_rounded, size: 14, color: _kPendingFg),
+            const SizedBox(width: 8),
+            const Expanded(
+              child: Text(
+                'Mark boxes arrived once they reach your warehouse.',
+                style: TextStyle(fontSize: 12, color: _kPendingFg),
+                maxLines: 1, overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            GestureDetector(
+              onTap: () => setState(() => _arrivalsHintDismissed = true),
+              child: const Padding(
+                padding: EdgeInsets.only(left: 6),
+                child: Icon(Icons.close_rounded, size: 15, color: _kPendingFg),
+              ),
+            ),
+          ]),
+        ),
+
+      // ── Header row: count + auto-refresh indicator ───────────────────────────
       Padding(
-        padding: const EdgeInsets.fromLTRB(16, 10, 8, 0),
+        padding: const EdgeInsets.fromLTRB(16, 8, 8, 0),
         child: Row(children: [
           Text('${_suppliers.length} supplier${_suppliers.length == 1 ? '' : 's'}',
               style: const TextStyle(fontSize: 13, color: _kSub, fontWeight: FontWeight.w500)),

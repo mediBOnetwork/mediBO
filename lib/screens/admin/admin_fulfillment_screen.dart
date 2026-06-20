@@ -364,6 +364,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('voice_receive_rendered', 'true');
     RenderLog.write('82_result_cards_removed', 'true');
     RenderLog.write('82_bag_refs_removed', 'true');
+    RenderLog.write('83_banners_removed', 'true');
     _probeRecorder();
   }
 
@@ -446,6 +447,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       RenderLog.write('fulfillment_ptl_loaded_${items.length}', supplier);
       _loadSupplierOrderItems(supplier);
       RenderLog.write('collect_area_rendered', supplier);
+      RenderLog.write('83_no_autocommit_on_load', 'true');
+      for (final it in items.take(3)) {
+        final pt = it['pack_type']?.toString() ?? '';
+        if (pt.isNotEmpty) RenderLog.write('83_pack_type_shown', '${it['product_name']}:$pt');
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() { _loadingBox = false; _error = e.toString(); });
@@ -609,7 +615,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         await _voiceService.start();
         _recStarted = true;
       }
-      if (result == null || result.bytes.length < 1500) return; // silent / too short
+      if (result == null || result.bytes.length < 5000) return; // silent / too short
       final expected = _buildExpectedList();
       final (:items, :transcript) = await _voiceService.transcribe(
         result.bytes, result.mime, expected: expected.isEmpty ? null : expected,
@@ -681,7 +687,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           'name': name,
           'ordered_qty': (row['ordered_qty'] as num?)?.toInt() ?? 1,
         };
-        final unit = row['unit']?.toString();
+        final unit = row['pack_type']?.toString();
         if (unit != null && unit.isNotEmpty) entry['unit'] = unit;
         expected.add(entry);
         if (expected.length >= 200) break;
@@ -690,15 +696,25 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     return expected;
   }
 
-  // Directly commit voice items — no result cards, no pending confirmations.
+  // Directly commit voice items — ONLY items the user actually spoke.
+  // Guard: heardName must be non-empty; empty heard = Gemini guess from expected list, not speech.
   Future<void> _handleEdgeItemsRealtime(List<Map<dynamic, dynamic>> items) async {
+    int matched = 0;
+    int skipped = 0;
     for (final item in items) {
       final status = (item['status'] ?? 'not_on_order').toString();
-      if (status == 'not_on_order') continue; // can't auto-commit without product_id
+      if (status == 'not_on_order') { skipped++; continue; }
+
       final matchedName = item['matched_name']?.toString();
-      final heardName = (item['heard'] ?? item['name'] ?? '').toString();
+      final heardName = (item['heard'] ?? item['name'] ?? '').toString().trim();
       final receivedQty = (item['received_qty'] as num?)?.toInt() ?? 1;
-      RenderLog.write('77_match_done', matchedName ?? 'none');
+
+      // CRITICAL: skip if no actual speech was transcribed for this item.
+      // voice-receive fills expected items with empty 'heard' when it guesses from context.
+      if (heardName.isEmpty || heardName.length < 3) {
+        skipped++;
+        continue;
+      }
 
       int? productId;
       if (matchedName != null) {
@@ -709,9 +725,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           }
         }
       }
-      if (productId == null) continue;
+      if (productId == null) { skipped++; continue; }
 
-      // Dedup: skip same product+qty seen in this recording session
+      // Dedup: skip same product+qty already committed this recording session
       final dedupeKey = '$productId:$receivedQty';
       if (_segmentSeenKeys.contains(dedupeKey)) continue;
       _segmentSeenKeys.add(dedupeKey);
@@ -723,8 +739,13 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         rawSegment: heardName,
       );
       if (!mounted) return;
-      RenderLog.write('82_realtime_commit', matchedName ?? heardName);
+      matched++;
+      RenderLog.write('83_committed_from_speech', '${matchedName ?? heardName}:$receivedQty/${item['ordered_qty'] ?? '?'}');
     }
+    RenderLog.write('83_segment_matched_count', '$matched');
+    if (skipped > 0) RenderLog.write('83_skipped_unmatched', '$skipped');
+    final done = _items.length - _pendingCount;
+    RenderLog.write('83_progress', '$done/${_items.length}');
   }
 
   // Called from text fallback field only (typed text → local parse → match)
@@ -1206,26 +1227,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         ),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        // ── "All counted" reminder banner (shown while recording if all items done) ──
-        if (_voiceListening && _allDone) ...[
-          Builder(builder: (_) {
-            RenderLog.write('80_all_counted_banner_shown', 'true');
-            return Container(
-              width: double.infinity,
-              margin: const EdgeInsets.only(bottom: 8),
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-              decoration: BoxDecoration(
-                color: _kReceivedBg,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: _kReceivedFg.withValues(alpha: 0.4)),
-              ),
-              child: const Text(
-                '✅ All items counted — tap the mic to stop recording.',
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _kReceivedFg),
-              ),
-            );
-          }),
-        ],
         // ── Top row: mic button + tally + type fallback ──
         Row(children: [
           if (!_voiceSupported) ...[
@@ -1640,34 +1641,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('81_progress', '${_items.length - _pendingCount}/${_items.length}');
 
     return Column(children: [
-      // All-done compact banner
-      if (_allDone) ...[
-        Container(
-          margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-          decoration: BoxDecoration(
-            color: _kReceivedBg,
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: _kReceivedFg.withValues(alpha: 0.35)),
-          ),
-          child: Row(children: [
-            const Icon(Icons.check_circle_rounded, color: _kReceivedFg, size: 18),
-            const SizedBox(width: 8),
-            Expanded(child: Text(
-              '${_selectedSupplier ?? 'Supplier'} — all ${_items.length} items counted ✓',
-              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kReceivedFg),
-            )),
-            TextButton(
-              onPressed: () {
-                setState(() { _items = []; _selectedSupplier = null; });
-                _loadSuppliers();
-              },
-              style: TextButton.styleFrom(foregroundColor: _kReceivedFg),
-              child: const Text('New supplier', style: TextStyle(fontSize: 12)),
-            ),
-          ]),
-        ),
-      ],
       Expanded(
         child: ListView.separated(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
@@ -1677,9 +1650,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             final item    = _items[i];
             final state   = item['fulfillment_state']?.toString() ?? 'pending';
             final name    = item['product_name']?.toString() ?? '—';
-            final ordQty  = (item['ordered_qty'] as num?)?.toInt() ?? 0;
-            final recQty  = (item['received_qty'] as num?)?.toInt() ?? 0;
-            final unit    = item['unit']?.toString() ?? '';
+            final ordQty   = (item['ordered_qty'] as num?)?.toInt() ?? 0;
+            final recQty   = (item['received_qty'] as num?)?.toInt() ?? 0;
+            final packType = item['pack_type']?.toString() ?? '';
             final imageUrl = item['image_url']?.toString();
 
             return GestureDetector(
@@ -1702,7 +1675,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                           style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
                           maxLines: 1, overflow: TextOverflow.ellipsis),
                       const SizedBox(height: 2),
-                      Text('$ordQty ${unit.isNotEmpty ? '$unit  ·  ' : ''}$recQty/$ordQty',
+                      Text('$recQty/$ordQty${packType.isNotEmpty ? ' $packType' : ''}',
                           style: const TextStyle(fontSize: 12, color: _kSub)),
                     ]),
                   ),
@@ -1722,7 +1695,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     if (idx >= 0) _focusItem(idx);
     final name   = item['product_name']?.toString() ?? '—';
     final ordQty = (item['ordered_qty'] as num?)?.toInt() ?? 0;
-    final unit   = item['unit']?.toString() ?? '';
+    final unit   = item['pack_type']?.toString() ?? '';
     // mutable sheet state: [showShort, shortDraft]
     final sheetState = <dynamic>[false, (ordQty - 1).clamp(1, ordQty)];
     showResponsiveSheet(

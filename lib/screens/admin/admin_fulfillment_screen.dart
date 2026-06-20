@@ -337,6 +337,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   bool _agentBusy = false;
   bool _agentRecStarted = false; // tracks whether _voiceService is owned by agent
 
+  // ── #88: agent reply popup overlay ──────────────────────────────────────────
+  final LayerLink _askPillLayerLink = LayerLink();
+  OverlayEntry? _agentBubbleEntry;
+
   // ── Computed ──
   Map<String, dynamic>? get _currentItem =>
       (_items.isNotEmpty && _focusIdx < _items.length) ? _items[_focusIdx] : null;
@@ -362,6 +366,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   @override
   void dispose() {
+    _agentBubbleEntry?.remove();
+    _agentBubbleEntry = null;
     _voiceService.dispose();
     _echoTimer?.cancel();
     _idleTimer?.cancel();
@@ -1252,6 +1258,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   // ── Narrow layout (< 900px) — existing tree verbatim ────────────────────────
   Widget _buildCollectNarrow(bool isAdmin) {
+    RenderLog.write('change_88_layout', 'narrow');
     RenderLog.write('change_86_layout', 'narrow');
     RenderLog.write('change_86_narrow_cards_present', '1');
     return Column(children: [
@@ -1273,22 +1280,138 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     ]);
   }
 
-  // ── Wide layout (>= 900px) — #87: single-line bar ───────────────────────────
+  // ── #88: agent popup bubble management ──────────────────────────────────────
+
+  void _ensureAgentBubble() {
+    if (!mounted) return;
+    if (_agentBubbleEntry == null) {
+      _agentBubbleEntry = OverlayEntry(builder: (_) => _buildAgentBubbleOverlay());
+      Overlay.of(context).insert(_agentBubbleEntry!);
+    } else {
+      _agentBubbleEntry!.markNeedsBuild();
+    }
+  }
+
+  void _hideAgentBubble() {
+    _agentBubbleEntry?.remove();
+    _agentBubbleEntry = null;
+  }
+
+  Widget _buildAgentBubbleOverlay() {
+    final phase = _agentPhase;
+    final reply = _agentReply;
+    final action = _pendingAction;
+    final bool confirming = phase == AgentPhase.confirming;
+    final bool agentBusy = phase == AgentPhase.thinking || phase == AgentPhase.speaking;
+    if (phase == AgentPhase.idle || reply.isEmpty) return const SizedBox.shrink();
+    RenderLog.write('change_88_popup_present', '1');
+
+    return CompositedTransformFollower(
+      link: _askPillLayerLink,
+      showWhenUnlinked: false,
+      targetAnchor: Alignment.topRight,
+      followerAnchor: Alignment.bottomRight,
+      offset: const Offset(0, -8),
+      child: Align(
+        alignment: Alignment.bottomRight,
+        child: Material(
+          color: Colors.transparent,
+          child: Container(
+            constraints: const BoxConstraints(maxWidth: 320),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: _kAgentAccent.withValues(alpha: 0.25)),
+              boxShadow: [
+                BoxShadow(color: Colors.black.withValues(alpha: 0.12), blurRadius: 12, offset: const Offset(0, 4)),
+              ],
+            ),
+            padding: const EdgeInsets.all(14),
+            child: confirming
+                ? Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(reply,
+                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: _kText)),
+                    if (action != null) ...[
+                      const SizedBox(height: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF5F6F8),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: _kBorder),
+                        ),
+                        child: Text(
+                          '${action['product_name'] ?? ''}'
+                          '${action['qty'] != null ? ' — qty ${(action['qty'] as num).toInt()}' : ''}',
+                          style: const TextStyle(fontSize: 12, color: _kText, fontWeight: FontWeight.w500),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+                        GestureDetector(
+                          onTap: _commitPending,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                            decoration: BoxDecoration(color: _kGreen, borderRadius: BorderRadius.circular(8)),
+                            child: const Text('✓ Haan',
+                                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.white)),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        GestureDetector(
+                          onTap: _cancelPending,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: _kBorder),
+                            ),
+                            child: const Text('✗ Nahi',
+                                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _kText)),
+                          ),
+                        ),
+                      ]),
+                    ],
+                  ])
+                : Row(mainAxisSize: MainAxisSize.min, children: [
+                    Icon(agentBusy ? Icons.hourglass_top_rounded : Icons.volume_up_rounded,
+                        size: 14, color: _kAgentAccent),
+                    const SizedBox(width: 8),
+                    Flexible(
+                      child: Text(reply,
+                          style: const TextStyle(fontSize: 13, color: _kText),
+                          maxLines: 3, overflow: TextOverflow.ellipsis),
+                    ),
+                  ]),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ── Wide layout (>= 900px) — #88: single bar + popup bubble ────────────────
   Widget _buildCollectWide(bool isAdmin) {
+    RenderLog.write('change_88_layout', 'wide');
+    RenderLog.write('change_88_no_inline_banner', '1');
     RenderLog.write('change_87_layout', 'wide');
     RenderLog.write('change_86_layout', 'wide');
-    final agentPhase = _agentPhase;
-    final showBanner = agentPhase != AgentPhase.idle && _agentReply.isNotEmpty;
+
+    // Drive bubble show/hide from the build cycle (post-frame to avoid setState-in-build)
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (_agentPhase != AgentPhase.idle && _agentReply.isNotEmpty) {
+        _ensureAgentBubble();
+      } else {
+        _hideAgentBubble();
+      }
+    });
+
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      // ── Single merged bar ────────────────────────────────────────────────────
+      // ── Single merged bar (dropdown + progress + both pills) ─────────────────
       _buildWideSingleBar(isAdmin),
-      // ── Agent banner (below bar, only when agent active) ─────────────────────
-      if (showBanner) ...[
-        const SizedBox(height: 8),
-        _buildWideAgentBanner(isAdmin),
-      ],
       const SizedBox(height: 16),
-      // ── Item table ──────────────────────────────────────────────────────────
+      // ── Item table — never pushed down by agent output (#88) ─────────────────
       if (_loadingBox)
         const Expanded(child: Center(child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2)))
       else if (_selectedSupplier == null)
@@ -1304,8 +1427,13 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     ]);
   }
 
-  // ── #87: Single merged bar — dropdown + progress + both pills in ONE row ──────
+  // ── #88: Single merged bar — dropdown + progress + FIXED-SIZE pills ──────────
+  // Button constants — fixed size applied at call site via SizedBox
+  static const double _kVoiceBtnW = 150;
+  static const double _kVoiceBtnH = 44;
+
   Widget _buildWideSingleBar(bool isAdmin) {
+    RenderLog.write('change_88_fixed_btn_size', '150x44');
     RenderLog.write('change_87_single_bar_present', '1');
     RenderLog.write('change_87_pills_inline', '1');
     RenderLog.write('change_86_voice_pills_present', '1');
@@ -1329,7 +1457,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       ),
       child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
 
-        // 1. Supplier dropdown (Flexible so long names ellipsize and don't crowd right side)
+        // 1. Supplier dropdown
         Flexible(
           flex: 3,
           child: _suppliers.isEmpty
@@ -1381,56 +1509,67 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           ),
         ],
 
-        // 4. Count items pill
+        // 4. Count items pill — FIXED SIZE BOX (never changes width/height across states)
         if (_voiceSupported) ...[
           const SizedBox(width: 16),
-          _buildWidePill(
-            icon: _voiceListening
-                ? Icons.stop_rounded
-                : _voiceProcessing
-                    ? Icons.hourglass_top_rounded
-                    : Icons.mic_none_rounded,
-            label: _voiceListening
-                ? 'Stop'
-                : _voiceProcessing
-                    ? 'Processing…'
-                    : 'Count items',
-            active: _voiceListening,
-            activeColor: _kWrongFg,
-            disabled: countingDisabled && !_voiceListening,
-            spinning: _voiceProcessing,
-            onTap: _toggleRecording,
+          SizedBox(
+            width: _kVoiceBtnW,
+            height: _kVoiceBtnH,
+            child: _buildWidePill(
+              icon: _voiceListening
+                  ? Icons.stop_rounded
+                  : _voiceProcessing
+                      ? Icons.hourglass_top_rounded
+                      : Icons.mic_none_rounded,
+              label: _voiceListening
+                  ? 'Stop recording'
+                  : _voiceProcessing
+                      ? 'Processing…'
+                      : 'Count items',
+              active: _voiceListening,
+              activeColor: _kWrongFg,
+              disabled: countingDisabled && !_voiceListening,
+              spinning: _voiceProcessing,
+              onTap: _toggleRecording,
+            ),
           ),
         ],
 
-        // 5. Ask mediBO pill (admin only)
+        // 5. Ask mediBO pill — FIXED SIZE BOX + LayerLink for popup anchor (#88)
         if (isAdmin) ...[
           const SizedBox(width: 10),
-          _buildWidePill(
-            icon: agentListening
-                ? Icons.stop_rounded
-                : agentBusy
-                    ? Icons.hourglass_top_rounded
-                    : Icons.record_voice_over_rounded,
-            label: agentListening
-                ? 'Stop'
-                : agentBusy
-                    ? (agentPhase == AgentPhase.thinking ? 'Thinking…' : 'Speaking…')
-                    : confirming
-                        ? 'Confirm…'
-                        : 'Ask mediBO',
-            active: agentListening,
-            activeColor: _kAgentAccent,
-            disabled: agentDisabled && !agentListening,
-            spinning: agentBusy,
-            onTap: () {
-              if (agentBusy) return;
-              if (agentListening) {
-                _stopAgentRecording();
-              } else if (agentPhase == AgentPhase.idle) {
-                _startAgentRecording();
-              }
-            },
+          CompositedTransformTarget(
+            link: _askPillLayerLink,
+            child: SizedBox(
+              width: _kVoiceBtnW,
+              height: _kVoiceBtnH,
+              child: _buildWidePill(
+                icon: agentListening
+                    ? Icons.stop_rounded
+                    : agentBusy
+                        ? Icons.hourglass_top_rounded
+                        : Icons.record_voice_over_rounded,
+                label: agentListening
+                    ? 'Listening…'
+                    : agentBusy
+                        ? (agentPhase == AgentPhase.thinking ? 'Thinking…' : 'Speaking…')
+                        : confirming
+                            ? 'Confirming…'
+                            : 'Ask mediBO',
+                active: agentListening,
+                activeColor: _kAgentAccent,
+                disabled: agentDisabled && !agentListening,
+                spinning: agentBusy,
+                onTap: () {
+                  if (agentBusy) return;
+                  if (agentListening) {
+                    _stopAgentRecording();
+                  } else if (agentPhase == AgentPhase.idle) {
+                    _startAgentRecording();
+                  }
+                },
+              ),
+            ),
           ),
         ],
 
@@ -1438,81 +1577,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     );
   }
 
-  // ── #87: Agent banner — shown below the single bar when agent active ───────────
-  Widget _buildWideAgentBanner(bool isAdmin) {
-    final agentPhase = _agentPhase;
-    final bool agentBusy = agentPhase == AgentPhase.thinking || agentPhase == AgentPhase.speaking;
-    final bool confirming = agentPhase == AgentPhase.confirming;
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 24),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        decoration: BoxDecoration(
-          color: _kAgentAccent.withValues(alpha: 0.06),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: _kAgentAccent.withValues(alpha: 0.25)),
-        ),
-        child: confirming
-            ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(_agentReply,
-                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: _kText)),
-                if (_pendingAction != null) ...[
-                  const SizedBox(height: 6),
-                  Row(children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFF5F6F8),
-                        borderRadius: BorderRadius.circular(6),
-                        border: Border.all(color: _kBorder),
-                      ),
-                      child: Text(
-                        '${_pendingAction!['product_name'] ?? ''}'
-                        '${_pendingAction!['qty'] != null ? ' — qty ${(_pendingAction!['qty'] as num).toInt()}' : ''}',
-                        style: const TextStyle(fontSize: 12, color: _kText, fontWeight: FontWeight.w500),
-                      ),
-                    ),
-                    const Spacer(),
-                    GestureDetector(
-                      onTap: _commitPending,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-                        decoration: BoxDecoration(color: _kGreen, borderRadius: BorderRadius.circular(8)),
-                        child: const Text('✓ Haan',
-                            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.white)),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    GestureDetector(
-                      onTap: _cancelPending,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: _kBorder),
-                        ),
-                        child: const Text('✗ Nahi',
-                            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _kText)),
-                      ),
-                    ),
-                  ]),
-                ],
-              ])
-            : Row(children: [
-                Icon(agentBusy ? Icons.hourglass_top_rounded : Icons.volume_up_rounded,
-                    size: 14, color: _kAgentAccent),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(_agentReply,
-                      style: const TextStyle(fontSize: 13, color: _kText),
-                      maxLines: 2, overflow: TextOverflow.ellipsis),
-                ),
-              ]),
-      ),
-    );
-  }
+  // _buildWideAgentBanner removed in #88 — replaced by popup overlay (_buildAgentBubbleOverlay).
 
+  // _buildWidePill: always sized by parent SizedBox(kVoiceBtnW x kVoiceBtnH).
+  // Only decoration/colour/icon/label change between states — never the box.
   Widget _buildWidePill({
     required IconData icon,
     required String label,
@@ -1530,41 +1598,48 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           onTap: onTap,
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 180),
-            height: 40,
-            padding: const EdgeInsets.symmetric(horizontal: 16),
+            // Width/height controlled by parent SizedBox — no hardcoded size here.
             decoration: BoxDecoration(
               color: active ? activeColor : Colors.white,
-              borderRadius: BorderRadius.circular(20),
+              borderRadius: BorderRadius.circular(_kVoiceBtnH / 2),
               border: Border.all(
                 color: active ? activeColor : _kBorder,
-                width: active ? 0 : 1,
+                width: 1,
               ),
               boxShadow: active
                   ? [BoxShadow(color: activeColor.withValues(alpha: 0.30), blurRadius: 10, spreadRadius: 1)]
                   : [],
             ),
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
-              spinning
-                  ? SizedBox(
-                      width: 14, height: 14,
-                      child: CircularProgressIndicator(
-                        color: active ? Colors.white : activeColor,
-                        strokeWidth: 2,
-                      ),
-                    )
-                  : Icon(icon,
-                      size: 16,
-                      color: active ? Colors.white : activeColor),
-              const SizedBox(width: 7),
-              Text(
-                label,
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: active ? Colors.white : _kText,
+            child: Row(
+              mainAxisSize: MainAxisSize.max,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                spinning
+                    ? SizedBox(
+                        width: 14, height: 14,
+                        child: CircularProgressIndicator(
+                          color: active ? Colors.white : activeColor,
+                          strokeWidth: 2,
+                        ),
+                      )
+                    : Icon(icon,
+                        size: 16,
+                        color: active ? Colors.white : activeColor),
+                const SizedBox(width: 6),
+                Flexible(
+                  child: Text(
+                    label,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: active ? Colors.white : _kText,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
+                  ),
                 ),
-              ),
-            ]),
+              ],
+            ),
           ),
         ),
       ),

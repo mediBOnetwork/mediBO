@@ -271,37 +271,6 @@ class _VoiceEcho {
   });
 }
 
-// ── Pending voice confirmation (one per edge-function item) ──────────────────
-
-/// One row returned by the voice-receive edge function (reconciliation mode).
-class _PendingConfirmation {
-  final String status;          // ok | short | over | not_on_order
-  final String heardName;       // raw heard text from Gemini
-  final String? matchedName;    // catalog product name (null for not_on_order until picked)
-  final int receivedQty;        // what was spoken
-  final int? orderedQty;        // from expected (null for not_on_order)
-  int? selectedProductId;       // looked up from _items by matchedName (or picked)
-  String? selectedProductName;  // = matchedName, or user's pick
-  final MatchResult candidateResult; // matchToBox result (used for not_on_order dropdown)
-  late final TextEditingController qtyCtrl;
-  bool confirmed = false;       // true once committed to DB (auto for ok/short/over)
-  bool editing = false;         // post-confirm edit mode
-
-  _PendingConfirmation({
-    required this.status,
-    required this.heardName,
-    required this.matchedName,
-    required this.receivedQty,
-    required this.orderedQty,
-    required this.selectedProductId,
-    required this.selectedProductName,
-    required this.candidateResult,
-  }) {
-    qtyCtrl = TextEditingController(text: receivedQty.toString());
-  }
-
-  void dispose() => qtyCtrl.dispose();
-}
 
 // ── PICK-TO-LIGHT SCREEN ─────────────────────────────────────────────────────
 
@@ -327,43 +296,31 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   int _focusIdx = 0;
   bool _recording = false;
   bool _showListView = false;
-  bool _showShortPanel = false;
-  int _shortQtyDraft = 1;
-
-  // ── Feature flags ──
-  bool _bagConfirmEnabled = false;
-  bool _barcodeEnabled = false;
-
-  // ── Bag confirm ──
-  bool _bagConfirmed = false;
-  bool? _bagScanMatch;
-  String? _bagScanMsg;
-  bool _bagConfirming = false;
 
   // ── Voice service (Vertex Gemini edge function) ──
   final _voiceService = VoiceReceiveService();
   bool _recStarted = false;
 
   // ── Voice state ──
-  bool _voiceSupported = true;   // always true; set false on mic deny
+  bool _voiceSupported = true;
   bool _voiceListening = false;
   bool _voiceProcessing = false;
   String _voiceInterim = '';
   String _voiceError = '';
   String _lastTranscript = '';
-  bool _showVoiceText = false;   // text fallback field
+  bool _showVoiceText = false;
   final _voiceTextCtrl = TextEditingController();
 
   // ── Voice results ──
   _VoiceEcho? _lastEcho;
   Timer? _echoTimer;
-  Timer? _idleTimer;              // 90s auto-stop safety
-  DateTime? _recStartTime;        // when current recording started
-  final List<List<Map<String, dynamic>>> _undoStack = [];   // each = rows from one call
-  final Map<int, num> _tally = {};  // product_id -> total allocated this session
-
-  // ── Voice confirmations (edge-function items awaiting user confirm) ──
-  List<_PendingConfirmation> _pendingConfirmations = [];
+  Timer? _idleTimer;
+  Timer? _segmentTimer;          // fires every 3s to process realtime segments
+  int _segmentCount = 0;
+  final Set<String> _segmentSeenKeys = {};  // "$productId:$qty" dedup within one recording
+  DateTime? _recStartTime;
+  final List<List<Map<String, dynamic>>> _undoStack = [];
+  final Map<int, num> _tally = {};
 
   // ── supplier_orders items for reconciliation expected list ──
   List<Map<String, dynamic>> _supplierOrderItems = [];
@@ -380,8 +337,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   bool get _allDone => _items.isNotEmpty && _pendingCount == 0;
 
-  bool get _blocked => _bagConfirmEnabled && _currentIsPending && !_bagConfirmed;
-
   // ── Lifecycle ───────────────────────────────────────────────────────────────
 
   @override
@@ -396,9 +351,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   @override
   void dispose() {
     _voiceService.dispose();
-    for (final c in _pendingConfirmations) { c.dispose(); }
     _echoTimer?.cancel();
     _idleTimer?.cancel();
+    _segmentTimer?.cancel();
     _voiceTextCtrl.dispose();
     super.dispose();
   }
@@ -407,7 +362,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     if (mounted) setState(() => _voiceSupported = true);
     RenderLog.write('77_voice_screen_mounted', 'true');
     RenderLog.write('voice_receive_rendered', 'true');
-    RenderLog.write('81_bagcard_removed', 'true');
+    RenderLog.write('82_result_cards_removed', 'true');
+    RenderLog.write('82_bag_refs_removed', 'true');
     _probeRecorder();
   }
 
@@ -425,20 +381,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   // ── Settings / suppliers / box ─────────────────────────────────────────────
 
-  Future<void> _loadSettings() async {
-    try {
-      final bagRes = await Supabase.instance.client
-          .rpc('get_app_setting', params: {'p_key': 'stage1_bag_confirm'});
-      final barRes = await Supabase.instance.client
-          .rpc('get_app_setting', params: {'p_key': 'stage1_barcode_scan'});
-      if (!mounted) return;
-      setState(() {
-        _bagConfirmEnabled = bagRes == true;
-        _barcodeEnabled = barRes == true;
-      });
-      if (!_barcodeEnabled) RenderLog.write('barcode_scan_hook_dormant', 'true');
-    } catch (_) {}
-  }
+  Future<void> _loadSettings() async {} // bag/barcode settings removed in #82
 
   Future<void> _loadSuppliers() async {
     RenderLog.write('78_collect_dropdown_query_sent', 'true');
@@ -472,12 +415,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       _recStarted = false;
       _idleTimer?.cancel();
     }
-    for (final c in _pendingConfirmations) { c.dispose(); }
     setState(() {
       _loadingBox = true; _error = null; _items = []; _focusIdx = 0;
       _voiceListening = false; _voiceInterim = ''; _lastEcho = null;
-      _pendingConfirmations = []; _supplierOrderItems = [];
-      _undoStack.clear(); _tally.clear();
+      _supplierOrderItems = [];
+      _undoStack.clear(); _tally.clear(); _segmentSeenKeys.clear();
     });
     try {
       final res = await Supabase.instance.client
@@ -572,8 +514,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     final nextPending = _items.indexWhere(
         (i) => (i['fulfillment_state'] as String?) == 'pending', _focusIdx + 1);
     setState(() {
-      _resetBagConfirm();
-      _showShortPanel = false; _shortQtyDraft = 1;
       if (nextPending >= 0) {
         _focusIdx = nextPending;
       } else {
@@ -584,100 +524,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     });
   }
 
-  void _goBack() {
-    setState(() {
-      if (_focusIdx > 0) _focusIdx--;
-      _resetBagConfirm();
-      _showShortPanel = false; _shortQtyDraft = 1;
-    });
-  }
-
-  void _skip() {
-    final pending = <int>[];
-    for (var i = 0; i < _items.length; i++) {
-      if ((_items[i]['fulfillment_state'] as String?) == 'pending') pending.add(i);
-    }
-    if (pending.length <= 1) return;
-    final pos = pending.indexOf(_focusIdx);
-    final nextPos = (pos + 1) % pending.length;
-    setState(() {
-      _focusIdx = pending[nextPos];
-      _resetBagConfirm();
-      _showShortPanel = false; _shortQtyDraft = 1;
-    });
-  }
-
   void _focusItem(int idx) {
     setState(() {
       _focusIdx = idx;
       _showListView = false;
-      _resetBagConfirm();
-      _showShortPanel = false; _shortQtyDraft = 1;
     });
-  }
-
-  void _resetBagConfirm() {
-    _bagConfirmed = false; _bagScanMatch = null; _bagScanMsg = null;
-  }
-
-  // ── Bag confirm ────────────────────────────────────────────────────────────
-
-  Future<void> _handleBagScan(String code) async {
-    final item = _currentItem;
-    if (item == null) return;
-    setState(() => _bagConfirming = true);
-    try {
-      final res = await Supabase.instance.client
-          .rpc('resolve_bag_code', params: {'p_code': code}) as List;
-      if (!mounted) return;
-      if (res.isEmpty) {
-        setState(() {
-          _bagScanMatch = false; _bagScanMsg = 'Unknown QR code'; _bagConfirming = false;
-        });
-        return;
-      }
-      final row = Map<String, dynamic>.from(res.first as Map);
-      final scannedOrderId = row['order_id']?.toString() ?? '';
-      final currentOrderId = item['order_id']?.toString() ?? '';
-      if (scannedOrderId == currentOrderId) {
-        setState(() {
-          _bagConfirmed = true; _bagScanMatch = true; _bagScanMsg = null; _bagConfirming = false;
-        });
-        RenderLog.write('bag_confirm_ok', 'scan:${item['bag_no']}');
-      } else {
-        final wrongBag = row['bag_no']?.toString() ?? '?';
-        final wrongCust = row['customer']?.toString() ?? '';
-        setState(() {
-          _bagScanMatch = false;
-          _bagScanMsg = 'Wrong bag — this is Bag $wrongBag ($wrongCust)';
-          _bagConfirming = false;
-        });
-      }
-    } catch (e) {
-      if (!mounted) return;
-      setState(() { _bagScanMatch = false; _bagScanMsg = 'Scan error: $e'; _bagConfirming = false; });
-    }
-  }
-
-  void _manualBagConfirm() {
-    final item = _currentItem;
-    if (item == null) return;
-    setState(() { _bagConfirmed = true; _bagScanMatch = true; _bagScanMsg = null; });
-    RenderLog.write('bag_confirm_ok', 'manual:${item['bag_no']}');
-  }
-
-  // ── Barcode hook (dormant) ─────────────────────────────────────────────────
-
-  Future<void> _handleItemScan(String code) async {
-    if (!_barcodeEnabled) { RenderLog.write('barcode_scan_hook_dormant', 'scan_ignored'); return; }
-    final item = _currentItem;
-    if (item == null) return;
-    try {
-      await Supabase.instance.client.rpc('learn_barcode', params: {
-        'p_order_item_id': item['order_item_id'], 'p_code': code,
-      });
-      if (mounted) RenderLog.write('barcode_learn_ok', '${item['order_item_id']}:$code');
-    } catch (_) {}
   }
 
   // ── VOICE (Vertex Gemini via voice-receive edge function) ──────────────────
@@ -715,17 +566,19 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   Future<void> _startRecording() async {
     if (!_voiceSupported || _voiceListening || _voiceProcessing) return;
-    // Clear prior confirmations
-    for (final c in _pendingConfirmations) { c.dispose(); }
+    _segmentSeenKeys.clear();
+    _segmentCount = 0;
     setState(() {
       _voiceListening = true; _voiceInterim = 'Recording…'; _voiceError = '';
-      _pendingConfirmations = [];
     });
     RenderLog.write('77_rec_start', 'attempt');
     try {
       await _voiceService.start();
       _recStarted = true;
       RenderLog.write('79_rec_start_ok', 'true');
+      // Kick off 3-second realtime segments
+      _segmentTimer?.cancel();
+      _segmentTimer = Timer.periodic(const Duration(seconds: 3), (_) => _processSegment());
     } catch (e) {
       _recStarted = false;
       if (!mounted) return;
@@ -745,7 +598,37 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     }
   }
 
+  // Fires every 3s during recording: stop current clip, send to voice-receive, restart.
+  Future<void> _processSegment() async {
+    if (!_voiceListening || !_recStarted) return;
+    _recStarted = false;
+    try {
+      final result = await _voiceService.stop();
+      // Restart recording immediately so the next segment captures while we process
+      if (_voiceListening && mounted) {
+        await _voiceService.start();
+        _recStarted = true;
+      }
+      if (result == null || result.bytes.length < 1500) return; // silent / too short
+      final expected = _buildExpectedList();
+      final (:items, :transcript) = await _voiceService.transcribe(
+        result.bytes, result.mime, expected: expected.isEmpty ? null : expected,
+      );
+      if (!mounted || items.isEmpty) return;
+      _segmentCount++;
+      RenderLog.write('82_segment_processed', '$_segmentCount');
+      await _handleEdgeItemsRealtime(items);
+    } catch (_) {
+      // Segment errors are silent — continue recording
+      if (_voiceListening && mounted && !_recStarted) {
+        try { await _voiceService.start(); _recStarted = true; } catch (_) {}
+      }
+    }
+  }
+
   Future<void> _stopAndTranscribe() async {
+    _segmentTimer?.cancel();
+    _segmentTimer = null;
     if (!_voiceListening) return;
     setState(() { _voiceListening = false; _voiceInterim = ''; });
     if (!_recStarted) return;
@@ -753,149 +636,94 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     setState(() => _voiceProcessing = true);
     try {
       final result = await _voiceService.stop();
-      if (!mounted) return;
-      if (result == null) {
-        setState(() { _voiceProcessing = false; _voiceError = 'No audio captured — try again'; });
-        Future.delayed(const Duration(seconds: 3), () {
-          if (mounted) setState(() => _voiceError = '');
-        });
-        return;
+      if (!mounted) { setState(() => _voiceProcessing = false); return; }
+      if (result == null || result.bytes.length < 1500) {
+        setState(() => _voiceProcessing = false);
+        return; // trailing silence — nothing to do
       }
-      final (:bytes, :mime) = result;
-      RenderLog.write('77_rec_stop_bytes', '${bytes.length}');
-
-      // Build ordered list for reconciliation mode.
-      // Prefer supplier_orders.items (the actual purchase order) over _items (pick-to-light rows).
-      final expected = <Map<String, dynamic>>[];
-      if (_supplierOrderItems.isNotEmpty) {
-        for (final row in _supplierOrderItems) {
-          final name = row['product_name']?.toString();
-          if (name == null) continue;
-          final entry = <String, dynamic>{
-            'name': name,
-            'ordered_qty': (row['quantity'] as num?)?.toInt() ?? 1,
-          };
-          expected.add(entry);
-        }
-      } else {
-        final seenNames = <String>{};
-        for (final row in _items) {
-          final name = row['product_name']?.toString();
-          if (name == null || !seenNames.add(name)) continue;
-          final entry = <String, dynamic>{
-            'name': name,
-            'ordered_qty': (row['ordered_qty'] as num?)?.toInt() ?? 1,
-          };
-          final unit = row['unit']?.toString();
-          if (unit != null && unit.isNotEmpty) entry['unit'] = unit;
-          expected.add(entry);
-          if (expected.length >= 200) break;
-        }
-      }
+      RenderLog.write('77_rec_stop_bytes', '${result.bytes.length}');
+      final expected = _buildExpectedList();
       RenderLog.write('77_invoke_sent', 'expected=${expected.length}');
-      RenderLog.write('79_voice_invoke_sent', 'bytes=${bytes.length}');
-
       final (:items, :transcript) = await _voiceService.transcribe(
-        bytes, mime, expected: expected.isEmpty ? null : expected,
+        result.bytes, result.mime, expected: expected.isEmpty ? null : expected,
       );
-      if (!mounted) return;
-      RenderLog.write('77_invoke_items', '${items.length}');
-      RenderLog.write('79_voice_items', '${items.length}');
-      RenderLog.write('80_voice_items', '${items.length}');
-
-      if (items.isEmpty) {
-        setState(() {
-          _voiceProcessing = false;
-          _voiceError = "Didn't catch that — try again";
-          _lastTranscript = transcript;
-        });
-        Future.delayed(const Duration(seconds: 3), () {
-          if (mounted) setState(() => _voiceError = '');
-        });
-        return;
-      }
-      _handleEdgeItems(items, transcript);
+      if (!mounted) { setState(() => _voiceProcessing = false); return; }
+      _segmentCount++;
+      RenderLog.write('82_segment_processed', '$_segmentCount');
+      if (items.isNotEmpty) await _handleEdgeItemsRealtime(items);
     } catch (e) {
       if (!mounted) return;
       final msg = e.toString();
       RenderLog.write('77_error', msg);
-      setState(() { _voiceProcessing = false; _voiceError = msg; });
+      setState(() { _voiceError = msg; });
       Future.delayed(const Duration(seconds: 4), () {
         if (mounted) setState(() => _voiceError = '');
       });
+    } finally {
+      if (mounted) setState(() => _voiceProcessing = false);
     }
   }
 
-  Future<void> _handleEdgeItems(List<Map<dynamic, dynamic>> items, String transcript) async {
-    setState(() => _voiceProcessing = false);
-    final confirmations = <_PendingConfirmation>[];
+  List<Map<String, dynamic>> _buildExpectedList() {
+    final expected = <Map<String, dynamic>>[];
+    if (_supplierOrderItems.isNotEmpty) {
+      for (final row in _supplierOrderItems) {
+        final name = row['product_name']?.toString();
+        if (name == null) continue;
+        expected.add({'name': name, 'ordered_qty': (row['quantity'] as num?)?.toInt() ?? 1});
+      }
+    } else {
+      final seenNames = <String>{};
+      for (final row in _items) {
+        final name = row['product_name']?.toString();
+        if (name == null || !seenNames.add(name)) continue;
+        final entry = <String, dynamic>{
+          'name': name,
+          'ordered_qty': (row['ordered_qty'] as num?)?.toInt() ?? 1,
+        };
+        final unit = row['unit']?.toString();
+        if (unit != null && unit.isNotEmpty) entry['unit'] = unit;
+        expected.add(entry);
+        if (expected.length >= 200) break;
+      }
+    }
+    return expected;
+  }
+
+  // Directly commit voice items — no result cards, no pending confirmations.
+  Future<void> _handleEdgeItemsRealtime(List<Map<dynamic, dynamic>> items) async {
     for (final item in items) {
       final status = (item['status'] ?? 'not_on_order').toString();
+      if (status == 'not_on_order') continue; // can't auto-commit without product_id
       final matchedName = item['matched_name']?.toString();
       final heardName = (item['heard'] ?? item['name'] ?? '').toString();
       final receivedQty = (item['received_qty'] as num?)?.toInt() ?? 1;
-      final orderedQty = (item['ordered_qty'] as num?)?.toInt();
+      RenderLog.write('77_match_done', matchedName ?? 'none');
 
-      // Look up product_id from _items by matched catalog name
-      int? selId;
+      int? productId;
       if (matchedName != null) {
         for (final row in _items) {
           if (row['product_name']?.toString() == matchedName) {
-            selId = (row['product_id'] as num?)?.toInt();
+            productId = (row['product_id'] as num?)?.toInt();
             break;
           }
         }
       }
+      if (productId == null) continue;
 
-      // For not_on_order: run local Double Metaphone matcher to suggest candidates
-      MatchResult candidateResult = MatchNone();
-      if (status == 'not_on_order' && heardName.isNotEmpty) {
-        candidateResult = matchToBox(heardName, _items);
-        if (candidateResult is MatchConfident && selId == null) {
-          selId = candidateResult.productId;
-        } else if (candidateResult is MatchAmbiguous &&
-            candidateResult.candidates.isNotEmpty && selId == null) {
-          selId = candidateResult.candidates.first.productId;
-        }
-      }
+      // Dedup: skip same product+qty seen in this recording session
+      final dedupeKey = '$productId:$receivedQty';
+      if (_segmentSeenKeys.contains(dedupeKey)) continue;
+      _segmentSeenKeys.add(dedupeKey);
 
-      RenderLog.write('77_match_done', matchedName ?? 'none');
-
-      confirmations.add(_PendingConfirmation(
-        status: status,
-        heardName: heardName,
-        matchedName: matchedName,
-        receivedQty: receivedQty,
-        orderedQty: orderedQty,
-        selectedProductId: selId,
-        selectedProductName: matchedName ??
-            (candidateResult is MatchConfident
-                ? candidateResult.productName
-                : candidateResult is MatchAmbiguous && candidateResult.candidates.isNotEmpty
-                    ? candidateResult.candidates.first.productName
-                    : null),
-        candidateResult: candidateResult,
-      ));
-    }
-    if (mounted) setState(() => _pendingConfirmations = confirmations);
-
-    // Auto-commit ok / short / over immediately (realtime marking).
-    // not_on_order requires user to pick a product first.
-    for (var i = 0; i < confirmations.length; i++) {
-      final conf = confirmations[i];
-      if (conf.status == 'not_on_order') continue;
-      final pid = conf.selectedProductId;
-      if (pid == null) continue;
-      final qty = (double.tryParse(conf.qtyCtrl.text.trim()) ?? conf.receivedQty).toDouble();
       await _commitVoiceItem(
-        productId: pid,
-        productName: conf.selectedProductName ?? conf.heardName,
-        qty: qty,
-        rawSegment: conf.heardName,
+        productId: productId,
+        productName: matchedName ?? heardName,
+        qty: receivedQty.toDouble(),
+        rawSegment: heardName,
       );
       if (!mounted) return;
-      conf.confirmed = true;
-      setState(() {}); // refresh card to locked state
+      RenderLog.write('82_realtime_commit', matchedName ?? heardName);
     }
   }
 
@@ -954,6 +782,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       }
 
       if (match is MatchConfident) {
+        RenderLog.write('82_realtime_commit', match.productName);
         await _voiceMarkProduct(
           productId: match.productId,
           productName: match.productName,
@@ -1003,15 +832,14 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             _items[idx]['received_qty']     = nowQty;
             _items[idx]['fulfillment_state'] = nowQty >= ordered ? 'received' : 'short';
           });
-          RenderLog.write('81_row_updated', '$productName:${nowQty.toInt()}/${ordered.toInt()}');
+          RenderLog.write('82_row_marked_live', '$productName:${nowQty.toInt()}/${ordered.toInt()}');
         }
       }
       if (rows.isNotEmpty) _undoStack.add(rows);
       setState(() { _tally[productId] = (_tally[productId] ?? 0) + allocated; });
 
-      RenderLog.write('81_voice_item_committed', productName);
       final done = _items.length - _pendingCount;
-      RenderLog.write('81_progress', '$done/${_items.length}');
+      RenderLog.write('82_progress', '$done/${_items.length}');
       _speakEcho(productName, allocated, null, leftover);
     } catch (e) {
       if (mounted) _showSnack('Commit error: $e');
@@ -1569,52 +1397,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           ]),
         ],
 
-        // ── Pending confirmation rows (from edge function) ──
-        if (_pendingConfirmations.isNotEmpty) ...[
-          const SizedBox(height: 8),
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 320),
-            child: SingleChildScrollView(
-              child: Column(
-                children: _pendingConfirmations.asMap().entries.map((e) =>
-                    _buildConfirmationRow(e.value, e.key)).toList(),
-              ),
-            ),
-          ),
-          if (_pendingConfirmations.any((c) => !c.confirmed && c.status != 'not_on_order')) ...[
-            const SizedBox(height: 8),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed: () async {
-                  for (final conf in _pendingConfirmations) {
-                    if (conf.confirmed || conf.status == 'not_on_order') continue;
-                    final pid = conf.selectedProductId;
-                    if (pid == null) continue;
-                    final qty = (double.tryParse(conf.qtyCtrl.text.trim()) ?? conf.receivedQty.toDouble());
-                    await _commitVoiceItem(
-                      productId: pid,
-                      productName: conf.matchedName ?? conf.heardName,
-                      qty: qty,
-                      rawSegment: conf.heardName,
-                    );
-                    if (!mounted) return;
-                    conf.confirmed = true;
-                    setState(() {});
-                  }
-                },
-                icon: const Icon(Icons.check_circle_rounded, size: 16),
-                label: const Text('Confirm all'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: _kGreen,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 10),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                ),
-              ),
-            ),
-          ],
-        ],
+
 
         // ── Echo banner ──
         if (_lastEcho != null) _buildEchoBanner(_lastEcho!),
@@ -1622,256 +1405,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     );
   }
 
-  Widget _buildConfirmationRow(_PendingConfirmation conf, int idx) {
-    final status = conf.status;
-    final isNotOnOrder = status == 'not_on_order';
-    final isShort = status == 'short';
-    final isOver = status == 'over';
-    final isOk = status == 'ok';
-
-    // Locked state: auto-committed, not in edit mode
-    if (conf.confirmed && !conf.editing) {
-      final lockedQty = conf.qtyCtrl.text;
-      final lockedName = conf.matchedName ?? conf.heardName;
-      return Container(
-        margin: const EdgeInsets.only(bottom: 6),
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-        decoration: BoxDecoration(
-          color: _kReceivedBg,
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: _kReceivedFg.withValues(alpha: 0.35)),
-        ),
-        child: Row(children: [
-          const Icon(Icons.check_circle_rounded, color: _kReceivedFg, size: 16),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text('$lockedName  ·  $lockedQty',
-                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _kReceivedFg),
-                maxLines: 1, overflow: TextOverflow.ellipsis),
-          ),
-          TextButton(
-            onPressed: () {
-              RenderLog.write('81_result_edited', lockedName);
-              setState(() => conf.editing = true);
-            },
-            style: TextButton.styleFrom(
-              foregroundColor: _kReceivedFg,
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              minimumSize: const Size(40, 28),
-            ),
-            child: const Text('Edit', style: TextStyle(fontSize: 12)),
-          ),
-        ]),
-      );
-    }
-
-    Color bgColor;
-    Color borderColor;
-    if (isNotOnOrder) {
-      bgColor = _kWrongBg;
-      borderColor = _kWrongFg.withValues(alpha: 0.35);
-    } else if (isShort || isOver) {
-      bgColor = _kPendingBg;
-      borderColor = _kPendingFg.withValues(alpha: 0.35);
-    } else {
-      bgColor = _kReceivedBg;
-      borderColor = _kReceivedFg.withValues(alpha: 0.35);
-    }
-
-    final candidateResult = conf.candidateResult;
-    final candidates = candidateResult is MatchAmbiguous
-        ? candidateResult.candidates
-        : candidateResult is MatchConfident
-            ? [MatchCandidate(candidateResult.productId, candidateResult.productName, 1.0)]
-            : <MatchCandidate>[];
-
-    void dismiss() {
-      conf.dispose();
-      setState(() => _pendingConfirmations.removeAt(idx));
-    }
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: 6),
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: bgColor,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: borderColor),
-      ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        // Header: heard + dismiss
-        Row(children: [
-          const Icon(Icons.graphic_eq_rounded, size: 13, color: _kSub),
-          const SizedBox(width: 4),
-          Expanded(
-            child: Text('Heard: "${conf.heardName}"',
-                style: const TextStyle(fontSize: 11, color: _kSub),
-                maxLines: 1, overflow: TextOverflow.ellipsis),
-          ),
-          GestureDetector(
-            onTap: dismiss,
-            child: const Icon(Icons.close_rounded, size: 14, color: _kSub),
-          ),
-        ]),
-        const SizedBox(height: 6),
-
-        if (isNotOnOrder) ...[
-          // "heard" — not on this order + candidates dropdown
-          Text('"${conf.heardName}" — not on this order.',
-              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _kWrongFg)),
-          if (candidates.isNotEmpty) ...[
-            const SizedBox(height: 6),
-            DropdownButtonHideUnderline(
-              child: DropdownButton<int>(
-                value: conf.selectedProductId,
-                isExpanded: true,
-                hint: const Text('Select product…', style: TextStyle(fontSize: 13, color: _kSub)),
-                style: const TextStyle(fontSize: 14, color: _kText),
-                items: candidates.map((c) => DropdownMenuItem(
-                  value: c.productId,
-                  child: Text(c.productName, style: const TextStyle(fontSize: 14, color: _kText)),
-                )).toList(),
-                onChanged: (id) {
-                  if (id == null) return;
-                  final match = candidates.firstWhere((c) => c.productId == id);
-                  setState(() {
-                    conf.selectedProductId = match.productId;
-                    conf.selectedProductName = match.productName;
-                  });
-                },
-              ),
-            ),
-            const SizedBox(height: 4),
-            Row(children: [
-              const Text('Qty:', style: TextStyle(fontSize: 13, color: _kSub)),
-              const SizedBox(width: 6),
-              SizedBox(
-                width: 64, height: 32,
-                child: TextField(
-                  controller: conf.qtyCtrl,
-                  keyboardType: TextInputType.number,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _kText),
-                  decoration: InputDecoration(
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 0),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(6),
-                      borderSide: const BorderSide(color: _kBorder),
-                    ),
-                    filled: true, fillColor: Colors.white,
-                  ),
-                ),
-              ),
-              const Spacer(),
-              FilledButton(
-                style: FilledButton.styleFrom(
-                  backgroundColor: _kShortFg,
-                  minimumSize: const Size(80, 36),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                ),
-                onPressed: conf.selectedProductId == null ? null : () async {
-                  final productId = conf.selectedProductId!;
-                  final productName = conf.selectedProductName ?? conf.heardName;
-                  final qty = double.tryParse(conf.qtyCtrl.text.trim());
-                  if (qty == null || qty <= 0) { _showSnack('Enter a valid quantity'); return; }
-                  dismiss();
-                  await _voiceMarkProduct(
-                    productId: productId, productName: productName,
-                    qty: qty, unit: null, rawSegment: conf.heardName,
-                  );
-                },
-                child: const Text('Add anyway', style: TextStyle(fontSize: 13, color: Colors.white)),
-              ),
-            ]),
-          ],
-        ] else ...[
-          // ok / short / over
-          Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-            Expanded(
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(conf.matchedName ?? conf.heardName,
-                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _kText)),
-                const SizedBox(height: 3),
-                if (isOk) ...[
-                  // green: matched_name ✓ received_qty / ordered_qty
-                  Text(
-                    '✓  ${conf.receivedQty}${conf.orderedQty != null ? " / ${conf.orderedQty}" : ""}',
-                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kReceivedFg),
-                  ),
-                ] else ...[
-                  // short / over: editable qty + "/ ordered_qty (short/over by N)"
-                  Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-                    SizedBox(
-                      width: 56, height: 28,
-                      child: TextField(
-                        controller: conf.qtyCtrl,
-                        keyboardType: TextInputType.number,
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
-                        decoration: InputDecoration(
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(6),
-                            borderSide: const BorderSide(color: _kBorder),
-                          ),
-                          filled: true, fillColor: Colors.white,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    Flexible(
-                      child: Text(
-                        '/ ${conf.orderedQty ?? "?"}'
-                        ' (${isShort ? "short" : "over"} by '
-                        '${isShort
-                            ? (conf.orderedQty != null ? conf.orderedQty! - conf.receivedQty : "?")
-                            : (conf.orderedQty != null ? conf.receivedQty - conf.orderedQty! : "?")})',
-                        style: const TextStyle(fontSize: 12, color: _kPendingFg),
-                      ),
-                    ),
-                  ]),
-                ],
-              ]),
-            ),
-            const SizedBox(width: 8),
-            FilledButton(
-              style: FilledButton.styleFrom(
-                backgroundColor: isOk ? _kGreen : _kPendingFg,
-                minimumSize: const Size(72, 36),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-              ),
-              onPressed: conf.selectedProductId == null ? null : () async {
-                final productId = conf.selectedProductId!;
-                final productName = conf.matchedName ?? conf.heardName;
-                final qty = isOk
-                    ? conf.receivedQty.toDouble()
-                    : (double.tryParse(conf.qtyCtrl.text.trim()) ?? conf.receivedQty.toDouble());
-                if (qty <= 0) { _showSnack('Enter a valid quantity'); return; }
-                if (conf.editing) {
-                  // Re-commit with updated qty (editing mode)
-                  RenderLog.write('81_result_edited', productName);
-                  await _commitVoiceItem(
-                    productId: productId, productName: productName,
-                    qty: qty, rawSegment: conf.heardName,
-                  );
-                  if (!mounted) return;
-                  setState(() { conf.editing = false; conf.confirmed = true; });
-                } else {
-                  dismiss();
-                  await _voiceMarkProduct(
-                    productId: productId, productName: productName,
-                    qty: qty, unit: null, rawSegment: conf.heardName,
-                  );
-                }
-              },
-              child: Text(conf.editing ? 'Save' : 'Confirm',
-                  style: const TextStyle(fontSize: 13, color: Colors.white)),
-            ),
-          ]),
-        ],
-      ]),
-    );
-  }
 
   Widget _buildEchoBanner(_VoiceEcho echo) {
     final summary = echo.rows.map((r) {
@@ -2026,346 +1559,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   // ── Focused item card ──────────────────────────────────────────────────────
 
-  Widget _buildFocusedCard() {
-    final item = _currentItem;
-    if (item == null) return const SizedBox.shrink();
 
-    final name       = item['product_name']?.toString() ?? '—';
-    final company    = item['company']?.toString() ?? '';
-    final bagNo      = item['bag_no']?.toString() ?? '?';
-    final customer   = item['customer']?.toString() ?? '';
-    final orderedQty = (item['ordered_qty'] as num?)?.toInt() ?? 0;
-    final imageUrl   = item['image_url']?.toString();
-    final isPending  = _currentIsPending;
-    final state      = item['fulfillment_state']?.toString() ?? 'pending';
-    final pending    = _pendingCount;
 
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-      child: Column(children: [
-        Container(
-          width: double.infinity,
-          decoration: BoxDecoration(
-            color: _kCard,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: isPending
-                  ? _kGreen.withValues(alpha: 0.4)
-                  : (_stateBgMap[state] ?? _kBorder),
-              width: isPending ? 2 : 1,
-            ),
-            boxShadow: const [BoxShadow(
-                color: Color(0x14000000), blurRadius: 12, offset: Offset(0, 4))],
-          ),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                _FulfilImageTile(imageUrl, size: 80),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    if (pending > 0)
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                        margin: const EdgeInsets.only(bottom: 8),
-                        decoration: BoxDecoration(
-                          color: _kBg, borderRadius: BorderRadius.circular(20),
-                          border: Border.all(color: _kBorder),
-                        ),
-                        child: Text(
-                          'Item ${_focusIdx + 1} of ${_items.length}  ·  $pending pending',
-                          style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: _kSub),
-                        ),
-                      ),
-                    Text(name,
-                        style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: _kText)),
-                    if (company.isNotEmpty) ...[
-                      const SizedBox(height: 4),
-                      Text(company, style: const TextStyle(fontSize: 13, color: _kSub)),
-                    ],
-                    const SizedBox(height: 8),
-                    Row(children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: _kBg, borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: _kBorder),
-                        ),
-                        child: Text('Qty: $orderedQty',
-                            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _kText)),
-                      ),
-                      const SizedBox(width: 8),
-                      if (!isPending) _StatePill(state),
-                    ]),
-                  ]),
-                ),
-              ]),
-            ),
-
-            // Bag destination
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
-              child: Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                decoration: BoxDecoration(
-                  color: _kReceivedBg,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: _kReceivedFg.withValues(alpha: 0.3)),
-                ),
-                child: Row(children: [
-                  const Icon(Icons.shopping_bag_outlined, color: _kReceivedFg, size: 22),
-                  const SizedBox(width: 10),
-                  Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text('→ Bag $bagNo',
-                        style: const TextStyle(
-                            fontSize: 22, fontWeight: FontWeight.w900, color: _kReceivedFg)),
-                    if (customer.isNotEmpty)
-                      Text(customer,
-                          style: const TextStyle(fontSize: 13, color: _kReceivedFg,
-                              fontWeight: FontWeight.w500)),
-                  ]),
-                ]),
-              ),
-            ),
-
-            // Bag confirm (tap path only — voice bypasses)
-            if (_bagConfirmEnabled && isPending)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
-                child: _buildBagConfirmSection(bagNo, customer),
-              ),
-
-            // Barcode scan (dormant hook)
-            if (_barcodeEnabled && isPending)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
-                child: OutlinedButton.icon(
-                  onPressed: () => showDialog(
-                    context: context,
-                    builder: (_) => _BagScannerDialog(
-                      title: 'Scan Item Barcode', onScanned: _handleItemScan,
-                    ),
-                  ),
-                  icon: const Icon(Icons.barcode_reader, size: 16),
-                  label: const Text('Scan item barcode'),
-                  style: OutlinedButton.styleFrom(
-                      foregroundColor: _kSub, side: const BorderSide(color: _kBorder)),
-                ),
-              ),
-
-            // Action buttons
-            if (isPending) ...[
-              const SizedBox(height: 14),
-              const Divider(height: 1, color: _kBorder),
-              Padding(
-                padding: const EdgeInsets.all(14),
-                child: _buildActionButtons(orderedQty),
-              ),
-            ] else ...[
-              const SizedBox(height: 12),
-              const Divider(height: 1, color: _kBorder),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                child: Row(children: [
-                  const Spacer(),
-                  TextButton.icon(
-                    onPressed: _recording ? null : () => _record('pending'),
-                    icon: const Icon(Icons.undo_rounded, size: 15),
-                    label: const Text('Reset to pending'),
-                    style: TextButton.styleFrom(foregroundColor: _kSub),
-                  ),
-                ]),
-              ),
-            ],
-          ]),
-        ),
-
-        const SizedBox(height: 16),
-
-        // Navigation row
-        Row(children: [
-          OutlinedButton.icon(
-            onPressed: _focusIdx > 0 ? _goBack : null,
-            icon: const Icon(Icons.arrow_back_rounded, size: 16),
-            label: const Text('Back'),
-            style: OutlinedButton.styleFrom(
-                foregroundColor: _kSub, side: const BorderSide(color: _kBorder)),
-          ),
-          const Spacer(),
-          if (isPending && _pendingCount > 1)
-            OutlinedButton.icon(
-              onPressed: _skip,
-              icon: const Icon(Icons.skip_next_rounded, size: 16),
-              label: const Text('Skip'),
-              style: OutlinedButton.styleFrom(
-                  foregroundColor: _kSub, side: const BorderSide(color: _kBorder)),
-            ),
-        ]),
-      ]),
-    );
-  }
-
-  Widget _buildBagConfirmSection(String bagNo, String customer) {
-    if (_bagConfirming) {
-      return const Row(children: [
-        SizedBox(width: 16, height: 16,
-            child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2)),
-        SizedBox(width: 8),
-        Text('Resolving bag…', style: TextStyle(fontSize: 13, color: _kSub)),
-      ]);
-    }
-    if (_bagConfirmed) {
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
-          color: _kReceivedBg, borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: _kReceivedFg.withValues(alpha: 0.3)),
-        ),
-        child: Row(children: [
-          const Icon(Icons.check_circle_rounded, color: _kReceivedFg, size: 16),
-          const SizedBox(width: 8),
-          Text('Bag $bagNo confirmed',
-              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _kReceivedFg)),
-          if (customer.isNotEmpty) ...[
-            const SizedBox(width: 4),
-            Text('· $customer', style: const TextStyle(fontSize: 12, color: _kReceivedFg)),
-          ],
-        ]),
-      );
-    }
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      SizedBox(
-        width: double.infinity, height: 44,
-        child: OutlinedButton.icon(
-          onPressed: () => showDialog(
-            context: context,
-            builder: (_) => _BagScannerDialog(
-                title: 'Scan Bag QR', onScanned: _handleBagScan),
-          ),
-          icon: const Icon(Icons.qr_code_scanner_rounded, size: 18),
-          label: Text('Scan Bag $bagNo'),
-          style: OutlinedButton.styleFrom(
-            foregroundColor: _kGreen, side: const BorderSide(color: _kGreen),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-          ),
-        ),
-      ),
-      const SizedBox(height: 6),
-      Center(
-        child: GestureDetector(
-          onTap: _manualBagConfirm,
-          child: Text('Confirm Bag $bagNo manually',
-              style: const TextStyle(fontSize: 13, color: _kSub,
-                  decoration: TextDecoration.underline, decorationColor: _kSub)),
-        ),
-      ),
-      if (_bagScanMatch == false && _bagScanMsg != null) ...[
-        const SizedBox(height: 8),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          decoration: BoxDecoration(
-            color: _kWrongBg, borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: _kWrongFg.withValues(alpha: 0.3)),
-          ),
-          child: Row(children: [
-            const Icon(Icons.warning_amber_rounded, color: _kWrongFg, size: 16),
-            const SizedBox(width: 8),
-            Expanded(child: Text(_bagScanMsg!,
-                style: const TextStyle(fontSize: 13, color: _kWrongFg))),
-          ]),
-        ),
-      ],
-    ]);
-  }
-
-  Widget _buildActionButtons(int orderedQty) {
-    final blocked = _blocked;
-    return Column(children: [
-      Row(children: [
-        Expanded(
-          child: _ActionBtn(
-            'Got all $orderedQty', _kGreen, Icons.check_rounded,
-            blocked ? null : () => _record('received', qty: orderedQty),
-            loading: _recording,
-          ),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: _ActionBtn(
-            _showShortPanel ? 'Hide short' : 'Short',
-            _kShortFg, Icons.content_cut_rounded,
-            blocked ? null : () => setState(() {
-              _showShortPanel = !_showShortPanel;
-              if (_showShortPanel) {
-                _shortQtyDraft = (orderedQty - 1).clamp(1, orderedQty - 1);
-              }
-            }),
-          ),
-        ),
-      ]),
-      const SizedBox(height: 8),
-      Row(children: [
-        Expanded(
-          child: _ActionBtn('Wrong item', _kWrongFg, Icons.close_rounded,
-              _recording ? null : () => _record('wrong')),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: _ActionBtn('Not coming', _kNotComingFg, Icons.block_outlined,
-              _recording ? null : () => _record('not_coming')),
-        ),
-      ]),
-      if (blocked)
-        Padding(
-          padding: const EdgeInsets.only(top: 10),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            decoration: BoxDecoration(color: _kPendingBg, borderRadius: BorderRadius.circular(8)),
-            child: const Row(children: [
-              Icon(Icons.lock_outlined, size: 14, color: _kPendingFg),
-              SizedBox(width: 6),
-              Text('Confirm the bag first (scan or manual)',
-                  style: TextStyle(fontSize: 12, color: _kPendingFg)),
-            ]),
-          ),
-        ),
-      if (_showShortPanel) ...[
-        const SizedBox(height: 12),
-        Container(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: _kBg, borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: _kBorder),
-          ),
-          child: Column(children: [
-            const Text('How many did you receive?',
-                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: _kText)),
-            const SizedBox(height: 12),
-            _QtyStepper(
-              value: _shortQtyDraft, max: orderedQty - 1,
-              onChanged: (v) => setState(() => _shortQtyDraft = v),
-            ),
-            const SizedBox(height: 12),
-            SizedBox(
-              width: double.infinity, height: 44,
-              child: FilledButton(
-                onPressed: _recording ? null : () => _record('short', qty: _shortQtyDraft),
-                style: FilledButton.styleFrom(
-                  backgroundColor: _kShortFg,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                ),
-                child: Text('Save Short ($_shortQtyDraft/$orderedQty)',
-                    style: const TextStyle(
-                        fontSize: 14, color: Colors.white, fontWeight: FontWeight.w700)),
-              ),
-            ),
-          ]),
-        ),
-      ],
-    ]);
-  }
 
   Widget _buildDoneState() {
     final total     = _items.length;
@@ -2482,9 +1677,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             final item    = _items[i];
             final state   = item['fulfillment_state']?.toString() ?? 'pending';
             final name    = item['product_name']?.toString() ?? '—';
-            final bagNo   = item['bag_no']?.toString() ?? '?';
             final ordQty  = (item['ordered_qty'] as num?)?.toInt() ?? 0;
             final recQty  = (item['received_qty'] as num?)?.toInt() ?? 0;
+            final unit    = item['unit']?.toString() ?? '';
             final imageUrl = item['image_url']?.toString();
 
             return GestureDetector(
@@ -2507,7 +1702,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                           style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
                           maxLines: 1, overflow: TextOverflow.ellipsis),
                       const SizedBox(height: 2),
-                      Text('Bag $bagNo  ·  $recQty/$ordQty',
+                      Text('$ordQty ${unit.isNotEmpty ? '$unit  ·  ' : ''}$recQty/$ordQty',
                           style: const TextStyle(fontSize: 12, color: _kSub)),
                     ]),
                   ),
@@ -2523,35 +1718,115 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   }
 
   void _showItemSheet(Map<String, dynamic> item) {
-    final name    = item['product_name']?.toString() ?? '—';
-    final ordQty  = (item['ordered_qty'] as num?)?.toInt() ?? 0;
-    final isPending = (item['fulfillment_state'] as String?) == 'pending';
+    final idx = _items.indexOf(item);
+    if (idx >= 0) _focusItem(idx);
+    final name   = item['product_name']?.toString() ?? '—';
+    final ordQty = (item['ordered_qty'] as num?)?.toInt() ?? 0;
+    final unit   = item['unit']?.toString() ?? '';
+    // mutable sheet state: [showShort, shortDraft]
+    final sheetState = <dynamic>[false, (ordQty - 1).clamp(1, ordQty)];
     showResponsiveSheet(
       context: context,
       borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-      builder: (_) => Padding(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
-        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(name, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _kText)),
-          const SizedBox(height: 12),
-          if (isPending) ...[
-            _buildActionButtons(ordQty),
-          ] else ...[
-            Row(children: [
-              _StatePill(item['fulfillment_state']?.toString() ?? 'pending'),
-              const SizedBox(width: 8),
-              TextButton.icon(
-                onPressed: () { Navigator.pop(context); _record('pending'); },
-                icon: const Icon(Icons.undo_rounded, size: 15),
-                label: const Text('Reset to pending'),
-                style: TextButton.styleFrom(foregroundColor: _kSub),
-              ),
+      builder: (_) => StatefulBuilder(
+        builder: (ctx, setS) {
+          final showShort   = sheetState[0] as bool;
+          final shortDraft  = sheetState[1] as int;
+          final curState = (idx >= 0 && idx < _items.length)
+              ? _items[idx]['fulfillment_state']?.toString() ?? 'pending'
+              : 'pending';
+          final isPending = curState == 'pending';
+          return Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(name, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _kText)),
+              if (unit.isNotEmpty || ordQty > 0)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4, bottom: 12),
+                  child: Text('Ordered: $ordQty${unit.isNotEmpty ? ' $unit' : ''}',
+                      style: const TextStyle(fontSize: 13, color: _kSub)),
+                )
+              else
+                const SizedBox(height: 12),
+              if (isPending) ...[
+                Row(children: [
+                  Expanded(child: _ActionBtn(
+                    'Got all ($ordQty)', _kGreen, Icons.check_rounded,
+                    _recording ? null : () async {
+                      await _record('received', qty: ordQty);
+                      RenderLog.write('82_sheet_commit', '$name:received');
+                      if (mounted) Navigator.of(context).pop();
+                    },
+                    loading: _recording,
+                  )),
+                  const SizedBox(width: 8),
+                  Expanded(child: _ActionBtn(
+                    showShort ? 'Hide short' : 'Short',
+                    _kShortFg, Icons.content_cut_rounded,
+                    () => setS(() { sheetState[0] = !showShort;
+                                   if (!showShort) sheetState[1] = (ordQty - 1).clamp(1, ordQty); }),
+                  )),
+                ]),
+                const SizedBox(height: 8),
+                Row(children: [
+                  Expanded(child: _ActionBtn('Wrong item', _kWrongFg, Icons.close_rounded,
+                      _recording ? null : () async {
+                        await _record('wrong');
+                        RenderLog.write('82_sheet_commit', '$name:wrong');
+                        if (mounted) Navigator.of(context).pop();
+                      })),
+                  const SizedBox(width: 8),
+                  Expanded(child: _ActionBtn('Not coming', _kNotComingFg, Icons.block_outlined,
+                      _recording ? null : () async {
+                        await _record('not_coming');
+                        RenderLog.write('82_sheet_commit', '$name:not_coming');
+                        if (mounted) Navigator.of(context).pop();
+                      })),
+                ]),
+                if (showShort) ...[
+                  const SizedBox(height: 12),
+                  Container(
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: _kBg, borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: _kBorder),
+                    ),
+                    child: Column(children: [
+                      const Text('How many received?',
+                          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: _kText)),
+                      const SizedBox(height: 12),
+                      _QtyStepper(
+                        value: shortDraft, max: ordQty,
+                        onChanged: (v) {
+                          setS(() { sheetState[1] = v; });
+                          _record('short', qty: v).then((_) {
+                            RenderLog.write('82_sheet_commit', '$name:short:$v');
+                          });
+                        },
+                      ),
+                    ]),
+                  ),
+                ],
+              ] else ...[
+                Row(children: [
+                  _StatePill(curState),
+                  const SizedBox(width: 8),
+                  TextButton.icon(
+                    onPressed: _recording ? null : () async {
+                      await _record('pending');
+                      if (mounted) Navigator.of(context).pop();
+                    },
+                    icon: const Icon(Icons.undo_rounded, size: 15),
+                    label: const Text('Reset to pending'),
+                    style: TextButton.styleFrom(foregroundColor: _kSub),
+                  ),
+                ]),
+              ],
             ]),
-          ],
-        ]),
+          );
+        },
       ),
     );
-    _focusItem(_items.indexOf(item));
   }
 }
 

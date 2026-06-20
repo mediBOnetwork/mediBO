@@ -387,19 +387,25 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     _initAgentTestHooks();
   }
 
-  /// Register custom-event test hooks when ?agentselftest=1.
-  /// Hooks are fired from JS via: window.dispatchEvent(new CustomEvent('medibo_injectAgentResponse', {detail: '...'}))
+  /// Register custom-event test hooks when ?agentselftest=1 (or localStorage flag).
+  /// Hooks: window.dispatchEvent(new CustomEvent('medibo_injectAgentResponse', {detail:'...'}))
   void _initAgentTestHooks() {
     try {
       final search = html.window.location.search ?? '';
-      if (!search.contains('agentselftest=1')) return;
+      final href   = html.window.location.href ?? '';
+      final ls     = html.window.localStorage['medibo_agentselftest'] ?? '';
+      final isTest = search.contains('agentselftest=1') ||
+                     href.contains('agentselftest=1') ||
+                     ls == '1';
+      RenderLog.write('change_85_agent_test_search', search.isEmpty ? 'empty' : search);
+      if (!isTest) return;
       html.window.addEventListener('medibo_injectAgentResponse', _onTestInjectResponse);
       html.window.addEventListener('medibo_injectAgentConfirm',  _onTestInjectConfirm);
       html.window.addEventListener('medibo_injectAgentSupplier', _onTestInjectSupplier);
-      // Also expose direct JS functions on window via eval for convenience.
-      html.window.postMessage({'_medibo_agent_hooks_ready': true}, '*');
       RenderLog.write('change_85_agent_hooks_registered', '1');
-    } catch (_) {}
+    } catch (e) {
+      RenderLog.write('change_85_agent_hooks_error', e.toString().substring(0, 40));
+    }
   }
 
   void _onTestInjectResponse(html.Event event) {

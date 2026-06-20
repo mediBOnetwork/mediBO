@@ -267,23 +267,6 @@ class _BagScannerDialogState extends State<_BagScannerDialog> {
   }
 }
 
-// ── Voice echo data ──────────────────────────────────────────────────────────
-
-class _VoiceEcho {
-  final String productName;
-  final num allocated;
-  final num leftover;
-  final List<Map<String, dynamic>> rows; // from receive_product_qty
-
-  _VoiceEcho({
-    required this.productName,
-    required this.allocated,
-    required this.leftover,
-    required this.rows,
-  });
-}
-
-
 // ── AGENT PHASE STATE MACHINE ────────────────────────────────────────────────
 
 enum AgentPhase { idle, listening, thinking, speaking, confirming }
@@ -325,8 +308,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   String _voiceError = '';
   String _lastTranscript = '';
   // ── Voice results ──
-  _VoiceEcho? _lastEcho;
-  Timer? _echoTimer;
   Timer? _idleTimer;
   DateTime? _recStartTime;
   int _voiceCallsDuringRecord = 0; // must stay 0; guard for B1
@@ -390,7 +371,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     _spokenPopupEntry?.remove();
     _spokenPopupEntry = null;
     _voiceService.dispose();
-    _echoTimer?.cancel();
     _idleTimer?.cancel();
     super.dispose();
   }
@@ -504,7 +484,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     }
     setState(() {
       _loadingBox = true; _error = null; _items = []; _focusIdx = 0;
-      _voiceListening = false; _voiceInterim = ''; _lastEcho = null;
+      _voiceListening = false; _voiceInterim = '';
       _supplierOrderItems = [];
       _tally.clear();
       _voiceCallsDuringRecord = 0; _voiceCallsAfterStop = 0;
@@ -927,23 +907,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
       // Update tally additively (not replace)
       setState(() { _tally[productId] = (_tally[productId] ?? 0) + qty; });
-
-      // Show echo banner with allocation rows
-      final allocated = (res['allocated'] as num?) ?? qty;
-      final leftover = (res['leftover'] as num?) ?? 0;
-      final rowsRaw = (res['rows'] as List?)?.cast<Map>() ?? <Map>[];
-      final rows = rowsRaw.map((r) => <String, dynamic>{
-        'bag_no': r['bag_no'],
-        'customer': r['customer']?.toString() ?? '',
-        'gave': r['gave'],
-        'ordered': r['ordered'],
-      }).toList();
-      _showEcho(_VoiceEcho(
-        productName: productName,
-        allocated: allocated,
-        leftover: leftover,
-        rows: rows,
-      ));
       return true;
     } catch (e) {
       if (mounted) _showSnack('Commit error: $e');
@@ -1367,25 +1330,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     if (state != null && state != 'pending') _advance();
   }
 
-  void _showEcho(_VoiceEcho echo) {
-    _echoTimer?.cancel();
-    setState(() => _lastEcho = echo);
-    _echoTimer = Timer(const Duration(seconds: 7), () {
-      if (mounted) setState(() => _lastEcho = null);
-    });
-  }
-
-  void _speakEcho(String productName, num allocated, String? unit, num leftover) {
-    final unitStr = unit != null ? ' ${unit}s' : '';
-    final leftoverStr = leftover > 0 ? ', ${leftover.toInt()} extra' : '';
-    speakText('$productName, ${allocated.toInt()}$unitStr, done$leftoverStr');
-  }
-
-  void _speakLastEcho() {
-    final echo = _lastEcho;
-    if (echo == null) return;
-    speakText('${echo.productName}, ${echo.allocated.toInt()}, done');
-  }
 
   Future<MatchCandidate?> _showAmbiguityPicker(List<MatchCandidate> candidates) async {
     return showDialog<MatchCandidate>(
@@ -1599,13 +1543,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       if (_items.isNotEmpty) _buildNarrowVoiceBar(isAdmin),
       // 3. Progress row — BELOW voice row (#90 moved from above supplier)
       if (_items.isNotEmpty) _buildNarrowProgressRow(),
-      // 4. Echo banner (voice-receive feedback, dismissible)
-      if (_lastEcho != null)
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
-          child: _buildEchoBanner(_lastEcho!),
-        ),
-      // 5. Item list — fills remaining space
+      // 4. Item list — fills remaining space
       if (_loadingBox)
         const Expanded(child: Center(child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2)))
       else if (_selectedSupplier == null)
@@ -1915,6 +1853,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   // ── Wide layout (>= 900px) — #88: single bar + popup bubble ────────────────
   Widget _buildCollectWide(bool isAdmin) {
+    RenderLog.write('change_100_banner_removed', '1');
     RenderLog.write('change_90_layout', 'wide');
     RenderLog.write('change_89_layout', 'wide');
     RenderLog.write('change_88_layout', 'wide');
@@ -2531,13 +2470,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                 ),
         ),
 
-        // ── Echo banner ──────────────────────────────────────────────────────────
-        if (_lastEcho != null)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
-            child: _buildEchoBanner(_lastEcho!),
-          ),
-
         // Type-instead footer removed (#87) — typed path kept hidden via self-test hook only.
 
       ]),
@@ -2672,48 +2604,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           ]),
         ),
 
-      ]),
-    );
-  }
-
-  Widget _buildEchoBanner(_VoiceEcho echo) {
-    final summary = echo.rows.map((r) {
-      final bag  = r['bag_no']?.toString() ?? '?';
-      final cust = (r['customer']?.toString() ?? '');
-      final gave = (r['gave'] as num?)?.toInt() ?? 0;
-      final ord  = (r['ordered'] as num?)?.toInt() ?? 0;
-      return 'Bag $bag $cust $gave/$ord';
-    }).join('  ·  ');
-
-    return Container(
-      margin: const EdgeInsets.only(top: 8),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: _kReceivedBg,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: _kReceivedFg.withValues(alpha: 0.3)),
-      ),
-      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Icon(Icons.check_circle_rounded, color: _kReceivedFg, size: 16),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(
-              '✓ ${echo.productName}  ·  ${echo.allocated.toInt()} allocated',
-              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kReceivedFg),
-            ),
-            if (summary.isNotEmpty)
-              Text(summary,
-                  style: const TextStyle(fontSize: 12, color: _kReceivedFg)),
-            if (echo.leftover > 0)
-              Text('⚠ ${echo.leftover.toInt()} over-received (not placed)',
-                  style: const TextStyle(fontSize: 11, color: _kShortFg, fontWeight: FontWeight.w600)),
-          ]),
-        ),
-        GestureDetector(
-          onTap: () => setState(() => _lastEcho = null),
-          child: const Icon(Icons.close_rounded, size: 14, color: _kReceivedFg),
-        ),
       ]),
     );
   }

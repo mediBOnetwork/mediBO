@@ -407,6 +407,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     if (mounted) setState(() => _voiceSupported = true);
     RenderLog.write('77_voice_screen_mounted', 'true');
     RenderLog.write('voice_receive_rendered', 'true');
+    RenderLog.write('81_bagcard_removed', 'true');
     _probeRecorder();
   }
 
@@ -2440,7 +2441,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   Widget _buildListView() => _buildItemList(); // legacy alias
 
   Widget _buildItemList() {
-    RenderLog.write('81_bagcard_removed', 'true');
     RenderLog.write('81_item_list_rendered', '${_items.length}');
     RenderLog.write('81_progress', '${_items.length - _pendingCount}/${_items.length}');
 

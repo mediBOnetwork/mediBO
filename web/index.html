@@ -636,6 +636,35 @@
         u.rate = 1.0;
         _synth.speak(u);
       };
+
+      // Async TTS — calls onDone when utterance ends or after 8s safety timeout.
+      window.mediboVoiceSpeakAsync = function (text, onDone) {
+        if (!_synth) { if (onDone) onDone(); return; }
+        var done = false;
+        function finish() { if (!done) { done = true; if (onDone) onDone(); } }
+        var tid = setTimeout(finish, 8000);
+        var voices = _synth.getVoices();
+        function speak(voices) {
+          var u = new SpeechSynthesisUtterance(text);
+          u.voice = voices.find(function(v) { return v.lang === 'hi-IN'; })
+                 || voices.find(function(v) { return v.lang && v.lang.startsWith('en-IN'); })
+                 || null;
+          u.lang = (u.voice && u.voice.lang) || 'hi-IN';
+          u.rate = 1.0; u.pitch = 1.0;
+          u.onend = function() { clearTimeout(tid); finish(); };
+          u.onerror = function() { clearTimeout(tid); finish(); };
+          _synth.cancel();
+          _synth.speak(u);
+        }
+        if (voices.length === 0) {
+          var vtid = setTimeout(function() { speak(_synth.getVoices()); }, 1000);
+          _synth.addEventListener('voiceschanged', function() {
+            clearTimeout(vtid); speak(_synth.getVoices());
+          }, { once: true });
+        } else {
+          speak(voices);
+        }
+      };
     })();
   </script>
 

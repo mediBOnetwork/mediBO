@@ -1,14 +1,19 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
 import 'dart:async';
 import 'dart:html' as html;
+import 'dart:js' as js;
 
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'dart:convert';
 import '../../utils/render_log.dart';
 import '../../utils/responsive.dart';
+import '../../utils/tts.dart';
+import '../../user_state.dart';
 import '../../services/voice_receive_service.dart';
+import '../../supabase_config.dart' show SupabaseConfig;
 import 'voice_receive.dart';
 
 // ── Color tokens ────────────────────────────────────────────────────────────
@@ -272,6 +277,10 @@ class _VoiceEcho {
 }
 
 
+// ── AGENT PHASE STATE MACHINE ────────────────────────────────────────────────
+
+enum AgentPhase { idle, listening, thinking, speaking, confirming }
+
 // ── PICK-TO-LIGHT SCREEN ─────────────────────────────────────────────────────
 
 class _PickToLightScreen extends StatefulWidget {
@@ -323,6 +332,15 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // ── supplier_orders items for reconciliation expected list ──
   List<Map<String, dynamic>> _supplierOrderItems = [];
 
+  // ── "Ask mediBO" voice-agent state (#85) ────────────────────────────────────
+  AgentPhase _agentPhase = AgentPhase.idle;
+  String _agentTranscript = '';
+  String _agentReply = '';
+  String _agentIntent = '';
+  Map<String, dynamic>? _pendingAction;
+  bool _agentBusy = false;
+  bool _agentRecStarted = false; // tracks whether _voiceService is owned by agent
+
   // ── Computed ──
   Map<String, dynamic>? get _currentItem =>
       (_items.isNotEmpty && _focusIdx < _items.length) ? _items[_focusIdx] : null;
@@ -365,6 +383,39 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('84_chunking_removed', 'true');
     RenderLog.write('84_voicecalls_during_record', '0');
     _probeRecorder();
+    _initAgentTestHooks();
+  }
+
+  /// Register JS test hooks on window when ?agentselftest=1 (admin only).
+  void _initAgentTestHooks() {
+    try {
+      final search = html.window.location.search ?? '';
+      if (!search.contains('agentselftest=1')) return;
+      // Only expose in test mode; gate on admin is enforced by widget render gate.
+      html.window.addEventListener('message', null); // no-op ensures window is accessible
+      // Register as window properties via js interop
+      _registerAgentHook('injectAgentResponse', _jsInjectAgentResponse);
+      _registerAgentHook('injectAgentConfirm', _jsInjectAgentConfirm);
+    } catch (_) {}
+  }
+
+  void _registerAgentHook(String name, Function handler) {
+    try {
+      js.context[name] = js.allowInterop(handler);
+    } catch (_) {}
+  }
+
+  void _jsInjectAgentResponse(String jsonString) {
+    try {
+      final data = jsonDecode(jsonString) as Map<String, dynamic>;
+      _processAgentResponse(data);
+    } catch (e) {
+      // ignore parse errors in test hook
+    }
+  }
+
+  void _jsInjectAgentConfirm() {
+    _commitPending();
   }
 
   Future<void> _probeRecorder() async {
@@ -541,6 +592,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   // Tap-to-toggle: one tap = start, next tap = stop+send.
   Future<void> _toggleRecording() async {
+    if (_agentPhase != AgentPhase.idle) return; // agent active — counting mic disabled
     if (_voiceProcessing) return; // busy — ignore double-tap
     if (_voiceListening) {
       // Stop
@@ -854,6 +906,204 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   // Undo removed — set_voice_received is idempotent SET; delta-undo is not applicable.
 
+  // ── Agent mic helpers (#85) ──────────────────────────────────────────────────
+
+  List<Map<String, dynamic>> _buildAgentItems() {
+    return _items
+        .where((r) => (r['fulfillment_state'] as String?) != 'cancelled')
+        .map((r) => {
+              'product_id': (r['product_id'] as num?)?.toInt() ?? 0,
+              'name': r['product_name']?.toString() ?? '',
+              'ordered': (r['ordered_qty'] as num?) ?? 0,
+              'received': (r['received_qty'] as num?) ?? 0,
+              'state': r['fulfillment_state']?.toString() ?? 'pending',
+              'pack_type': r['pack_type']?.toString(),
+            })
+        .toList();
+  }
+
+  Future<void> _startAgentRecording() async {
+    if (_agentBusy || _voiceListening || _agentPhase != AgentPhase.idle) return;
+    _agentBusy = true;
+    try {
+      await _voiceService.start();
+      _agentRecStarted = true;
+      if (mounted) setState(() => _agentPhase = AgentPhase.listening);
+    } catch (e) {
+      _agentBusy = false;
+      _agentRecStarted = false;
+      if (mounted) _showSnack('Mic error: $e');
+    }
+    _agentBusy = false;
+  }
+
+  Future<void> _stopAgentRecording() async {
+    if (!_agentRecStarted) return;
+    _agentRecStarted = false;
+    if (mounted) setState(() => _agentPhase = AgentPhase.thinking);
+    try {
+      final result = await _voiceService.stop();
+      if (!mounted) return;
+      if (result == null || result.bytes.length < 1500) {
+        if (mounted) setState(() { _agentPhase = AgentPhase.idle; _agentReply = ''; });
+        _showSnack('No audio captured — try again');
+        return;
+      }
+      await _askAgent(bytes: result.bytes, mime: result.mime);
+    } catch (e) {
+      if (mounted) setState(() { _agentPhase = AgentPhase.idle; _agentReply = ''; });
+    }
+  }
+
+  Future<void> _askAgent({required List<int> bytes, required String mime}) async {
+    if (!mounted) return;
+    try {
+      final b64 = base64Encode(bytes);
+      final token = Supabase.instance.client.auth.currentSession?.accessToken ?? '';
+      final agentItems = _buildAgentItems();
+      final supplier = _selectedSupplier ?? '';
+      final res = await Supabase.instance.client.functions.invoke(
+        'voice-agent',
+        body: {
+          'audio_base64': b64,
+          'mime_type': mime,
+          'supplier_name': supplier,
+          'items': agentItems,
+        },
+        headers: {'Authorization': 'Bearer $token'},
+      );
+      if (!mounted) return;
+      final data = res.data;
+      if (data is Map && data['error'] != null) {
+        throw Exception(data['error'].toString());
+      }
+      await _processAgentResponse(Map<String, dynamic>.from(data as Map));
+    } catch (e) {
+      if (!mounted) return;
+      setState(() { _agentReply = 'Network issue, dobara try karein.'; _agentPhase = AgentPhase.speaking; });
+      await speakAsync(_agentReply);
+      if (mounted) setState(() => _agentPhase = AgentPhase.idle);
+      RenderLog.write('change_85_agent_error', '1');
+    }
+  }
+
+  Future<void> _processAgentResponse(Map<String, dynamic> data) async {
+    if (!mounted) return;
+    final transcript = (data['transcript'] ?? '').toString();
+    final intent = (data['intent'] ?? 'unknown').toString();
+    final reply = (data['reply'] ?? '').toString();
+    final actionRaw = data['action'];
+    final action = actionRaw is Map ? Map<String, dynamic>.from(actionRaw) : null;
+
+    setState(() {
+      _agentTranscript = transcript;
+      _agentIntent = intent;
+      _agentReply = reply;
+      _agentPhase = AgentPhase.speaking;
+    });
+    RenderLog.write('change_85_agent_call_ok', '1');
+    RenderLog.write('change_85_intent_last', intent);
+
+    await speakAsync(reply);
+    RenderLog.write('change_85_agent_reply_spoken', '1');
+
+    if (!mounted) return;
+    if ((intent == 'set' || intent == 'correct') && action != null) {
+      setState(() {
+        _pendingAction = action;
+        _agentPhase = AgentPhase.confirming;
+      });
+    } else {
+      setState(() { _pendingAction = null; _agentPhase = AgentPhase.idle; });
+    }
+  }
+
+  Future<void> _commitPending() async {
+    final action = _pendingAction;
+    if (action == null) return;
+    final supplier = _selectedSupplier;
+    if (supplier == null) return;
+    setState(() => _agentPhase = AgentPhase.thinking);
+    try {
+      final res = await Supabase.instance.client.rpc('set_voice_received', params: {
+        'p_supplier_name': supplier,
+        'p_product_id': (action['product_id'] as num).toInt(),
+        'p_qty': (action['qty'] as num).toDouble(),
+        'p_note': 'voice-agent #85',
+      });
+      if (!mounted) return;
+      if (res is Map && res['error'] != null) {
+        setState(() { _agentReply = 'Save nahi hua, dobara.'; _agentPhase = AgentPhase.speaking; });
+        await speakAsync(_agentReply);
+        if (mounted) setState(() => _agentPhase = AgentPhase.idle);
+        RenderLog.write('change_85_agent_commit_fail', '1');
+        return;
+      }
+      await _reloadItemsFromDB();
+      if (!mounted) return;
+      final productName = action['product_name']?.toString() ?? '';
+      final reply = '$productName ho gaya.';
+      setState(() {
+        _agentReply = reply;
+        _pendingAction = null;
+        _agentPhase = AgentPhase.speaking;
+      });
+      RenderLog.write('change_85_agent_action_committed', '1');
+      await speakAsync(reply);
+      if (mounted) setState(() => _agentPhase = AgentPhase.idle);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() { _agentPhase = AgentPhase.idle; });
+    }
+  }
+
+  Future<void> _cancelPending() async {
+    setState(() { _pendingAction = null; _agentReply = 'Theek hai, cancel.'; _agentPhase = AgentPhase.speaking; });
+    await speakAsync(_agentReply);
+    if (mounted) setState(() => _agentPhase = AgentPhase.idle);
+  }
+
+  /// C5: Voice yes/no while confirming — re-uses the existing recorder.
+  Future<void> _stopAgentYesNo() async {
+    if (!_agentRecStarted) return;
+    _agentRecStarted = false;
+    setState(() => _agentPhase = AgentPhase.thinking);
+    try {
+      final result = await _voiceService.stop();
+      if (!mounted) { setState(() => _agentPhase = AgentPhase.confirming); return; }
+      if (result == null || result.bytes.length < 500) {
+        setState(() => _agentPhase = AgentPhase.confirming);
+        return;
+      }
+      final token = Supabase.instance.client.auth.currentSession?.accessToken ?? '';
+      final res = await Supabase.instance.client.functions.invoke(
+        'voice-agent',
+        body: {
+          'audio_base64': base64Encode(result.bytes),
+          'mime_type': result.mime,
+          'supplier_name': _selectedSupplier ?? '',
+          'items': _buildAgentItems(),
+        },
+        headers: {'Authorization': 'Bearer $token'},
+      );
+      if (!mounted) return;
+      final transcript = ((res.data as Map?)?['transcript'] ?? '').toString().toLowerCase().trim();
+      final yesPattern = RegExp(r'\b(haan|ha\b|haa|yes|ok|okay|theek|thik|kar do|sahi)\b');
+      final noPattern  = RegExp(r'\b(nahi|nahin|no\b|cancel|galat|rehne do)\b');
+      if (yesPattern.hasMatch(transcript)) {
+        await _commitPending();
+      } else if (noPattern.hasMatch(transcript)) {
+        await _cancelPending();
+      } else {
+        setState(() => _agentPhase = AgentPhase.speaking);
+        await speakAsync('Haan ya nahi boliye.');
+        if (mounted) setState(() => _agentPhase = AgentPhase.confirming);
+      }
+    } catch (_) {
+      if (mounted) setState(() => _agentPhase = AgentPhase.confirming);
+    }
+  }
+
   void _advanceIfReceived() {
     final item = _currentItem;
     if (item == null) return;
@@ -1050,9 +1300,25 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           style: const TextStyle(color: Color(0xFFDC2626))));
     }
 
+    final isAdmin = UserState.of(context).isAdmin;
+    // Write agent button render-log once when admin loads the Collect screen.
+    if (isAdmin && _items.isNotEmpty) {
+      RenderLog.write('change_85_agent_button_present', '1');
+    }
+
     return Column(children: [
       _buildSupplierPicker(),
-      if (_items.isNotEmpty) _buildVoicePanel(),
+      if (_items.isNotEmpty) _buildVoicePanel(isAdmin),
+      if (isAdmin && _agentPhase == AgentPhase.confirming) _buildAgentConfirmBar(),
+      if (isAdmin && _agentPhase == AgentPhase.speaking && _agentReply.isNotEmpty)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
+          child: Text(
+            _agentReply,
+            style: const TextStyle(fontSize: 12, color: _kSub),
+            textAlign: TextAlign.center,
+          ),
+        ),
       if (_loadingBox)
         const Expanded(child: Center(child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2)))
       else if (_selectedSupplier == null)
@@ -1070,8 +1336,15 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   // ── Voice panel ─────────────────────────────────────────────────────────────
 
-  Widget _buildVoicePanel() {
-    return Container(
+  Widget _buildVoicePanel(bool isAdmin) {
+    // Counting mic is disabled while agent is active (mutual exclusion)
+    final countingDisabled = _agentPhase != AgentPhase.idle;
+    // Agent mic is disabled while counting mic is active
+    final agentDisabled = _voiceListening || _voiceProcessing;
+
+    return LayoutBuilder(builder: (ctx, constraints) {
+      final isWide = constraints.maxWidth >= 600;
+      return Container(
       margin: const EdgeInsets.fromLTRB(16, 10, 16, 0),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
@@ -1100,8 +1373,12 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                   style: TextStyle(fontSize: 13, color: _kSub)),
             ),
           ] else ...[
-            // Mic button — tap to start, tap again to stop
-            GestureDetector(
+            // Counting mic button — tap to start, tap again to stop
+            IgnorePointer(
+              ignoring: countingDisabled,
+              child: Opacity(
+                opacity: countingDisabled ? 0.35 : 1.0,
+                child: GestureDetector(
               onTap: _toggleRecording,
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 200),
@@ -1128,6 +1405,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                 ),
               ),
             ),
+              ),  // Opacity
+            ),  // IgnorePointer
             const SizedBox(width: 10),
             Expanded(
               child: _voiceListening
@@ -1179,8 +1458,25 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                 ),
               ),
             ],
+            // Ask mediBO mic — wide screens: inline in the same row
+            if (isAdmin && isWide && !agentDisabled) ...[
+              const SizedBox(width: 10),
+              _buildAgentMic(true),
+            ] else if (isAdmin && isWide && agentDisabled) ...[
+              const SizedBox(width: 10),
+              Opacity(opacity: 0.35, child: _buildAgentMic(true)),
+            ],
           ],
         ]),
+        // Ask mediBO mic — narrow screens: below the counting-mic row
+        if (isAdmin && !isWide) ...[
+          const SizedBox(height: 8),
+          Center(
+            child: agentDisabled
+                ? Opacity(opacity: 0.35, child: _buildAgentMic(false))
+                : _buildAgentMic(false),
+          ),
+        ],
 
         // ── Text type fallback ──
         if (_voiceSupported) ...[
@@ -1256,8 +1552,152 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         if (_lastEcho != null) _buildEchoBanner(_lastEcho!),
       ]),
     );
+    }); // LayoutBuilder
   }
 
+
+  // ── Agent mic widget (#85) ───────────────────────────────────────────────────
+
+  static const _kAgentAccent = Color(0xFF3B5BDB); // distinct indigo — not green
+
+  /// The "Ask mediBO" circular mic button + caption. Only rendered for admin/super_admin.
+  Widget _buildAgentMic(bool isWide) {
+    final phase = _agentPhase;
+    final bool busy = phase == AgentPhase.thinking || phase == AgentPhase.speaking;
+    final bool isListening = phase == AgentPhase.listening;
+    final bool isConfirming = phase == AgentPhase.confirming;
+
+    void onTap() {
+      if (busy) return;
+      if (isConfirming) {
+        // C5: voice yes/no — start recording
+        if (!_agentRecStarted) {
+          _voiceService.start().then((_) {
+            _agentRecStarted = true;
+            if (mounted) setState(() {});
+          }).catchError((_) {});
+        } else {
+          _stopAgentYesNo();
+        }
+        return;
+      }
+      if (isListening) {
+        _stopAgentRecording();
+      } else if (phase == AgentPhase.idle) {
+        _startAgentRecording();
+      }
+    }
+
+    final Widget micBtn = GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        width: isWide ? 48 : 40,
+        height: isWide ? 48 : 40,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: isListening
+              ? _kAgentAccent
+              : busy
+                  ? _kAgentAccent.withValues(alpha: 0.25)
+                  : _kAgentAccent.withValues(alpha: 0.10),
+          boxShadow: isListening
+              ? [BoxShadow(color: _kAgentAccent.withValues(alpha: 0.4), blurRadius: 14, spreadRadius: 2)]
+              : [],
+        ),
+        child: busy
+            ? const Padding(
+                padding: EdgeInsets.all(10),
+                child: CircularProgressIndicator(color: _kAgentAccent, strokeWidth: 2),
+              )
+            : Icon(
+                isListening ? Icons.stop_rounded : Icons.record_voice_over_rounded,
+                color: isListening ? Colors.white : _kAgentAccent,
+                size: isWide ? 22 : 18,
+              ),
+      ),
+    );
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        micBtn,
+        const SizedBox(height: 4),
+        Text(
+          isListening ? '● Tap to stop' : busy ? '…' : 'Ask mediBO',
+          style: TextStyle(
+            fontSize: 10,
+            fontWeight: FontWeight.w500,
+            color: isListening ? _kAgentAccent : _kSub,
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Confirm / cancel bar shown when _agentPhase == confirming.
+  Widget _buildAgentConfirmBar() {
+    final action = _pendingAction;
+    final productName = action?['product_name']?.toString() ?? '';
+    final qty = action?['qty'];
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: _kAgentAccent.withValues(alpha: 0.07),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: _kAgentAccent.withValues(alpha: 0.25)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(
+          _agentReply,
+          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _kText),
+        ),
+        if (productName.isNotEmpty || qty != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Text(
+              '$productName${qty != null ? ' — qty ${(qty as num).toInt()}' : ''}',
+              style: const TextStyle(fontSize: 12, color: _kSub),
+            ),
+          ),
+        const SizedBox(height: 10),
+        Row(children: [
+          Expanded(
+            child: GestureDetector(
+              onTap: _commitPending,
+              child: Container(
+                height: 44,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: _kGreen,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Text('✓ Haan', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Colors.white)),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: GestureDetector(
+              onTap: _cancelPending,
+              child: Container(
+                height: 44,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: _kBorder),
+                ),
+                child: const Text('✗ Nahi', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: _kText)),
+              ),
+            ),
+          ),
+        ]),
+      ]),
+    );
+  }
 
   Widget _buildEchoBanner(_VoiceEcho echo) {
     final summary = echo.rows.map((r) {

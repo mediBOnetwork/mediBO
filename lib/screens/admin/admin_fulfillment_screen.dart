@@ -857,20 +857,56 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   // ── #91: Confirm count lock / unlock ─────────────────────────────────────────
 
-  Widget _buildConfirmFooter(bool locked) {
+  // #92: isWide=true → right-aligned compact; false → full-width refined mobile strip
+  Widget _buildConfirmFooter(bool locked, {bool isWide = false}) {
     final isAdmin = UserState.of(context).isAdmin;
+
     if (locked) {
+      RenderLog.write('change_91_locked', '1');
+      if (isWide) {
+        // Web: compact right-aligned locked chip
+        return Row(
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: [
+            GestureDetector(
+              onLongPress: isAdmin ? _showUnlockDialog : null,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                decoration: BoxDecoration(
+                  color: _kReceivedBg,
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(color: _kReceivedFg.withValues(alpha: 0.3)),
+                ),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  const Icon(Icons.lock_rounded, size: 14, color: _kReceivedFg),
+                  const SizedBox(width: 6),
+                  const Text('Count confirmed — locked',
+                      style: TextStyle(
+                          fontSize: 12.5, fontWeight: FontWeight.w600, color: _kReceivedFg)),
+                  if (isAdmin) ...[
+                    const SizedBox(width: 6),
+                    Icon(Icons.more_horiz_rounded,
+                        size: 14, color: _kReceivedFg.withValues(alpha: 0.6)),
+                  ],
+                ]),
+              ),
+            ),
+          ],
+        );
+      }
+      // Mobile: slim full-width green strip
       return GestureDetector(
         onLongPress: isAdmin ? _showUnlockDialog : null,
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          height: 44,
+          padding: const EdgeInsets.symmetric(horizontal: 16),
           decoration: BoxDecoration(
             color: _kReceivedBg,
             borderRadius: BorderRadius.circular(10),
             border: Border.all(color: _kReceivedFg.withValues(alpha: 0.3)),
           ),
           child: Row(children: [
-            const Icon(Icons.lock_rounded, size: 16, color: _kReceivedFg),
+            const Icon(Icons.lock_rounded, size: 15, color: _kReceivedFg),
             const SizedBox(width: 8),
             const Expanded(
               child: Text('Count confirmed — locked',
@@ -879,24 +915,57 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             ),
             if (isAdmin)
               Icon(Icons.more_horiz_rounded,
-                  size: 16, color: _kReceivedFg.withValues(alpha: 0.6)),
+                  size: 15, color: _kReceivedFg.withValues(alpha: 0.6)),
           ]),
         ),
       );
     }
-    return SizedBox(
-      width: double.infinity,
-      height: 48,
-      child: FilledButton.icon(
-        style: FilledButton.styleFrom(
-          backgroundColor: _kGreen,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+
+    // Unlocked — show Confirm button
+    RenderLog.write('change_92_confirm_styled', '1');
+    if (isWide) {
+      // Web: right-aligned compact button, NOT a full-width slab
+      return Row(
+        mainAxisAlignment: MainAxisAlignment.end,
+        children: [
+          SizedBox(
+            height: 44,
+            child: FilledButton.icon(
+              style: FilledButton.styleFrom(
+                backgroundColor: _kGreen,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                padding: const EdgeInsets.symmetric(horizontal: 28),
+              ),
+              icon: const Icon(Icons.check_circle_outline_rounded, size: 17),
+              label: const Text('Confirm count',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+              onPressed: _showConfirmLockDialog,
+            ),
+          ),
+        ],
+      );
+    }
+    // Mobile: full-width, refined height + top divider
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Divider(height: 1, color: _kBorder),
+        const SizedBox(height: 12),
+        SizedBox(
+          height: 50,
+          child: FilledButton.icon(
+            style: FilledButton.styleFrom(
+              backgroundColor: _kGreen,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            icon: const Icon(Icons.check_circle_outline_rounded, size: 18),
+            label: const Text('Confirm count',
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+            onPressed: _showConfirmLockDialog,
+          ),
         ),
-        icon: const Icon(Icons.check_circle_outline_rounded, size: 18),
-        label: const Text('Confirm count',
-            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
-        onPressed: _showConfirmLockDialog,
-      ),
+      ],
     );
   }
 
@@ -1525,9 +1594,38 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('change_90_progress_below', '1');
     final doneCount = _items.length - _pendingCount;
     final total = _items.length;
+    final hasTally = _tally.isNotEmpty;
+    if (hasTally) {
+      RenderLog.write('change_92_spoken_pill', '1');
+      RenderLog.write('change_92_no_overlap', '1'); // chip is left of bar — never overlaps N/N
+    }
+    // #92: spoken pill moves LEFT of the bar so it never collides with N/N on the right
+    // Layout: [ "N spoken" chip ] ← gap → [ bar (Expanded) ] → [ "N/N" ]
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-      child: Row(children: [
+      child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+        if (hasTally) ...[
+          GestureDetector(
+            onTap: _showTallySheet,
+            child: Container(
+              height: 24,
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: _kReceivedBg,
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(color: _kReceivedFg.withValues(alpha: 0.25)),
+              ),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                const Icon(Icons.check_rounded, size: 11, color: _kReceivedFg),
+                const SizedBox(width: 4),
+                Text('${_tally.length} spoken',
+                    style: const TextStyle(
+                        fontSize: 12.5, fontWeight: FontWeight.w600, color: _kReceivedFg)),
+              ]),
+            ),
+          ),
+          const SizedBox(width: 8),
+        ],
         Expanded(
           child: LinearProgressIndicator(
             value: total == 0 ? 0 : doneCount / total,
@@ -1537,27 +1635,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             borderRadius: BorderRadius.circular(4),
           ),
         ),
-        // Tally badge (moved from voice row in #90)
-        if (_tally.isNotEmpty) ...[
-          const SizedBox(width: 8),
-          GestureDetector(
-            onTap: _showTallySheet,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-              decoration: BoxDecoration(
-                color: _kReceivedBg,
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: _kReceivedFg.withValues(alpha: 0.25)),
-              ),
-              child: Row(mainAxisSize: MainAxisSize.min, children: [
-                const Icon(Icons.check_rounded, size: 10, color: _kReceivedFg),
-                const SizedBox(width: 3),
-                Text('${_tally.length} spoken',
-                    style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: _kReceivedFg)),
-              ]),
-            ),
-          ),
-        ],
         const SizedBox(width: 8),
         Text(
           '$doneCount/$total',
@@ -1845,8 +1922,35 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         // 2. Spacer
         const Expanded(child: SizedBox()),
 
-        // 3. Progress bar + "N/N" count (only when box is loaded)
+        // 3. "N spoken" pill (left of bar) + progress bar + "N/N" count
         if (_items.isNotEmpty) ...[
+          // #92: spoken pill — quiet, left of bar, only when tally > 0
+          if (_tally.isNotEmpty) ...[
+            const SizedBox(width: 12),
+            GestureDetector(
+              onTap: _showTallySheet,
+              child: Builder(builder: (ctx) {
+                RenderLog.write('change_92_spoken_pill', '1');
+                RenderLog.write('change_92_no_overlap', '1');
+                return Container(
+                  height: 24,
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: _kReceivedBg,
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(color: _kReceivedFg.withValues(alpha: 0.25)),
+                  ),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    const Icon(Icons.check_rounded, size: 11, color: _kReceivedFg),
+                    const SizedBox(width: 4),
+                    Text('${_tally.length} spoken',
+                        style: const TextStyle(
+                            fontSize: 12.5, fontWeight: FontWeight.w600, color: _kReceivedFg)),
+                  ]),
+                );
+              }),
+            ),
+          ],
           const SizedBox(width: 12),
           ConstrainedBox(
             constraints: const BoxConstraints(minWidth: 120, maxWidth: 200),
@@ -2049,8 +2153,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
               itemBuilder: (_, i) {
                 if (i == _items.length) {
                   return Padding(
-                    padding: const EdgeInsets.fromLTRB(12, 16, 12, 16),
-                    child: _buildConfirmFooter(locked),
+                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+                    child: _buildConfirmFooter(locked, isWide: true),
                   );
                 }
                 final item = _items[i];

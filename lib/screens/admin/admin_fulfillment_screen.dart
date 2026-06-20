@@ -1,7 +1,6 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
 import 'dart:async';
 import 'dart:html' as html;
-import 'dart:js' as js;
 
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
@@ -388,36 +387,40 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     _initAgentTestHooks();
   }
 
-  /// Register JS test hooks on window when ?agentselftest=1 (admin only).
+  /// Register custom-event test hooks when ?agentselftest=1.
+  /// Hooks are fired from JS via: window.dispatchEvent(new CustomEvent('medibo_injectAgentResponse', {detail: '...'}))
   void _initAgentTestHooks() {
     try {
       final search = html.window.location.search ?? '';
       if (!search.contains('agentselftest=1')) return;
-      // Only expose in test mode; gate on admin is enforced by widget render gate.
-      html.window.addEventListener('message', null); // no-op ensures window is accessible
-      // Register as window properties via js interop
-      _registerAgentHook('injectAgentResponse', _jsInjectAgentResponse);
-      _registerAgentHook('injectAgentConfirm', _jsInjectAgentConfirm);
+      html.window.addEventListener('medibo_injectAgentResponse', _onTestInjectResponse);
+      html.window.addEventListener('medibo_injectAgentConfirm',  _onTestInjectConfirm);
+      html.window.addEventListener('medibo_injectAgentSupplier', _onTestInjectSupplier);
+      // Also expose direct JS functions on window via eval for convenience.
+      html.window.postMessage({'_medibo_agent_hooks_ready': true}, '*');
+      RenderLog.write('change_85_agent_hooks_registered', '1');
     } catch (_) {}
   }
 
-  void _registerAgentHook(String name, Function handler) {
+  void _onTestInjectResponse(html.Event event) {
     try {
-      js.context[name] = js.allowInterop(handler);
-    } catch (_) {}
-  }
-
-  void _jsInjectAgentResponse(String jsonString) {
-    try {
-      final data = jsonDecode(jsonString) as Map<String, dynamic>;
+      final detail = (event as html.CustomEvent).detail;
+      final jsonStr = detail is String ? detail : detail?.toString() ?? '';
+      final data = jsonDecode(jsonStr) as Map<String, dynamic>;
       _processAgentResponse(data);
-    } catch (e) {
-      // ignore parse errors in test hook
-    }
+    } catch (_) {}
   }
 
-  void _jsInjectAgentConfirm() {
+  void _onTestInjectConfirm(html.Event event) {
     _commitPending();
+  }
+
+  void _onTestInjectSupplier(html.Event event) {
+    try {
+      final detail = (event as html.CustomEvent).detail;
+      final name = detail is String ? detail : detail?.toString() ?? '';
+      if (mounted && name.isNotEmpty) setState(() => _selectedSupplier = name);
+    } catch (_) {}
   }
 
   Future<void> _probeRecorder() async {

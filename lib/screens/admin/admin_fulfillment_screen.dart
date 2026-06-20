@@ -2634,12 +2634,29 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       });
 
     const double popupW = 300.0;
-    // Clamp left so popup doesn't overflow screen right edge
     final screenW = MediaQuery.of(pillContext).size.width;
     final screenH = MediaQuery.of(pillContext).size.height;
-    final double left = math.min(topLeft.dx, screenW - popupW - 8);
-    // #99: popup top = pill BOTTOM + 6px gap so pill stays fully visible above popup
-    final double popupTop = topLeft.dy + pillH + 6;
+    final bool isWide = screenW >= 900;
+
+    double popupTop;
+    double left;
+    if (isWide) {
+      // #101: wide — open to the RIGHT of the pill, top edge level with pill top
+      RenderLog.write('change_101_popup_right', '1');
+      final double pillRight = topLeft.dx + (pillContext.findRenderObject() as RenderBox).size.width;
+      final double rightOfPill = pillRight + 8;
+      // Right-edge safety: if popup overflows screen right, open to the LEFT of the pill instead
+      if (rightOfPill + popupW <= screenW - 8) {
+        left = rightOfPill;
+      } else {
+        left = math.max(8.0, topLeft.dx - popupW - 8);
+      }
+      popupTop = topLeft.dy;
+    } else {
+      // narrow — keep #99 behaviour: open below the pill
+      left = math.min(topLeft.dx, screenW - popupW - 8);
+      popupTop = topLeft.dy + pillH + 6;
+    }
     final double maxH = math.min(320.0, screenH - popupTop - 16);
 
     void dismiss() {
@@ -2653,7 +2670,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         behavior: HitTestBehavior.translucent,
         onTap: dismiss,
       )),
-      // Popup anchored at pill top-left, grows downward
+      // #101 wide: popup to the RIGHT of pill, top-aligned; narrow: below pill
       Positioned(
         top: popupTop,
         left: left,

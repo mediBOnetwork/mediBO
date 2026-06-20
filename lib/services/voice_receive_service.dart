@@ -25,6 +25,10 @@ class VoiceReceiveService {
 
   bool get wasStarted => _started;
 
+  /// Calls hasPermission() to confirm the plugin channel is registered on this platform.
+  /// Throws if the plugin is missing (MissingPluginException) or any other error.
+  Future<bool> probe() => _rec.hasPermission();
+
   Future<bool> hasPermission() => _rec.hasPermission();
 
   Future<void> start() async {

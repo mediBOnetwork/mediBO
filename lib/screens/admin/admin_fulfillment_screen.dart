@@ -399,10 +399,22 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   }
 
   void _initVoice() {
-    // MediaRecorder is universally supported; we always show the mic button.
     if (mounted) setState(() => _voiceSupported = true);
     RenderLog.write('77_voice_screen_mounted', 'true');
     RenderLog.write('voice_receive_rendered', 'true');
+    _probeRecorder();
+  }
+
+  Future<void> _probeRecorder() async {
+    try {
+      await _voiceService.probe();
+      RenderLog.write('79_recorder_init_ok', 'true');
+    } catch (e) {
+      final msg = e.toString();
+      RenderLog.write('79_recorder_error', msg.substring(0, msg.length.clamp(0, 80)));
+      // Plugin missing — disable mic button so "Type instead" remains the only path.
+      if (mounted) setState(() => _voiceSupported = false);
+    }
   }
 
   // ── Settings / suppliers / box ─────────────────────────────────────────────
@@ -675,16 +687,19 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     try {
       await _voiceService.start();
       _recStarted = true;
+      RenderLog.write('79_rec_start_ok', 'true');
     } catch (e) {
       _recStarted = false;
       if (!mounted) return;
+      final msg = e.toString();
       if (e is MicPermissionException) {
         setState(() { _voiceListening = false; _voiceInterim = ''; _voiceSupported = false; });
         RenderLog.write('77_error', 'mic-denied');
         _showSnack('Allow microphone access to use voice receiving');
       } else {
-        setState(() { _voiceListening = false; _voiceInterim = ''; _voiceError = e.toString(); });
-        RenderLog.write('77_error', e.toString());
+        setState(() { _voiceListening = false; _voiceInterim = ''; _voiceError = msg; });
+        RenderLog.write('77_error', msg);
+        RenderLog.write('79_recorder_error', msg.substring(0, msg.length.clamp(0, 80)));
         Future.delayed(const Duration(seconds: 3), () {
           if (mounted) setState(() => _voiceError = '');
         });
@@ -740,12 +755,14 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         }
       }
       RenderLog.write('77_invoke_sent', 'expected=${expected.length}');
+      RenderLog.write('79_voice_invoke_sent', 'bytes=${bytes.length}');
 
       final (:items, :transcript) = await _voiceService.transcribe(
         bytes, mime, expected: expected.isEmpty ? null : expected,
       );
       if (!mounted) return;
       RenderLog.write('77_invoke_items', '${items.length}');
+      RenderLog.write('79_voice_items', '${items.length}');
 
       if (items.isEmpty) {
         setState(() {

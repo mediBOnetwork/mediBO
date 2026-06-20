@@ -53,10 +53,12 @@ class VoiceReceiveService {
     }
   }
 
+  /// [expected] = [{name, ordered_qty, unit?}] from the open order.
+  /// When provided the edge function returns reconciliation-mode items with a `status` field.
   Future<({List<Map<dynamic, dynamic>> items, String transcript})> transcribe(
     Uint8List bytes,
     String mime, {
-    List<String>? hintNames,
+    List<Map<String, dynamic>>? expected,
   }) async {
     final b64 = base64Encode(bytes);
     if (b64.length > 6 * 1024 * 1024) {
@@ -67,7 +69,7 @@ class VoiceReceiveService {
       body: {
         'audio_base64': b64,
         'mime_type': mime,
-        if (hintNames != null && hintNames.isNotEmpty) 'hint_names': hintNames,
+        if (expected != null && expected.isNotEmpty) 'expected': expected,
       },
     );
     final data = res.data;

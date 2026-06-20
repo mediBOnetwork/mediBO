@@ -273,26 +273,29 @@ class _VoiceEcho {
 
 // ── Pending voice confirmation (one per edge-function item) ──────────────────
 
+/// One row returned by the voice-receive edge function (reconciliation mode).
 class _PendingConfirmation {
-  final String heardName;
-  final int? quantity;       // from edge function (may be null)
-  final String? unit;
-  final MatchResult matchResult;
-  int? selectedProductId;
-  String selectedProductName;
-  final String rawTranscript;
+  final String status;          // ok | short | over | not_on_order
+  final String heardName;       // raw heard text from Gemini
+  final String? matchedName;    // catalog product name (null for not_on_order until picked)
+  final int receivedQty;        // what was spoken
+  final int? orderedQty;        // from expected (null for not_on_order)
+  int? selectedProductId;       // looked up from _items by matchedName (or picked)
+  String? selectedProductName;  // = matchedName, or user's pick
+  final MatchResult candidateResult; // matchToBox result (used for not_on_order dropdown)
   late final TextEditingController qtyCtrl;
 
   _PendingConfirmation({
+    required this.status,
     required this.heardName,
-    required this.quantity,
-    required this.unit,
-    required this.matchResult,
+    required this.matchedName,
+    required this.receivedQty,
+    required this.orderedQty,
     required this.selectedProductId,
     required this.selectedProductName,
-    required this.rawTranscript,
+    required this.candidateResult,
   }) {
-    qtyCtrl = TextEditingController(text: (quantity ?? 1).toString());
+    qtyCtrl = TextEditingController(text: receivedQty.toString());
   }
 
   void dispose() => qtyCtrl.dispose();
@@ -357,6 +360,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   // ── Voice confirmations (edge-function items awaiting user confirm) ──
   List<_PendingConfirmation> _pendingConfirmations = [];
+
+  // ── supplier_orders items for reconciliation expected list ──
+  List<Map<String, dynamic>> _supplierOrderItems = [];
 
   // ── Computed ──
   Map<String, dynamic>? get _currentItem =>
@@ -449,7 +455,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     setState(() {
       _loadingBox = true; _error = null; _items = []; _focusIdx = 0;
       _voiceListening = false; _voiceInterim = ''; _lastEcho = null;
-      _pendingConfirmations = [];
+      _pendingConfirmations = []; _supplierOrderItems = [];
       _undoStack.clear(); _tally.clear();
     });
     try {
@@ -475,10 +481,35 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         _showListView = false;
       });
       RenderLog.write('fulfillment_ptl_loaded_${items.length}', supplier);
+      _loadSupplierOrderItems(supplier);
       RenderLog.write('collect_area_rendered', supplier);
     } catch (e) {
       if (!mounted) return;
       setState(() { _loadingBox = false; _error = e.toString(); });
+    }
+  }
+
+  Future<void> _loadSupplierOrderItems(String supplier) async {
+    try {
+      final res = await Supabase.instance.client
+          .from('supplier_orders')
+          .select('items')
+          .eq('supplier_name', supplier)
+          .eq('status', 'pending')
+          .order('created_at', ascending: false)
+          .limit(1)
+          .maybeSingle();
+      if (!mounted) return;
+      if (res == null) { setState(() => _supplierOrderItems = []); return; }
+      final raw = res['items'] as List? ?? [];
+      setState(() {
+        _supplierOrderItems = raw
+            .map((e) => Map<String, dynamic>.from(e as Map))
+            .toList();
+      });
+      RenderLog.write('77_supplier_order_items', '${_supplierOrderItems.length}');
+    } catch (_) {
+      if (mounted) setState(() => _supplierOrderItems = []);
     }
   }
 
@@ -677,15 +708,38 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       final (:bytes, :mime) = result;
       RenderLog.write('77_rec_stop_bytes', '${bytes.length}');
 
-      final hintNames = _items
-          .map((i) => i['product_name']?.toString())
-          .whereType<String>()
-          .take(200)
-          .toList();
-      RenderLog.write('77_invoke_sent', 'hints=${hintNames.length}');
+      // Build ordered list for reconciliation mode.
+      // Prefer supplier_orders.items (the actual purchase order) over _items (pick-to-light rows).
+      final expected = <Map<String, dynamic>>[];
+      if (_supplierOrderItems.isNotEmpty) {
+        for (final row in _supplierOrderItems) {
+          final name = row['product_name']?.toString();
+          if (name == null) continue;
+          final entry = <String, dynamic>{
+            'name': name,
+            'ordered_qty': (row['quantity'] as num?)?.toInt() ?? 1,
+          };
+          expected.add(entry);
+        }
+      } else {
+        final seenNames = <String>{};
+        for (final row in _items) {
+          final name = row['product_name']?.toString();
+          if (name == null || !seenNames.add(name)) continue;
+          final entry = <String, dynamic>{
+            'name': name,
+            'ordered_qty': (row['ordered_qty'] as num?)?.toInt() ?? 1,
+          };
+          final unit = row['unit']?.toString();
+          if (unit != null && unit.isNotEmpty) entry['unit'] = unit;
+          expected.add(entry);
+          if (expected.length >= 200) break;
+        }
+      }
+      RenderLog.write('77_invoke_sent', 'expected=${expected.length}');
 
       final (:items, :transcript) = await _voiceService.transcribe(
-        bytes, mime, hintNames: hintNames.isEmpty ? null : hintNames,
+        bytes, mime, expected: expected.isEmpty ? null : expected,
       );
       if (!mounted) return;
       RenderLog.write('77_invoke_items', '${items.length}');
@@ -717,32 +771,52 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     setState(() => _voiceProcessing = false);
     final confirmations = <_PendingConfirmation>[];
     for (final item in items) {
-      final heardName = (item['name'] ?? '').toString();
-      final quantityRaw = item['quantity'];
-      final qty = quantityRaw is num ? quantityRaw.toInt() : null;
-      final unit = item['unit']?.toString();
+      final status = (item['status'] ?? 'not_on_order').toString();
+      final matchedName = item['matched_name']?.toString();
+      final heardName = (item['heard'] ?? item['name'] ?? '').toString();
+      final receivedQty = (item['received_qty'] as num?)?.toInt() ?? 1;
+      final orderedQty = (item['ordered_qty'] as num?)?.toInt();
 
-      final matchResult = matchToBox(heardName, _items);
-      RenderLog.write('77_match_done',
-          matchResult is MatchConfident ? matchResult.productName : 'none');
-
+      // Look up product_id from _items by matched catalog name
       int? selId;
-      String selName = heardName;
-      if (matchResult is MatchConfident) {
-        selId = matchResult.productId;
-        selName = matchResult.productName;
-      } else if (matchResult is MatchAmbiguous && matchResult.candidates.isNotEmpty) {
-        selId = matchResult.candidates.first.productId;
-        selName = matchResult.candidates.first.productName;
+      if (matchedName != null) {
+        for (final row in _items) {
+          if (row['product_name']?.toString() == matchedName) {
+            selId = (row['product_id'] as num?)?.toInt();
+            break;
+          }
+        }
       }
+
+      // For not_on_order: run local Double Metaphone matcher to suggest candidates
+      MatchResult candidateResult = MatchNone();
+      if (status == 'not_on_order' && heardName.isNotEmpty) {
+        candidateResult = matchToBox(heardName, _items);
+        // Pre-select top candidate if available
+        if (candidateResult is MatchConfident && selId == null) {
+          selId = candidateResult.productId;
+        } else if (candidateResult is MatchAmbiguous &&
+            candidateResult.candidates.isNotEmpty && selId == null) {
+          selId = candidateResult.candidates.first.productId;
+        }
+      }
+
+      RenderLog.write('77_match_done', matchedName ?? 'none');
+
       confirmations.add(_PendingConfirmation(
+        status: status,
         heardName: heardName,
-        quantity: qty,
-        unit: unit,
-        matchResult: matchResult,
+        matchedName: matchedName,
+        receivedQty: receivedQty,
+        orderedQty: orderedQty,
         selectedProductId: selId,
-        selectedProductName: selName,
-        rawTranscript: transcript,
+        selectedProductName: matchedName ??
+            (candidateResult is MatchConfident
+                ? candidateResult.productName
+                : candidateResult is MatchAmbiguous && candidateResult.candidates.isNotEmpty
+                    ? candidateResult.candidates.first.productName
+                    : null),
+        candidateResult: candidateResult,
       ));
     }
     setState(() => _pendingConfirmations = confirmations);
@@ -1357,29 +1431,49 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   }
 
   Widget _buildConfirmationRow(_PendingConfirmation conf, int idx) {
-    final isNone = conf.matchResult is MatchNone;
-    final isAmbiguous = conf.matchResult is MatchAmbiguous;
-    final candidates = isAmbiguous
-        ? (conf.matchResult as MatchAmbiguous).candidates
-        : <MatchCandidate>[];
-    final allCandidates = <MatchCandidate>[
-      if (!isNone && !isAmbiguous && conf.selectedProductId != null)
-        MatchCandidate(conf.selectedProductId!, conf.selectedProductName, 1.0),
-      ...candidates,
-    ];
+    final status = conf.status;
+    final isNotOnOrder = status == 'not_on_order';
+    final isShort = status == 'short';
+    final isOver = status == 'over';
+    final isOk = status == 'ok';
+
+    Color bgColor;
+    Color borderColor;
+    if (isNotOnOrder) {
+      bgColor = _kWrongBg;
+      borderColor = _kWrongFg.withValues(alpha: 0.35);
+    } else if (isShort || isOver) {
+      bgColor = _kPendingBg;
+      borderColor = _kPendingFg.withValues(alpha: 0.35);
+    } else {
+      bgColor = _kReceivedBg;
+      borderColor = _kReceivedFg.withValues(alpha: 0.35);
+    }
+
+    final candidateResult = conf.candidateResult;
+    final candidates = candidateResult is MatchAmbiguous
+        ? candidateResult.candidates
+        : candidateResult is MatchConfident
+            ? [MatchCandidate(candidateResult.productId, candidateResult.productName, 1.0)]
+            : <MatchCandidate>[];
+
+    void dismiss() {
+      conf.dispose();
+      setState(() => _pendingConfirmations.removeAt(idx));
+    }
 
     return Container(
       margin: const EdgeInsets.only(bottom: 6),
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
-        color: isNone ? _kShortBg : _kBg,
+        color: bgColor,
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: isNone ? _kShortFg.withValues(alpha: 0.3) : _kBorder),
+        border: Border.all(color: borderColor),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        // Heard name
+        // Header: heard + dismiss
         Row(children: [
-          const Icon(Icons.graphic_eq_rounded, size: 14, color: _kSub),
+          const Icon(Icons.graphic_eq_rounded, size: 13, color: _kSub),
           const SizedBox(width: 4),
           Expanded(
             child: Text('Heard: "${conf.heardName}"',
@@ -1387,95 +1481,148 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                 maxLines: 1, overflow: TextOverflow.ellipsis),
           ),
           GestureDetector(
-            onTap: () {
-              conf.dispose();
-              setState(() => _pendingConfirmations.removeAt(idx));
-            },
+            onTap: dismiss,
             child: const Icon(Icons.close_rounded, size: 14, color: _kSub),
           ),
         ]),
         const SizedBox(height: 6),
-        if (isNone) ...[
-          Text('No match found for "${conf.heardName}"',
-              style: const TextStyle(fontSize: 13, color: _kShortFg, fontWeight: FontWeight.w600)),
-          const SizedBox(height: 4),
-          const Text('Tap an item below or type instead',
-              style: TextStyle(fontSize: 12, color: _kSub)),
-        ] else ...[
-          // Product selector (dropdown if ambiguous, chip if confident)
-          if (allCandidates.length > 1)
+
+        if (isNotOnOrder) ...[
+          // "heard" — not on this order + candidates dropdown
+          Text('"${conf.heardName}" — not on this order.',
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _kWrongFg)),
+          if (candidates.isNotEmpty) ...[
+            const SizedBox(height: 6),
             DropdownButtonHideUnderline(
               child: DropdownButton<int>(
                 value: conf.selectedProductId,
                 isExpanded: true,
-                style: const TextStyle(fontSize: 14, color: _kText, fontWeight: FontWeight.w600),
-                items: allCandidates.map((c) => DropdownMenuItem(
+                hint: const Text('Select product…', style: TextStyle(fontSize: 13, color: _kSub)),
+                style: const TextStyle(fontSize: 14, color: _kText),
+                items: candidates.map((c) => DropdownMenuItem(
                   value: c.productId,
                   child: Text(c.productName, style: const TextStyle(fontSize: 14, color: _kText)),
                 )).toList(),
                 onChanged: (id) {
                   if (id == null) return;
-                  final match = allCandidates.firstWhere((c) => c.productId == id);
+                  final match = candidates.firstWhere((c) => c.productId == id);
                   setState(() {
                     conf.selectedProductId = match.productId;
                     conf.selectedProductName = match.productName;
                   });
                 },
               ),
-            )
-          else
-            Text(conf.selectedProductName,
-                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _kText)),
-          const SizedBox(height: 8),
-          // Qty + unit + confirm row
-          Row(children: [
-            const Text('Qty:', style: TextStyle(fontSize: 13, color: _kSub)),
-            const SizedBox(width: 6),
-            SizedBox(
-              width: 64,
-              height: 32,
-              child: TextField(
-                controller: conf.qtyCtrl,
-                keyboardType: TextInputType.number,
-                textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _kText),
-                decoration: InputDecoration(
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 0),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(6),
-                    borderSide: const BorderSide(color: _kBorder),
+            ),
+            const SizedBox(height: 4),
+            Row(children: [
+              const Text('Qty:', style: TextStyle(fontSize: 13, color: _kSub)),
+              const SizedBox(width: 6),
+              SizedBox(
+                width: 64, height: 32,
+                child: TextField(
+                  controller: conf.qtyCtrl,
+                  keyboardType: TextInputType.number,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _kText),
+                  decoration: InputDecoration(
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 0),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(6),
+                      borderSide: const BorderSide(color: _kBorder),
+                    ),
+                    filled: true, fillColor: Colors.white,
                   ),
-                  filled: true, fillColor: Colors.white,
                 ),
               ),
+              const Spacer(),
+              FilledButton(
+                style: FilledButton.styleFrom(
+                  backgroundColor: _kShortFg,
+                  minimumSize: const Size(80, 36),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+                onPressed: conf.selectedProductId == null ? null : () async {
+                  final productId = conf.selectedProductId!;
+                  final productName = conf.selectedProductName ?? conf.heardName;
+                  final qty = double.tryParse(conf.qtyCtrl.text.trim());
+                  if (qty == null || qty <= 0) { _showSnack('Enter a valid quantity'); return; }
+                  dismiss();
+                  await _voiceMarkProduct(
+                    productId: productId, productName: productName,
+                    qty: qty, unit: null, rawSegment: conf.heardName,
+                  );
+                },
+                child: const Text('Add anyway', style: TextStyle(fontSize: 13, color: Colors.white)),
+              ),
+            ]),
+          ],
+        ] else ...[
+          // ok / short / over
+          Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(conf.matchedName ?? conf.heardName,
+                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _kText)),
+                const SizedBox(height: 3),
+                if (isOk) ...[
+                  // green: matched_name ✓ received_qty / ordered_qty
+                  Text(
+                    '✓  ${conf.receivedQty}${conf.orderedQty != null ? " / ${conf.orderedQty}" : ""}',
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kReceivedFg),
+                  ),
+                ] else ...[
+                  // short / over: editable qty + "/ ordered_qty (short/over by N)"
+                  Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+                    SizedBox(
+                      width: 56, height: 28,
+                      child: TextField(
+                        controller: conf.qtyCtrl,
+                        keyboardType: TextInputType.number,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
+                        decoration: InputDecoration(
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(6),
+                            borderSide: const BorderSide(color: _kBorder),
+                          ),
+                          filled: true, fillColor: Colors.white,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Flexible(
+                      child: Text(
+                        '/ ${conf.orderedQty ?? "?"}'
+                        ' (${isShort ? "short" : "over"} by '
+                        '${isShort
+                            ? (conf.orderedQty != null ? conf.orderedQty! - conf.receivedQty : "?")
+                            : (conf.orderedQty != null ? conf.receivedQty - conf.orderedQty! : "?")})',
+                        style: const TextStyle(fontSize: 12, color: _kPendingFg),
+                      ),
+                    ),
+                  ]),
+                ],
+              ]),
             ),
-            if (conf.unit != null) ...[
-              const SizedBox(width: 6),
-              Text(conf.unit!, style: const TextStyle(fontSize: 12, color: _kSub)),
-            ],
-            const Spacer(),
+            const SizedBox(width: 8),
             FilledButton(
               style: FilledButton.styleFrom(
-                backgroundColor: _kGreen,
-                minimumSize: const Size(80, 36),
+                backgroundColor: isOk ? _kGreen : _kPendingFg,
+                minimumSize: const Size(72, 36),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
               ),
-              onPressed: () async {
-                final productId = conf.selectedProductId;
-                if (productId == null) return;
-                final qty = double.tryParse(conf.qtyCtrl.text.trim());
-                if (qty == null || qty <= 0) {
-                  _showSnack('Enter a valid quantity');
-                  return;
-                }
-                conf.dispose();
-                setState(() => _pendingConfirmations.removeAt(idx));
+              onPressed: conf.selectedProductId == null ? null : () async {
+                final productId = conf.selectedProductId!;
+                final productName = conf.matchedName ?? conf.heardName;
+                final qty = isOk
+                    ? conf.receivedQty.toDouble()
+                    : (double.tryParse(conf.qtyCtrl.text.trim()) ?? conf.receivedQty.toDouble());
+                if (qty <= 0) { _showSnack('Enter a valid quantity'); return; }
+                dismiss();
                 await _voiceMarkProduct(
-                  productId: productId,
-                  productName: conf.selectedProductName,
-                  qty: qty,
-                  unit: conf.unit,
-                  rawSegment: conf.heardName,
+                  productId: productId, productName: productName,
+                  qty: qty, unit: null, rawSegment: conf.heardName,
                 );
               },
               child: const Text('Confirm', style: TextStyle(fontSize: 13, color: Colors.white)),

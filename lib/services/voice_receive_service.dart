@@ -59,7 +59,8 @@ class VoiceReceiveService {
 
   /// [expected] = [{name, ordered_qty, unit?}] from the open order.
   /// When provided the edge function returns reconciliation-mode items with a `status` field.
-  Future<({List<Map<dynamic, dynamic>> items, String transcript})> transcribe(
+  /// v4+: response also includes dropped_no_qty / dropped_low_conf counts (#93).
+  Future<({List<Map<dynamic, dynamic>> items, String transcript, int droppedNoQty, int droppedLowConf})> transcribe(
     Uint8List bytes,
     String mime, {
     List<Map<String, dynamic>>? expected,
@@ -82,7 +83,9 @@ class VoiceReceiveService {
     }
     final items = (data['items'] as List?)?.cast<Map>() ?? const <Map>[];
     final transcript = (data['transcript'] ?? '').toString();
-    return (items: items, transcript: transcript);
+    final droppedNoQty = (data['dropped_no_qty'] as num?)?.toInt() ?? 0;
+    final droppedLowConf = (data['dropped_low_conf'] as num?)?.toInt() ?? 0;
+    return (items: items, transcript: transcript, droppedNoQty: droppedNoQty, droppedLowConf: droppedLowConf);
   }
 
   Future<void> cancel() async {

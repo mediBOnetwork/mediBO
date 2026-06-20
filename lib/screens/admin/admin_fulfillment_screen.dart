@@ -1,6 +1,10 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
 import 'dart:async';
 import 'dart:html' as html;
+import 'dart:math' as math;
+import 'dart:typed_data';
+import 'dart:js_interop';
+import 'dart:js_interop_unsafe';
 
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
@@ -14,6 +18,10 @@ import '../../user_state.dart';
 import '../../services/voice_receive_service.dart';
 import '../../supabase_config.dart' show SupabaseConfig;
 import 'voice_receive.dart';
+
+// #93: JS interop — mediboCheckLoudness is defined in web/index.html
+@JS('mediboCheckLoudness')
+external JSPromise _jsCheckLoudness(JSUint8Array data);
 
 // ── Color tokens ────────────────────────────────────────────────────────────
 const _kGreen        = Color(0xFF1B7A43);
@@ -609,6 +617,24 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   // ── VOICE (Vertex Gemini via voice-receive edge function) ──────────────────
 
+  // #93: Decode WebM/Opus bytes via Web Audio and compute RMS + peak loudness.
+  // Returns null on decode failure (caller should fall open — never block real speech).
+  // #93: Call mediboCheckLoudness JS function (defined in web/index.html).
+  // Returns null on decode failure so the caller always falls open.
+  Future<({double rms, double peak})?> _measureLoudness(Uint8List bytes) async {
+    try {
+      final jsResult = await _jsCheckLoudness(bytes.toJS).toDart;
+      if (jsResult == null) return null;
+      final obj = jsResult as JSObject;
+      final rms = (obj.getProperty('rms'.toJS) as JSNumber).toDartDouble;
+      final peak = (obj.getProperty('peak'.toJS) as JSNumber).toDartDouble;
+      if (rms < 0) return null; // JS reported decode failure — fall open
+      return (rms: rms, peak: peak);
+    } catch (_) {
+      return null;
+    }
+  }
+
   // Tap-to-toggle: one tap = start, next tap = stop+send.
   Future<void> _toggleRecording() async {
     if (_agentPhase != AgentPhase.idle) return; // agent active — counting mic disabled
@@ -688,18 +714,43 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         return;
       }
       RenderLog.write('77_rec_stop_bytes', '${result.bytes.length}');
+
+      // #93 Part C: Loudness gate — drop faint/background clips before upload
+      final loudness = await _measureLoudness(result.bytes);
+      if (!mounted) { setState(() => _voiceProcessing = false); return; }
+      if (loudness == null) {
+        RenderLog.write('change_93_rms_skip', '1'); // decode failed — fall open
+      } else if (loudness.rms < _kVoiceRmsMin && loudness.peak < _kVoiceRmsMin * 4) {
+        setState(() => _voiceProcessing = false);
+        RenderLog.write('change_93_quiet_dropped', '1');
+        _showSnack('Bahut dheere — phone ke paas boliye');
+        return;
+      }
+
       final expected = _buildExpectedList();
       _voiceCallsAfterStop++;
-      final (:items, :transcript) = await _voiceService.transcribe(
+      final (:items, :transcript, :droppedNoQty, :droppedLowConf) = await _voiceService.transcribe(
         result.bytes, result.mime, expected: expected.isEmpty ? null : expected,
       );
       if (!mounted) { setState(() => _voiceProcessing = false); return; }
       RenderLog.write('84_voicecalls_after_stop', '$_voiceCallsAfterStop');
+
+      // #93 Part D: name-without-number hint (non-blocking — shows alongside any kept items)
+      if (droppedNoQty > 0) {
+        RenderLog.write('change_93_no_qty_hint', '1');
+        _showSnack('Naam suna par quantity nahi — kuch mark nahi kiya');
+      }
+
       if (items.isEmpty) {
         setState(() {
           _voiceProcessing = false;
-          _voiceError = "Didn't catch that — try again";
           _lastTranscript = transcript;
+          // Only overwrite voiceError if no snack was already shown for droppedNoQty
+          if (droppedNoQty == 0) {
+            _voiceError = droppedLowConf > 0
+                ? 'Saaf nahi suna — dobara boliye'
+                : "Didn't catch that — try again";
+          }
         });
         Future.delayed(const Duration(seconds: 3), () {
           if (mounted) setState(() => _voiceError = '');
@@ -744,13 +795,14 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     return expected;
   }
 
-  // Aggregate by product, SET absolute qty, skip items with no quantity spoken.
+  // #93: ADDITIVE — partial mixed counts accumulate across clips.
+  // Each clip ADDs spoken qty to existing received_qty (not SET/replace).
   Future<void> _commitVoiceItems(List<Map<dynamic, dynamic>> items) async {
     final supplier = _selectedSupplier;
     if (supplier == null) return;
 
-    // Aggregate by product_id: sum received_qty for duplicates in one response.
-    final Map<int, ({String name, double qty, String heard})> byProduct = {};
+    // Aggregate by product_id: sum received_qty for duplicates in one clip.
+    final Map<int, ({String name, int qty, String heard})> byProduct = {};
     int skipped = 0;
 
     for (final item in items) {
@@ -758,17 +810,17 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       final heardName = (item['heard'] ?? '').toString().trim();
       final rawQty = item['received_qty'];
 
-      // B2.4: no qty spoken → skip, don't default to ordered
+      // No qty spoken → skip (server already drops these via dropped_no_qty, belt-and-suspenders)
       if (rawQty == null) { skipped++; continue; }
-      // Guard: empty heard = Gemini guess, not actual speech
+      // Guard: empty heard = Gemini guess without actual speech
       if (heardName.isEmpty || heardName.length < 2) { skipped++; continue; }
 
-      final receivedQty = (rawQty as num).toDouble();
+      final receivedQty = (rawQty as num).toInt();
       if (receivedQty <= 0) { skipped++; continue; }
 
-      // Look up product_id from box list
+      // Look up product_id by matched_name in current box
       int? productId;
-      if (matchedName != null) {
+      if (matchedName != null && matchedName != 'not_on_order') {
         for (final row in _items) {
           if (row['product_name']?.toString() == matchedName) {
             productId = (row['product_id'] as num?)?.toInt();
@@ -779,7 +831,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       if (productId == null) { skipped++; continue; }
 
       if (byProduct.containsKey(productId)) {
-        // Sum duplicates into one SET value
+        // Multiple mentions of same product in one clip → sum them
         byProduct[productId] = (
           name: byProduct[productId]!.name,
           qty: byProduct[productId]!.qty + receivedQty,
@@ -792,21 +844,20 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
     if (skipped > 0) RenderLog.write('84_skipped_no_qty', '$skipped');
 
-    // One SET call per product (idempotent)
+    // ADD each product via receive_product_qty — partial mixed counts accumulate
     for (final entry in byProduct.entries) {
-      final productId = entry.key;
-      final productName = entry.value.name;
-      final qty = entry.value.qty;
-      final heard = entry.value.heard;
-
-      await _setVoiceReceived(
-        productId: productId,
-        productName: productName,
-        qty: qty,
-        rawSegment: heard,
+      final ok = await _addVoiceQty(
+        productId: entry.key,
+        productName: entry.value.name,
+        qty: entry.value.qty,
+        rawSegment: entry.value.heard,
       );
       if (!mounted) return;
+      if (!ok) break; // locked or error — stop processing this clip
     }
+
+    // Reload DB once after all additions (not per item)
+    if (byProduct.isNotEmpty && mounted) await _reloadItemsFromDB();
 
     final done = _items.length - _pendingCount;
     RenderLog.write('84_progress', '$done/${_items.length}');
@@ -834,6 +885,60 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       await _reloadItemsFromDB();
     } catch (e) {
       if (mounted) _showSnack('Commit error: $e');
+    }
+  }
+
+  // #93: ADDITIVE receive — counting mic uses this; each clip ADDS to received_qty.
+  // Returns true if the add succeeded, false on locked/error (caller stops loop).
+  Future<bool> _addVoiceQty({
+    required int productId,
+    required String productName,
+    required int qty,
+    required String rawSegment,
+  }) async {
+    final supplier = _selectedSupplier;
+    if (supplier == null) return false;
+    try {
+      final res = await Supabase.instance.client.rpc('receive_product_qty', params: {
+        'p_supplier_name': supplier,
+        'p_product_id': productId,
+        'p_add_qty': qty,
+        'p_note': 'voice #93: $rawSegment',
+      }) as Map;
+
+      if (res['error'] != null) {
+        if (res['error'] == 'collect_locked') {
+          if (mounted) _showSnack('Count locked — unlock to edit.');
+        }
+        return false;
+      }
+
+      RenderLog.write('change_93_additive_mark', '1');
+      RenderLog.write('84_committed', '$productName:add$qty');
+
+      // Update tally additively (not replace)
+      setState(() { _tally[productId] = (_tally[productId] ?? 0) + qty; });
+
+      // Show echo banner with allocation rows
+      final allocated = (res['allocated'] as num?) ?? qty;
+      final leftover = (res['leftover'] as num?) ?? 0;
+      final rowsRaw = (res['rows'] as List?)?.cast<Map>() ?? <Map>[];
+      final rows = rowsRaw.map((r) => <String, dynamic>{
+        'bag_no': r['bag_no'],
+        'customer': r['customer']?.toString() ?? '',
+        'gave': r['gave'],
+        'ordered': r['ordered'],
+      }).toList();
+      _showEcho(_VoiceEcho(
+        productName: productName,
+        allocated: allocated,
+        leftover: leftover,
+        rows: rows,
+      ));
+      return true;
+    } catch (e) {
+      if (mounted) _showSnack('Commit error: $e');
+      return false;
     }
   }
 
@@ -1864,6 +1969,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // Button constants — fixed size applied at call site via SizedBox
   static const double _kVoiceBtnW = 150;
   static const double _kVoiceBtnH = 44;
+  // #93: loudness gate — RMS below this on a -1..1 scale = too quiet / background
+  static const double _kVoiceRmsMin = 0.015;
 
   Widget _buildWideSingleBar(bool isAdmin) {
     RenderLog.write('change_88_fixed_btn_size', '150x44');

@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <meta name="build-commit" content="45ef77f">
+  <meta name="build-commit" content="59d706d">
   <!-- CHANGE #58: SW killswitch — unregisters ALL service workers + clears all caches, then reloads ONCE.
        Runs before Flutter loader so even devices with stale SW get fresh bundle next load. -->
   <script>(function(){try{if('serviceWorker'in navigator){navigator.serviceWorker.getRegistrations().then(function(rs){var had=rs&&rs.length>0;return Promise.all((rs||[]).map(function(r){return r.unregister();})).then(function(){return had;});}).then(function(had){if(window.caches&&caches.keys){return caches.keys().then(function(k){return Promise.all(k.map(function(x){return caches.delete(x);}));}).then(function(){return had;});}return had;}).then(function(had){if(had&&!sessionStorage.getItem('sw_killed_58')){sessionStorage.setItem('sw_killed_58','1');location.reload();}}).catch(function(){});}}catch(e){}})();</script>
@@ -665,6 +665,35 @@
         } else {
           speak(voices);
         }
+      };
+
+      // #93: Loudness gate — decode audio bytes and compute RMS+peak via Web Audio.
+      // Called from Dart before uploading a clip. Returns Promise<{rms, peak}>.
+      // On any failure resolves with {rms:-1, peak:-1} so Dart falls open.
+      window.mediboCheckLoudness = function(uint8Array) {
+        return new Promise(function(resolve) {
+          try {
+            var ctx = new (window.AudioContext || window.webkitAudioContext)();
+            var buf = uint8Array.buffer;
+            ctx.decodeAudioData(buf, function(audioBuffer) {
+              var nCh = audioBuffer.numberOfChannels;
+              var sumSq = 0, peak = 0, count = 0;
+              for (var ch = 0; ch < nCh; ch++) {
+                var data = audioBuffer.getChannelData(ch);
+                for (var i = 0; i < data.length; i += 4) {
+                  var s = data[i];
+                  sumSq += s * s;
+                  var abs = s < 0 ? -s : s;
+                  if (abs > peak) peak = abs;
+                  count++;
+                }
+              }
+              var rms = count > 0 ? Math.sqrt(sumSq / count) : 0;
+              ctx.close();
+              resolve({rms: rms, peak: peak});
+            }, function() { resolve({rms: -1, peak: -1}); });
+          } catch(e) { resolve({rms: -1, peak: -1}); }
+        });
       };
     })();
   </script>

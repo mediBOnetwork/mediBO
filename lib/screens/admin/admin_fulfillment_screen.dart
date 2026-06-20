@@ -1985,33 +1985,36 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       ),
       child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
 
-        // 1. Supplier dropdown
-        Flexible(
+        // 1. Supplier dropdown — #99: Expanded (tight) keeps arrow at constant right X
+        Expanded(
           flex: 3,
           child: _suppliers.isEmpty
               ? const Text('No supplier orders to collect yet',
                   style: TextStyle(fontSize: 14, color: _kSub), overflow: TextOverflow.ellipsis)
-              : DropdownButtonHideUnderline(
-                  child: DropdownButton<String>(
-                    isExpanded: true,
-                    hint: const Text('Select supplier…',
-                        style: TextStyle(color: Color(0xFF9CA3AF), fontSize: 15)),
-                    value: _selectedSupplier,
-                    items: _suppliers
-                        .map((s) => DropdownMenuItem(
-                              value: s,
-                              child: Text(s, style: const TextStyle(fontSize: 15, color: _kText),
-                                  overflow: TextOverflow.ellipsis),
-                            ))
-                        .toList(),
-                    onChanged: (v) {
-                      if (v == null) return;
-                      RenderLog.write('78_collect_supplier_selected', v);
-                      setState(() => _selectedSupplier = v);
-                      _loadBox(v);
-                    },
-                  ),
-                ),
+              : Builder(builder: (ctx) {
+                  RenderLog.write('change_99_arrow_constant', '1');
+                  return DropdownButtonHideUnderline(
+                    child: DropdownButton<String>(
+                      isExpanded: true,
+                      hint: const Text('Select supplier…',
+                          style: TextStyle(color: Color(0xFF9CA3AF), fontSize: 15)),
+                      value: _selectedSupplier,
+                      items: _suppliers
+                          .map((s) => DropdownMenuItem(
+                                value: s,
+                                child: Text(s, style: const TextStyle(fontSize: 15, color: _kText),
+                                    overflow: TextOverflow.ellipsis),
+                              ))
+                          .toList(),
+                      onChanged: (v) {
+                        if (v == null) return;
+                        RenderLog.write('78_collect_supplier_selected', v);
+                        setState(() => _selectedSupplier = v);
+                        _loadBox(v);
+                      },
+                    ),
+                  );
+                }),
         ),
 
         // 2. Spacer
@@ -2719,15 +2722,17 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   void _showSpokenPopup(BuildContext pillContext) {
     RenderLog.write('change_97_spoken_popup', '1');
     RenderLog.write('change_98_popup_top_aligned', '1');
+    RenderLog.write('change_99_popup_below', '1');
 
     // Dismiss any existing popup first
     _spokenPopupEntry?.remove();
     _spokenPopupEntry = null;
 
-    // Get pill's global top-left from its RenderBox
+    // Get pill's global top-left + size from its RenderBox
     final RenderBox? box = pillContext.findRenderObject() as RenderBox?;
     if (box == null || !box.attached) return;
     final Offset topLeft = box.localToGlobal(Offset.zero);
+    final double pillH = box.size.height;
 
     final counted = _items
         .where((r) => ((r['received_qty'] as num?) ?? 0) > 0)
@@ -2743,8 +2748,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     final screenW = MediaQuery.of(pillContext).size.width;
     final screenH = MediaQuery.of(pillContext).size.height;
     final double left = math.min(topLeft.dx, screenW - popupW - 8);
-    // Popup top = pill top; max height = remaining screen below pill - 16px margin
-    final double popupTop = topLeft.dy;
+    // #99: popup top = pill BOTTOM + 6px gap so pill stays fully visible above popup
+    final double popupTop = topLeft.dy + pillH + 6;
     final double maxH = math.min(320.0, screenH - popupTop - 16);
 
     void dismiss() {

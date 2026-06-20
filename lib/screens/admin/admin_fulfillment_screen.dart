@@ -383,6 +383,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('84_voicecalls_during_record', '0');
     // #85: agent button present — written in initState (IndexedStack always mounts)
     RenderLog.write('change_85_agent_button_present', '1');
+    RenderLog.write('change_86_voice_card_present', '1');
+    RenderLog.write('change_86_confirm_card_present', '1');
     _probeRecorder();
     _initAgentTestHooks();
   }
@@ -1315,17 +1317,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
     return Column(children: [
       _buildSupplierPicker(),
-      if (_items.isNotEmpty) _buildVoicePanel(isAdmin),
+      if (_items.isNotEmpty) _buildVoiceCard(isAdmin),
       if (isAdmin && _agentPhase == AgentPhase.confirming) _buildAgentConfirmBar(),
-      if (isAdmin && _agentPhase == AgentPhase.speaking && _agentReply.isNotEmpty)
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
-          child: Text(
-            _agentReply,
-            style: const TextStyle(fontSize: 12, color: _kSub),
-            textAlign: TextAlign.center,
-          ),
-        ),
       if (_loadingBox)
         const Expanded(child: Center(child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2)))
       else if (_selectedSupplier == null)
@@ -1341,367 +1334,457 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     ]);
   }
 
-  // ── Voice panel ─────────────────────────────────────────────────────────────
+  // ── Voice card (#86) ─────────────────────────────────────────────────────────
 
-  Widget _buildVoicePanel(bool isAdmin) {
-    // Counting mic is disabled while agent is active (mutual exclusion)
+  static const _kAgentAccent = Color(0xFF3B5BDB); // indigo — distinct from green
+
+  Widget _buildVoiceCard(bool isAdmin) {
     final countingDisabled = _agentPhase != AgentPhase.idle;
-    // Agent mic is disabled while counting mic is active
     final agentDisabled = _voiceListening || _voiceProcessing;
 
-    return LayoutBuilder(builder: (ctx, constraints) {
-      final isWide = constraints.maxWidth >= 600;
-      return Container(
+    return Container(
       margin: const EdgeInsets.fromLTRB(16, 10, 16, 0),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        color: _voiceListening
-            ? _kWrongFg.withValues(alpha: 0.05)
-            : _voiceProcessing
-                ? _kGreen.withValues(alpha: 0.06)
-                : _kBg,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: _voiceListening
-              ? _kWrongFg.withValues(alpha: 0.35)
-              : _voiceProcessing
-                  ? _kGreen.withValues(alpha: 0.4)
-                  : _kBorder,
-        ),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 8, offset: const Offset(0, 2)),
+        ],
       ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        // ── Top row: mic button + tally + type fallback ──
-        Row(children: [
-          if (!_voiceSupported) ...[
-            const Icon(Icons.mic_off_rounded, size: 18, color: _kSub),
-            const SizedBox(width: 8),
-            const Expanded(
-              child: Text('Voice unavailable — tap items below',
-                  style: TextStyle(fontSize: 13, color: _kSub)),
-            ),
-          ] else ...[
-            // Counting mic button — tap to start, tap again to stop
-            IgnorePointer(
-              ignoring: countingDisabled,
-              child: Opacity(
-                opacity: countingDisabled ? 0.35 : 1.0,
-                child: GestureDetector(
-              onTap: _toggleRecording,
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                width: 56, height: 56,
-                decoration: BoxDecoration(
-                  color: _voiceListening
-                      ? _kWrongFg
-                      : _voiceProcessing
-                          ? _kSub
-                          : _kGreen.withValues(alpha: 0.12),
-                  shape: BoxShape.circle,
-                  boxShadow: _voiceListening
-                      ? [BoxShadow(color: _kWrongFg.withValues(alpha: 0.45), blurRadius: 16, spreadRadius: 3)]
-                      : [],
-                ),
-                child: Icon(
-                  _voiceListening
-                      ? Icons.stop_rounded
-                      : _voiceProcessing
-                          ? Icons.hourglass_top_rounded
-                          : Icons.mic_none_rounded,
-                  color: (_voiceListening || _voiceProcessing) ? Colors.white : _kGreen,
-                  size: 24,
-                ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+
+        // ── Header row ──────────────────────────────────────────────────────────
+        Padding(
+          padding: const EdgeInsets.fromLTRB(14, 10, 14, 0),
+          child: Row(children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: _kGreen.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(20),
               ),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                Icon(Icons.mic_rounded, size: 12, color: _kGreen.withValues(alpha: 0.8)),
+                const SizedBox(width: 4),
+                Text('Voice Input', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _kGreen.withValues(alpha: 0.85))),
+              ]),
             ),
-              ),  // Opacity
-            ),  // IgnorePointer
-            const SizedBox(width: 10),
-            Expanded(
-              child: _voiceListening
-                  ? Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-                      const Text('● Recording… tap to stop',
-                          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: _kWrongFg)),
-                      if (_voiceInterim.isNotEmpty)
-                        Text(_voiceInterim,
-                            style: const TextStyle(fontSize: 12, color: _kSub),
-                            maxLines: 1, overflow: TextOverflow.ellipsis),
-                    ])
-                  : _voiceProcessing
-                      ? const Row(children: [
-                          SizedBox(width: 16, height: 16,
-                              child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2)),
-                          SizedBox(width: 8),
-                          Text('Processing…', style: TextStyle(fontSize: 13, color: _kSub)),
-                        ])
-                      : _voiceError.isNotEmpty
-                          ? Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-                              Text(_voiceError,
-                                  style: const TextStyle(fontSize: 13, color: _kWrongFg)),
-                              if (_lastTranscript.isNotEmpty)
-                                Text('Heard: $_lastTranscript',
-                                    style: const TextStyle(fontSize: 11, color: _kSub),
-                                    maxLines: 1, overflow: TextOverflow.ellipsis),
-                            ])
-                          : const Text('Tap to start recording',
-                              style: TextStyle(fontSize: 13, color: _kSub)),
-            ),
-            // Tally chip
-            if (_tally.isNotEmpty) ...[
-              const SizedBox(width: 6),
+            const Spacer(),
+            if (_tally.isNotEmpty)
               GestureDetector(
-                onTap: () => _showTallySheet(),
+                onTap: _showTallySheet,
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                   decoration: BoxDecoration(
                     color: _kReceivedBg,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: _kReceivedFg.withValues(alpha: 0.3)),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: _kReceivedFg.withValues(alpha: 0.25)),
                   ),
-                  child: Row(children: [
-                    const Icon(Icons.check_rounded, size: 12, color: _kReceivedFg),
-                    const SizedBox(width: 4),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    const Icon(Icons.check_rounded, size: 11, color: _kReceivedFg),
+                    const SizedBox(width: 3),
                     Text('${_tally.length} spoken',
-                        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: _kReceivedFg)),
+                        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _kReceivedFg)),
                   ]),
                 ),
               ),
-            ],
-            // Ask mediBO mic — wide screens: inline in the same row
-            if (isAdmin && isWide && !agentDisabled) ...[
-              const SizedBox(width: 10),
-              _buildAgentMic(true),
-            ] else if (isAdmin && isWide && agentDisabled) ...[
-              const SizedBox(width: 10),
-              Opacity(opacity: 0.35, child: _buildAgentMic(true)),
-            ],
-          ],
-        ]),
-        // Ask mediBO mic — narrow screens: below the counting-mic row
-        if (isAdmin && !isWide) ...[
-          const SizedBox(height: 8),
-          Center(
-            child: agentDisabled
-                ? Opacity(opacity: 0.35, child: _buildAgentMic(false))
-                : _buildAgentMic(false),
-          ),
-        ],
+          ]),
+        ),
 
-        // ── Text type fallback ──
-        if (_voiceSupported) ...[
-          const SizedBox(height: 6),
-          Row(children: [
-            Expanded(
-              child: AnimatedCrossFade(
-                duration: const Duration(milliseconds: 200),
-                crossFadeState: _showVoiceText
-                    ? CrossFadeState.showSecond
-                    : CrossFadeState.showFirst,
-                firstChild: GestureDetector(
-                  onTap: () => setState(() => _showVoiceText = true),
-                  child: const Text(
-                    'Type instead',
-                    style: TextStyle(fontSize: 12, color: _kSub,
-                        decoration: TextDecoration.underline, decorationColor: _kSub),
+        // ── Mic row ─────────────────────────────────────────────────────────────
+        Padding(
+          padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
+          child: !_voiceSupported
+              ? Row(children: [
+                  const Icon(Icons.mic_off_rounded, size: 16, color: _kSub),
+                  const SizedBox(width: 8),
+                  const Expanded(
+                    child: Text('Voice unavailable — tap items below',
+                        style: TextStyle(fontSize: 13, color: _kSub)),
                   ),
-                ),
-                secondChild: Row(children: [
-                  Expanded(
-                    child: SizedBox(
-                      height: 36,
-                      child: TextField(
-                        controller: _voiceTextCtrl,
-                        decoration: InputDecoration(
-                          hintText: 'e.g. "Amler 4 strip"',
-                          hintStyle: const TextStyle(fontSize: 13, color: _kSub),
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 0),
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(6),
-                            borderSide: const BorderSide(color: _kBorder),
+                ])
+              : IntrinsicHeight(
+                  child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+
+                    // ── Counting mic (left) ──────────────────────────────────────
+                    Expanded(
+                      child: IgnorePointer(
+                        ignoring: countingDisabled,
+                        child: Opacity(
+                          opacity: countingDisabled ? 0.35 : 1.0,
+                          child: GestureDetector(
+                            onTap: _toggleRecording,
+                            child: Column(crossAxisAlignment: CrossAxisAlignment.center, children: [
+                              AnimatedContainer(
+                                duration: const Duration(milliseconds: 200),
+                                width: 52, height: 52,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: _voiceListening
+                                      ? _kWrongFg
+                                      : _voiceProcessing
+                                          ? _kSub
+                                          : _kGreen.withValues(alpha: 0.10),
+                                  boxShadow: _voiceListening
+                                      ? [BoxShadow(color: _kWrongFg.withValues(alpha: 0.40), blurRadius: 14, spreadRadius: 2)]
+                                      : [],
+                                ),
+                                child: _voiceProcessing
+                                    ? const Padding(
+                                        padding: EdgeInsets.all(14),
+                                        child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2.5),
+                                      )
+                                    : Icon(
+                                        _voiceListening ? Icons.stop_rounded : Icons.mic_none_rounded,
+                                        color: _voiceListening ? Colors.white : _kGreen,
+                                        size: 22,
+                                      ),
+                              ),
+                              const SizedBox(height: 6),
+                              if (_voiceListening) ...[
+                                const Text('● Recording',
+                                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kWrongFg)),
+                                const Text('Tap to stop',
+                                    style: TextStyle(fontSize: 11, color: _kSub)),
+                                if (_voiceInterim.isNotEmpty)
+                                  Padding(
+                                    padding: const EdgeInsets.only(top: 2),
+                                    child: Text(_voiceInterim,
+                                        style: const TextStyle(fontSize: 10, color: _kSub),
+                                        maxLines: 1, overflow: TextOverflow.ellipsis, textAlign: TextAlign.center),
+                                  ),
+                              ] else if (_voiceProcessing) ...[
+                                const Text('Processing…',
+                                    style: TextStyle(fontSize: 12, color: _kSub)),
+                              ] else if (_voiceError.isNotEmpty) ...[
+                                Text(_voiceError,
+                                    style: const TextStyle(fontSize: 11, color: _kWrongFg),
+                                    textAlign: TextAlign.center, maxLines: 2),
+                              ] else ...[
+                                const Text('Count items',
+                                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: _kText)),
+                                const Text('Tap to record',
+                                    style: TextStyle(fontSize: 11, color: _kSub)),
+                              ],
+                            ]),
                           ),
-                          filled: true, fillColor: Colors.white,
                         ),
-                        style: const TextStyle(fontSize: 13, color: _kText),
-                        onSubmitted: (t) {
-                          final text = t.trim();
-                          if (text.isNotEmpty) {
-                            _voiceTextCtrl.clear();
-                            _handleVoiceTranscript(text);
-                          }
-                        },
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 6),
-                  GestureDetector(
-                    onTap: () {
-                      final text = _voiceTextCtrl.text.trim();
-                      if (text.isNotEmpty) {
-                        _voiceTextCtrl.clear();
-                        _handleVoiceTranscript(text);
-                      } else {
-                        setState(() => _showVoiceText = false);
-                      }
-                    },
-                    child: Container(
-                      width: 36, height: 36, alignment: Alignment.center,
-                      decoration: BoxDecoration(color: _kGreen, borderRadius: BorderRadius.circular(6)),
-                      child: const Icon(Icons.send_rounded, size: 16, color: Colors.white),
+
+                    // ── Vertical divider ─────────────────────────────────────────
+                    if (isAdmin)
+                      Container(
+                        width: 1,
+                        margin: const EdgeInsets.symmetric(horizontal: 8),
+                        color: const Color(0xFFE5E7EB),
+                      ),
+
+                    // ── Agent mic (right, admin only) ────────────────────────────
+                    if (isAdmin) Expanded(
+                      child: () {
+                        final phase = _agentPhase;
+                        final bool busy = phase == AgentPhase.thinking || phase == AgentPhase.speaking;
+                        final bool isListening = phase == AgentPhase.listening;
+                        final bool isConfirming = phase == AgentPhase.confirming;
+
+                        void onTap() {
+                          if (agentDisabled || busy) return;
+                          if (isConfirming) {
+                            if (!_agentRecStarted) {
+                              _voiceService.start().then((_) {
+                                _agentRecStarted = true;
+                                if (mounted) setState(() {});
+                              }).catchError((_) {});
+                            } else {
+                              _stopAgentYesNo();
+                            }
+                            return;
+                          }
+                          if (isListening) {
+                            _stopAgentRecording();
+                          } else if (phase == AgentPhase.idle) {
+                            _startAgentRecording();
+                          }
+                        }
+
+                        String caption;
+                        if (isListening) caption = '● Listening';
+                        else if (phase == AgentPhase.thinking) caption = 'Thinking…';
+                        else if (phase == AgentPhase.speaking) caption = 'Speaking…';
+                        else if (isConfirming) caption = 'Confirming';
+                        else caption = 'Ask mediBO';
+
+                        String subcaption;
+                        if (isListening) subcaption = 'Tap to stop';
+                        else if (busy) subcaption = 'Please wait';
+                        else if (isConfirming) subcaption = 'See below';
+                        else if (agentDisabled) subcaption = 'Finish count first';
+                        else subcaption = 'Tap to ask';
+
+                        return IgnorePointer(
+                          ignoring: agentDisabled,
+                          child: Opacity(
+                            opacity: agentDisabled ? 0.35 : 1.0,
+                            child: GestureDetector(
+                              onTap: onTap,
+                              child: Column(crossAxisAlignment: CrossAxisAlignment.center, children: [
+                                AnimatedContainer(
+                                  duration: const Duration(milliseconds: 200),
+                                  width: 52, height: 52,
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color: isListening
+                                        ? _kAgentAccent
+                                        : busy
+                                            ? _kAgentAccent.withValues(alpha: 0.18)
+                                            : _kAgentAccent.withValues(alpha: 0.08),
+                                    boxShadow: isListening
+                                        ? [BoxShadow(color: _kAgentAccent.withValues(alpha: 0.35), blurRadius: 14, spreadRadius: 2)]
+                                        : [],
+                                  ),
+                                  child: busy
+                                      ? const Padding(
+                                          padding: EdgeInsets.all(14),
+                                          child: CircularProgressIndicator(color: _kAgentAccent, strokeWidth: 2.5),
+                                        )
+                                      : Icon(
+                                          isListening ? Icons.stop_rounded : Icons.record_voice_over_rounded,
+                                          color: isListening ? Colors.white : _kAgentAccent,
+                                          size: 22,
+                                        ),
+                                ),
+                                const SizedBox(height: 6),
+                                Text(caption,
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w500,
+                                      color: isListening ? _kAgentAccent : _kText,
+                                    )),
+                                Text(subcaption,
+                                    style: const TextStyle(fontSize: 11, color: _kSub)),
+                                // Agent reply shown inline when speaking
+                                if (_agentReply.isNotEmpty && (phase == AgentPhase.speaking || phase == AgentPhase.confirming))
+                                  Padding(
+                                    padding: const EdgeInsets.only(top: 4),
+                                    child: Text(_agentReply,
+                                        style: const TextStyle(fontSize: 10, color: _kSub),
+                                        textAlign: TextAlign.center, maxLines: 2, overflow: TextOverflow.ellipsis),
+                                  ),
+                              ]),
+                            ),
+                          ),
+                        );
+                      }(),
+                    ),
+
+                  ]),
+                ),
+        ),
+
+        // ── Echo banner ──────────────────────────────────────────────────────────
+        if (_lastEcho != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
+            child: _buildEchoBanner(_lastEcho!),
+          ),
+
+        // ── Type-instead footer ──────────────────────────────────────────────────
+        if (_voiceSupported) ...[
+          const Divider(height: 1, thickness: 1, color: Color(0xFFE5E7EB)),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 8, 14, 10),
+            child: AnimatedCrossFade(
+              duration: const Duration(milliseconds: 200),
+              crossFadeState: _showVoiceText ? CrossFadeState.showSecond : CrossFadeState.showFirst,
+              firstChild: GestureDetector(
+                onTap: () => setState(() => _showVoiceText = true),
+                child: const Text('Type instead',
+                    style: TextStyle(fontSize: 12, color: _kSub,
+                        decoration: TextDecoration.underline, decorationColor: _kSub)),
+              ),
+              secondChild: Row(children: [
+                Expanded(
+                  child: SizedBox(
+                    height: 36,
+                    child: TextField(
+                      controller: _voiceTextCtrl,
+                      decoration: InputDecoration(
+                        hintText: 'e.g. "Amler 4 strip"',
+                        hintStyle: const TextStyle(fontSize: 13, color: _kSub),
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 0),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(6),
+                          borderSide: const BorderSide(color: _kBorder),
+                        ),
+                        filled: true, fillColor: Colors.white,
+                      ),
+                      style: const TextStyle(fontSize: 13, color: _kText),
+                      onSubmitted: (t) {
+                        final text = t.trim();
+                        if (text.isNotEmpty) {
+                          _voiceTextCtrl.clear();
+                          _handleVoiceTranscript(text);
+                        }
+                      },
                     ),
                   ),
-                ]),
-              ),
+                ),
+                const SizedBox(width: 6),
+                GestureDetector(
+                  onTap: () {
+                    final text = _voiceTextCtrl.text.trim();
+                    if (text.isNotEmpty) {
+                      _voiceTextCtrl.clear();
+                      _handleVoiceTranscript(text);
+                    } else {
+                      setState(() => _showVoiceText = false);
+                    }
+                  },
+                  child: Container(
+                    width: 36, height: 36, alignment: Alignment.center,
+                    decoration: BoxDecoration(color: _kGreen, borderRadius: BorderRadius.circular(6)),
+                    child: const Icon(Icons.send_rounded, size: 16, color: Colors.white),
+                  ),
+                ),
+              ]),
             ),
-          ]),
+          ),
         ],
 
-
-
-        // ── Echo banner ──
-        if (_lastEcho != null) _buildEchoBanner(_lastEcho!),
       ]),
     );
-    }); // LayoutBuilder
   }
 
-
-  // ── Agent mic widget (#85) ───────────────────────────────────────────────────
-
-  static const _kAgentAccent = Color(0xFF3B5BDB); // distinct indigo — not green
-
-  /// The "Ask mediBO" circular mic button + caption. Only rendered for admin/super_admin.
-  Widget _buildAgentMic(bool isWide) {
-    final phase = _agentPhase;
-    final bool busy = phase == AgentPhase.thinking || phase == AgentPhase.speaking;
-    final bool isListening = phase == AgentPhase.listening;
-    final bool isConfirming = phase == AgentPhase.confirming;
-
-    void onTap() {
-      if (busy) return;
-      if (isConfirming) {
-        // C5: voice yes/no — start recording
-        if (!_agentRecStarted) {
-          _voiceService.start().then((_) {
-            _agentRecStarted = true;
-            if (mounted) setState(() {});
-          }).catchError((_) {});
-        } else {
-          _stopAgentYesNo();
-        }
-        return;
-      }
-      if (isListening) {
-        _stopAgentRecording();
-      } else if (phase == AgentPhase.idle) {
-        _startAgentRecording();
-      }
-    }
-
-    final Widget micBtn = GestureDetector(
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        width: isWide ? 48 : 40,
-        height: isWide ? 48 : 40,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: isListening
-              ? _kAgentAccent
-              : busy
-                  ? _kAgentAccent.withValues(alpha: 0.25)
-                  : _kAgentAccent.withValues(alpha: 0.10),
-          boxShadow: isListening
-              ? [BoxShadow(color: _kAgentAccent.withValues(alpha: 0.4), blurRadius: 14, spreadRadius: 2)]
-              : [],
-        ),
-        child: busy
-            ? const Padding(
-                padding: EdgeInsets.all(10),
-                child: CircularProgressIndicator(color: _kAgentAccent, strokeWidth: 2),
-              )
-            : Icon(
-                isListening ? Icons.stop_rounded : Icons.record_voice_over_rounded,
-                color: isListening ? Colors.white : _kAgentAccent,
-                size: isWide ? 22 : 18,
-              ),
-      ),
-    );
-
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        micBtn,
-        const SizedBox(height: 4),
-        Text(
-          isListening ? '● Tap to stop' : busy ? '…' : 'Ask mediBO',
-          style: TextStyle(
-            fontSize: 10,
-            fontWeight: FontWeight.w500,
-            color: isListening ? _kAgentAccent : _kSub,
-          ),
-        ),
-      ],
-    );
-  }
-
-  /// Confirm / cancel bar shown when _agentPhase == confirming.
+  /// Assistant confirm card — shown when _agentPhase == confirming.
   Widget _buildAgentConfirmBar() {
     final action = _pendingAction;
     final productName = action?['product_name']?.toString() ?? '';
     final qty = action?['qty'];
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        color: _kAgentAccent.withValues(alpha: 0.07),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: _kAgentAccent.withValues(alpha: 0.25)),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: _kAgentAccent.withValues(alpha: 0.30)),
+        boxShadow: [
+          BoxShadow(color: _kAgentAccent.withValues(alpha: 0.08), blurRadius: 10, offset: const Offset(0, 3)),
+        ],
       ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(
-          _agentReply,
-          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _kText),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+
+        // ── Header ──────────────────────────────────────────────────────────────
+        Container(
+          padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+          decoration: BoxDecoration(
+            color: _kAgentAccent.withValues(alpha: 0.06),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(14)),
+          ),
+          child: Row(children: [
+            Container(
+              width: 28, height: 28,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: _kAgentAccent.withValues(alpha: 0.12),
+              ),
+              child: const Icon(Icons.record_voice_over_rounded, size: 15, color: _kAgentAccent),
+            ),
+            const SizedBox(width: 8),
+            const Expanded(
+              child: Text('mediBO puch raha hai',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _kAgentAccent)),
+            ),
+          ]),
         ),
-        if (productName.isNotEmpty || qty != null)
-          Padding(
-            padding: const EdgeInsets.only(top: 2),
-            child: Text(
-              '$productName${qty != null ? ' — qty ${(qty as num).toInt()}' : ''}',
-              style: const TextStyle(fontSize: 12, color: _kSub),
-            ),
-          ),
-        const SizedBox(height: 10),
-        Row(children: [
-          Expanded(
-            child: GestureDetector(
-              onTap: _commitPending,
-              child: Container(
-                height: 44,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: _kGreen,
-                  borderRadius: BorderRadius.circular(8),
+
+        // ── Reply text + product chip ────────────────────────────────────────────
+        Padding(
+          padding: const EdgeInsets.fromLTRB(14, 10, 14, 0),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            if (_agentReply.isNotEmpty)
+              Text(_agentReply,
+                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: _kText)),
+            if (productName.isNotEmpty || qty != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF5F6F8),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: const Color(0xFFE5E7EB)),
+                  ),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    const Icon(Icons.inventory_2_rounded, size: 13, color: _kSub),
+                    const SizedBox(width: 6),
+                    Flexible(
+                      child: Text(
+                        productName,
+                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: _kText),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    if (qty != null) ...[
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: _kAgentAccent.withValues(alpha: 0.10),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          'qty ${(qty as num).toInt()}',
+                          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _kAgentAccent),
+                        ),
+                      ),
+                    ],
+                  ]),
                 ),
-                child: const Text('✓ Haan', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Colors.white)),
+              ),
+          ]),
+        ),
+
+        // ── Confirm / cancel buttons ─────────────────────────────────────────────
+        Padding(
+          padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+          child: Row(children: [
+            Expanded(
+              child: GestureDetector(
+                onTap: _commitPending,
+                child: Container(
+                  height: 46,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: _kGreen,
+                    borderRadius: BorderRadius.circular(10),
+                    boxShadow: [BoxShadow(color: _kGreen.withValues(alpha: 0.30), blurRadius: 8, offset: const Offset(0, 3))],
+                  ),
+                  child: const Text('✓  Haan',
+                      style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Colors.white)),
+                ),
               ),
             ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: GestureDetector(
-              onTap: _cancelPending,
-              child: Container(
-                height: 44,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: _kBorder),
+            const SizedBox(width: 10),
+            Expanded(
+              child: GestureDetector(
+                onTap: _cancelPending,
+                child: Container(
+                  height: 46,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: const Color(0xFFE5E7EB)),
+                  ),
+                  child: const Text('✗  Nahi',
+                      style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: _kText)),
                 ),
-                child: const Text('✗ Nahi', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: _kText)),
               ),
             ),
-          ),
-        ]),
+          ]),
+        ),
+
       ]),
     );
   }

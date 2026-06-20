@@ -1258,13 +1258,33 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   // ── Narrow layout (< 900px) — existing tree verbatim ────────────────────────
   Widget _buildCollectNarrow(bool isAdmin) {
+    RenderLog.write('change_89_layout', 'narrow');
+    RenderLog.write('change_89_no_voiceinput_card', '1');
     RenderLog.write('change_88_layout', 'narrow');
     RenderLog.write('change_86_layout', 'narrow');
     RenderLog.write('change_86_narrow_cards_present', '1');
+
+    // Drive popup bubble show/hide from build cycle (same as wide)
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (_agentPhase != AgentPhase.idle && _agentReply.isNotEmpty) {
+        _ensureAgentBubble();
+      } else {
+        _hideAgentBubble();
+      }
+    });
+
     return Column(children: [
       _buildSupplierPicker(),
-      if (_items.isNotEmpty) _buildVoiceCard(isAdmin),
-      if (isAdmin && _agentPhase == AgentPhase.confirming) _buildAgentConfirmBar(),
+      // ── Compact voice bar (#89 — replaces giant Voice Input card) ──────────
+      if (_items.isNotEmpty) _buildNarrowVoiceBar(isAdmin),
+      // ── Echo banner (voice-receive feedback, dismissible) ───────────────────
+      if (_lastEcho != null)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
+          child: _buildEchoBanner(_lastEcho!),
+        ),
+      // ── No _buildAgentConfirmBar — reply/confirm goes to popup above Ask ───
       if (_loadingBox)
         const Expanded(child: Center(child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2)))
       else if (_selectedSupplier == null)
@@ -1276,8 +1296,180 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             child: Text('No items in this box',
                 style: TextStyle(color: _kSub, fontSize: 15))))
       else
-        Expanded(child: _buildItemList()),
+        Expanded(child: _buildNarrowItemList()),
     ]);
+  }
+
+  // ── #89: Compact narrow voice bar — replaces the big Voice Input card ────────
+  Widget _buildNarrowVoiceBar(bool isAdmin) {
+    RenderLog.write('change_89_compact_voicebar', '1');
+    final countingDisabled = _agentPhase != AgentPhase.idle;
+    final agentDisabled = _voiceListening || _voiceProcessing;
+    final agentPhase = _agentPhase;
+    final bool agentBusy = agentPhase == AgentPhase.thinking || agentPhase == AgentPhase.speaking;
+    final bool agentListening = agentPhase == AgentPhase.listening;
+    final bool confirming = agentPhase == AgentPhase.confirming;
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _kBorder),
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 6, offset: const Offset(0, 2))],
+      ),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+
+        // Count items — fixed-size pill (same kVoiceBtnW x kVoiceBtnH as wide)
+        SizedBox(
+          width: _kVoiceBtnW,
+          height: _kVoiceBtnH,
+          child: _buildWidePill(
+            icon: _voiceListening
+                ? Icons.stop_rounded
+                : _voiceProcessing
+                    ? Icons.hourglass_top_rounded
+                    : Icons.mic_none_rounded,
+            label: _voiceListening
+                ? 'Stop recording'
+                : _voiceProcessing
+                    ? 'Processing…'
+                    : 'Count items',
+            active: _voiceListening,
+            activeColor: _kWrongFg,
+            disabled: countingDisabled && !_voiceListening,
+            spinning: _voiceProcessing,
+            onTap: _toggleRecording,
+          ),
+        ),
+
+        // Divider + Ask mediBO pill (admin only)
+        if (isAdmin) ...[
+          Container(
+            width: 1,
+            height: 28,
+            margin: const EdgeInsets.symmetric(horizontal: 8),
+            color: _kBorder,
+          ),
+          // CompositedTransformTarget anchors the popup bubble above this pill
+          CompositedTransformTarget(
+            link: _askPillLayerLink,
+            child: SizedBox(
+              width: _kVoiceBtnW,
+              height: _kVoiceBtnH,
+              child: _buildWidePill(
+                icon: agentListening
+                    ? Icons.stop_rounded
+                    : agentBusy
+                        ? Icons.hourglass_top_rounded
+                        : Icons.record_voice_over_rounded,
+                label: agentListening
+                    ? 'Listening…'
+                    : agentBusy
+                        ? (agentPhase == AgentPhase.thinking ? 'Thinking…' : 'Speaking…')
+                        : confirming
+                            ? 'Confirming…'
+                            : 'Ask mediBO',
+                active: agentListening,
+                activeColor: _kAgentAccent,
+                disabled: agentDisabled && !agentListening,
+                spinning: agentBusy,
+                onTap: () {
+                  if (agentBusy) return;
+                  if (agentListening) {
+                    _stopAgentRecording();
+                  } else if (agentPhase == AgentPhase.idle) {
+                    _startAgentRecording();
+                  }
+                },
+              ),
+            ),
+          ),
+        ],
+
+        const Spacer(),
+
+        // "N spoken" tally badge (tap to open tally sheet)
+        if (_tally.isNotEmpty)
+          GestureDetector(
+            onTap: _showTallySheet,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: _kReceivedBg,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: _kReceivedFg.withValues(alpha: 0.25)),
+              ),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                const Icon(Icons.check_rounded, size: 11, color: _kReceivedFg),
+                const SizedBox(width: 3),
+                Text('${_tally.length} spoken',
+                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _kReceivedFg)),
+              ]),
+            ),
+          ),
+      ]),
+    );
+  }
+
+  // ── #89: Dense narrow item list — compact rows, render-log key ───────────────
+  Widget _buildNarrowItemList() {
+    RenderLog.write('change_89_dense_items', '1');
+    RenderLog.write('81_item_list_rendered', '${_items.length}');
+    RenderLog.write('81_progress', '${_items.length - _pendingCount}/${_items.length}');
+
+    return ListView.separated(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+      itemCount: _items.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 4),
+      itemBuilder: (_, i) {
+        final item     = _items[i];
+        final state    = item['fulfillment_state']?.toString() ?? 'pending';
+        final name     = item['product_name']?.toString() ?? '—';
+        final ordQty   = (item['ordered_qty'] as num?)?.toInt() ?? 0;
+        final recQty   = (item['received_qty'] as num?)?.toInt() ?? 0;
+        final packType = item['pack_type']?.toString() ?? '';
+        final imageUrl = item['image_url']?.toString();
+
+        return GestureDetector(
+          onTap: () => _showItemSheet(item),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: _kCard,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: state == 'pending' ? _kBorder : (_stateBgMap[state] ?? _kBorder),
+              ),
+            ),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+              _FulfilImageTile(imageUrl, size: 40),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min, children: [
+                  Text(name,
+                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
+                      maxLines: 1, overflow: TextOverflow.ellipsis),
+                  const SizedBox(height: 1),
+                  Text(packType.isNotEmpty ? packType : '$recQty/$ordQty',
+                      style: const TextStyle(fontSize: 11, color: _kSub),
+                      maxLines: 1, overflow: TextOverflow.ellipsis),
+                ]),
+              ),
+              const SizedBox(width: 8),
+              Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
+                Text('$recQty/$ordQty',
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText)),
+                const SizedBox(height: 2),
+                _StatePill(state),
+              ]),
+            ]),
+          ),
+        );
+      },
+    );
   }
 
   // ── #88: agent popup bubble management ──────────────────────────────────────
@@ -1285,7 +1477,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   void _ensureAgentBubble() {
     if (!mounted) return;
     if (_agentBubbleEntry == null) {
-      _agentBubbleEntry = OverlayEntry(builder: (_) => _buildAgentBubbleOverlay());
+      _agentBubbleEntry = OverlayEntry(builder: (overlayCtx) => _buildAgentBubbleOverlay(overlayCtx));
       Overlay.of(context).insert(_agentBubbleEntry!);
     } else {
       _agentBubbleEntry!.markNeedsBuild();
@@ -1297,7 +1489,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     _agentBubbleEntry = null;
   }
 
-  Widget _buildAgentBubbleOverlay() {
+  Widget _buildAgentBubbleOverlay(BuildContext overlayCtx) {
     final phase = _agentPhase;
     final reply = _agentReply;
     final action = _pendingAction;
@@ -1305,6 +1497,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     final bool agentBusy = phase == AgentPhase.thinking || phase == AgentPhase.speaking;
     if (phase == AgentPhase.idle || reply.isEmpty) return const SizedBox.shrink();
     RenderLog.write('change_88_popup_present', '1');
+    RenderLog.write('change_89_popup_present', '1');
+    final screenW = MediaQuery.of(overlayCtx).size.width;
+    final bubbleMaxW = (screenW - 48).clamp(200.0, 320.0);
 
     return CompositedTransformFollower(
       link: _askPillLayerLink,
@@ -1317,7 +1512,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         child: Material(
           color: Colors.transparent,
           child: Container(
-            constraints: const BoxConstraints(maxWidth: 320),
+            constraints: BoxConstraints(maxWidth: bubbleMaxW),
             decoration: BoxDecoration(
               color: Colors.white,
               borderRadius: BorderRadius.circular(12),
@@ -1392,6 +1587,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   // ── Wide layout (>= 900px) — #88: single bar + popup bubble ────────────────
   Widget _buildCollectWide(bool isAdmin) {
+    RenderLog.write('change_89_layout', 'wide');
     RenderLog.write('change_88_layout', 'wide');
     RenderLog.write('change_88_no_inline_banner', '1');
     RenderLog.write('change_87_layout', 'wide');

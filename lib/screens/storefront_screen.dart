@@ -102,6 +102,9 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
   bool _pageNetworkError = false;
   List<String> _suggestions = [];
 
+  // Buyable-only category total (loaded async when browsing a specific category).
+  int? _buyableCategoryTotal;
+
   // Captcha-gated pagination: 1 = first 100 shown, 2 = up to 200 shown.
   int _paginationPage = 1;
   bool _captchaLoading = false;
@@ -232,6 +235,17 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
     }
   }
 
+  /// True only when browsing a SPECIFIC category with no search query.
+  /// In this mode only buyable=true items are fetched and shown.
+  bool get _onlyBuyable => widget.category != 'All' && widget.query.isEmpty;
+
+  Future<void> _fetchBuyableCategoryTotal() async {
+    final cat = widget.category;
+    final total = await widget.repo.fetchBuyableCategoryCount(cat);
+    if (!mounted || widget.category != cat) return;
+    setState(() => _buyableCategoryTotal = total);
+  }
+
   Future<void> _resetAndLoad() async {
     final token = ++_loadToken;
     final sw = Stopwatch()..start();
@@ -248,12 +262,15 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
       _captchaLoading = false;
       _addingItems = false;
       _animatedFrom = 0;
+      _buyableCategoryTotal = null;
     });
+    if (_onlyBuyable) _fetchBuyableCategoryTotal();
     try {
       final page = await widget.repo.fetchPage(
         category: widget.category,
         query: widget.query,
         offset: 0,
+        onlyBuyable: _onlyBuyable,
       );
       sw.stop();
       if (token != _loadToken || !mounted) return;
@@ -276,6 +293,8 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
       RenderLog.write('c75_suggestion_dropdown_removed', 'true');
       RenderLog.write('c75_direct_results', 'true');
       RenderLog.write('c75_suggest_call_removed', 'true');
+      if (_onlyBuyable) RenderLog.write('change_104_category_buyable_only', '1');
+      if (widget.query.trim().isNotEmpty) RenderLog.write('change_104_search_unfiltered', '1');
       setState(() {
         _items
           ..clear()
@@ -319,6 +338,7 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
         category: widget.category,
         query: widget.query,
         offset: _items.length,
+        onlyBuyable: _onlyBuyable,
       );
       if (token != _loadToken || !mounted) return;
       setState(() {
@@ -356,6 +376,7 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
         query: widget.query,
         offset: offset,
         limit: 100,
+        onlyBuyable: _onlyBuyable,
       );
       if (loadToken != _loadToken || !mounted) return;
       // Record where new items start so _gridBody can animate them,
@@ -435,6 +456,8 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
   }
 
   int _categoryTotal() {
+    // In buyable-only category mode, use the buyable-specific count.
+    if (_onlyBuyable) return _buyableCategoryTotal ?? _items.length;
     final meta = _meta;
     if (meta == null) return _items.length;
     if (widget.category == 'All') return meta.total;

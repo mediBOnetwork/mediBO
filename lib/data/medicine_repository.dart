@@ -102,16 +102,23 @@ class MedicineRepository {
   /// Both RPCs have an ILIKE+sales fallback in case they are unavailable.
   ///
   /// Throws if the request fails so callers can show an error/retry state.
+  ///
+  /// When [onlyBuyable] is true, the CATEGORY browse path filters to
+  /// buyable=true only. Search and All-products paths ignore this flag.
   Future<List<Product>> fetchPage({
     String category = 'All',
     String query = '',
     required int offset,
     int limit = pageSize,
+    bool onlyBuyable = false,
   }) async {
     // Strip characters that break PostgREST's or()/ilike syntax.
     final term = query.replaceAll(RegExp(r'[,()*%_]'), ' ').trim();
 
-    final cacheKey = '${term.toLowerCase()}|$category|$offset';
+    // Buyable-only cache uses a distinct key to avoid poisoning the all-items cache.
+    final cacheKey = onlyBuyable && term.isEmpty && category != 'All'
+        ? '${term.toLowerCase()}|$category|$offset|buyable'
+        : '${term.toLowerCase()}|$category|$offset';
     final cached = _resultCache[cacheKey];
     if (cached != null) {
       lastCallWasCacheHit = true;
@@ -146,6 +153,20 @@ class MedicineRepository {
       return result;
     }
 
+    // ── Browse buyable-only: direct query, category != 'All', no RPC needed ─────
+    if (onlyBuyable && category != 'All') {
+      final rows = await _client
+          .from('MEDICINE')
+          .select(_kListCols)
+          .eq('therapeutic_class', category)
+          .eq('buyable', true)
+          .order('sales_count', ascending: false)
+          .range(offset, offset + limit - 1);
+      final result = rows.map((r) => Product.fromMap(r)).toList(growable: false);
+      _cacheSet(_resultCache, cacheKey, result);
+      return result;
+    }
+
     // ── Browse: category/all priority RPC (index scan ~0.12ms) ─────────────────
     List<Product> result;
     try {
@@ -167,6 +188,20 @@ class MedicineRepository {
     }
     _cacheSet(_resultCache, cacheKey, result);
     return result;
+  }
+
+  /// Returns the count of buyable=true medicines in a specific category.
+  /// Used to show accurate "Showing N of M" totals in category-only view.
+  Future<int> fetchBuyableCategoryCount(String category) async {
+    try {
+      return await _client
+          .from('MEDICINE')
+          .count(CountOption.exact)
+          .eq('therapeutic_class', category)
+          .eq('buyable', true);
+    } catch (_) {
+      return 0;
+    }
   }
 
   /// Returns up to 3 product names similar to [query] for "Did you mean?"

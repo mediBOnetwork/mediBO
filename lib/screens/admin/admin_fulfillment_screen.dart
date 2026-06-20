@@ -316,9 +316,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   String _voiceInterim = '';
   String _voiceError = '';
   String _lastTranscript = '';
-  bool _showVoiceText = false;
-  final _voiceTextCtrl = TextEditingController();
-
   // ── Voice results ──
   _VoiceEcho? _lastEcho;
   Timer? _echoTimer;
@@ -368,7 +365,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     _voiceService.dispose();
     _echoTimer?.cancel();
     _idleTimer?.cancel();
-    _voiceTextCtrl.dispose();
     super.dispose();
   }
 
@@ -385,6 +381,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('change_85_agent_button_present', '1');
     RenderLog.write('change_86_voice_card_present', '1');
     RenderLog.write('change_86_confirm_card_present', '1');
+    RenderLog.write('change_87_typed_path_deleted', '1');
     _probeRecorder();
     _initAgentTestHooks();
   }
@@ -438,7 +435,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     } catch (e) {
       final msg = e.toString();
       RenderLog.write('79_recorder_error', msg.substring(0, msg.length.clamp(0, 80)));
-      // Plugin missing — disable mic button so "Type instead" remains the only path.
       if (mounted) setState(() => _voiceSupported = false);
     }
   }
@@ -805,75 +801,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('84_progress', '$done/${_items.length}');
   }
   // Called from text fallback field only (typed text → local parse → match)
-  Future<void> _handleVoiceTranscript(String transcript) async {
-    setState(() => _voiceProcessing = true);
-
-    final parsed = parseUtterance(transcript);
-    if (parsed.isEmpty) {
-      setState(() { _voiceProcessing = false; _voiceError = "Didn't catch that"; });
-      Future.delayed(const Duration(seconds: 2), () {
-        if (mounted) setState(() => _voiceError = '');
-      });
-      return;
-    }
-
-    // Process each segment sequentially
-    for (final item in parsed) {
-      // Command handling
-      if (item.itemPhrase == 'undo') {
-        _showSnack('Undo not available — tap the item to adjust qty');
-        continue;
-      }
-      if ({'stop', 'done', 'finish', 'cancel'}.contains(item.itemPhrase)) {
-        break;
-      }
-      if (item.itemPhrase == 'repeat' || item.itemPhrase == 'again') {
-        _speakLastEcho();
-        continue;
-      }
-
-      if (item.itemPhrase.isEmpty || item.itemPhrase.length < 3) {
-        _showSnack("Didn't catch an item — try again or tap it");
-        continue;
-      }
-
-      // Match against box
-      final match = matchToBox(item.itemPhrase, _items);
-
-      if (match is MatchNone) {
-        _showSnack("'${item.itemPhrase}' not in this box — try again or tap it");
-        continue;
-      }
-
-      if (match is MatchAmbiguous) {
-        final chosen = await _showAmbiguityPicker(match.candidates);
-        if (chosen == null) continue;
-        final resolvedQty = item.qty ?? (chosen.productId > 0 ? 1.0 : null);
-        if (resolvedQty == null) { _showSnack('Quantity not detected for ${chosen.productName}'); continue; }
-        await _setVoiceReceived(
-          productId: chosen.productId,
-          productName: chosen.productName,
-          qty: resolvedQty,
-          rawSegment: item.rawSegment,
-        );
-        continue;
-      }
-
-      if (match is MatchConfident) {
-        final resolvedQty = item.qty ?? 1.0;
-        RenderLog.write('84_typed_commit', match.productName);
-        await _setVoiceReceived(
-          productId: match.productId,
-          productName: match.productName,
-          qty: resolvedQty,
-          rawSegment: item.rawSegment,
-        );
-      }
-    }
-
-    if (mounted) setState(() => _voiceProcessing = false);
-  }
-
   // Idempotent SET via set_voice_received RPC, then re-pulls DB truth.
   Future<void> _setVoiceReceived({
     required int productId,
@@ -1590,68 +1517,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             child: _buildEchoBanner(_lastEcho!),
           ),
 
-        // ── Type-instead footer ──────────────────────────────────────────────────
-        if (_voiceSupported) ...[
-          const Divider(height: 1, thickness: 1, color: Color(0xFFE5E7EB)),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(14, 8, 14, 10),
-            child: AnimatedCrossFade(
-              duration: const Duration(milliseconds: 200),
-              crossFadeState: _showVoiceText ? CrossFadeState.showSecond : CrossFadeState.showFirst,
-              firstChild: GestureDetector(
-                onTap: () => setState(() => _showVoiceText = true),
-                child: const Text('Type instead',
-                    style: TextStyle(fontSize: 12, color: _kSub,
-                        decoration: TextDecoration.underline, decorationColor: _kSub)),
-              ),
-              secondChild: Row(children: [
-                Expanded(
-                  child: SizedBox(
-                    height: 36,
-                    child: TextField(
-                      controller: _voiceTextCtrl,
-                      decoration: InputDecoration(
-                        hintText: 'e.g. "Amler 4 strip"',
-                        hintStyle: const TextStyle(fontSize: 13, color: _kSub),
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 0),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(6),
-                          borderSide: const BorderSide(color: _kBorder),
-                        ),
-                        filled: true, fillColor: Colors.white,
-                      ),
-                      style: const TextStyle(fontSize: 13, color: _kText),
-                      onSubmitted: (t) {
-                        final text = t.trim();
-                        if (text.isNotEmpty) {
-                          _voiceTextCtrl.clear();
-                          _handleVoiceTranscript(text);
-                        }
-                      },
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 6),
-                GestureDetector(
-                  onTap: () {
-                    final text = _voiceTextCtrl.text.trim();
-                    if (text.isNotEmpty) {
-                      _voiceTextCtrl.clear();
-                      _handleVoiceTranscript(text);
-                    } else {
-                      setState(() => _showVoiceText = false);
-                    }
-                  },
-                  child: Container(
-                    width: 36, height: 36, alignment: Alignment.center,
-                    decoration: BoxDecoration(color: _kGreen, borderRadius: BorderRadius.circular(6)),
-                    child: const Icon(Icons.send_rounded, size: 16, color: Colors.white),
-                  ),
-                ),
-              ]),
-            ),
-          ),
-        ],
+        // Type-instead footer removed (#87) — typed path kept hidden via self-test hook only.
 
       ]),
     );

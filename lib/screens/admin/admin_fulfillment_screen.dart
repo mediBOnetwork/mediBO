@@ -353,6 +353,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   bool get _allDone => _items.isNotEmpty && _pendingCount == 0;
 
+  // #91: true when get_receiving_box returns collect_locked=true on any row
+  bool get _boxLocked =>
+      _items.isNotEmpty && _items.any((r) => r['collect_locked'] == true);
+
   // ── Lifecycle ───────────────────────────────────────────────────────────────
 
   @override
@@ -609,6 +613,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   Future<void> _toggleRecording() async {
     if (_agentPhase != AgentPhase.idle) return; // agent active — counting mic disabled
     if (_voiceProcessing) return; // busy — ignore double-tap
+    if (_boxLocked) { RenderLog.write('change_91_edit_blocked', '1'); return; } // #91
     if (_voiceListening) {
       // Stop
       _idleTimer?.cancel();
@@ -850,6 +855,122 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     } catch (_) {}
   }
 
+  // ── #91: Confirm count lock / unlock ─────────────────────────────────────────
+
+  Widget _buildConfirmFooter(bool locked) {
+    final isAdmin = UserState.of(context).isAdmin;
+    if (locked) {
+      return GestureDetector(
+        onLongPress: isAdmin ? _showUnlockDialog : null,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          decoration: BoxDecoration(
+            color: _kReceivedBg,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: _kReceivedFg.withValues(alpha: 0.3)),
+          ),
+          child: Row(children: [
+            const Icon(Icons.lock_rounded, size: 16, color: _kReceivedFg),
+            const SizedBox(width: 8),
+            const Expanded(
+              child: Text('Count confirmed — locked',
+                  style: TextStyle(
+                      fontSize: 13, fontWeight: FontWeight.w600, color: _kReceivedFg)),
+            ),
+            if (isAdmin)
+              Icon(Icons.more_horiz_rounded,
+                  size: 16, color: _kReceivedFg.withValues(alpha: 0.6)),
+          ]),
+        ),
+      );
+    }
+    return SizedBox(
+      width: double.infinity,
+      height: 48,
+      child: FilledButton.icon(
+        style: FilledButton.styleFrom(
+          backgroundColor: _kGreen,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ),
+        icon: const Icon(Icons.check_circle_outline_rounded, size: 18),
+        label: const Text('Confirm count',
+            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+        onPressed: _showConfirmLockDialog,
+      ),
+    );
+  }
+
+  Future<void> _showConfirmLockDialog() async {
+    final supplier = _selectedSupplier;
+    if (supplier == null) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Confirm this count?'),
+        content: Text(
+            'After confirming, you can\'t change quantities or mark items for $supplier anymore.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: _kGreen),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Confirm & lock'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      final res = await Supabase.instance.client
+          .rpc('lock_supplier_collect', params: {'p_supplier_name': supplier}) as Map;
+      if (res['status'] != 'ok') throw Exception(res.toString());
+      await _reloadItemsFromDB();
+      RenderLog.write('change_91_locked', '1');
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Couldn\'t lock. Please try again.')),
+        );
+      }
+    }
+  }
+
+  Future<void> _showUnlockDialog() async {
+    final supplier = _selectedSupplier;
+    if (supplier == null) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Unlock this count?'),
+        content: Text('Unlock $supplier\'s count to allow edits again?'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: _kWrongFg),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Unlock'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      await Supabase.instance.client
+          .rpc('unlock_supplier_collect', params: {'p_supplier_name': supplier});
+      await _reloadItemsFromDB();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Couldn\'t unlock. Please try again.')),
+        );
+      }
+    }
+  }
+
   // Undo removed — set_voice_received is idempotent SET; delta-undo is not applicable.
 
   // ── Agent mic helpers (#85) ──────────────────────────────────────────────────
@@ -955,10 +1076,16 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
     if (!mounted) return;
     if ((intent == 'set' || intent == 'correct') && action != null) {
-      setState(() {
-        _pendingAction = action;
-        _agentPhase = AgentPhase.confirming;
-      });
+      if (_boxLocked) {
+        // #91: locked — do not arm confirm
+        RenderLog.write('change_91_edit_blocked', '1');
+        setState(() { _pendingAction = null; _agentPhase = AgentPhase.idle; });
+      } else {
+        setState(() {
+          _pendingAction = action;
+          _agentPhase = AgentPhase.confirming;
+        });
+      }
     } else {
       setState(() { _pendingAction = null; _agentPhase = AgentPhase.idle; });
     }
@@ -1445,12 +1572,17 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('change_89_dense_items', '1');
     RenderLog.write('81_item_list_rendered', '${_items.length}');
     RenderLog.write('81_progress', '${_items.length - _pendingCount}/${_items.length}');
+    final locked = _boxLocked;
+    if (locked) RenderLog.write('change_91_locked', '1');
+    else RenderLog.write('change_91_confirm_present', '1');
 
     return ListView.separated(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-      itemCount: _items.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 4),
+      itemCount: _items.length + 1, // +1 for Confirm/Locked footer #91
+      separatorBuilder: (_, i) => SizedBox(height: i == _items.length - 1 ? 16 : 4),
       itemBuilder: (_, i) {
+        if (i == _items.length) return _buildConfirmFooter(locked);
+
         final item     = _items[i];
         final state    = item['fulfillment_state']?.toString() ?? 'pending';
         final name     = item['product_name']?.toString() ?? '—';
@@ -1873,6 +2005,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // ── B3: Wide item table ───────────────────────────────────────────────────────
   Widget _buildWideItemTable() {
     RenderLog.write('change_86_wide_table_present', '1');
+    final locked = _boxLocked;
+    if (locked) RenderLog.write('change_91_locked', '1');
+    else RenderLog.write('change_91_confirm_present', '1');
     return Padding(
       padding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
       child: Column(children: [
@@ -1910,8 +2045,14 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
               border: Border.all(color: _kBorder),
             ),
             child: ListView.builder(
-              itemCount: _items.length,
+              itemCount: _items.length + 1, // +1 for Confirm/Locked footer #91
               itemBuilder: (_, i) {
+                if (i == _items.length) {
+                  return Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 16, 12, 16),
+                    child: _buildConfirmFooter(locked),
+                  );
+                }
                 final item = _items[i];
                 final state   = item['fulfillment_state']?.toString() ?? 'pending';
                 final name    = item['product_name']?.toString() ?? '—';
@@ -2630,6 +2771,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   }
 
   void _showItemSheet(Map<String, dynamic> item) {
+    if (_boxLocked) return; // #91 locked — no manual edits
     final idx = _items.indexOf(item);
     if (idx >= 0) _focusItem(idx);
     final name   = item['product_name']?.toString() ?? '—';

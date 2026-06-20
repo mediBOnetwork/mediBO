@@ -382,6 +382,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('83_banners_removed', 'true');
     RenderLog.write('84_chunking_removed', 'true');
     RenderLog.write('84_voicecalls_during_record', '0');
+    // #85: agent button present — written in initState (IndexedStack always mounts)
+    RenderLog.write('change_85_agent_button_present', '1');
     _probeRecorder();
     _initAgentTestHooks();
   }
@@ -1301,10 +1303,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     }
 
     final isAdmin = UserState.of(context).isAdmin;
-    // Write agent button render-log once when admin loads the Collect screen.
-    if (isAdmin && _items.isNotEmpty) {
-      RenderLog.write('change_85_agent_button_present', '1');
-    }
 
     return Column(children: [
       _buildSupplierPicker(),

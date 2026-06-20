@@ -2891,21 +2891,80 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen> {
   bool _loading = true;
   String? _error;
   final Set<String> _marking = {};
+  bool _arrivalsLive = false;
+  bool _redesignLogged = false;
+
+  // realtime + debounce
+  RealtimeChannel? _channel;
+  Timer? _debounce;
+  Timer? _pollTimer;
 
   @override
   void initState() {
     super.initState();
     _load();
+    _subscribeRealtime();
   }
 
-  Future<void> _load() async {
-    setState(() { _loading = true; _error = null; });
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _pollTimer?.cancel();
+    _channel?.unsubscribe();
+    _channel = null;
+    super.dispose();
+  }
+
+  void _subscribeRealtime() {
+    try {
+      final ch = Supabase.instance.client
+          .channel('arrivals_order_items')
+          .onPostgresChanges(
+            event: PostgresChangeEvent.all,
+            schema: 'public',
+            table: 'order_items',
+            callback: (_) {
+              _debounce?.cancel();
+              _debounce = Timer(const Duration(milliseconds: 500), () {
+                if (mounted) {
+                  RenderLog.write('change_88_arrivals_autorefreshed', '1');
+                  _load(silent: true);
+                }
+              });
+            },
+          )
+          .subscribe((status, [error]) {
+            if (!mounted) return;
+            final live = status == RealtimeSubscribeStatus.subscribed;
+            setState(() => _arrivalsLive = live);
+            if (live) {
+              RenderLog.write('change_88_arrivals_realtime_subscribed', '1');
+              _pollTimer?.cancel();
+            } else {
+              // fallback poll every 15s when realtime is not live
+              _pollTimer?.cancel();
+              _pollTimer = Timer.periodic(const Duration(seconds: 15), (_) {
+                if (mounted) _load(silent: true);
+              });
+            }
+          });
+      _channel = ch;
+    } catch (_) {
+      // realtime unavailable — fall back to poll
+      _pollTimer = Timer.periodic(const Duration(seconds: 15), (_) {
+        if (mounted) _load(silent: true);
+      });
+    }
+  }
+
+  Future<void> _load({bool silent = false}) async {
+    if (!silent) setState(() { _loading = true; _error = null; });
     try {
       final res = await Supabase.instance.client
           .rpc('get_supplier_arrival_status') as List;
       if (!mounted) return;
       final suppliers = res.map((r) => Map<String, dynamic>.from(r as Map)).toList();
-      // In-transit suppliers first, fully-arrived below
+      // in_transit > 0 first (needs action), fully-arrived below; alpha within each group
       suppliers.sort((a, b) {
         final aFull = (a['fully_arrived'] as bool?) == true;
         final bFull = (b['fully_arrived'] as bool?) == true;
@@ -2913,11 +2972,11 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen> {
         return (a['supplier_name'] ?? '').toString()
             .compareTo((b['supplier_name'] ?? '').toString());
       });
-      setState(() { _suppliers = suppliers; _loading = false; });
+      setState(() { _suppliers = suppliers; _loading = false; _error = null; });
       RenderLog.write('arrivals_area_rendered', '${suppliers.length}');
     } catch (e) {
       if (!mounted) return;
-      setState(() { _loading = false; _error = e.toString(); });
+      if (!silent) setState(() { _loading = false; _error = e.toString(); });
     }
   }
 
@@ -2943,7 +3002,8 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen> {
             style: FilledButton.styleFrom(
                 backgroundColor: _kGreen,
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
-            child: const Text('Mark Arrived', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+            child: const Text('Mark Arrived',
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
           ),
         ],
       ),
@@ -2963,7 +3023,7 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen> {
         _showSnack('$n item${n == 1 ? '' : 's'} from $supplier arrived at warehouse',
             isGood: true);
         RenderLog.write('arrivals_mark_arrived_ok', '$supplier:$n');
-        await _load();
+        await _load(silent: true); // immediate refresh; realtime echo will also fire
       }
     } catch (e) {
       if (!mounted) return;
@@ -3022,7 +3082,7 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen> {
     }
 
     return Column(children: [
-      // Helper banner
+      // ── Banner (B1) ──────────────────────────────────────────────────────────
       Container(
         width: double.infinity,
         margin: const EdgeInsets.fromLTRB(16, 14, 16, 0),
@@ -3032,35 +3092,68 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen> {
           borderRadius: BorderRadius.circular(10),
           border: Border.all(color: _kPendingFg.withValues(alpha: 0.3)),
         ),
-        child: Row(children: [
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
           const Icon(Icons.info_outline_rounded, size: 16, color: _kPendingFg),
           const SizedBox(width: 10),
-          Expanded(
+          const Expanded(
             child: Text(
-              'Collected stock becomes packable only after you mark it arrived here.',
-              style: const TextStyle(fontSize: 12, color: _kPendingFg),
+              'Stock you counted at the supplier shows here while it\'s on the way. '
+              'Mark it arrived once the boxes physically reach your warehouse — '
+              'only then can you pack it.',
+              style: TextStyle(fontSize: 12, color: _kPendingFg),
             ),
           ),
         ]),
       ),
-      // Refresh + count row
+
+      // ── Header row: count + auto-refresh indicator (B2) ─────────────────────
       Padding(
-        padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+        padding: const EdgeInsets.fromLTRB(16, 10, 8, 0),
         child: Row(children: [
           Text('${_suppliers.length} supplier${_suppliers.length == 1 ? '' : 's'}',
-              style: const TextStyle(fontSize: 13, color: _kSub)),
+              style: const TextStyle(fontSize: 13, color: _kSub, fontWeight: FontWeight.w500)),
           const Spacer(),
-          OutlinedButton.icon(
+          // Auto-refresh live dot chip
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: _arrivalsLive
+                  ? _kReceivedBg
+                  : const Color(0xFFF5F6F8),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                  color: _arrivalsLive
+                      ? _kReceivedFg.withValues(alpha: 0.3)
+                      : const Color(0xFFE5E7EB)),
+            ),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Container(
+                width: 6, height: 6,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: _arrivalsLive ? _kReceivedFg : _kSub,
+                ),
+              ),
+              const SizedBox(width: 5),
+              Text('Auto',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: _arrivalsLive ? _kReceivedFg : _kSub,
+                  )),
+            ]),
+          ),
+          // Small manual refresh icon fallback
+          IconButton(
             onPressed: _load,
-            icon: const Icon(Icons.refresh_rounded, size: 14),
-            label: const Text('Refresh'),
-            style: OutlinedButton.styleFrom(
-                foregroundColor: _kSub, side: const BorderSide(color: _kBorder),
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                visualDensity: VisualDensity.compact),
+            icon: const Icon(Icons.refresh_rounded, size: 16),
+            color: _kSub,
+            visualDensity: VisualDensity.compact,
+            tooltip: 'Refresh now',
           ),
         ]),
       ),
+
       const SizedBox(height: 8),
       Expanded(
         child: ListView.separated(
@@ -3073,105 +3166,118 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen> {
     ]);
   }
 
+  // ── Supplier card (Part C) ───────────────────────────────────────────────────
   Widget _buildSupplierCard(Map<String, dynamic> supplier) {
-    final name       = supplier['supplier_name']?.toString() ?? '—';
-    final collected  = (supplier['collected']   as num?)?.toInt() ?? 0;
-    final arrived    = (supplier['arrived']     as num?)?.toInt() ?? 0;
-    final inTransit  = (supplier['in_transit']  as num?)?.toInt() ?? 0;
+    final name         = supplier['supplier_name']?.toString() ?? '—';
+    final collected    = (supplier['collected']    as num?)?.toInt() ?? 0;
+    final arrived      = (supplier['arrived']      as num?)?.toInt() ?? 0;
+    final inTransit    = (supplier['in_transit']   as num?)?.toInt() ?? 0;
     final fullyArrived = (supplier['fully_arrived'] as bool?) == true;
-    final isMarking  = _marking.contains(name);
+    final isMarking    = _marking.contains(name);
+
+    // Log redesign key once
+    if (!_redesignLogged) {
+      _redesignLogged = true;
+      RenderLog.write('change_88_arrivals_redesigned', '1');
+    }
 
     return Container(
       decoration: BoxDecoration(
-        color: _kCard,
-        borderRadius: BorderRadius.circular(12),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
         border: Border.all(
           color: fullyArrived
-              ? _kReceivedFg.withValues(alpha: 0.25)
+              ? _kReceivedFg.withValues(alpha: 0.20)
               : inTransit > 0
-                  ? _kPendingFg.withValues(alpha: 0.25)
-                  : _kBorder,
+                  ? _kPendingFg.withValues(alpha: 0.20)
+                  : const Color(0xFFE5E7EB),
         ),
-        boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 6, offset: Offset(0, 2))],
+        boxShadow: [
+          BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 8, offset: const Offset(0, 2)),
+        ],
       ),
       child: Padding(
-        padding: const EdgeInsets.all(14),
+        padding: const EdgeInsets.all(16),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          // Supplier name + status badge row
+
+          // Row 1: supplier name + ONE status pill
           Row(children: [
             Expanded(
               child: Text(name,
-                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: _kText),
+                  style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: _kText),
                   maxLines: 1, overflow: TextOverflow.ellipsis),
             ),
             const SizedBox(width: 8),
-            if (fullyArrived)
-              _ArrivalBadge(label: 'All arrived', bg: _kReceivedBg, fg: _kReceivedFg)
-            else if (inTransit > 0)
-              _ArrivalBadge(label: 'In transit ($inTransit)', bg: _kPendingBg, fg: _kPendingFg),
+            // ONE status pill — amber if on the way, green if fully arrived
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+              decoration: BoxDecoration(
+                color: fullyArrived ? _kReceivedBg : _kPendingBg,
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Text(
+                fullyArrived ? 'All arrived' : '$inTransit on the way',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: fullyArrived ? _kReceivedFg : _kPendingFg,
+                ),
+              ),
+            ),
           ]),
-          const SizedBox(height: 8),
-          // Count chips
-          Wrap(spacing: 10, runSpacing: 6, children: [
-            _CountChip('Collected $collected', _kSub, _kBg),
-            _CountChip('Arrived $arrived', _kReceivedFg, _kReceivedBg),
-            if (inTransit > 0)
-              _CountChip('In transit $inTransit', _kPendingFg, _kPendingBg),
-          ]),
-          // Mark arrived button (only when there's something in transit)
-          if (!fullyArrived && inTransit > 0) ...[
-            const SizedBox(height: 12),
+
+          // Row 2: progress bar + caption (only if collected > 0)
+          if (collected > 0) ...[
+            const SizedBox(height: 10),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: LinearProgressIndicator(
+                value: collected > 0 ? arrived / collected : 0,
+                minHeight: 6,
+                backgroundColor: const Color(0xFFE5E7EB),
+                valueColor: const AlwaysStoppedAnimation<Color>(_kGreen),
+              ),
+            ),
+            const SizedBox(height: 5),
+            Text(
+              '$arrived of $collected at warehouse',
+              style: const TextStyle(fontSize: 12, color: _kSub),
+            ),
+          ],
+
+          // Row 3: action — button or confirmation row
+          const SizedBox(height: 12),
+          if (fullyArrived)
+            Row(children: [
+              Icon(Icons.check_circle_rounded, size: 16, color: _kReceivedFg),
+              const SizedBox(width: 6),
+              const Text('All arrived — ready to pack',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _kReceivedFg)),
+            ])
+          else
             SizedBox(
-              width: double.infinity, height: 44,
+              width: double.infinity, height: 46,
               child: FilledButton.icon(
                 onPressed: isMarking ? null : () => _markArrived(name, inTransit),
                 icon: isMarking
                     ? const SizedBox(width: 16, height: 16,
                         child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
                     : const Icon(Icons.warehouse_outlined, size: 18),
-                label: Text(isMarking ? 'Marking…' : 'Mark arrived at warehouse',
-                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+                label: Text(
+                  isMarking ? 'Marking…' : 'Mark $inTransit arrived at warehouse',
+                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+                ),
                 style: FilledButton.styleFrom(
                   backgroundColor: _kGreen,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  shadowColor: _kGreen.withValues(alpha: 0.30),
+                  elevation: 3,
                 ),
               ),
             ),
-          ],
+
         ]),
       ),
-    );
-  }
-}
-
-class _ArrivalBadge extends StatelessWidget {
-  final String label;
-  final Color bg;
-  final Color fg;
-  const _ArrivalBadge({required this.label, required this.bg, required this.fg});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(20)),
-      child: Text(label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: fg)),
-    );
-  }
-}
-
-class _CountChip extends StatelessWidget {
-  final String label;
-  final Color fg;
-  final Color bg;
-  const _CountChip(this.label, this.fg, this.bg);
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(8)),
-      child: Text(label, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: fg)),
     );
   }
 }

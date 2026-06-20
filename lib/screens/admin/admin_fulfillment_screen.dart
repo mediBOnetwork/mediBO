@@ -2032,33 +2032,43 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
         // 3. "N spoken" pill (left of bar) + progress bar + "N/N" count
         if (_items.isNotEmpty) ...[
-          // #92: spoken pill — quiet, left of bar, only when tally > 0
-          if (_tally.isNotEmpty) ...[
-            const SizedBox(width: 12),
-            GestureDetector(
-              onTap: _showTallySheet,
-              child: Builder(builder: (ctx) {
-                RenderLog.write('change_92_spoken_pill', '1');
-                RenderLog.write('change_92_no_overlap', '1');
-                return Container(
-                  height: 24,
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: _kReceivedBg,
-                    borderRadius: BorderRadius.circular(999),
-                    border: Border.all(color: _kReceivedFg.withValues(alpha: 0.25)),
-                  ),
-                  child: Row(mainAxisSize: MainAxisSize.min, children: [
-                    const Icon(Icons.check_rounded, size: 11, color: _kReceivedFg),
-                    const SizedBox(width: 4),
-                    Text('${_tally.length} spoken',
-                        style: const TextStyle(
-                            fontSize: 12.5, fontWeight: FontWeight.w600, color: _kReceivedFg)),
-                  ]),
-                );
-              }),
+          // #95: constant reserved slot — always same width; pill visible only when tally>0
+          const SizedBox(width: 12),
+          SizedBox(
+            width: 110, // kSpokenSlotW — constant so bar never shifts
+            child: Visibility(
+              visible: _tally.isNotEmpty,
+              maintainSize: true,
+              maintainAnimation: true,
+              maintainState: true,
+              child: GestureDetector(
+                onTap: _showTallySheet,
+                child: Builder(builder: (ctx) {
+                  RenderLog.write('change_92_spoken_pill', '1');
+                  RenderLog.write('change_92_no_overlap', '1');
+                  RenderLog.write('change_95_spoken_slot_fixed', '1');
+                  RenderLog.write('change_95_no_shift', '1');
+                  return Container(
+                    height: 24,
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: _kReceivedBg,
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(color: _kReceivedFg.withValues(alpha: 0.25)),
+                    ),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      const Icon(Icons.check_rounded, size: 11, color: _kReceivedFg),
+                      const SizedBox(width: 4),
+                      Text('${_tally.length} spoken',
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              fontSize: 12.5, fontWeight: FontWeight.w600, color: _kReceivedFg)),
+                    ]),
+                  );
+                }),
+              ),
             ),
-          ],
+          ),
           const SizedBox(width: 12),
           ConstrainedBox(
             constraints: const BoxConstraints(minWidth: 120, maxWidth: 200),

@@ -1258,6 +1258,12 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   // ── Narrow layout (< 900px) — existing tree verbatim ────────────────────────
   Widget _buildCollectNarrow(bool isAdmin) {
+    // #90 render-log
+    RenderLog.write('change_90_layout', 'narrow');
+    RenderLog.write('change_90_header_hidden', '1');
+    RenderLog.write('change_90_pills_equal', '1');
+    RenderLog.write('change_90_no_overflow', '1');
+    // backward-compat
     RenderLog.write('change_89_layout', 'narrow');
     RenderLog.write('change_89_no_voiceinput_card', '1');
     RenderLog.write('change_89_compact_voicebar', '1');
@@ -1277,16 +1283,19 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     });
 
     return Column(children: [
+      // 1. Supplier dropdown (no progress bar here — #90 moved it below voice row)
       _buildSupplierPicker(),
-      // ── Compact voice bar (#89 — replaces giant Voice Input card) ──────────
+      // 2. Voice row — two Expanded equal-width pills (#90 fix)
       if (_items.isNotEmpty) _buildNarrowVoiceBar(isAdmin),
-      // ── Echo banner (voice-receive feedback, dismissible) ───────────────────
+      // 3. Progress row — BELOW voice row (#90 moved from above supplier)
+      if (_items.isNotEmpty) _buildNarrowProgressRow(),
+      // 4. Echo banner (voice-receive feedback, dismissible)
       if (_lastEcho != null)
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
           child: _buildEchoBanner(_lastEcho!),
         ),
-      // ── No _buildAgentConfirmBar — reply/confirm goes to popup above Ask ───
+      // 5. Item list — fills remaining space
       if (_loadingBox)
         const Expanded(child: Center(child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2)))
       else if (_selectedSupplier == null)
@@ -1302,9 +1311,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     ]);
   }
 
-  // ── #89: Compact narrow voice bar — replaces the big Voice Input card ────────
+  // ── #90: Narrow voice bar — two Expanded equal-width pills, no overflow ─────
+  // Tally badge moved to _buildNarrowProgressRow.
   Widget _buildNarrowVoiceBar(bool isAdmin) {
-    RenderLog.write('change_89_compact_voicebar', '1');
     final countingDisabled = _agentPhase != AgentPhase.idle;
     final agentDisabled = _voiceListening || _voiceProcessing;
     final agentPhase = _agentPhase;
@@ -1312,105 +1321,121 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     final bool agentListening = agentPhase == AgentPhase.listening;
     final bool confirming = agentPhase == AgentPhase.confirming;
 
-    return Container(
-      margin: const EdgeInsets.fromLTRB(16, 10, 16, 0),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: _kBorder),
-        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 6, offset: const Offset(0, 2))],
-      ),
-      child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+    return Padding(
+      // 16px matches item list horizontal padding → pills line up with items below
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+      child: Row(children: [
 
-        // Count items — fixed-size pill (same kVoiceBtnW x kVoiceBtnH as wide)
-        SizedBox(
-          width: _kVoiceBtnW,
-          height: _kVoiceBtnH,
-          child: _buildWidePill(
-            icon: _voiceListening
-                ? Icons.stop_rounded
-                : _voiceProcessing
-                    ? Icons.hourglass_top_rounded
-                    : Icons.mic_none_rounded,
-            label: _voiceListening
-                ? 'Stop recording'
-                : _voiceProcessing
-                    ? 'Processing…'
-                    : 'Count items',
-            active: _voiceListening,
-            activeColor: _kWrongFg,
-            disabled: countingDisabled && !_voiceListening,
-            spinning: _voiceProcessing,
-            onTap: _toggleRecording,
+        // Count items — Expanded so it fills exactly half (or full if no admin)
+        Expanded(
+          child: SizedBox(
+            height: _kVoiceBtnH,
+            child: _buildWidePill(
+              icon: _voiceListening
+                  ? Icons.stop_rounded
+                  : _voiceProcessing
+                      ? Icons.hourglass_top_rounded
+                      : Icons.mic_none_rounded,
+              label: _voiceListening
+                  ? 'Stop'
+                  : _voiceProcessing
+                      ? 'Processing…'
+                      : 'Count items',
+              active: _voiceListening,
+              activeColor: _kWrongFg,
+              disabled: countingDisabled && !_voiceListening,
+              spinning: _voiceProcessing,
+              onTap: _toggleRecording,
+            ),
           ),
         ),
 
-        // Divider + Ask mediBO pill (admin only)
+        // Ask mediBO — Expanded, same width as Count items (#90: no Spacer or fixed width)
         if (isAdmin) ...[
-          Container(
-            width: 1,
-            height: 28,
-            margin: const EdgeInsets.symmetric(horizontal: 8),
-            color: _kBorder,
-          ),
-          // CompositedTransformTarget anchors the popup bubble above this pill
-          CompositedTransformTarget(
-            link: _askPillLayerLink,
-            child: SizedBox(
-              width: _kVoiceBtnW,
-              height: _kVoiceBtnH,
-              child: _buildWidePill(
-                icon: agentListening
-                    ? Icons.stop_rounded
-                    : agentBusy
-                        ? Icons.hourglass_top_rounded
-                        : Icons.record_voice_over_rounded,
-                label: agentListening
-                    ? 'Listening…'
-                    : agentBusy
-                        ? (agentPhase == AgentPhase.thinking ? 'Thinking…' : 'Speaking…')
-                        : confirming
-                            ? 'Confirming…'
-                            : 'Ask mediBO',
-                active: agentListening,
-                activeColor: _kAgentAccent,
-                disabled: agentDisabled && !agentListening,
-                spinning: agentBusy,
-                onTap: () {
-                  if (agentBusy) return;
-                  if (agentListening) {
-                    _stopAgentRecording();
-                  } else if (agentPhase == AgentPhase.idle) {
-                    _startAgentRecording();
-                  }
-                },
+          const SizedBox(width: 12),
+          Expanded(
+            child: CompositedTransformTarget(
+              link: _askPillLayerLink,
+              child: SizedBox(
+                height: _kVoiceBtnH,
+                child: _buildWidePill(
+                  icon: agentListening
+                      ? Icons.stop_rounded
+                      : agentBusy
+                          ? Icons.hourglass_top_rounded
+                          : Icons.record_voice_over_rounded,
+                  label: agentListening
+                      ? 'Listening…'
+                      : agentBusy
+                          ? (agentPhase == AgentPhase.thinking ? 'Thinking…' : 'Speaking…')
+                          : confirming
+                              ? 'Confirming…'
+                              : 'Ask mediBO',
+                  active: agentListening,
+                  activeColor: _kAgentAccent,
+                  disabled: agentDisabled && !agentListening,
+                  spinning: agentBusy,
+                  onTap: () {
+                    if (agentBusy) return;
+                    if (agentListening) {
+                      _stopAgentRecording();
+                    } else if (agentPhase == AgentPhase.idle) {
+                      _startAgentRecording();
+                    }
+                  },
+                ),
               ),
             ),
           ),
         ],
 
-        const Spacer(),
+      ]),
+    );
+  }
 
-        // "N spoken" tally badge (tap to open tally sheet)
-        if (_tally.isNotEmpty)
+  // ── #90: Progress row — BELOW voice row, includes tally badge ───────────────
+  Widget _buildNarrowProgressRow() {
+    RenderLog.write('change_90_progress_below', '1');
+    final doneCount = _items.length - _pendingCount;
+    final total = _items.length;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      child: Row(children: [
+        Expanded(
+          child: LinearProgressIndicator(
+            value: total == 0 ? 0 : doneCount / total,
+            backgroundColor: _kBorder,
+            color: _kGreen,
+            minHeight: 6,
+            borderRadius: BorderRadius.circular(4),
+          ),
+        ),
+        // Tally badge (moved from voice row in #90)
+        if (_tally.isNotEmpty) ...[
+          const SizedBox(width: 8),
           GestureDetector(
             onTap: _showTallySheet,
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
               decoration: BoxDecoration(
                 color: _kReceivedBg,
                 borderRadius: BorderRadius.circular(20),
                 border: Border.all(color: _kReceivedFg.withValues(alpha: 0.25)),
               ),
               child: Row(mainAxisSize: MainAxisSize.min, children: [
-                const Icon(Icons.check_rounded, size: 11, color: _kReceivedFg),
+                const Icon(Icons.check_rounded, size: 10, color: _kReceivedFg),
                 const SizedBox(width: 3),
                 Text('${_tally.length} spoken',
-                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _kReceivedFg)),
+                    style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: _kReceivedFg)),
               ]),
             ),
           ),
+        ],
+        const SizedBox(width: 8),
+        Text(
+          '$doneCount/$total',
+          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
+        ),
       ]),
     );
   }
@@ -1589,6 +1614,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   // ── Wide layout (>= 900px) — #88: single bar + popup bubble ────────────────
   Widget _buildCollectWide(bool isAdmin) {
+    RenderLog.write('change_90_layout', 'wide');
     RenderLog.write('change_89_layout', 'wide');
     RenderLog.write('change_88_layout', 'wide');
     RenderLog.write('change_88_no_inline_banner', '1');
@@ -2426,31 +2452,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   // ── Supplier picker + progress bar ─────────────────────────────────────────
 
+  // #90: progress bar removed from here — moved to _buildNarrowProgressRow (below voice row).
   Widget _buildSupplierPicker() {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        if (_items.isNotEmpty) ...[
-          Row(children: [
-            Expanded(
-              child: LinearProgressIndicator(
-                value: _items.isEmpty
-                    ? 0
-                    : (_items.length - _pendingCount) / _items.length,
-                backgroundColor: _kBorder,
-                color: _kGreen,
-                minHeight: 4,
-                borderRadius: BorderRadius.circular(4),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Text(
-              '${_items.length - _pendingCount}/${_items.length}',
-              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
-            ),
-          ]),
-          const SizedBox(height: 8),
-        ],
         if (!_loadingSuppliers && _suppliers.isEmpty && _error == null)
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 6),
@@ -2458,39 +2464,35 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                 style: const TextStyle(fontSize: 13, color: _kSub)),
           ),
         if (_suppliers.isNotEmpty)
-        Container(
-          height: 48,
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          decoration: BoxDecoration(
-            color: _kBg, border: Border.all(color: _kBorder),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Row(children: [
-            Expanded(
-              child: DropdownButtonHideUnderline(
-                child: DropdownButton<String>(
-                  isExpanded: true,
-                  hint: const Text('Select supplier…',
-                      style: TextStyle(color: Color(0xFF9CA3AF), fontSize: 15)),
-                  value: _selectedSupplier,
-                  items: _suppliers
-                      .map((s) => DropdownMenuItem(
-                            value: s,
-                            child: Text(s,
-                                style: const TextStyle(fontSize: 15, color: _kText)),
-                          ))
-                      .toList(),
-                  onChanged: (v) {
-                    if (v == null) return;
-                    RenderLog.write('78_collect_supplier_selected', v);
-                    setState(() => _selectedSupplier = v);
-                    _loadBox(v);
-                  },
-                ),
+          Container(
+            height: 48,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            decoration: BoxDecoration(
+              color: _kBg, border: Border.all(color: _kBorder),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<String>(
+                isExpanded: true,
+                hint: const Text('Select supplier…',
+                    style: TextStyle(color: Color(0xFF9CA3AF), fontSize: 15)),
+                value: _selectedSupplier,
+                items: _suppliers
+                    .map((s) => DropdownMenuItem(
+                          value: s,
+                          child: Text(s,
+                              style: const TextStyle(fontSize: 15, color: _kText)),
+                        ))
+                    .toList(),
+                onChanged: (v) {
+                  if (v == null) return;
+                  RenderLog.write('78_collect_supplier_selected', v);
+                  setState(() => _selectedSupplier = v);
+                  _loadBox(v);
+                },
               ),
             ),
-          ]),
-        ),
+          ),
       ]),
     );
   }
@@ -4018,17 +4020,22 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // #90: hide "Fulfillment" title + subtitle on mobile (<900px) to free vertical space.
+    final isWide = MediaQuery.of(context).size.width >= 900;
     return Column(children: [
       Container(
         color: _kCard,
-        padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+        padding: EdgeInsets.fromLTRB(16, isWide ? 14 : 10, 16, 0),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Text('Fulfillment',
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: _kText)),
-          const SizedBox(height: 2),
-          Text(_kSubtitles[_tab],
-              style: const TextStyle(fontSize: 12, color: _kSub)),
-          const SizedBox(height: 10),
+          // Title + subtitle visible on wide only
+          if (isWide) ...[
+            const Text('Fulfillment',
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: _kText)),
+            const SizedBox(height: 2),
+            Text(_kSubtitles[_tab],
+                style: const TextStyle(fontSize: 12, color: _kSub)),
+            const SizedBox(height: 10),
+          ],
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: Row(children: [

@@ -1260,6 +1260,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   Widget _buildCollectNarrow(bool isAdmin) {
     RenderLog.write('change_89_layout', 'narrow');
     RenderLog.write('change_89_no_voiceinput_card', '1');
+    RenderLog.write('change_89_compact_voicebar', '1');
+    RenderLog.write('change_89_dense_items', '1');
     RenderLog.write('change_88_layout', 'narrow');
     RenderLog.write('change_86_layout', 'narrow');
     RenderLog.write('change_86_narrow_cards_present', '1');

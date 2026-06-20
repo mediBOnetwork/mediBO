@@ -284,6 +284,8 @@ class _PendingConfirmation {
   String? selectedProductName;  // = matchedName, or user's pick
   final MatchResult candidateResult; // matchToBox result (used for not_on_order dropdown)
   late final TextEditingController qtyCtrl;
+  bool confirmed = false;       // true once committed to DB (auto for ok/short/over)
+  bool editing = false;         // post-confirm edit mode
 
   _PendingConfirmation({
     required this.status,
@@ -823,7 +825,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     }
   }
 
-  void _handleEdgeItems(List<Map<dynamic, dynamic>> items, String transcript) {
+  Future<void> _handleEdgeItems(List<Map<dynamic, dynamic>> items, String transcript) async {
     setState(() => _voiceProcessing = false);
     final confirmations = <_PendingConfirmation>[];
     for (final item in items) {
@@ -848,7 +850,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       MatchResult candidateResult = MatchNone();
       if (status == 'not_on_order' && heardName.isNotEmpty) {
         candidateResult = matchToBox(heardName, _items);
-        // Pre-select top candidate if available
         if (candidateResult is MatchConfident && selId == null) {
           selId = candidateResult.productId;
         } else if (candidateResult is MatchAmbiguous &&
@@ -875,7 +876,26 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         candidateResult: candidateResult,
       ));
     }
-    setState(() => _pendingConfirmations = confirmations);
+    if (mounted) setState(() => _pendingConfirmations = confirmations);
+
+    // Auto-commit ok / short / over immediately (realtime marking).
+    // not_on_order requires user to pick a product first.
+    for (var i = 0; i < confirmations.length; i++) {
+      final conf = confirmations[i];
+      if (conf.status == 'not_on_order') continue;
+      final pid = conf.selectedProductId;
+      if (pid == null) continue;
+      final qty = (double.tryParse(conf.qtyCtrl.text.trim()) ?? conf.receivedQty).toDouble();
+      await _commitVoiceItem(
+        productId: pid,
+        productName: conf.selectedProductName ?? conf.heardName,
+        qty: qty,
+        rawSegment: conf.heardName,
+      );
+      if (!mounted) return;
+      conf.confirmed = true;
+      setState(() {}); // refresh card to locked state
+    }
   }
 
   // Called from text fallback field only (typed text → local parse → match)
@@ -944,6 +964,57 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     }
 
     if (mounted) setState(() => _voiceProcessing = false);
+  }
+
+  // Commits one item immediately (no _voiceProcessing toggle — used by auto-commit in _handleEdgeItems).
+  Future<void> _commitVoiceItem({
+    required int productId,
+    required String productName,
+    required double qty,
+    required String rawSegment,
+  }) async {
+    final supplier = _selectedSupplier;
+    if (supplier == null) return;
+    try {
+      final res = await Supabase.instance.client.rpc('receive_product_qty', params: {
+        'p_supplier_name': supplier,
+        'p_product_id': productId,
+        'p_add_qty': qty,
+        'p_note': 'voice: $rawSegment',
+      });
+      if (!mounted) return;
+      final resMap = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+      if (resMap['error'] != null) { _showSnack('Commit error: ${resMap['error']}'); return; }
+
+      final allocated = (resMap['allocated'] as num?) ?? 0;
+      final leftover  = (resMap['leftover']  as num?) ?? 0;
+      final rawRows   = resMap['rows'] as List? ?? [];
+      final rows      = rawRows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
+
+      for (final row in rows) {
+        final oiid = row['order_item_id']?.toString();
+        if (oiid == null) continue;
+        final idx = _items.indexWhere((i) => i['order_item_id'] == oiid);
+        if (idx >= 0) {
+          final nowQty  = (row['now']     as num?) ?? 0;
+          final ordered = (row['ordered'] as num?) ?? 0;
+          setState(() {
+            _items[idx]['received_qty']     = nowQty;
+            _items[idx]['fulfillment_state'] = nowQty >= ordered ? 'received' : 'short';
+          });
+          RenderLog.write('81_row_updated', '$productName:${nowQty.toInt()}/${ordered.toInt()}');
+        }
+      }
+      if (rows.isNotEmpty) _undoStack.add(rows);
+      setState(() { _tally[productId] = (_tally[productId] ?? 0) + allocated; });
+
+      RenderLog.write('81_voice_item_committed', productName);
+      final done = _items.length - _pendingCount;
+      RenderLog.write('81_progress', '$done/${_items.length}');
+      _speakEcho(productName, allocated, null, leftover);
+    } catch (e) {
+      if (mounted) _showSnack('Commit error: $e');
+    }
   }
 
   Future<void> _voiceMarkProduct({
@@ -1268,9 +1339,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
     return Column(children: [
       _buildSupplierPicker(),
-      // Voice panel always visible when box is loaded (and voice supported)
-      if (_items.isNotEmpty && !_showListView)
-        _buildVoicePanel(),
+      if (_items.isNotEmpty) _buildVoicePanel(),
       if (_loadingBox)
         const Expanded(child: Center(child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2)))
       else if (_selectedSupplier == null)
@@ -1281,12 +1350,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         const Expanded(child: Center(
             child: Text('No items in this box',
                 style: TextStyle(color: _kSub, fontSize: 15))))
-      else if (_showListView)
-        Expanded(child: _buildListView())
-      else if (_allDone)
-        Expanded(child: _buildDoneState())
       else
-        Expanded(child: _buildFocusedCard()),
+        Expanded(child: _buildItemList()),
     ]);
   }
 
@@ -1506,8 +1571,48 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         // ── Pending confirmation rows (from edge function) ──
         if (_pendingConfirmations.isNotEmpty) ...[
           const SizedBox(height: 8),
-          ..._pendingConfirmations.asMap().entries.map((e) =>
-              _buildConfirmationRow(e.value, e.key)),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 320),
+            child: SingleChildScrollView(
+              child: Column(
+                children: _pendingConfirmations.asMap().entries.map((e) =>
+                    _buildConfirmationRow(e.value, e.key)).toList(),
+              ),
+            ),
+          ),
+          if (_pendingConfirmations.any((c) => !c.confirmed && c.status != 'not_on_order')) ...[
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: () async {
+                  for (final conf in _pendingConfirmations) {
+                    if (conf.confirmed || conf.status == 'not_on_order') continue;
+                    final pid = conf.selectedProductId;
+                    if (pid == null) continue;
+                    final qty = (double.tryParse(conf.qtyCtrl.text.trim()) ?? conf.receivedQty.toDouble());
+                    await _commitVoiceItem(
+                      productId: pid,
+                      productName: conf.matchedName ?? conf.heardName,
+                      qty: qty,
+                      rawSegment: conf.heardName,
+                    );
+                    if (!mounted) return;
+                    conf.confirmed = true;
+                    setState(() {});
+                  }
+                },
+                icon: const Icon(Icons.check_circle_rounded, size: 16),
+                label: const Text('Confirm all'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _kGreen,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+              ),
+            ),
+          ],
         ],
 
         // ── Echo banner ──
@@ -1522,6 +1627,42 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     final isShort = status == 'short';
     final isOver = status == 'over';
     final isOk = status == 'ok';
+
+    // Locked state: auto-committed, not in edit mode
+    if (conf.confirmed && !conf.editing) {
+      final lockedQty = conf.qtyCtrl.text;
+      final lockedName = conf.matchedName ?? conf.heardName;
+      return Container(
+        margin: const EdgeInsets.only(bottom: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: _kReceivedBg,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: _kReceivedFg.withValues(alpha: 0.35)),
+        ),
+        child: Row(children: [
+          const Icon(Icons.check_circle_rounded, color: _kReceivedFg, size: 16),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text('$lockedName  ·  $lockedQty',
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _kReceivedFg),
+                maxLines: 1, overflow: TextOverflow.ellipsis),
+          ),
+          TextButton(
+            onPressed: () {
+              RenderLog.write('81_result_edited', lockedName);
+              setState(() => conf.editing = true);
+            },
+            style: TextButton.styleFrom(
+              foregroundColor: _kReceivedFg,
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              minimumSize: const Size(40, 28),
+            ),
+            child: const Text('Edit', style: TextStyle(fontSize: 12)),
+          ),
+        ]),
+      );
+    }
 
     Color bgColor;
     Color borderColor;
@@ -1705,13 +1846,25 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                     ? conf.receivedQty.toDouble()
                     : (double.tryParse(conf.qtyCtrl.text.trim()) ?? conf.receivedQty.toDouble());
                 if (qty <= 0) { _showSnack('Enter a valid quantity'); return; }
-                dismiss();
-                await _voiceMarkProduct(
-                  productId: productId, productName: productName,
-                  qty: qty, unit: null, rawSegment: conf.heardName,
-                );
+                if (conf.editing) {
+                  // Re-commit with updated qty (editing mode)
+                  RenderLog.write('81_result_edited', productName);
+                  await _commitVoiceItem(
+                    productId: productId, productName: productName,
+                    qty: qty, rawSegment: conf.heardName,
+                  );
+                  if (!mounted) return;
+                  setState(() { conf.editing = false; conf.confirmed = true; });
+                } else {
+                  dismiss();
+                  await _voiceMarkProduct(
+                    productId: productId, productName: productName,
+                    qty: qty, unit: null, rawSegment: conf.heardName,
+                  );
+                }
               },
-              child: const Text('Confirm', style: TextStyle(fontSize: 13, color: Colors.white)),
+              child: Text(conf.editing ? 'Save' : 'Confirm',
+                  style: const TextStyle(fontSize: 13, color: Colors.white)),
             ),
           ]),
         ],
@@ -1805,7 +1958,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        if (_items.isNotEmpty && !_showListView && !_allDone) ...[
+        if (_items.isNotEmpty) ...[
           Row(children: [
             Expanded(
               child: LinearProgressIndicator(
@@ -1864,25 +2017,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                 ),
               ),
             ),
-            if (_items.isNotEmpty) ...[
-              const SizedBox(width: 8),
-              GestureDetector(
-                onTap: () => setState(() => _showListView = !_showListView),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: _showListView ? _kGreen : _kBg,
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(color: _showListView ? _kGreen : _kBorder),
-                  ),
-                  child: Icon(
-                    _showListView ? Icons.view_agenda_outlined : Icons.list_rounded,
-                    size: 18,
-                    color: _showListView ? Colors.white : _kSub,
-                  ),
-                ),
-              ),
-            ],
           ]),
         ),
       ]),
@@ -2303,56 +2437,121 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     );
   }
 
-  Widget _buildListView() {
-    return ListView.separated(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-      itemCount: _items.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 6),
-      itemBuilder: (_, i) {
-        final item     = _items[i];
-        final state    = item['fulfillment_state']?.toString() ?? 'pending';
-        final isPending = state == 'pending';
-        final isFocused = i == _focusIdx;
-        final name     = item['product_name']?.toString() ?? '—';
-        final bagNo    = item['bag_no']?.toString() ?? '?';
-        final ordQty   = (item['ordered_qty'] as num?)?.toInt() ?? 0;
-        final recQty   = (item['received_qty'] as num?)?.toInt() ?? 0;
-        final imageUrl = item['image_url']?.toString();
+  Widget _buildListView() => _buildItemList(); // legacy alias
 
-        return GestureDetector(
-          onTap: () => _focusItem(i),
-          child: Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: isFocused ? _kGreen.withValues(alpha: 0.05) : _kCard,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(
-                color: isFocused
-                    ? _kGreen
-                    : (isPending ? _kBorder : (_stateBgMap[state] ?? _kBorder)),
-                width: isFocused ? 2 : 1,
-              ),
+  Widget _buildItemList() {
+    RenderLog.write('81_bagcard_removed', 'true');
+    RenderLog.write('81_item_list_rendered', '${_items.length}');
+    RenderLog.write('81_progress', '${_items.length - _pendingCount}/${_items.length}');
+
+    return Column(children: [
+      // All-done compact banner
+      if (_allDone) ...[
+        Container(
+          margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color: _kReceivedBg,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: _kReceivedFg.withValues(alpha: 0.35)),
+          ),
+          child: Row(children: [
+            const Icon(Icons.check_circle_rounded, color: _kReceivedFg, size: 18),
+            const SizedBox(width: 8),
+            Expanded(child: Text(
+              '${_selectedSupplier ?? 'Supplier'} — all ${_items.length} items counted ✓',
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kReceivedFg),
+            )),
+            TextButton(
+              onPressed: () {
+                setState(() { _items = []; _selectedSupplier = null; });
+                _loadSuppliers();
+              },
+              style: TextButton.styleFrom(foregroundColor: _kReceivedFg),
+              child: const Text('New supplier', style: TextStyle(fontSize: 12)),
             ),
-            child: Row(children: [
-              _FulfilImageTile(imageUrl, size: 40),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(name,
-                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
-                      maxLines: 1, overflow: TextOverflow.ellipsis),
-                  const SizedBox(height: 2),
-                  Text('Bag $bagNo  ·  $recQty/$ordQty',
-                      style: const TextStyle(fontSize: 12, color: _kSub)),
+          ]),
+        ),
+      ],
+      Expanded(
+        child: ListView.separated(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+          itemCount: _items.length,
+          separatorBuilder: (_, __) => const SizedBox(height: 6),
+          itemBuilder: (_, i) {
+            final item    = _items[i];
+            final state   = item['fulfillment_state']?.toString() ?? 'pending';
+            final name    = item['product_name']?.toString() ?? '—';
+            final bagNo   = item['bag_no']?.toString() ?? '?';
+            final ordQty  = (item['ordered_qty'] as num?)?.toInt() ?? 0;
+            final recQty  = (item['received_qty'] as num?)?.toInt() ?? 0;
+            final imageUrl = item['image_url']?.toString();
+
+            return GestureDetector(
+              onTap: () => _showItemSheet(item),
+              child: Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: _kCard,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: state == 'pending' ? _kBorder : (_stateBgMap[state] ?? _kBorder),
+                  ),
+                ),
+                child: Row(children: [
+                  _FulfilImageTile(imageUrl, size: 40),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text(name,
+                          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
+                          maxLines: 1, overflow: TextOverflow.ellipsis),
+                      const SizedBox(height: 2),
+                      Text('Bag $bagNo  ·  $recQty/$ordQty',
+                          style: const TextStyle(fontSize: 12, color: _kSub)),
+                    ]),
+                  ),
+                  const SizedBox(width: 8),
+                  _StatePill(state),
                 ]),
               ),
+            );
+          },
+        ),
+      ),
+    ]);
+  }
+
+  void _showItemSheet(Map<String, dynamic> item) {
+    final name    = item['product_name']?.toString() ?? '—';
+    final ordQty  = (item['ordered_qty'] as num?)?.toInt() ?? 0;
+    final isPending = (item['fulfillment_state'] as String?) == 'pending';
+    showResponsiveSheet(
+      context: context,
+      borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+      builder: (_) => Padding(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(name, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _kText)),
+          const SizedBox(height: 12),
+          if (isPending) ...[
+            _buildActionButtons(ordQty),
+          ] else ...[
+            Row(children: [
+              _StatePill(item['fulfillment_state']?.toString() ?? 'pending'),
               const SizedBox(width: 8),
-              _StatePill(state),
+              TextButton.icon(
+                onPressed: () { Navigator.pop(context); _record('pending'); },
+                icon: const Icon(Icons.undo_rounded, size: 15),
+                label: const Text('Reset to pending'),
+                style: TextButton.styleFrom(foregroundColor: _kSub),
+              ),
             ]),
-          ),
-        );
-      },
+          ],
+        ]),
+      ),
     );
+    _focusItem(_items.indexOf(item));
   }
 }
 

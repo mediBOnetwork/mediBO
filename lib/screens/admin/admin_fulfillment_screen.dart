@@ -349,6 +349,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   final LayerLink _askPillLayerLink = LayerLink();
   OverlayEntry? _agentBubbleEntry;
 
+  // ── #98: spoken popup overlay ────────────────────────────────────────────────
+  OverlayEntry? _spokenPopupEntry;
+
   // ── Computed ──
   Map<String, dynamic>? get _currentItem =>
       (_items.isNotEmpty && _focusIdx < _items.length) ? _items[_focusIdx] : null;
@@ -384,6 +387,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   void dispose() {
     _agentBubbleEntry?.remove();
     _agentBubbleEntry = null;
+    _spokenPopupEntry?.remove();
+    _spokenPopupEntry = null;
     _voiceService.dispose();
     _echoTimer?.cancel();
     _idleTimer?.cancel();
@@ -2710,9 +2715,20 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     );
   }
 
-  // #97: floating popup — counted items from saved data, last counted first
-  void _showSpokenPopup(BuildContext context) {
+  // #98: spoken popup anchored — top edge == pill top, opens downward
+  void _showSpokenPopup(BuildContext pillContext) {
     RenderLog.write('change_97_spoken_popup', '1');
+    RenderLog.write('change_98_popup_top_aligned', '1');
+
+    // Dismiss any existing popup first
+    _spokenPopupEntry?.remove();
+    _spokenPopupEntry = null;
+
+    // Get pill's global top-left from its RenderBox
+    final RenderBox? box = pillContext.findRenderObject() as RenderBox?;
+    if (box == null || !box.attached) return;
+    final Offset topLeft = box.localToGlobal(Offset.zero);
+
     final counted = _items
         .where((r) => ((r['received_qty'] as num?) ?? 0) > 0)
         .toList()
@@ -2721,30 +2737,50 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         final bAt = (b['received_at'] as String?) ?? '';
         return bAt.compareTo(aAt); // DESC — most recent first
       });
-    showDialog(
-      context: context,
-      barrierColor: Colors.black.withValues(alpha: 0.08),
-      barrierDismissible: true,
-      builder: (ctx) => Align(
-        alignment: const Alignment(0.5, -0.55),
+
+    const double popupW = 300.0;
+    // Clamp left so popup doesn't overflow screen right edge
+    final screenW = MediaQuery.of(pillContext).size.width;
+    final screenH = MediaQuery.of(pillContext).size.height;
+    final double left = math.min(topLeft.dx, screenW - popupW - 8);
+    // Popup top = pill top; max height = remaining screen below pill - 16px margin
+    final double popupTop = topLeft.dy;
+    final double maxH = math.min(320.0, screenH - popupTop - 16);
+
+    void dismiss() {
+      _spokenPopupEntry?.remove();
+      _spokenPopupEntry = null;
+    }
+
+    _spokenPopupEntry = OverlayEntry(builder: (_) => Stack(children: [
+      // Transparent barrier — tap outside to dismiss
+      Positioned.fill(child: GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onTap: dismiss,
+      )),
+      // Popup anchored at pill top-left, grows downward
+      Positioned(
+        top: popupTop,
+        left: left,
+        width: popupW,
         child: Material(
           borderRadius: BorderRadius.circular(12),
           elevation: 8,
           color: Colors.white,
           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 320, maxHeight: 360),
+            constraints: BoxConstraints(maxHeight: maxH),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 14, 12, 8),
+                  padding: const EdgeInsets.fromLTRB(14, 12, 10, 8),
                   child: Row(children: [
                     const Text('Counted items',
-                        style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: _kText)),
+                        style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _kText)),
                     const Spacer(),
                     GestureDetector(
-                      onTap: () => Navigator.of(ctx).pop(),
+                      onTap: dismiss,
                       child: const Icon(Icons.close_rounded, size: 18, color: _kSub),
                     ),
                   ]),
@@ -2762,13 +2798,14 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                       final recQty = (r['received_qty'] as num?)?.toInt() ?? 0;
                       final ordQty = (r['ordered_qty'] as num?)?.toInt() ?? 0;
                       return Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+                        padding: const EdgeInsets.fromLTRB(14, 9, 14, 9),
                         child: Row(children: [
                           Expanded(child: Text(name,
                               style: const TextStyle(fontSize: 13, color: _kText))),
-                          const SizedBox(width: 12),
+                          const SizedBox(width: 10),
                           Text('$recQty/$ordQty',
-                              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kGreen)),
+                              style: const TextStyle(
+                                  fontSize: 13, fontWeight: FontWeight.w700, color: _kGreen)),
                         ]),
                       );
                     },
@@ -2779,31 +2816,41 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           ),
         ),
       ),
-    );
+    ]));
+
+    Overlay.of(pillContext).insert(_spokenPopupEntry!);
   }
 
-  // #97: shared pill widget — always green, always visible, tappable when count>0
+  // #97/#98: shared pill widget — always green, centered, always visible, tappable when count>0
   Widget _buildSpokenPill(BuildContext context) {
     RenderLog.write('change_97_spoken_green', '1');
     RenderLog.write('change_97_spoken_persisted', '1');
+    RenderLog.write('change_98_pill_centered', '1');
     final count = _spokenCount;
     return GestureDetector(
       onTap: count > 0 ? () => _showSpokenPopup(context) : null,
       child: Container(
         height: 24,
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        alignment: Alignment.center, // #98: explicit center — fixes low baseline
         decoration: BoxDecoration(
           color: _kReceivedBg,
           borderRadius: BorderRadius.circular(999),
           border: Border.all(color: _kReceivedFg.withValues(alpha: 0.25)),
         ),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          const Icon(Icons.check_rounded, size: 11, color: _kReceivedFg),
-          const SizedBox(width: 4),
-          Text('$count spoken',
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: _kReceivedFg)),
-        ]),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            const Icon(Icons.check_rounded, size: 11, color: _kReceivedFg),
+            const SizedBox(width: 4),
+            Text('$count spoken',
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                    fontSize: 12, fontWeight: FontWeight.w600, color: _kReceivedFg,
+                    height: 1.0)),
+          ],
+        ),
       ),
     );
   }

@@ -1242,6 +1242,18 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
     final isAdmin = UserState.of(context).isAdmin;
 
+    return LayoutBuilder(builder: (ctx, constraints) {
+      if (constraints.maxWidth >= 900) {
+        return _buildCollectWide(isAdmin);
+      }
+      return _buildCollectNarrow(isAdmin);
+    });
+  }
+
+  // ── Narrow layout (< 900px) — existing tree verbatim ────────────────────────
+  Widget _buildCollectNarrow(bool isAdmin) {
+    RenderLog.write('change_86_layout', 'narrow');
+    RenderLog.write('change_86_narrow_cards_present', '1');
     return Column(children: [
       _buildSupplierPicker(),
       if (_items.isNotEmpty) _buildVoiceCard(isAdmin),
@@ -1259,6 +1271,406 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       else
         Expanded(child: _buildItemList()),
     ]);
+  }
+
+  // ── Wide layout (>= 900px) — desktop redesign ────────────────────────────────
+  Widget _buildCollectWide(bool isAdmin) {
+    RenderLog.write('change_86_layout', 'wide');
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      // ── Supplier bar ────────────────────────────────────────────────────────
+      _buildWideSupplierBar(),
+      const SizedBox(height: 12),
+      // ── Voice toolbar (pills + agent banner) ────────────────────────────────
+      if (_suppliers.isNotEmpty) _buildWideVoiceToolbar(isAdmin),
+      if (_suppliers.isNotEmpty) const SizedBox(height: 12),
+      // ── Item table ──────────────────────────────────────────────────────────
+      if (_loadingBox)
+        const Expanded(child: Center(child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2)))
+      else if (_selectedSupplier == null)
+        const Expanded(child: Center(
+            child: Text('Choose a supplier to begin',
+                style: TextStyle(color: _kSub, fontSize: 15))))
+      else if (_items.isEmpty)
+        const Expanded(child: Center(
+            child: Text('No items in this box',
+                style: TextStyle(color: _kSub, fontSize: 15))))
+      else
+        Expanded(child: _buildWideItemTable()),
+    ]);
+  }
+
+  // ── B1: Wide supplier bar ─────────────────────────────────────────────────────
+  Widget _buildWideSupplierBar() {
+    final doneCount = _items.length - _pendingCount;
+    final total = _items.length;
+    return Container(
+      margin: const EdgeInsets.fromLTRB(24, 12, 24, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _kBorder),
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 6, offset: const Offset(0, 2))],
+      ),
+      child: Row(children: [
+        // Dropdown — fills available space
+        Expanded(
+          child: _suppliers.isEmpty
+              ? const Text('No supplier orders to collect yet',
+                  style: TextStyle(fontSize: 14, color: _kSub))
+              : DropdownButtonHideUnderline(
+                  child: DropdownButton<String>(
+                    isExpanded: true,
+                    hint: const Text('Select supplier…',
+                        style: TextStyle(color: Color(0xFF9CA3AF), fontSize: 15)),
+                    value: _selectedSupplier,
+                    items: _suppliers
+                        .map((s) => DropdownMenuItem(
+                              value: s,
+                              child: Text(s, style: const TextStyle(fontSize: 15, color: _kText)),
+                            ))
+                        .toList(),
+                    onChanged: (v) {
+                      if (v == null) return;
+                      RenderLog.write('78_collect_supplier_selected', v);
+                      setState(() => _selectedSupplier = v);
+                      _loadBox(v);
+                    },
+                  ),
+                ),
+        ),
+        // Progress bar + count (only when a box is loaded)
+        if (_items.isNotEmpty) ...[
+          const SizedBox(width: 20),
+          SizedBox(
+            width: 200,
+            child: LinearProgressIndicator(
+              value: total == 0 ? 0 : doneCount / total,
+              backgroundColor: _kBorder,
+              color: _kGreen,
+              minHeight: 6,
+              borderRadius: BorderRadius.circular(4),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Text(
+            '$doneCount/$total',
+            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
+          ),
+        ],
+      ]),
+    );
+  }
+
+  // ── B2: Wide voice toolbar ────────────────────────────────────────────────────
+  Widget _buildWideVoiceToolbar(bool isAdmin) {
+    RenderLog.write('change_86_voice_pills_present', '1');
+    final countingDisabled = _agentPhase != AgentPhase.idle;
+    final agentDisabled = _voiceListening || _voiceProcessing;
+    final agentPhase = _agentPhase;
+    final bool agentBusy = agentPhase == AgentPhase.thinking || agentPhase == AgentPhase.speaking;
+    final bool agentListening = agentPhase == AgentPhase.listening;
+    final bool confirming = agentPhase == AgentPhase.confirming;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        // Pills row — right-aligned
+        Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+          // Count items pill
+          if (_voiceSupported) ...[
+            _buildWidePill(
+              icon: _voiceListening
+                  ? Icons.stop_rounded
+                  : _voiceProcessing
+                      ? Icons.hourglass_top_rounded
+                      : Icons.mic_none_rounded,
+              label: _voiceListening
+                  ? 'Stop recording'
+                  : _voiceProcessing
+                      ? 'Processing…'
+                      : 'Count items',
+              active: _voiceListening,
+              activeColor: _kWrongFg,
+              disabled: countingDisabled && !_voiceListening,
+              spinning: _voiceProcessing,
+              onTap: _toggleRecording,
+            ),
+            const SizedBox(width: 10),
+          ],
+          // Ask mediBO pill (admin only)
+          if (isAdmin) _buildWidePill(
+            icon: agentListening
+                ? Icons.stop_rounded
+                : agentBusy
+                    ? Icons.hourglass_top_rounded
+                    : Icons.record_voice_over_rounded,
+            label: agentListening
+                ? 'Stop listening'
+                : agentBusy
+                    ? (agentPhase == AgentPhase.thinking ? 'Thinking…' : 'Speaking…')
+                    : confirming
+                        ? 'Confirming…'
+                        : 'Ask mediBO',
+            active: agentListening,
+            activeColor: _kAgentAccent,
+            disabled: agentDisabled && !agentListening,
+            spinning: agentBusy,
+            onTap: () {
+              if (agentBusy) return;
+              if (agentListening) {
+                _stopAgentRecording();
+              } else if (agentPhase == AgentPhase.idle) {
+                _startAgentRecording();
+              }
+            },
+          ),
+        ]),
+
+        // Agent inline banner (shown when agent phase != idle)
+        if (agentPhase != AgentPhase.idle && _agentReply.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: BoxDecoration(
+              color: _kAgentAccent.withValues(alpha: 0.06),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: _kAgentAccent.withValues(alpha: 0.25)),
+            ),
+            child: confirming
+                ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    // Reply text
+                    Text(_agentReply,
+                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: _kText)),
+                    // Product chip
+                    if (_pendingAction != null) ...[
+                      const SizedBox(height: 6),
+                      Row(children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF5F6F8),
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(color: _kBorder),
+                          ),
+                          child: Text(
+                            '${_pendingAction!['product_name'] ?? ''}'
+                            '${_pendingAction!['qty'] != null ? ' — qty ${(_pendingAction!['qty'] as num).toInt()}' : ''}',
+                            style: const TextStyle(fontSize: 12, color: _kText, fontWeight: FontWeight.w500),
+                          ),
+                        ),
+                        const Spacer(),
+                        // Haan button
+                        GestureDetector(
+                          onTap: _commitPending,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                            decoration: BoxDecoration(
+                              color: _kGreen,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: const Text('✓ Haan',
+                                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.white)),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        // Nahi button
+                        GestureDetector(
+                          onTap: _cancelPending,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: _kBorder),
+                            ),
+                            child: const Text('✗ Nahi',
+                                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _kText)),
+                          ),
+                        ),
+                      ]),
+                    ],
+                  ])
+                : Row(children: [
+                    Icon(
+                      agentBusy ? Icons.hourglass_top_rounded : Icons.volume_up_rounded,
+                      size: 14, color: _kAgentAccent,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(_agentReply,
+                          style: const TextStyle(fontSize: 13, color: _kText),
+                          maxLines: 2, overflow: TextOverflow.ellipsis),
+                    ),
+                  ]),
+          ),
+        ],
+      ]),
+    );
+  }
+
+  Widget _buildWidePill({
+    required IconData icon,
+    required String label,
+    required bool active,
+    required Color activeColor,
+    required bool disabled,
+    required bool spinning,
+    required VoidCallback onTap,
+  }) {
+    return IgnorePointer(
+      ignoring: disabled,
+      child: Opacity(
+        opacity: disabled ? 0.40 : 1.0,
+        child: GestureDetector(
+          onTap: onTap,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            height: 40,
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            decoration: BoxDecoration(
+              color: active ? activeColor : Colors.white,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                color: active ? activeColor : _kBorder,
+                width: active ? 0 : 1,
+              ),
+              boxShadow: active
+                  ? [BoxShadow(color: activeColor.withValues(alpha: 0.30), blurRadius: 10, spreadRadius: 1)]
+                  : [],
+            ),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              spinning
+                  ? SizedBox(
+                      width: 14, height: 14,
+                      child: CircularProgressIndicator(
+                        color: active ? Colors.white : activeColor,
+                        strokeWidth: 2,
+                      ),
+                    )
+                  : Icon(icon,
+                      size: 16,
+                      color: active ? Colors.white : activeColor),
+              const SizedBox(width: 7),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: active ? Colors.white : _kText,
+                ),
+              ),
+            ]),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ── B3: Wide item table ───────────────────────────────────────────────────────
+  Widget _buildWideItemTable() {
+    RenderLog.write('change_86_wide_table_present', '1');
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
+      child: Column(children: [
+        // Sticky header
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            color: _kBg,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(10)),
+            border: const Border(
+              top: BorderSide(color: _kBorder),
+              left: BorderSide(color: _kBorder),
+              right: BorderSide(color: _kBorder),
+            ),
+          ),
+          child: Row(children: [
+            Expanded(flex: 6, child: Text('Product',
+                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _kSub))),
+            Expanded(flex: 2, child: Text('Pack',
+                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _kSub))),
+            Expanded(flex: 2, child: Text('Received',
+                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _kSub),
+                textAlign: TextAlign.right)),
+            Expanded(flex: 2, child: Text('Status',
+                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _kSub),
+                textAlign: TextAlign.right)),
+          ]),
+        ),
+        // Scrollable rows
+        Expanded(
+          child: Container(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: const BorderRadius.vertical(bottom: Radius.circular(10)),
+              border: Border.all(color: _kBorder),
+            ),
+            child: ListView.builder(
+              itemCount: _items.length,
+              itemBuilder: (_, i) {
+                final item = _items[i];
+                final state   = item['fulfillment_state']?.toString() ?? 'pending';
+                final name    = item['product_name']?.toString() ?? '—';
+                final ordQty  = (item['ordered_qty'] as num?)?.toInt() ?? 0;
+                final recQty  = (item['received_qty'] as num?)?.toInt() ?? 0;
+                final packType = item['pack_type']?.toString() ?? '';
+                final imageUrl = item['image_url']?.toString();
+                final isLast = i == _items.length - 1;
+
+                return InkWell(
+                  onTap: () => _showItemSheet(item),
+                  hoverColor: _kGreen.withValues(alpha: 0.04),
+                  child: Container(
+                    height: 56,
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    decoration: BoxDecoration(
+                      border: isLast ? null : const Border(
+                        bottom: BorderSide(color: _kBorder, width: 0.8),
+                      ),
+                    ),
+                    child: Row(children: [
+                      // col1: thumbnail + name
+                      Expanded(flex: 6, child: Row(children: [
+                        _FulfilImageTile(imageUrl, size: 36),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(name,
+                                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _kText),
+                                  maxLines: 1, overflow: TextOverflow.ellipsis),
+                            ],
+                          ),
+                        ),
+                      ])),
+                      // col2: pack type
+                      Expanded(flex: 2, child: Text(
+                        packType.isEmpty ? '—' : packType,
+                        style: const TextStyle(fontSize: 12, color: _kSub),
+                      )),
+                      // col3: received / ordered
+                      Expanded(flex: 2, child: Text(
+                        '$recQty / $ordQty',
+                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
+                        textAlign: TextAlign.right,
+                      )),
+                      // col4: status chip
+                      Expanded(flex: 2, child: Align(
+                        alignment: Alignment.centerRight,
+                        child: _StatePill(state),
+                      )),
+                    ]),
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+      ]),
+    );
   }
 
   // ── Voice card (#86) ─────────────────────────────────────────────────────────

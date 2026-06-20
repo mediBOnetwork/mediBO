@@ -30,12 +30,6 @@ class ProductCard extends StatelessWidget {
         child: PressEffect(
           scale: 0.98,
           child: Container(
-            foregroundDecoration: product.isBuyable
-                ? null
-                : BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.45),
-                    borderRadius: BorderRadius.circular(14),
-                  ),
             decoration: BoxDecoration(
               color: Colors.white,
               borderRadius: BorderRadius.circular(14),
@@ -274,6 +268,7 @@ class _CartControlState extends State<_CartControl>
     final qty = cart.quantityOf(widget.product.id);
 
     RenderLog.write('change_102_buyable_read', '1');
+    RenderLog.write('change_103_no_dim', '1');
     if (!widget.product.isBuyable) RenderLog.write('change_102_unavailable_ui', '1');
 
     return SizedBox(

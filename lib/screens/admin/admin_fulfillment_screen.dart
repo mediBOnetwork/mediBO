@@ -365,6 +365,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   bool get _boxLocked =>
       _items.isNotEmpty && _items.any((r) => r['collect_locked'] == true);
 
+  // #97: derived from saved data — survives refresh; counts rows with received_qty>0
+  int get _spokenCount =>
+      _items.where((r) => ((r['received_qty'] as num?) ?? 0) > 0).length;
+
   // ── Lifecycle ───────────────────────────────────────────────────────────────
 
   @override
@@ -1697,40 +1701,18 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // ── #90: Progress row — BELOW voice row, includes tally badge ───────────────
   Widget _buildNarrowProgressRow() {
     RenderLog.write('change_90_progress_below', '1');
+    RenderLog.write('change_97_spoken_mobile', '1');
     final doneCount = _items.length - _pendingCount;
     final total = _items.length;
-    final hasTally = _tally.isNotEmpty;
-    if (hasTally) {
-      RenderLog.write('change_92_spoken_pill', '1');
-      RenderLog.write('change_92_no_overlap', '1'); // chip is left of bar — never overlaps N/N
-    }
-    // #92: spoken pill moves LEFT of the bar so it never collides with N/N on the right
-    // Layout: [ "N spoken" chip ] ← gap → [ bar (Expanded) ] → [ "N/N" ]
+    // #97: pill ALWAYS visible on mobile — constant 100px slot, always green
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
       child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-        if (hasTally) ...[
-          GestureDetector(
-            onTap: _showTallySheet,
-            child: Container(
-              height: 24,
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              decoration: BoxDecoration(
-                color: _kReceivedBg,
-                borderRadius: BorderRadius.circular(999),
-                border: Border.all(color: _kReceivedFg.withValues(alpha: 0.25)),
-              ),
-              child: Row(mainAxisSize: MainAxisSize.min, children: [
-                const Icon(Icons.check_rounded, size: 11, color: _kReceivedFg),
-                const SizedBox(width: 4),
-                Text('${_tally.length} spoken',
-                    style: const TextStyle(
-                        fontSize: 12.5, fontWeight: FontWeight.w600, color: _kReceivedFg)),
-              ]),
-            ),
-          ),
-          const SizedBox(width: 8),
-        ],
+        SizedBox(
+          width: 100, // constant slot — no layout shift when count changes
+          child: Builder(builder: (ctx) => _buildSpokenPill(ctx)),
+        ),
+        const SizedBox(width: 8),
         Expanded(
           child: LinearProgressIndicator(
             value: total == 0 ? 0 : doneCount / total,
@@ -2032,50 +2014,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
         // 3. "N spoken" pill (left of bar) + progress bar + "N/N" count
         if (_items.isNotEmpty) ...[
-          // #96: constant reserved slot — always visible; muted style at 0, active style at N
+          // #97: constant reserved slot — always green, always visible, tappable when count>0
           const SizedBox(width: 12),
           SizedBox(
             width: 110, // kSpokenSlotW — constant so bar never shifts
-            child: Builder(builder: (ctx) {
-              RenderLog.write('change_92_spoken_pill', '1');
-              RenderLog.write('change_95_spoken_slot_fixed', '1');
-              RenderLog.write('change_95_no_shift', '1');
-              RenderLog.write('change_96_spoken_always', '1');
-              final hasTally = _tally.isNotEmpty;
-              return GestureDetector(
-                onTap: hasTally ? _showTallySheet : null,
-                child: Container(
-                  height: 24,
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: hasTally ? _kReceivedBg : const Color(0xFFF3F4F6),
-                    borderRadius: BorderRadius.circular(999),
-                    border: Border.all(
-                      color: hasTally
-                          ? _kReceivedFg.withValues(alpha: 0.25)
-                          : const Color(0xFFD1D5DB),
-                    ),
-                  ),
-                  child: Row(mainAxisSize: MainAxisSize.min, children: [
-                    Icon(
-                      Icons.check_rounded,
-                      size: 11,
-                      color: hasTally ? _kReceivedFg : const Color(0xFF9CA3AF),
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      '${_tally.length} spoken',
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 12.5,
-                        fontWeight: FontWeight.w600,
-                        color: hasTally ? _kReceivedFg : const Color(0xFF9CA3AF),
-                      ),
-                    ),
-                  ]),
-                ),
-              );
-            }),
+            child: Builder(builder: (ctx) => _buildSpokenPill(ctx)),
           ),
           const SizedBox(width: 12),
           ConstrainedBox(
@@ -2384,24 +2327,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
               ]),
             ),
             const Spacer(),
-            if (_tally.isNotEmpty)
-              GestureDetector(
-                onTap: _showTallySheet,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: _kReceivedBg,
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: _kReceivedFg.withValues(alpha: 0.25)),
-                  ),
-                  child: Row(mainAxisSize: MainAxisSize.min, children: [
-                    const Icon(Icons.check_rounded, size: 11, color: _kReceivedFg),
-                    const SizedBox(width: 3),
-                    Text('${_tally.length} spoken',
-                        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _kReceivedFg)),
-                  ]),
-                ),
-              ),
+            // #97: always visible in voice-bar header, green, tappable when count>0
+            Builder(builder: (ctx) => _buildSpokenPill(ctx)),
           ]),
         ),
 
@@ -2780,6 +2707,104 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           child: const Icon(Icons.close_rounded, size: 14, color: _kReceivedFg),
         ),
       ]),
+    );
+  }
+
+  // #97: floating popup — counted items from saved data, last counted first
+  void _showSpokenPopup(BuildContext context) {
+    RenderLog.write('change_97_spoken_popup', '1');
+    final counted = _items
+        .where((r) => ((r['received_qty'] as num?) ?? 0) > 0)
+        .toList()
+      ..sort((a, b) {
+        final aAt = (a['received_at'] as String?) ?? '';
+        final bAt = (b['received_at'] as String?) ?? '';
+        return bAt.compareTo(aAt); // DESC — most recent first
+      });
+    showDialog(
+      context: context,
+      barrierColor: Colors.black.withValues(alpha: 0.08),
+      barrierDismissible: true,
+      builder: (ctx) => Align(
+        alignment: const Alignment(0.5, -0.55),
+        child: Material(
+          borderRadius: BorderRadius.circular(12),
+          elevation: 8,
+          color: Colors.white,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 320, maxHeight: 360),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 14, 12, 8),
+                  child: Row(children: [
+                    const Text('Counted items',
+                        style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: _kText)),
+                    const Spacer(),
+                    GestureDetector(
+                      onTap: () => Navigator.of(ctx).pop(),
+                      child: const Icon(Icons.close_rounded, size: 18, color: _kSub),
+                    ),
+                  ]),
+                ),
+                const Divider(height: 1, color: _kBorder),
+                Flexible(
+                  child: ListView.separated(
+                    shrinkWrap: true,
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    itemCount: counted.length,
+                    separatorBuilder: (_, __) => const Divider(height: 1, color: _kBorder),
+                    itemBuilder: (_, i) {
+                      final r = counted[i];
+                      final name = r['product_name']?.toString() ?? '?';
+                      final recQty = (r['received_qty'] as num?)?.toInt() ?? 0;
+                      final ordQty = (r['ordered_qty'] as num?)?.toInt() ?? 0;
+                      return Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+                        child: Row(children: [
+                          Expanded(child: Text(name,
+                              style: const TextStyle(fontSize: 13, color: _kText))),
+                          const SizedBox(width: 12),
+                          Text('$recQty/$ordQty',
+                              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kGreen)),
+                        ]),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // #97: shared pill widget — always green, always visible, tappable when count>0
+  Widget _buildSpokenPill(BuildContext context) {
+    RenderLog.write('change_97_spoken_green', '1');
+    RenderLog.write('change_97_spoken_persisted', '1');
+    final count = _spokenCount;
+    return GestureDetector(
+      onTap: count > 0 ? () => _showSpokenPopup(context) : null,
+      child: Container(
+        height: 24,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        decoration: BoxDecoration(
+          color: _kReceivedBg,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: _kReceivedFg.withValues(alpha: 0.25)),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          const Icon(Icons.check_rounded, size: 11, color: _kReceivedFg),
+          const SizedBox(width: 4),
+          Text('$count spoken',
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: _kReceivedFg)),
+        ]),
+      ),
     );
   }
 

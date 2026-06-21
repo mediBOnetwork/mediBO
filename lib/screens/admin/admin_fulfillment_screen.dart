@@ -404,6 +404,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c120_view_mode', 'mode=grouped'); // static: default view is grouped
     RenderLog.write('c121_ask_ready', 'handles_ask=y'); // static: #121 ask intent handled
     RenderLog.write('c122_ask_ready', 'tts=cloud'); // static: #122 cloud TTS WaveNet
+    RenderLog.write('c123_ready', 'handles_ask=y;fast_voice=y'); // static: #123 clean+fast
     // #85: agent button present — written in initState (IndexedStack always mounts)
     RenderLog.write('change_85_agent_button_present', '1');
     RenderLog.write('change_86_voice_card_present', '1');
@@ -1184,6 +1185,12 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   Future<void> _startAgentRecording() async {
     if (_agentBusy || _voiceListening || _agentPhase != AgentPhase.idle) return;
     _agentBusy = true;
+    // #123 P1: clear stale reply + stop previous audio the instant Ask mediBO starts
+    _ttsAudio?.pause();
+    _ttsAudio = null;
+    final hadPrev = _agentReply.isNotEmpty;
+    if (mounted) setState(() { _agentReply = ''; _agentPhase = AgentPhase.idle; });
+    RenderLog.write('c123_ask_open', 'cleared_prev=${hadPrev ? 'y' : 'n'}');
     try {
       await _voiceService.start();
       _agentRecStarted = true;
@@ -1255,45 +1262,53 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     final action = actionRaw is Map ? Map<String, dynamic>.from(actionRaw) : null;
     final hasReply = reply.isNotEmpty;
 
+    // #121: route — confirm=set/correct with action; info=all others (incl ask)
+    final isConfirm = (intent == 'set' || intent == 'correct') && action != null;
+    final route = isConfirm ? 'confirm' : 'info';
+
+    // #123 P2: stamp before setState so ms_text_to_tts measures the real gap
+    final t0 = DateTime.now().millisecondsSinceEpoch;
+
+    // Show reply text IMMEDIATELY — TTS fires right after in the same frame
     setState(() {
       _agentTranscript = transcript;
       _agentIntent = intent;
       _agentReply = reply;
       _agentPhase = AgentPhase.speaking;
     });
+
     RenderLog.write('change_85_agent_call_ok', '1');
     RenderLog.write('change_85_intent_last', intent);
-
-    // #121: route logging — confirm=set/correct with action, info=all others (incl ask), clarify=unknown
-    final isConfirm = (intent == 'set' || intent == 'correct') && action != null;
-    final route = isConfirm ? 'confirm' : 'info';
     RenderLog.write('c121_intent_route', 'intent=$intent;route=$route');
     RenderLog.write('c121_ask_handled', 'intent=$intent;has_reply=${hasReply ? 'y' : 'n'}');
 
-    // Speak the reply for all intents — status/remaining/greeting/ask all land here.
-    // #121: "ask" intent carries a plain-language answer in `reply`; no action taken.
-    // Robust fallback: any unrecognised future intent speaks its reply if present.
-    // #122: cloud TTS (WaveNet Hindi) with browser-speech fallback.
-    await _speakReply(reply);
-    RenderLog.write('change_85_agent_reply_spoken', '1');
-
-    if (!mounted) return;
-    if (isConfirm) {
-      if (_boxLocked) {
-        // #91: locked — do not arm confirm
-        RenderLog.write('change_91_edit_blocked', '1');
-        setState(() { _pendingAction = null; _agentPhase = AgentPhase.idle; });
-      } else {
-        setState(() {
-          _pendingAction = action;
-          _agentPhase = AgentPhase.confirming;
-        });
-      }
-    } else {
-      // info path: status, remaining, greeting, ask, unknown, and any future intents
-      // reply already spoken above; no DB write, no confirm dialog
-      setState(() { _pendingAction = null; _agentPhase = AgentPhase.idle; });
+    // #123 P3: log ask intent specifically
+    if (intent == 'ask' && hasReply) {
+      RenderLog.write('c123_ask_answered', 'had_reply=y');
     }
+
+    final msGap = DateTime.now().millisecondsSinceEpoch - t0;
+    RenderLog.write('c123_reply', 'intent=$intent;spoke=y;ms_text_to_tts=$msGap');
+
+    // #123 P2: fire TTS immediately without awaiting — audio plays while UI is already responsive.
+    // Phase transitions happen inside the .then() callback so nothing blocks here.
+    // #122: cloud TTS (WaveNet Hindi) with browser-speech fallback.
+    // #121: speak for all intents; ask/status/remaining/greeting/unknown all speak reply.
+    _speakReply(reply).then((_) {
+      if (!mounted) return;
+      RenderLog.write('change_85_agent_reply_spoken', '1');
+      if (isConfirm) {
+        if (_boxLocked) {
+          RenderLog.write('change_91_edit_blocked', '1');
+          setState(() { _pendingAction = null; _agentPhase = AgentPhase.idle; });
+        } else {
+          setState(() { _pendingAction = action; _agentPhase = AgentPhase.confirming; });
+        }
+      } else {
+        // info path: status, remaining, greeting, ask, unknown, any future intent
+        setState(() { _pendingAction = null; _agentPhase = AgentPhase.idle; });
+      }
+    });
   }
 
   Future<void> _commitPending() async {

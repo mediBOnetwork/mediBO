@@ -88,6 +88,7 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
       RenderLog.write('inquiry_form_loaded',
           '${items.length}_items_${widget.token.substring(0, 8)}');
       RenderLog.write('inquiry_v12_public_form', 'true');
+      RenderLog.write('inq_surface_link_grouped', 1);
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -96,6 +97,66 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
       });
       RenderLog.write('inquiry_form_load_error',
           e.toString().substring(0, 40));
+    }
+  }
+
+  Future<int?> _bulkDontStockCompanyCategory(
+      String company, String category) async {
+    try {
+      final result = await Supabase.instance.client.rpc(
+        'submit_inquiry_dont_stock_company_category',
+        params: {
+          'p_token': widget.token,
+          'p_company': company,
+          'p_category': category,
+        },
+      );
+      final data = Map<String, dynamic>.from(result as Map);
+      if (data['error'] != null) return null;
+
+      final items = (data['items'] as List? ?? [])
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+
+      if (!mounted) return null;
+
+      // Count items newly marked in this company+category
+      final cLower = company.trim().toLowerCase();
+      final cUpper = category.trim().toUpperCase();
+      final marked = items.where((i) {
+        final iComp =
+            (i['company'] as String? ?? '').trim().toLowerCase();
+        final iCat = (i['therapeutic_class'] as String? ?? '')
+            .trim()
+            .toUpperCase();
+        return iComp == cLower &&
+            iCat == cUpper &&
+            i['locked'] == true;
+      }).length;
+
+      setState(() {
+        _items = items;
+        final nowLocked = items
+            .where((i) => i['locked'] == true)
+            .map((i) => (i['inquiry_id'] as num).toInt())
+            .toSet();
+        for (final id in nowLocked) {
+          _selections.remove(id);
+        }
+        final unlockedIds = items
+            .where((i) => i['locked'] == false)
+            .map((i) => (i['inquiry_id'] as num).toInt())
+            .toSet();
+        _prevUnlockedIds = unlockedIds;
+        if (unlockedIds.isEmpty && items.isNotEmpty) {
+          _respondedExpanded = true;
+        }
+      });
+
+      RenderLog.write('inq_link_bulk_done', '${company}_$category');
+      return marked;
+    } catch (e) {
+      return null;
     }
   }
 
@@ -407,6 +468,8 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
                   }
                 });
               },
+              onBulkCompanyCategory: _bulkDontStockCompanyCategory,
+              surface: 'link',
             ),
             const SizedBox(height: 8),
             SizedBox(

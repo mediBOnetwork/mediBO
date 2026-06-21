@@ -2123,9 +2123,34 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                       supplierName: supName,
                       answer: answer,
                     ),
+                    onBulkCompanyCategory: (company, category) async {
+                      try {
+                        final res = await Supabase.instance.client.rpc(
+                          'admin_inquiry_dont_stock_company_category',
+                          params: {
+                            'p_supplier_name': supName,
+                            'p_company': company,
+                            'p_category': category,
+                          },
+                        ) as Map;
+                        if (res['error'] != null) return null;
+                        final marked =
+                            (res['marked'] as num?)?.toInt() ?? 0;
+                        RenderLog.write('admin_bulk_dont_stock',
+                            '${supName}_${company}_${category}_$marked');
+                        await Future.wait([
+                          _fetchInquiryItems(supName),
+                          _fetchInquiryOverview(silent: true),
+                        ]);
+                        return marked;
+                      } catch (e) {
+                        return null;
+                      }
+                    },
                     itemTrailingWidget: isFewest
                         ? (item) => _buildMoveControl(item)
                         : null,
+                    surface: 'admin',
                   );
                 }),
     );

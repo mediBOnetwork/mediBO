@@ -98,6 +98,33 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen> {
     }
   }
 
+  Future<int?> _bulkDontStockCompanyCategory(
+      String company, String category) async {
+    try {
+      final rpcName = widget.viewAsSupplierId != null
+          ? 'admin_inquiry_dont_stock_company_category'
+          : 'supplier_inquiry_dont_stock_company_category';
+      final params = widget.viewAsSupplierId != null
+          ? {
+              'p_supplier_name': widget.viewAsSupplierId!,
+              'p_company': company,
+              'p_category': category,
+            }
+          : {'p_company': company, 'p_category': category};
+
+      final res = await Supabase.instance.client.rpc(rpcName, params: params)
+          as Map;
+      if (res['error'] != null) return null;
+      final marked = (res['marked'] as num?)?.toInt() ?? 0;
+      RenderLog.write('supplier_bulk_dont_stock',
+          '${company}_${category}_$marked');
+      await _fetch(silent: true);
+      return marked;
+    } catch (e) {
+      return null;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final isDesktop = MediaQuery.of(context).size.width >= 900;
@@ -163,7 +190,9 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen> {
             items: _items,
             onAnswer: _answer,
             onBulk: _bulkAnswer,
+            onBulkCompanyCategory: _bulkDontStockCompanyCategory,
             answeringIds: _answering,
+            surface: 'supplier',
           ),
         ],
       ),

@@ -102,16 +102,11 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
   bool _pageNetworkError = false;
   List<String> _suggestions = [];
 
-  // Buyable-only category total (loaded async when browsing a specific category).
+  // Buyable-only category total from get_storefront_count (real total, not capped at 200).
   int? _buyableCategoryTotal;
 
-  // Captcha-gated pagination: 1 = first 100 shown, 2 = up to 200 shown.
-  int _paginationPage = 1;
-  bool _captchaLoading = false;
-  // true while products are being drip-fed one-by-one after captcha
-  bool _addingItems = false;
-  // items at/above this index get the slide-in entrance animation
-  int _animatedFrom = 0;
+  // Browse feed cap: true once loadedCount>=200 or a page returned <20 rows.
+  bool _feedEnded = false;
 
   @override
   void initState() {
@@ -249,13 +244,10 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
       _loadingFirst = true;
       _loadingMore = false;
       _reachedEnd = false;
+      _feedEnded = false;
       _pageError = null;
       _pageNetworkError = false;
       _suggestions = [];
-      _paginationPage = 1;
-      _captchaLoading = false;
-      _addingItems = false;
-      _animatedFrom = 0;
       _buyableCategoryTotal = null;
     });
     try {
@@ -332,12 +324,22 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
         RenderLog.write('c109_search_untouched',
             'term=$term;rows=${page.length};includes_no_image=$anyNoImage;includes_non_buyable=$anyNonBuyable');
       }
+      final ended = page.length < MedicineRepository.pageSize || page.length >= 200;
+      if (_onlyBuyable) {
+        RenderLog.write('c112_browse_page_loaded',
+            'category=${widget.category};page_offset=0;rows_returned=${page.length};loadedCount=${page.length}');
+        if (page.length >= 100) {
+          RenderLog.write('c112_no_captcha_on_browse',
+              'category=${widget.category};loadedCount=${page.length}');
+        }
+      }
       setState(() {
         _items
           ..clear()
           ..addAll(page);
         _loadingFirst = false;
         _reachedEnd = page.length < MedicineRepository.pageSize;
+        _feedEnded = ended;
       });
       // After results arrive for a real search query, scroll to the grid.
       if (widget.query.trim().length >= 2) {
@@ -365,16 +367,21 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
   }
 
   Future<void> _loadMore() async {
-    if (_loadingFirst || _loadingMore || _reachedEnd || _addingItems) return;
-    if (_paginationPage == 1 && _items.length >= 100) return;
-    if (_paginationPage == 2 && _items.length >= 200) return;
+    if (_loadingFirst || _loadingMore || _reachedEnd || _feedEnded) return;
+    // Hard cap: never request past 200 items.
+    if (_items.length >= 200) {
+      RenderLog.write('c112_browse_cap_200', 'category=${widget.category}');
+      setState(() => _feedEnded = true);
+      return;
+    }
     final token = _loadToken;
+    final offset = _items.length;
     setState(() => _loadingMore = true);
     try {
       final pageResult = await widget.repo.fetchPage(
         category: widget.category,
         query: widget.query,
-        offset: _items.length,
+        offset: offset,
         onlyBuyable: _onlyBuyable,
       );
       if (token != _loadToken || !mounted) return;
@@ -382,10 +389,25 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
       if (pageResult.exactCount != null) {
         setState(() => _buyableCategoryTotal = pageResult.exactCount);
       }
+      final newCount = _items.length + page.length;
+      final ended = page.length < MedicineRepository.pageSize || newCount >= 200;
+      if (_onlyBuyable) {
+        RenderLog.write('c112_browse_page_loaded',
+            'category=${widget.category};page_offset=$offset;rows_returned=${page.length};loadedCount=$newCount');
+        // Prove no captcha fires — key present at every load including >=100.
+        if (newCount >= 100) {
+          RenderLog.write('c112_no_captcha_on_browse',
+              'category=${widget.category};loadedCount=$newCount');
+        }
+        if (newCount >= 200) {
+          RenderLog.write('c112_browse_cap_200', 'category=${widget.category}');
+        }
+      }
       setState(() {
         _items.addAll(page);
         _loadingMore = false;
         _reachedEnd = page.length < MedicineRepository.pageSize;
+        _feedEnded = ended;
       });
     } catch (e) {
       if (token != _loadToken || !mounted) return;
@@ -398,93 +420,7 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
     // products are now loaded exclusively via the Load More button.
   }
 
-  // _maybeAutoFill removed — loading is now manual (Load More button only).
-
-  Future<void> _onLoadMorePressed() async {
-    if (_captchaLoading || _addingItems) return;
-    setState(() => _captchaLoading = true);
-    final captchaToken = await _showRecaptcha();
-    if (!mounted) return;
-    if (captchaToken == null) {
-      setState(() => _captchaLoading = false);
-      return;
-    }
-    final loadToken = _loadToken;
-    final offset = _items.length;
-    try {
-      final pageResult = await widget.repo.fetchPage(
-        category: widget.category,
-        query: widget.query,
-        offset: offset,
-        limit: 100,
-        onlyBuyable: _onlyBuyable,
-      );
-      if (loadToken != _loadToken || !mounted) return;
-      final page = pageResult.items;
-      if (pageResult.exactCount != null) {
-        setState(() => _buyableCategoryTotal = pageResult.exactCount);
-      }
-      // Record where new items start so _gridBody can animate them,
-      // then switch from captcha-spinner to the drip-feed phase.
-      setState(() {
-        _animatedFrom = _items.length;
-        _captchaLoading = false;
-        _addingItems = true;
-      });
-      // Drip-feed each product one at a time so cards slide in individually.
-      for (var i = 0; i < page.length; i++) {
-        await Future.delayed(const Duration(milliseconds: 50));
-        if (loadToken != _loadToken || !mounted) return;
-        setState(() => _items.add(page[i]));
-      }
-      if (loadToken != _loadToken || !mounted) return;
-      setState(() {
-        _paginationPage = 2;
-        _addingItems = false;
-        _reachedEnd = page.length < 100;
-      });
-      // Scroll to the bottom so the last batch of new products is visible.
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && _scroll.hasClients) {
-          _scroll.animateTo(
-            _scroll.position.maxScrollExtent,
-            duration: const Duration(milliseconds: 600),
-            curve: Curves.easeOut,
-          );
-        }
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _captchaLoading = false;
-        _addingItems = false;
-      });
-    }
-  }
-
-  Future<String?> _showRecaptcha() {
-    final completer = Completer<String?>();
-    // ignore: deprecated_member_use
-    final jsCallback = js.JsFunction.withThis((dynamic _, dynamic token) {
-      if (!completer.isCompleted) {
-        // JS strings cross the interop boundary as dynamic, not Dart String —
-        // convert via toString() and treat empty/null as cancelled.
-        final t = token?.toString();
-        completer.complete((t != null && t.isNotEmpty) ? t : null);
-      }
-    });
-    js.context.callMethod('showRecaptcha', [jsCallback]);
-    return completer.future;
-  }
-
-  // Unified Load More: non-captcha for first 100, captcha-gated beyond that.
-  void _handleLoadMore() {
-    if (_paginationPage == 1 && _items.length >= 100 && !_reachedEnd) {
-      _onLoadMorePressed();
-    } else {
-      _loadMore();
-    }
-  }
+  void _handleLoadMore() => _loadMore();
 
   void _scrollToProducts() {
     final ctx = _productsKey.currentContext;
@@ -565,17 +501,15 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
                 loadingFirst: _loadingFirst,
                 loadingMore: _loadingMore,
                 reachedEnd: _reachedEnd,
+                feedEnded: _feedEnded,
+                totalN: _buyableCategoryTotal ?? 0,
                 error: _pageError,
                 isNetworkError: _pageNetworkError,
                 suggestions: _suggestions,
                 onClear: () => widget.onCategorySelected('All'),
                 onRetry: _resetAndLoad,
                 onSuggestionTap: widget.onSuggestionTap,
-                paginationPage: _paginationPage,
-                captchaLoading: _captchaLoading,
                 onLoadMore: _handleLoadMore,
-                addingItems: _addingItems,
-                animatedFrom: _animatedFrom,
               ),
             ),
           ),
@@ -1159,17 +1093,15 @@ class _ProductsSection extends StatelessWidget {
   final bool loadingFirst;
   final bool loadingMore;
   final bool reachedEnd;
+  final bool feedEnded;
+  final int totalN;
   final Object? error;
   final bool isNetworkError;
   final List<String> suggestions;
   final VoidCallback onClear;
   final VoidCallback onRetry;
   final ValueChanged<String> onSuggestionTap;
-  final int paginationPage;
-  final bool captchaLoading;
   final VoidCallback onLoadMore;
-  final bool addingItems;
-  final int animatedFrom;
   const _ProductsSection({
     required this.items,
     required this.categoryTotal,
@@ -1178,17 +1110,15 @@ class _ProductsSection extends StatelessWidget {
     required this.loadingFirst,
     required this.loadingMore,
     required this.reachedEnd,
+    required this.feedEnded,
+    required this.totalN,
     required this.error,
     this.isNetworkError = false,
     required this.suggestions,
     required this.onClear,
     required this.onRetry,
     required this.onSuggestionTap,
-    required this.paginationPage,
-    required this.captchaLoading,
     required this.onLoadMore,
-    required this.addingItems,
-    required this.animatedFrom,
   });
 
   String _buildSubtitle() {
@@ -1196,10 +1126,14 @@ class _ProductsSection extends StatelessWidget {
     if (q.isEmpty) {
       final catSuffix =
           category != 'All' ? ' in ${prettyCategory(category)}' : '';
-      return 'Showing ${items.length} of $categoryTotal products$catSuffix';
+      // totalN is the real get_storefront_count value — never capped at 200.
+      final n = totalN > 0 ? totalN : categoryTotal;
+      RenderLog.write('c112_count_label',
+          'category=$category;X=${items.length};N=$n');
+      return 'Showing ${items.length} of $n products$catSuffix';
     }
     // At the 200-item cap for search
-    if (paginationPage == 2 && (reachedEnd || items.length >= 200)) {
+    if (reachedEnd && items.length >= 200) {
       return 'Showing ${items.length} results for “$q” — try a more specific term';
     }
     // All results fit within the first page
@@ -1207,9 +1141,8 @@ class _ProductsSection extends StatelessWidget {
       final n = items.length;
       return '$n result${n == 1 ? '' : 's'} found for “$q”';
     }
-    // Loading or capped at 100 with more available
-    final shown = items.length >= 100 ? '100+' : '${items.length}+';
-    return 'Showing $shown results for “$q”';
+    // Loading or more available
+    return 'Showing ${items.length}+ results for “$q”';
   }
 
   @override
@@ -1247,8 +1180,8 @@ class _ProductsSection extends StatelessWidget {
 
     final isSearch = query.trim().isNotEmpty;
 
-    // Show a spinner-inside-button while any loading is in progress.
-    if (captchaLoading || loadingMore || addingItems) {
+    // Spinner while loading next page.
+    if (loadingMore) {
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 20),
         child: Center(
@@ -1272,15 +1205,49 @@ class _ProductsSection extends StatelessWidget {
       );
     }
 
-    // Hard cap at 200 items or reached end of catalogue.
-    if (reachedEnd || items.length >= 200) {
+    // Browse feed ended (hit 200 cap or small category exhausted).
+    if (!isSearch && feedEnded) {
+      final showHint = totalN > 0 && items.length < totalN;
+      if (showHint) {
+        RenderLog.write('c112_feed_end_hint',
+            'category=$category;loadedCount=${items.length};totalN=$totalN');
+        return Padding(
+          padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 16),
+          child: Center(
+            child: Text.rich(
+              TextSpan(
+                style: const TextStyle(
+                    fontSize: 13,
+                    color: Brand.inkMuted,
+                    fontStyle: FontStyle.italic),
+                children: [
+                  TextSpan(
+                    text: 'Use search feature',
+                    style: TextStyle(
+                        color: Brand.green,
+                        fontWeight: FontWeight.w600,
+                        fontStyle: FontStyle.normal),
+                  ),
+                  const TextSpan(
+                      text: ' to find products under a seconds'),
+                ],
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ),
+        );
+      } else {
+        RenderLog.write('c112_feed_end_full',
+            'category=$category;loadedCount=${items.length};totalN=$totalN');
+        return const SizedBox(height: 12);
+      }
+    }
+
+    // Search end states.
+    if (isSearch && (reachedEnd || items.length >= 200)) {
       final msg = items.length >= 200
-          ? (isSearch
-              ? '🔍 Try a more specific search for more results'
-              : '🔍 Use Search for more products')
-          : (isSearch
-              ? 'All results shown for "${query.trim()}"'
-              : "You've reached the end of this category");
+          ? '🔍 Try a more specific search for more results'
+          : 'All results shown for "${query.trim()}"';
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 12),
         child: Center(
@@ -1350,15 +1317,6 @@ class _ProductsSection extends StatelessWidget {
           itemCount: items.length,
           itemBuilder: (context, i) {
             final card = ProductCard(product: items[i], isBestSeller: i < 3);
-            // "Load More" batch: each card slides in as it's added (no delay —
-            // the 50 ms stagger comes from the drip-feed loop in state).
-            if (animatedFrom > 0 && i >= animatedFrom) {
-              return EntranceAnimator(
-                key: ValueKey(items[i].id),
-                delay: Duration.zero,
-                child: card,
-              );
-            }
             // First page: stagger entrance on initial load.
             if (i < MedicineRepository.pageSize) {
               return EntranceAnimator(

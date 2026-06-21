@@ -3508,7 +3508,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
             // Header: title + X close button (#120: ▶ moved to chip row; #111: visible X)
         Builder(builder: (_) {
           RenderLog.write('c110_close_btn', 'present=y');
-          RenderLog.write('c111_close_btn_built', 'visible=y;color=green');
+          RenderLog.write('c111_close_btn_built', 'visible=y;color=dark');
           return Padding(
             padding: const EdgeInsets.fromLTRB(14, 10, 8, 6),
             child: Row(
@@ -3517,23 +3517,16 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
                 const Text('Counted items',
                     style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _kText)),
                 const Spacer(),
-                // #111: clearly visible X — dark icon, circular tap target, green border
+                // #111: plain X icon button, dark and clearly visible
                 GestureDetector(
                   onTap: () {
                     RenderLog.write('c110_close_tap', 'dismiss=y');
                     RenderLog.write('c111_close_tap', 'dismiss=y');
                     widget.onDismiss();
                   },
-                  child: Container(
-                    width: 28,
-                    height: 28,
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: const Color(0xFFF0FFF4),
-                      border: Border.all(color: _kGreen, width: 1),
-                    ),
-                    child: const Icon(Icons.close_rounded, size: 16, color: _kGreen),
+                  child: const Padding(
+                    padding: EdgeInsets.all(8),
+                    child: Icon(Icons.close_rounded, size: 20, color: _kText),
                   ),
                 ),
               ],

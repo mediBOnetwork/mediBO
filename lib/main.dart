@@ -89,6 +89,9 @@ void main() {
     RenderLog.write('inq_toggle_removed', 1);
     RenderLog.write('inq_company_header_removed', 1);
     RenderLog.write('inq_category_header_removed', 1);
+    // #111 static build properties (3-group accordion, no refresh button)
+    RenderLog.write('inq.norefreshbtn', 1);
+    RenderLog.write('inq.colours', 'pending=yellow;inquired=green;expired=red');
     RenderLog.write('screen', 'boot');
 
     // Selftest hook (guarded; no-op without exact secret; mark for removal in #64).

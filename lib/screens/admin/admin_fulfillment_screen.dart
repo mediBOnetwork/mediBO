@@ -394,6 +394,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c117_voice_ready', 'platform=web');
     RenderLog.write('c117_no_seek', 'true'); // static: seek/highlight removed in #117
     RenderLog.write('c118_table_flow', 'cols=flexible,qty_wrap=y'); // static: #118 responsive table
+    RenderLog.write('c119_no_timestamps', 'true'); // static: no t_start/t_end in #119
     // #85: agent button present — written in initState (IndexedStack always mounts)
     RenderLog.write('change_85_agent_button_present', '1');
     RenderLog.write('change_86_voice_card_present', '1');
@@ -3115,13 +3116,19 @@ class _CountedMentionsPopup extends StatefulWidget {
   State<_CountedMentionsPopup> createState() => _CountedMentionsPopupState();
 }
 
+// #119: per-mention entry retaining recording_seq + ord for pill coloring and reordering.
+// No timestamp fields — green state is purely seq-based.
+typedef _QtyEntry = ({int qty, int seq, int ord});
+
 class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
   List<Map<String, dynamic>>? _mentions;
   String? _error;
 
   // Web audio player — dart:html AudioElement (web-only; this file already imports dart:html)
   html.AudioElement? _audio;
-  String? _playingClip; // clip_path of the currently-playing recording
+  String? _playingClip;   // clip_path of currently-playing recording
+  int? _playingSeq;       // #119: recording_seq of playing clip (drives green state)
+  int? _selectedClipSeq;  // #119: clip last tapped (drives reorder; null = default order)
 
   @override
   void initState() {
@@ -3143,8 +3150,8 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
       if (!mounted) return;
       final mentions = rows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
       final distinctClips = mentions.map((r) => r['clip_path']?.toString() ?? '').toSet().length;
-      RenderLog.write('c117_counted_table_built',
-          'supplier=${widget.supplierName};products=${_uniqueNames(mentions)};total_mentions=${mentions.length};distinct_clips=$distinctClips');
+      RenderLog.write('c119_popup_built',
+          'clips=$distinctClips;products=${_uniqueNames(mentions)};total_mentions=${mentions.length};retains_seq=y');
       setState(() => _mentions = mentions);
     } catch (e) {
       if (mounted) setState(() => _error = e.toString());
@@ -3154,10 +3161,10 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
   int _uniqueNames(List<Map<String, dynamic>> rows) =>
       rows.map((r) => r['matched_name']?.toString() ?? '').toSet().length;
 
-  // #117: whole-clip play — no seeking, no auto-stop, no highlight.
+  // Whole-clip play — no seeking, no timestamps.
   Future<void> _playWholeClip(String clipPath, int recordingSeq) async {
     _audio?.pause();
-    if (mounted) setState(() => _playingClip = null);
+    if (mounted) setState(() { _playingClip = null; _playingSeq = null; });
 
     try {
       final url = await Supabase.instance.client.storage
@@ -3167,26 +3174,41 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
 
       final a = html.AudioElement(url);
       _audio = a;
-      if (mounted) setState(() => _playingClip = clipPath);
+      if (mounted) setState(() { _playingClip = clipPath; _playingSeq = recordingSeq; });
 
       a.onEnded.listen((_) {
         if (!mounted || _audio != a) return;
-        setState(() => _playingClip = null);
+        setState(() { _playingClip = null; _playingSeq = null; });
+        RenderLog.write('c119_play_state', 'playing_seq=none;is_playing=false');
       });
 
       a.play();
       RenderLog.write('c117_clip_play', 'clip=${clipPath.split('/').last};recording_seq=$recordingSeq');
+      RenderLog.write('c119_play_state', 'playing_seq=$recordingSeq;is_playing=true');
     } catch (_) {
       if (mounted) {
-        setState(() => _playingClip = null);
+        setState(() { _playingClip = null; _playingSeq = null; });
         _showSnackMsg('Playback unavailable');
       }
     }
   }
 
+  // #119: tap a clip chip — reorder + play.
+  void _tapClip(String clipPath, int recordingSeq) {
+    if (_playingClip == clipPath) {
+      // Already playing — stop and clear reorder
+      _stopAudio();
+      setState(() => _selectedClipSeq = null);
+    } else {
+      setState(() => _selectedClipSeq = recordingSeq);
+      _playWholeClip(clipPath, recordingSeq);
+      RenderLog.write('c119_clip_tapped', 'seq=$recordingSeq;reordered=y;playing=y');
+    }
+  }
+
   void _stopAudio() {
     _audio?.pause();
-    if (mounted) setState(() => _playingClip = null);
+    if (mounted) setState(() { _playingClip = null; _playingSeq = null; });
   }
 
   void _showSnackMsg(String msg) {
@@ -3210,43 +3232,69 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
     return result;
   }
 
-  // Group rows by matched_name preserving RPC order (recording_seq, ord).
-  // Returns: [{name, qtySequence (list of ints), total, ordered}]
-  List<({String name, List<int> qtys, int total, int ordered})>
+  // #119: group rows by matched_name, retaining per-qty (recording_seq, ord) for pill coloring + reordering.
+  // No timestamp fields are read here.
+  List<({String name, List<_QtyEntry> entries, int total, int ordered})>
       _groupMentions(List<Map<String, dynamic>> rows) {
     final nameOrder = <String>[];
-    final byName = <String, List<int>>{};
+    final byName = <String, List<_QtyEntry>>{};
     for (final r in rows) {
       final name = r['matched_name']?.toString() ?? '?';
       if (!byName.containsKey(name)) nameOrder.add(name);
-      byName.putIfAbsent(name, () => []).add((r['qty'] as num?)?.toInt() ?? 0);
+      byName.putIfAbsent(name, () => []).add((
+        qty: (r['qty'] as num?)?.toInt() ?? 0,
+        seq: (r['recording_seq'] as num?)?.toInt() ?? 0,
+        ord: (r['ord'] as num?)?.toInt() ?? 0,
+      ));
     }
     final orderedMap = <String, int>{};
     for (final item in widget.orderItems) {
       final name = item['product_name']?.toString();
-      if (name != null) {
-        orderedMap[name] = (item['ordered_qty'] as num?)?.toInt() ?? 0;
-      }
+      if (name != null) orderedMap[name] = (item['ordered_qty'] as num?)?.toInt() ?? 0;
     }
     return nameOrder.map((name) {
-      final qtys = byName[name]!;
-      final total = qtys.fold(0, (s, q) => s + q);
-      return (name: name, qtys: qtys, total: total, ordered: orderedMap[name] ?? 0);
+      final entries = byName[name]!;
+      final total = entries.fold(0, (s, e) => s + e.qty);
+      return (name: name, entries: entries, total: total, ordered: orderedMap[name] ?? 0);
     }).toList();
+  }
+
+  // #119: reorder groups so selected clip's products come first (in clip's spoken order).
+  List<({String name, List<_QtyEntry> entries, int total, int ordered})> _reorder(
+    List<({String name, List<_QtyEntry> entries, int total, int ordered})> groups,
+    int? clipSeq,
+  ) {
+    if (clipSeq == null) return groups;
+    // First-ord of each product in this clip (for ordering).
+    final firstOrd = <String, int>{};
+    for (final g in groups) {
+      for (final e in g.entries) {
+        if (e.seq == clipSeq) {
+          if (!firstOrd.containsKey(g.name) || e.ord < firstOrd[g.name]!) {
+            firstOrd[g.name] = e.ord;
+          }
+        }
+      }
+    }
+    final inClip = groups.where((g) => firstOrd.containsKey(g.name)).toList()
+      ..sort((a, b) => firstOrd[a.name]!.compareTo(firstOrd[b.name]!));
+    final notInClip = groups.where((g) => !firstOrd.containsKey(g.name)).toList();
+    return [...inClip, ...notInClip];
   }
 
   @override
   Widget build(BuildContext context) {
+    RenderLog.write('c119_no_timestamps', 'true'); // static: no t_start/t_end used
+
     final mentions = _mentions;
     final clips = mentions != null ? _distinctClips(mentions) : <({int seq, String clipPath})>[];
     final multiClip = clips.length > 1;
 
-    // #118: log popup width vs screen for SV2 verification
+    // #118: log popup width vs screen
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final sw = MediaQuery.of(context).size.width;
       final isMobile = sw < 600;
-      // The popup width is the render box width of this widget's parent.
       final ro = context.findRenderObject();
       final pw = (ro is RenderBox && ro.hasSize) ? ro.size.width : 0.0;
       RenderLog.write('c118_counted_popup_built',
@@ -3257,21 +3305,20 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // Header: title + play controls
+        // Header: title + single-clip play (if only one clip)
         Padding(
           padding: const EdgeInsets.fromLTRB(14, 12, 10, 8),
           child: Row(children: [
             const Text('Counted items',
                 style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _kText)),
             const SizedBox(width: 8),
-            // Single-clip: one ▶/⏸ in the header
             if (!multiClip && clips.isNotEmpty)
               _ClipPlayButton(
                 label: null,
                 clipPath: clips.first.clipPath,
                 recordingSeq: clips.first.seq,
                 playing: _playingClip == clips.first.clipPath,
-                onPlay: () => _playWholeClip(clips.first.clipPath, clips.first.seq),
+                onPlay: () => _tapClip(clips.first.clipPath, clips.first.seq),
                 onStop: _stopAudio,
               ),
             const Spacer(),
@@ -3281,7 +3328,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
             ),
           ]),
         ),
-        // Multi-clip row: "Clip 1 ▶  Clip 2 ▶ …"
+        // Multi-clip row: "Clip 1 ▶  Clip 2 ▶ …" — tap = reorder + play
         if (multiClip)
           Padding(
             padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
@@ -3296,14 +3343,14 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
                   clipPath: clip.clipPath,
                   recordingSeq: clip.seq,
                   playing: _playingClip == clip.clipPath,
-                  onPlay: () => _playWholeClip(clip.clipPath, clip.seq),
+                  onPlay: () => _tapClip(clip.clipPath, clip.seq),
                   onStop: _stopAudio,
                 );
               }).toList(),
             ),
           ),
         const Divider(height: 1, color: _kBorder),
-        // Body: product table or states
+        // Body
         if (_error != null)
           Padding(
             padding: const EdgeInsets.all(14),
@@ -3326,7 +3373,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
             child: SingleChildScrollView(
               child: Padding(
                 padding: const EdgeInsets.symmetric(vertical: 4),
-                child: _buildTable(_groupMentions(mentions)),
+                child: _buildTable(_reorder(_groupMentions(mentions), _selectedClipSeq)),
               ),
             ),
           ),
@@ -3334,7 +3381,9 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
     );
   }
 
-  Widget _buildTable(List<({String name, List<int> qtys, int total, int ordered})> groups) {
+  Widget _buildTable(
+      List<({String name, List<_QtyEntry> entries, int total, int ordered})> groups) {
+    final playSeq = _playingSeq; // current playing seq for pill coloring
     return Table(
       columnWidths: const {
         0: FlexColumnWidth(3),
@@ -3367,17 +3416,23 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
               child: Wrap(
                 spacing: 4,
                 runSpacing: 4,
-                children: g.qtys.map((q) => Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFF5F6F8),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: _kBorder),
-                  ),
-                  child: Text('$q',
-                      style: const TextStyle(
-                        fontSize: 12, fontWeight: FontWeight.w600, color: _kText)),
-                )).toList(),
+                children: g.entries.map((e) {
+                  // #119: green if this pill's clip is playing
+                  final active = playSeq != null && e.seq == playSeq;
+                  return Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: active ? _kGreen : const Color(0xFFF5F6F8),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: active ? _kGreen : _kBorder),
+                    ),
+                    child: Text('${e.qty}',
+                        style: TextStyle(
+                          fontSize: 12, fontWeight: FontWeight.w600,
+                          color: active ? Colors.white : _kText,
+                        )),
+                  );
+                }).toList(),
               ),
             ),
             Padding(

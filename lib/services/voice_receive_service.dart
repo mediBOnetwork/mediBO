@@ -91,6 +91,8 @@ class VoiceReceiveService {
     );
     RenderLog.write('c115_clip_uploaded',
         'platform=${kIsWeb ? 'web' : 'native'};supplier=$supplierName;seq=$recordingSeq;path=$path;ext=$ext;mime=$mimeForUpload');
+    final tail = path.length >= 8 ? path.substring(path.length - 8) : path;
+    RenderLog.write('c125_clip_uploaded', 'seq=$recordingSeq;path_tail=$tail;upsert=y;http_ok=y');
     return path;
   }
 

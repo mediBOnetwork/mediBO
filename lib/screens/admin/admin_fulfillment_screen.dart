@@ -318,7 +318,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   List<Map<String, dynamic>> _supplierOrderItems = [];
 
   // ── #115: clip persistence ──────────────────────────────────────────────────
-  int _recordingSeq = 0;      // increments each clip for this supplier session
+  // #125: _recordingSeq removed — seq now comes from next_voice_recording_seq RPC
   String? _latestClipPath;    // last uploaded clip path (for ▶ whole-clip play)
 
   // ── "Ask mediBO" voice-agent state (#85) ────────────────────────────────────
@@ -406,6 +406,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c122_ask_ready', 'tts=cloud'); // static: #122 cloud TTS WaveNet
     RenderLog.write('c123_ready', 'handles_ask=y;fast_voice=y'); // static: #123 clean+fast
     RenderLog.write('c124_ready', 'per_clip_path=y'); // static: #124 per-clip signed URL
+    RenderLog.write('c125_ready', 'server_seq=y'); // static: #125 seq from RPC not local counter
     // #85: agent button present — written in initState (IndexedStack always mounts)
     RenderLog.write('change_85_agent_button_present', '1');
     RenderLog.write('change_86_voice_card_present', '1');
@@ -510,7 +511,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       _supplierOrderItems = [];
       _tally.clear();
       _voiceCallsDuringRecord = 0; _voiceCallsAfterStop = 0;
-      _recordingSeq = 0; _latestClipPath = null; // #115: reset clip state per supplier
+      _latestClipPath = null; // #115: reset clip state per supplier (#125: no local seq — comes from RPC)
     });
     try {
       final res = await Supabase.instance.client
@@ -741,15 +742,33 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
       // #115: upload clip (fire-and-forget — failure must not block counting)
       final supplier = _selectedSupplier;
-      final seq = ++_recordingSeq;
+      // #125: get authoritative seq from server so every clip gets a unique filename
+      int seq = 0;
       String clipPath = '';
+      bool clipSaved = false;
       if (supplier != null) {
         try {
+          // #125: RPC returns next unique seq for this supplier today (max+1)
+          final seqRaw = await Supabase.instance.client
+              .rpc('next_voice_recording_seq', params: {'p_supplier_name': supplier});
+          seq = (seqRaw as num?)?.toInt() ?? 0;
+          if (seq <= 0) {
+            // fallback: timestamp-based suffix — never collides
+            seq = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+          }
+          RenderLog.write('c125_seq_fetched', 'supplier=$supplier;seq=$seq');
           clipPath = await _voiceService.uploadClip(
             result.bytes, supplier, seq, result.ext,
           );
+          clipSaved = true;
           setState(() => _latestClipPath = clipPath);
-        } catch (_) {} // upload failure must not block counting
+        } catch (e) {
+          RenderLog.write('c125_clip_upload_err', 'seq=$seq;err=${e.toString().substring(0, e.toString().length.clamp(0, 80))}');
+          if (clipPath.isEmpty) {
+            // Upload failed — warn user but don't block counting
+            _showSnack('Clip save failed — retry recording for this item');
+          }
+        }
       }
 
       final expected = _buildExpectedList();
@@ -761,15 +780,16 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       if (!mounted) { setState(() => _voiceProcessing = false); return; }
       RenderLog.write('84_voicecalls_after_stop', '$_voiceCallsAfterStop');
 
-      // #115: persist mentions (fire-and-forget)
-      if (mentions.isNotEmpty && supplier != null) {
+      // #115: persist mentions only if clip was saved (no clip_path → no mention row)
+      if (mentions.isNotEmpty && supplier != null && clipSaved && clipPath.isNotEmpty) {
         _voiceService.insertMentions(
           mentions: mentions,
           supplierName: supplier,
-          clipPath: clipPath ?? '',
+          clipPath: clipPath,
           recordingSeq: seq,
           orderItems: _items,
         ).ignore();
+        RenderLog.write('c125_mentions_inserted', 'seq=$seq;rows=${mentions.length}');
       }
 
       // #93 Part D: name-without-number hint (non-blocking — shows alongside any kept items)

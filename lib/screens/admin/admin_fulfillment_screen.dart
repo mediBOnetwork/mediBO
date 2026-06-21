@@ -405,6 +405,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c121_ask_ready', 'handles_ask=y'); // static: #121 ask intent handled
     RenderLog.write('c122_ask_ready', 'tts=cloud'); // static: #122 cloud TTS WaveNet
     RenderLog.write('c123_ready', 'handles_ask=y;fast_voice=y'); // static: #123 clean+fast
+    RenderLog.write('c124_ready', 'per_clip_path=y'); // static: #124 per-clip signed URL
     // #85: agent button present — written in initState (IndexedStack always mounts)
     RenderLog.write('change_85_agent_button_present', '1');
     RenderLog.write('change_86_voice_card_present', '1');
@@ -3238,14 +3239,24 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
 
   // Whole-clip play — no seeking, no timestamps.
   Future<void> _playWholeClip(String clipPath, int recordingSeq) async {
+    if (clipPath.isEmpty) {
+      _showSnackMsg('Audio unavailable for this clip');
+      return;
+    }
     _audio?.pause();
     if (mounted) setState(() { _playingClip = null; _playingSeq = null; });
+
+    // #124: log the path used for THIS clip BEFORE fetching URL (proves per-clip routing)
+    final tail = clipPath.length >= 8 ? clipPath.substring(clipPath.length - 8) : clipPath;
+    RenderLog.write('c124_clip_play', 'recording_seq=$recordingSeq;clip_path_tail=$tail');
 
     try {
       final url = await Supabase.instance.client.storage
           .from('voice-clips')
           .createSignedUrl(clipPath, 3600);
       if (!mounted) return;
+
+      RenderLog.write('c124_signed_url', 'clip_path_tail=$tail;ok=y');
 
       final a = html.AudioElement(url);
       _audio = a;
@@ -3257,13 +3268,22 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
         RenderLog.write('c119_play_state', 'playing_seq=none;is_playing=false');
       });
 
+      // #124: handle audio load/decode errors (missing onError was causing silent failures)
+      a.onError.listen((_) {
+        if (!mounted || _audio != a) return;
+        setState(() { _playingClip = null; _playingSeq = null; });
+        _showSnackMsg('Playback unavailable');
+        RenderLog.write('c124_signed_url', 'clip_path_tail=$tail;ok=n;reason=audio_error');
+      });
+
       a.play();
       RenderLog.write('c117_clip_play', 'clip=${clipPath.split('/').last};recording_seq=$recordingSeq');
       RenderLog.write('c119_play_state', 'playing_seq=$recordingSeq;is_playing=true');
-    } catch (_) {
+    } catch (e) {
       if (mounted) {
         setState(() { _playingClip = null; _playingSeq = null; });
         _showSnackMsg('Playback unavailable');
+        RenderLog.write('c124_signed_url', 'clip_path_tail=$tail;ok=n;reason=exception');
       }
     }
   }

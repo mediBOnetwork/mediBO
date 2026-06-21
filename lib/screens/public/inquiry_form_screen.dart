@@ -473,8 +473,6 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
               },
               onBulkCompanyCategory: _bulkDontStockCompanyCategory,
               surface: 'link',
-              showClusterDontStockHeaders: false,
-              anchoredDontStockPopup: true,
             ),
             const SizedBox(height: 8),
             SizedBox(

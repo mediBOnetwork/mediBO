@@ -69,9 +69,9 @@ const _kWideBreakpoint = 500.0;
 
 /// Shared inquiry item list for all three surfaces (admin, token link, supplier).
 ///
-/// Items are ordered company→category→product_name A→Z.  No toggle, no header
-/// chrome — the card already shows category pill and company line.  A slim
-/// "Don't stock all <Category>" affordance precedes each cluster.
+/// Items are sorted company→category→product_name A→Z and rendered as a clean
+/// flat list — no toggle, no company/category group headers. The per-card
+/// category chip and company name make headers redundant.
 ///
 /// onBulkCompanyCategory: bulk RPC for (company, category) — returns marked
 ///   count on success, null on error.
@@ -87,11 +87,6 @@ class InquiryAnswerList extends StatefulWidget {
   final bool readOnly;
   final Widget Function(Map<String, dynamic> item)? itemTrailingWidget;
   final String? surface;
-  /// Whether to show "Don't stock all <Category>" cluster-header links.
-  final bool showClusterDontStockHeaders;
-  /// When true, the "Don't stock all…?" confirm popup floats anchored
-  /// above/below the tapped button instead of a bottom-center toast.
-  final bool anchoredDontStockPopup;
 
   const InquiryAnswerList({
     super.key,
@@ -104,8 +99,6 @@ class InquiryAnswerList extends StatefulWidget {
     this.readOnly = false,
     this.itemTrailingWidget,
     this.surface,
-    this.showClusterDontStockHeaders = true,
-    this.anchoredDontStockPopup = false,
   });
 
   @override
@@ -176,9 +169,6 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
     return widget.answerOverrides[id] ?? item['answer'] as String?;
   }
 
-  bool _hasAnswerable(List<Map<String, dynamic>> items) =>
-      items.any((i) => !_isLocked(i) && !_noSupplier(i));
-
   // ── Popup (bottom-center toast) ────────────────────────────────────────────
 
   void _closePopup() {
@@ -195,10 +185,7 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
     final company = (item['company'] as String? ?? '').trim();
     final category = (item['therapeutic_class'] as String? ?? '').trim();
 
-    if (widget.anchoredDontStockPopup) {
-      RenderLog.write(
-          'dontstock.tap', '$id:$category|$company');
-    }
+    RenderLog.write('dontstock.tap', '$id:$category|$company');
 
     if (company.isEmpty && category.isEmpty) return;
     if (widget.onBulkCompanyCategory == null) return;
@@ -206,12 +193,13 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
     _closePopup();
     _popupShownCount++;
     RenderLog.write('inq_dontstock_popup_shown', _popupShownCount);
+    RenderLog.write('inq_dontstock_popup_compact', 1);
 
-    if (widget.anchoredDontStockPopup && buttonKey != null) {
+    // Responsive: anchored above button on desktop (>600px), bottom-center on mobile.
+    final isWide = MediaQuery.of(context).size.width > 600;
+    if (isWide && buttonKey != null) {
       _showAnchoredPopup(buttonKey, id, company, category);
     } else {
-      // Bottom-center toast (original behaviour — admin + supplier surfaces)
-      RenderLog.write('inq_popup_compact', 1);
       RenderLog.write('inq_popup_anchor', 'bottom_center');
       final overlay = Overlay.of(context, rootOverlay: true);
       _popupEntry = OverlayEntry(
@@ -219,7 +207,7 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
           company: company,
           category: category,
           hasBulk: true,
-          onYesAll: () => _doBulkCompanyCategory(company, category),
+          onMarkAll: () => _doBulkCompanyCategory(company, category),
           onDismiss: _closePopup,
         ),
       );
@@ -266,7 +254,7 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
     final anchorSide = fitsAbove ? 'above' : 'below';
 
     RenderLog.write('popup.anchor', '$anchorSide:$id');
-    RenderLog.write('popup.style.ok', 'bg=#FCE8E8;yesall=#D32F2F');
+    RenderLog.write('inq_popup_anchor', '$anchorSide:$id');
 
     final overlay = Overlay.of(context, rootOverlay: true);
     _popupEntry = OverlayEntry(
@@ -276,7 +264,7 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
         popupWidth: popupW,
         company: company,
         category: category,
-        onYesAll: () => _doBulkCompanyCategory(company, category),
+        onMarkAll: () => _doBulkCompanyCategory(company, category),
         onDismiss: _closePopup,
       ),
     );
@@ -333,41 +321,15 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
     }
   }
 
-  Future<void> _clusterDontStockAll(
-      String company, String category) async {
-    if (widget.onBulkCompanyCategory != null) {
-      await _doBulkCompanyCategory(company, category);
-    } else {
-      final ids = widget.items
-          .where((i) {
-            final c = (i['company'] as String? ?? '').trim();
-            final ck = c.isEmpty ? 'Other' : c;
-            final t = (i['therapeutic_class'] as String? ?? '').trim();
-            final tk = t.isEmpty ? 'Uncategorised' : t.toUpperCase();
-            return ck == company &&
-                tk == category &&
-                !_isLocked(i) &&
-                !_noSupplier(i);
-          })
-          .map((i) => (i['inquiry_id'] as num).toInt())
-          .toList();
-      if (widget.onBulk != null && ids.isNotEmpty) {
-        widget.onBulk!(ids, "We don't stock this product");
-      } else {
-        for (final id in ids) {
-          widget.onAnswer(id, "We don't stock this product");
-        }
-      }
-    }
-  }
-
   // ── Build ──────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
-    RenderLog.write('inq_chrome_stripped', 1);
-    RenderLog.write('inq_cluster_order', 'company_category');
-    RenderLog.write('inq_group_mode', 'company_category');
+    RenderLog.write('inq_flat_list', 1);
+    RenderLog.write('inq_toggle_removed', 1);
+    RenderLog.write('inq_company_header_removed', 1);
+    RenderLog.write('inq_category_header_removed', 1);
+    RenderLog.write('headerlinks.count', 0);
 
     final surf = widget.surface;
     if (surf == 'admin') RenderLog.write('inq_surface_admin_grouped', 1);
@@ -378,23 +340,12 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
       final isWide = constraints.maxWidth >= _kWideBreakpoint;
       final nested = _nestedGrouped();
 
-      RenderLog.write('headerlinks.count',
-          widget.showClusterDontStockHeaders ? nested.values
-              .expand((cats) => cats.entries)
-              .where((e) => _hasAnswerable(e.value))
-              .length : 0);
-
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
           for (final compEntry in nested.entries)
             for (final catEntry in compEntry.value.entries) ...[
-              if (!widget.readOnly &&
-                  widget.showClusterDontStockHeaders &&
-                  _hasAnswerable(catEntry.value))
-                _buildClusterDontStockRow(
-                    compEntry.key, catEntry.key),
               ...catEntry.value
                   .map((item) => _buildItemCard(item, isWide)),
               const SizedBox(height: 4),
@@ -402,55 +353,6 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
         ],
       );
     });
-  }
-
-  // ── Slim "Don't stock all <Category>" affordance ───────────────────────────
-
-  Widget _buildClusterDontStockRow(String company, String category) {
-    final catKey = '$company|$category';
-    final inFlight = _bulkingCatKeys.contains(catKey);
-    final label = category.isNotEmpty
-        ? "Don't stock all $category"
-        : "Don't stock all";
-
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 4),
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: inFlight ? null : () => _clusterDontStockAll(company, category),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 3),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (inFlight)
-                const SizedBox(
-                  width: 10,
-                  height: 10,
-                  child: CircularProgressIndicator(
-                      strokeWidth: 1.5, color: Color(0xFF9CA3AF)),
-                )
-              else
-                const Icon(Icons.do_not_disturb_on_outlined,
-                    size: 11, color: Color(0xFF9CA3AF)),
-              const SizedBox(width: 4),
-              Flexible(
-                child: Text(
-                  label,
-                  style: const TextStyle(
-                      fontSize: 11,
-                      color: Color(0xFF9CA3AF),
-                      decoration: TextDecoration.underline,
-                      decorationColor: Color(0xFF9CA3AF)),
-                  overflow: TextOverflow.ellipsis,
-                  maxLines: 1,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
   }
 
   // ── Item card dispatcher ───────────────────────────────────────────────────
@@ -587,9 +489,7 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
         final chip = _kChips[i];
         final selected = currentAnswer == chip.answer;
         final isDontStock = chip.answer == "We don't stock this product";
-        final dsKey = (isDontStock && widget.anchoredDontStockPopup)
-            ? _dontStockKey(id)
-            : null;
+        final dsKey = isDontStock ? _dontStockKey(id) : null;
         return Padding(
           padding: EdgeInsets.only(left: i > 0 ? 8 : 0),
           child: GestureDetector(
@@ -755,9 +655,7 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
         final chip = _kChips[i];
         final selected = currentAnswer == chip.answer;
         final isDontStock = chip.answer == "We don't stock this product";
-        final dsKey = (isDontStock && widget.anchoredDontStockPopup)
-            ? _dontStockKey(id)
-            : null;
+        final dsKey = isDontStock ? _dontStockKey(id) : null;
         return Expanded(
           child: Padding(
             padding: EdgeInsets.only(
@@ -904,7 +802,21 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
   }
 }
 
-// ── Anchored "Don't stock all" popup (token form — CHANGE #109) ───────────────
+// ── Shared popup text helper ──────────────────────────────────────────────────
+
+String _dontStockPopupText(String category, String company) {
+  final cat = category;
+  final raw = company;
+  final comp = raw.length > 18 ? '${raw.substring(0, 18)}…' : raw;
+  if (cat.isNotEmpty && comp.isNotEmpty) {
+    return 'Also mark all $cat from $comp as "Don\'t stock"?';
+  }
+  if (cat.isNotEmpty) return 'Also mark all $cat as "Don\'t stock"?';
+  if (comp.isNotEmpty) return 'Also mark all from $comp as "Don\'t stock"?';
+  return 'Also mark all as "Don\'t stock"?';
+}
+
+// ── Anchored "Don't stock all" popup (desktop) ────────────────────────────────
 
 class _InqDontStockAnchoredPopup extends StatelessWidget {
   final double popupLeft;
@@ -912,7 +824,7 @@ class _InqDontStockAnchoredPopup extends StatelessWidget {
   final double popupWidth;
   final String company;
   final String category;
-  final VoidCallback onYesAll;
+  final VoidCallback onMarkAll;
   final VoidCallback onDismiss;
 
   const _InqDontStockAnchoredPopup({
@@ -921,23 +833,13 @@ class _InqDontStockAnchoredPopup extends StatelessWidget {
     required this.popupWidth,
     required this.company,
     required this.category,
-    required this.onYesAll,
+    required this.onMarkAll,
     required this.onDismiss,
   });
 
-  String get _text {
-    final cat = category;
-    final comp = company;
-    if (cat.isNotEmpty && comp.isNotEmpty) {
-      return "Don't stock all $cat from $comp?";
-    }
-    if (cat.isNotEmpty) return "Don't stock all $cat?";
-    if (comp.isNotEmpty) return "Don't stock all from $comp?";
-    return "Don't stock all?";
-  }
-
   @override
   Widget build(BuildContext context) {
+    final text = _dontStockPopupText(category, company);
     return Stack(
       children: [
         // Transparent barrier — tap outside dismisses
@@ -957,10 +859,10 @@ class _InqDontStockAnchoredPopup extends StatelessWidget {
             child: Container(
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
-                color: const Color(0xFFFCE8E8),
+                color: Colors.white,
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(
-                    color: const Color(0xFFF1B0B0), width: 1),
+                    color: const Color(0xFFE5E7EB), width: 1),
                 boxShadow: [
                   BoxShadow(
                     color: Colors.black.withValues(alpha: 0.12),
@@ -974,9 +876,9 @@ class _InqDontStockAnchoredPopup extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    _text,
+                    text,
                     style: const TextStyle(
-                      fontSize: 14,
+                      fontSize: 13,
                       fontWeight: FontWeight.w500,
                       color: Color(0xFF111827),
                       height: 1.4,
@@ -990,32 +892,27 @@ class _InqDontStockAnchoredPopup extends StatelessWidget {
                     children: [
                       GestureDetector(
                         onTap: onDismiss,
-                        child: Container(
-                          width: 32,
-                          height: 32,
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFF3F4F6),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: const Icon(Icons.close,
-                              size: 16, color: Color(0xFF6B7280)),
+                        child: const Padding(
+                          padding: EdgeInsets.all(6),
+                          child: Icon(Icons.close,
+                              size: 16, color: Color(0xFF9CA3AF)),
                         ),
                       ),
-                      const SizedBox(width: 8),
+                      const SizedBox(width: 6),
                       GestureDetector(
-                        onTap: onYesAll,
+                        onTap: onMarkAll,
                         child: Container(
                           padding: const EdgeInsets.symmetric(
-                              horizontal: 16, vertical: 8),
+                              horizontal: 14, vertical: 8),
                           decoration: BoxDecoration(
-                            color: const Color(0xFFD32F2F),
-                            borderRadius: BorderRadius.circular(10),
+                            color: const Color(0xFF1B7A43),
+                            borderRadius: BorderRadius.circular(8),
                           ),
                           child: const Text(
-                            'Yes, all',
+                            'Mark all',
                             style: TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w700,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
                               color: Colors.white,
                             ),
                           ),
@@ -1039,14 +936,14 @@ class _InqDontStockToast extends StatefulWidget {
   final String company;
   final String category;
   final bool hasBulk;
-  final VoidCallback onYesAll;
+  final VoidCallback onMarkAll;
   final VoidCallback onDismiss;
 
   const _InqDontStockToast({
     required this.company,
     required this.category,
     required this.hasBulk,
-    required this.onYesAll,
+    required this.onMarkAll,
     required this.onDismiss,
   });
 
@@ -1081,19 +978,9 @@ class _InqDontStockToastState extends State<_InqDontStockToast>
     super.dispose();
   }
 
-  String get _text {
-    final cat = widget.category;
-    final comp = widget.company;
-    if (cat.isNotEmpty && comp.isNotEmpty) {
-      return "Don't stock all $cat from $comp?";
-    }
-    if (cat.isNotEmpty) return "Don't stock all $cat?";
-    if (comp.isNotEmpty) return "Don't stock all from $comp?";
-    return "Don't stock all?";
-  }
-
   @override
   Widget build(BuildContext context) {
+    final text = _dontStockPopupText(widget.category, widget.company);
     return Stack(
       children: [
         Positioned.fill(
@@ -1114,7 +1001,7 @@ class _InqDontStockToastState extends State<_InqDontStockToast>
                   child: Material(
                     color: Colors.transparent,
                     child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 420),
+                      constraints: const BoxConstraints(maxWidth: 320),
                       child: Container(
                         padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
                         decoration: BoxDecoration(
@@ -1132,7 +1019,7 @@ class _InqDontStockToastState extends State<_InqDontStockToast>
                           children: [
                             Expanded(
                               child: Text(
-                                _text,
+                                text,
                                 style: const TextStyle(
                                     fontSize: 13,
                                     color: Colors.white,
@@ -1145,7 +1032,7 @@ class _InqDontStockToastState extends State<_InqDontStockToast>
                             if (widget.hasBulk) ...[
                               const SizedBox(width: 10),
                               GestureDetector(
-                                onTap: widget.onYesAll,
+                                onTap: widget.onMarkAll,
                                 child: Container(
                                   padding: const EdgeInsets.symmetric(
                                       horizontal: 12, vertical: 7),
@@ -1154,7 +1041,7 @@ class _InqDontStockToastState extends State<_InqDontStockToast>
                                     borderRadius:
                                         BorderRadius.circular(7),
                                   ),
-                                  child: const Text('Yes, all',
+                                  child: const Text('Mark all',
                                       style: TextStyle(
                                           fontSize: 12,
                                           color: Colors.white,

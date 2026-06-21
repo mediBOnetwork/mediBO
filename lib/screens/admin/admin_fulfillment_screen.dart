@@ -339,6 +339,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   // ── #98: spoken popup overlay ────────────────────────────────────────────────
   OverlayEntry? _spokenPopupEntry;
+  // #126: key to call refresh on the popup after each recording
+  final _popupKey = GlobalKey<_CountedMentionsPopupState>();
 
   // ── Computed ──
   Map<String, dynamic>? get _currentItem =>
@@ -407,6 +409,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c123_ready', 'handles_ask=y;fast_voice=y'); // static: #123 clean+fast
     RenderLog.write('c124_ready', 'per_clip_path=y'); // static: #124 per-clip signed URL
     RenderLog.write('c125_ready', 'server_seq=y'); // static: #125 seq from RPC not local counter
+    RenderLog.write('c126_ready', 'auto_all=y;chips_single_row=y'); // static: #126 popup auto-reset + single-row chips
     // #85: agent button present — written in initState (IndexedStack always mounts)
     RenderLog.write('change_85_agent_button_present', '1');
     RenderLog.write('change_86_voice_card_present', '1');
@@ -791,6 +794,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         ).ignore();
         RenderLog.write('c125_mentions_inserted', 'seq=$seq;rows=${mentions.length}');
       }
+      // #126: after every recording, reset popup to "All" view and refresh its data
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _popupKey.currentState?._refreshForNewClip();
+      });
 
       // #93 Part D: name-without-number hint (non-blocking — shows alongside any kept items)
       if (droppedNoQty > 0) {
@@ -2815,6 +2822,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           child: ConstrainedBox(
             constraints: BoxConstraints(maxHeight: maxH),
             child: _CountedMentionsPopup(
+              key: _popupKey,
               supplierName: supplierForPopup,
               orderItems: orderSnapshot,
               onDismiss: dismiss,
@@ -3203,6 +3211,7 @@ class _CountedMentionsPopup extends StatefulWidget {
   final List<Map<String, dynamic>> orderItems;
   final VoidCallback onDismiss;
   const _CountedMentionsPopup({
+    super.key,
     required this.supplierName,
     required this.orderItems,
     required this.onDismiss,
@@ -3256,6 +3265,14 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
 
   int _uniqueNames(List<Map<String, dynamic>> rows) =>
       rows.map((r) => r['matched_name']?.toString() ?? '').toSet().length;
+
+  // #126: called after every recording — reset to "All" view and re-fetch
+  void _refreshForNewClip() {
+    if (!mounted) return;
+    setState(() => _selectedClipSeq = null);
+    _fetchMentions();
+    RenderLog.write('c126_reset_to_all', 'after_recording=y');
+  }
 
   // Whole-clip play — no seeking, no timestamps.
   Future<void> _playWholeClip(String clipPath, int recordingSeq) async {
@@ -3417,50 +3434,61 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
             ),
           ]),
         ),
-        // #120: "All" chip + clip chips always shown when clips available
+        // #120/#126: "All" chip + clip chips in a single horizontally-scrolling row
         if (mentions != null && clips.isNotEmpty)
           Padding(
-            padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
-            child: Wrap(
-              spacing: 8,
-              runSpacing: 4,
-              children: [
-                // "All" chip — returns to grouped overview
-                GestureDetector(
-                  onTap: () {
-                    setState(() => _selectedClipSeq = null);
-                    RenderLog.write('c120_back_to_all', 'true');
-                  },
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: selSeq == null ? _kGreen : const Color(0xFFE8F5E9),
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(color: _kGreen),
+            padding: const EdgeInsets.fromLTRB(0, 0, 0, 8),
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              child: Row(
+                children: [
+                  // "All" chip — returns to grouped overview
+                  GestureDetector(
+                    onTap: () {
+                      setState(() => _selectedClipSeq = null);
+                      RenderLog.write('c120_back_to_all', 'true');
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: selSeq == null ? _kGreen : const Color(0xFFE8F5E9),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: _kGreen),
+                      ),
+                      child: Text('All',
+                          style: TextStyle(
+                            fontSize: 12, fontWeight: FontWeight.w600,
+                            color: selSeq == null ? Colors.white : _kGreen,
+                          )),
                     ),
-                    child: Text('All',
-                        style: TextStyle(
-                          fontSize: 12, fontWeight: FontWeight.w600,
-                          color: selSeq == null ? Colors.white : _kGreen,
-                        )),
                   ),
-                ),
-                // Clip chips
-                ...clips.asMap().entries.map((e) {
-                  final idx = e.key;
-                  final clip = e.value;
-                  return _ClipPlayButton(
-                    label: 'Clip ${idx + 1}',
-                    clipPath: clip.clipPath,
-                    recordingSeq: clip.seq,
-                    playing: _playingClip == clip.clipPath,
-                    onPlay: () => _tapClip(clip.clipPath, clip.seq),
-                    onStop: _stopAudio,
-                  );
-                }),
-              ],
+                  // Clip chips
+                  ...clips.asMap().entries.map((e) {
+                    final idx = e.key;
+                    final clip = e.value;
+                    return Padding(
+                      padding: const EdgeInsets.only(left: 8),
+                      child: _ClipPlayButton(
+                        label: 'Clip ${idx + 1}',
+                        clipPath: clip.clipPath,
+                        recordingSeq: clip.seq,
+                        playing: _playingClip == clip.clipPath,
+                        onPlay: () => _tapClip(clip.clipPath, clip.seq),
+                        onStop: _stopAudio,
+                      ),
+                    );
+                  }),
+                ],
+              ),
             ),
           ),
+        // #126: static proof key (fires whenever popup builds with chips)
+        if (mentions != null && clips.isNotEmpty)
+          Builder(builder: (_) {
+            RenderLog.write('c126_chips_row', 'scroll=horizontal;wrap=n');
+            return const SizedBox.shrink();
+          }),
         const Divider(height: 1, color: _kBorder),
         // Body
         if (_error != null)

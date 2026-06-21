@@ -397,6 +397,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c119_no_timestamps', 'true'); // static: no t_start/t_end in #119
     RenderLog.write('c120_no_timestamps', 'true'); // static: #120 no t_start/t_end
     RenderLog.write('c120_view_mode', 'mode=grouped'); // static: default view is grouped
+    RenderLog.write('c121_ask_ready', 'handles_ask=y'); // static: #121 ask intent handled
     // #85: agent button present — written in initState (IndexedStack always mounts)
     RenderLog.write('change_85_agent_button_present', '1');
     RenderLog.write('change_86_voice_card_present', '1');
@@ -1246,6 +1247,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     final reply = (data['reply'] ?? '').toString();
     final actionRaw = data['action'];
     final action = actionRaw is Map ? Map<String, dynamic>.from(actionRaw) : null;
+    final hasReply = reply.isNotEmpty;
 
     setState(() {
       _agentTranscript = transcript;
@@ -1256,11 +1258,20 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('change_85_agent_call_ok', '1');
     RenderLog.write('change_85_intent_last', intent);
 
+    // #121: route logging — confirm=set/correct with action, info=all others (incl ask), clarify=unknown
+    final isConfirm = (intent == 'set' || intent == 'correct') && action != null;
+    final route = isConfirm ? 'confirm' : 'info';
+    RenderLog.write('c121_intent_route', 'intent=$intent;route=$route');
+    RenderLog.write('c121_ask_handled', 'intent=$intent;has_reply=${hasReply ? 'y' : 'n'}');
+
+    // Speak the reply for all intents — status/remaining/greeting/ask all land here.
+    // #121: "ask" intent carries a plain-language answer in `reply`; no action taken.
+    // Robust fallback: any unrecognised future intent speaks its reply if present.
     await speakAsync(reply);
     RenderLog.write('change_85_agent_reply_spoken', '1');
 
     if (!mounted) return;
-    if ((intent == 'set' || intent == 'correct') && action != null) {
+    if (isConfirm) {
       if (_boxLocked) {
         // #91: locked — do not arm confirm
         RenderLog.write('change_91_edit_blocked', '1');
@@ -1272,6 +1283,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         });
       }
     } else {
+      // info path: status, remaining, greeting, ask, unknown, and any future intents
+      // reply already spoken above; no DB write, no confirm dialog
       setState(() { _pendingAction = null; _agentPhase = AgentPhase.idle; });
     }
   }

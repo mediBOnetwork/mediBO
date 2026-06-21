@@ -420,6 +420,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c133_popup_width', 'narrowed=y;centered=y'); // static: #133 narrower popup with side margins
     RenderLog.write('c133_ready', 'width_balanced=y'); // static: #133 width + proportional columns
     RenderLog.write('c110_ready', 'width_inset=y;row_spacing=y;chip_dots=y;close_btn=y'); // static: #110 all four asks
+    RenderLog.write('c111_ready', 'x_visible=y;width_2pct=y;header_aligned=y'); // static: #111 three fixes
     // #85: agent button present — written in initState (IndexedStack always mounts)
     RenderLog.write('change_85_agent_button_present', '1');
     RenderLog.write('change_86_voice_card_present', '1');
@@ -2784,9 +2785,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     final screenW = MediaQuery.of(pillContext).size.width;
     final screenH = MediaQuery.of(pillContext).size.height;
     final bool isWide = screenW >= 900;
-    // #118/#133: comfortable side margins; cap at 440 on wide/desktop.
+    // #118/#133/#111: comfortable side margins; cap at 440 on wide/desktop; +2% from #111.
     const double kMargin = 20.0; // #133: 20px each side → ~88-90% on phones
-    final double popupW = math.min(440.0, screenW - kMargin * 2);
+    final double popupW = (math.min(440.0, screenW - kMargin * 2) * 1.02)
+        .clamp(0.0, screenW - 8.0); // #111: +2% width, min 4px each side
 
     double popupTop;
     double left;
@@ -3237,9 +3239,11 @@ class _CountedMentionsPopup extends StatefulWidget {
 // No timestamp fields — green state is purely seq-based.
 typedef _QtyEntry = ({int qty, int seq, int ord});
 
-// #110 sentinel — must survive into compiled bundle for curl grep.
+// #110/#111 sentinels — must survive into compiled bundle for curl grep.
 // ignore: unused_field
 const String _kC110Sentinel = 'C110_COUNTED_POPUP';
+// ignore: unused_field
+const String _kC111Sentinel = 'C111_COUNTED_POPUP_FIX';
 
 class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
   List<Map<String, dynamic>>? _mentions;
@@ -3487,6 +3491,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
           'is_mobile=${isMobile ? 'y' : 'n'};popup_width_px=${pw.toStringAsFixed(0)};screen_width_px=${sw.toStringAsFixed(0)}');
       final margin = ((sw - pw) / 2).toStringAsFixed(0);
       RenderLog.write('c110_width_inset', 'margin_px=$margin;centered=y');
+      RenderLog.write('c111_width_2pct', 'margin_px=$margin;popup_w=${pw.toStringAsFixed(0)};factor=1.02');
     });
     RenderLog.write('c110_popup_built', 'sentinel=$_kC110Sentinel');
 
@@ -3500,28 +3505,39 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Header: title + close button (#120: ▶ moved to chip row; #110: tooltip + key)
+            // Header: title + X close button (#120: ▶ moved to chip row; #111: visible X)
         Builder(builder: (_) {
           RenderLog.write('c110_close_btn', 'present=y');
+          RenderLog.write('c111_close_btn_built', 'visible=y;color=green');
           return Padding(
-            padding: const EdgeInsets.fromLTRB(14, 10, 4, 6),
-            child: Row(children: [
-              const Text('Counted items',
-                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _kText)),
-              const Spacer(),
-              Tooltip(
-                message: 'Close',
-                child: IconButton(
-                  icon: const Icon(Icons.close_rounded, size: 18, color: _kSub),
-                  onPressed: () {
+            padding: const EdgeInsets.fromLTRB(14, 10, 8, 6),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                const Text('Counted items',
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _kText)),
+                const Spacer(),
+                // #111: clearly visible X — dark icon, circular tap target, green border
+                GestureDetector(
+                  onTap: () {
                     RenderLog.write('c110_close_tap', 'dismiss=y');
+                    RenderLog.write('c111_close_tap', 'dismiss=y');
                     widget.onDismiss();
                   },
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+                  child: Container(
+                    width: 28,
+                    height: 28,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: const Color(0xFFF0FFF4),
+                      border: Border.all(color: _kGreen, width: 1),
+                    ),
+                    child: const Icon(Icons.close_rounded, size: 16, color: _kGreen),
+                  ),
                 ),
-              ),
-            ]),
+              ],
+            ),
           );
         }),
         // #120/#126/#110: "All" chip + clip chips in a single horizontally-scrolling row
@@ -3791,8 +3807,9 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
       List<({String name, List<_QtyEntry> entries, int total, int ordered})> groups) {
     final playSeq = _playingSeq;
     RenderLog.write('c132_table_responsive', 'cols_fit=y;total_visible=y');
-    RenderLog.write('c133_cols_proportional', 'product_flex=expanded;qty_max=${_kBadgeClusterMaxW.toInt()};total_fixed=y');
+    RenderLog.write('c133_cols_proportional', 'product_flex=expanded;qty_fixed=${_kBadgeClusterMaxW.toInt()};total_fixed=y');
     RenderLog.write('c110_row_spacing', 'name_left=y;badges_grouped_right=y;gap_badge_total=${_kBadgeToTotalGap.toInt()}');
+    RenderLog.write('c111_header_aligned', 'badge_zone_fixed=${_kBadgeClusterMaxW.toInt()};header_body_match=y');
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -3828,9 +3845,9 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
               ),
               // Minimum gap between name and badge cluster
               const SizedBox(width: _kNameToBadgeMinGap),
-              // Badge cluster — constrained so it never crowds the name on narrow phones
-              ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: _kBadgeClusterMaxW),
+              // Badge cluster — FIXED width so header "Qty sequence" aligns above it (#111)
+              SizedBox(
+                width: _kBadgeClusterMaxW,
                 child: Padding(
                   padding: const EdgeInsets.symmetric(vertical: 6),
                   child: Wrap(

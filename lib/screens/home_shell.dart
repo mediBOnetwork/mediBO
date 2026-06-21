@@ -122,6 +122,7 @@ class _HomeShellState extends State<HomeShell> {
     final hasFragment = fragment.contains('access_token=') ||
         fragment.contains('refresh_token=') ||
         fragment.contains('error=');
+    RenderLog.write('c109_init_url_diag', 'path=${currentPath()};hasCode=$hasCode;hasFragment=$hasFragment');
     if (hasCode || hasFragment) {
       final cleaned = hasCode ? 'code' : 'fragment';
       _stripOAuthUrlWhenReady(cleaned);

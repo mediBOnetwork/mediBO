@@ -415,6 +415,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c129_seq_source', 'server_rpc=y'); // static: #129 proves RPC-based seq in bundle
     RenderLog.write('c129_ready', 'deploy_doctor=done'); // static: #129 deploy confirmed
     RenderLog.write('c130_ready', 'auto_all=y'); // static: #130 reset-on-playback-complete in bundle
+    RenderLog.write('c131_ready', 'auto_return_on_play_end=y'); // static: #131 any-clip completion triggers All
     // #85: agent button present — written in initState (IndexedStack always mounts)
     RenderLog.write('change_85_agent_button_present', '1');
     RenderLog.write('change_86_voice_card_present', '1');
@@ -3287,9 +3288,9 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
     await _fetchMentions(); // refresh so new clip chip appears; view stays on whatever user had
   }
 
-  // #130: fires inside _playWholeClip's onEnded for the just-recorded clip only.
+  // #130/#131: fires inside _playWholeClip's onEnded for ANY tapped clip.
   // Resets popup to All combined view + scrolls chip row to start.
-  Future<void> _resetToAllAfterPlayback() async {
+  Future<void> _resetToAllAfterPlayback({int? playedSeq}) async {
     if (!mounted) return;
     setState(() {
       _selectedClipSeq = null; // All view
@@ -3302,10 +3303,10 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
     }
     await _fetchMentions();
     if (!mounted) return;
-    // c130_reset_fired: runtime proof — fires AFTER selectedClipSeq=null and body rebuilds
+    // c131_return_fired: runtime proof inside completion handler, AFTER selectedClipSeq=null
     final modeAfter = _selectedClipSeq == null ? 'grouped' : 'flat';
-    RenderLog.write('c130_reset_fired',
-        'trigger=playback_complete;mode_after=$modeAfter;seq_after=${_selectedClipSeq?.toString() ?? 'null'}');
+    RenderLog.write('c131_return_fired',
+        'trigger=playback_complete;played_seq=${playedSeq?.toString() ?? 'null'};mode_after=$modeAfter;seq_after=${_selectedClipSeq?.toString() ?? 'null'}');
   }
 
   // Whole-clip play — no seeking, no timestamps.
@@ -3337,11 +3338,10 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
         if (!mounted || _audio != a) return;
         setState(() { _playingClip = null; _playingSeq = null; });
         RenderLog.write('c119_play_state', 'playing_seq=none;is_playing=false');
-        // #130: only reset to All if this was the JUST-RECORDED clip (not a manual old-clip replay)
-        if (_newClipSeq != null && recordingSeq == _newClipSeq) {
-          _newClipSeq = null; // consume so subsequent manual replays don't trigger reset
-          _resetToAllAfterPlayback();
-        }
+        // #131: ANY clip's natural playback end → return to All.
+        // Interruption guard: _audio != a (above) handles tap-another-clip / tap-All / new-recording.
+        _newClipSeq = null; // clear just-recorded marker (no longer needed as a gate)
+        _resetToAllAfterPlayback(playedSeq: recordingSeq);
       });
 
       // #124: handle audio load/decode errors (missing onError was causing silent failures)

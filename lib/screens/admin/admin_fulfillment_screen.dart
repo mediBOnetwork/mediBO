@@ -3526,7 +3526,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
                   },
                   child: const Padding(
                     padding: EdgeInsets.all(8),
-                    child: Icon(Icons.close_rounded, size: 20, color: _kText),
+                    child: Icon(Icons.close_rounded, size: 20, color: _kSub),
                   ),
                 ),
               ],

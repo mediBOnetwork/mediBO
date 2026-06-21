@@ -84,6 +84,11 @@ void main() {
     } catch (_) {
       RenderLog.setBuildHash('unknown');
     }
+    // #108 static build properties (chrome stripped, popup redesigned)
+    RenderLog.write('inq_chrome_stripped', 1);
+    RenderLog.write('inq_cluster_order', 'company_category');
+    RenderLog.write('inq_popup_anchor', 'bottom_center');
+    RenderLog.write('inq_popup_compact', 1);
     RenderLog.write('screen', 'boot');
 
     // Selftest hook (guarded; no-op without exact secret; mark for removal in #64).

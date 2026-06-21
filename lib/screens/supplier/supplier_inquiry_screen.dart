@@ -42,6 +42,11 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
   // One open group at a time; null = all collapsed
   String? _openGroup; // 'pending' | 'inquired' | 'expired'
 
+  // Select-and-submit state (#109)
+  final Map<int, String> _supplierSelections = {};
+  bool _supplierSubmitting = false;
+  int _submitCount = 0;
+
   final Set<int> _answering = {};
   RealtimeChannel? _rt;
   Timer? _poll;
@@ -153,6 +158,91 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
       if (mounted) setState(() => _loading = false);
       RenderLog.write('inq.fetch.err', e.toString().substring(0, 60));
     }
+  }
+
+  // Bulk don't-stock for pending group — updates local selections only
+  Future<int?> _bulkDontStockLocalPending(String company, String category) async {
+    final matching = _pending.where((r) {
+      final c = (r['company'] as String? ?? '').toLowerCase();
+      final cat = (r['therapeutic_class'] as String? ?? '').toUpperCase();
+      return c == company.toLowerCase() && cat == category.toUpperCase();
+    }).toList();
+    final ids = matching.map((r) => (r['inquiry_id'] as num).toInt()).toList();
+    if (mounted) {
+      setState(() {
+        for (final id in ids) {
+          _supplierSelections[id] = "We don't stock this product";
+        }
+      });
+    }
+    return ids.length;
+  }
+
+  Future<void> _supplierSubmit() async {
+    if (_supplierSelections.isEmpty || _supplierSubmitting) return;
+    final answers = _supplierSelections.entries
+        .map((e) => {'inquiry_id': e.key, 'answer': e.value})
+        .toList();
+    if (mounted) setState(() => _supplierSubmitting = true);
+    try {
+      final sid = widget.viewAsSupplierId;
+      final Map res;
+      if (sid != null) {
+        final supplierName = widget.viewAsSupplierName ?? sid;
+        res = await Supabase.instance.client.rpc(
+          'admin_submit_inquiry_answers',
+          params: {'p_supplier_name': supplierName, 'p_answers': answers},
+        ) as Map;
+      } else {
+        res = await Supabase.instance.client.rpc(
+          'supplier_submit_inquiry_answers',
+          params: {'p_answers': answers},
+        ) as Map;
+      }
+      if (res['error'] != null) {
+        if (mounted) showToast(context, 'Error: ${res['error']}', isError: true);
+        return;
+      }
+      final saved = (res['saved'] as num?)?.toInt() ?? 0;
+      _submitCount++;
+      RenderLog.write('inq_submit_called', _submitCount);
+      RenderLog.write('inq_submit_last_saved', saved);
+      if (mounted) {
+        showToast(context, 'Saved $saved response${saved == 1 ? '' : 's'}');
+        setState(() => _supplierSelections.clear());
+        await _fetch(source: 'post_submit', silent: true);
+      }
+    } catch (e) {
+      if (mounted) showToast(context, 'Submit failed: $e', isError: true);
+    } finally {
+      if (mounted) setState(() => _supplierSubmitting = false);
+    }
+  }
+
+  Widget _buildSupplierSubmitButton() {
+    final count = _supplierSelections.length;
+    return SizedBox(
+      width: double.infinity,
+      height: 48,
+      child: FilledButton(
+        onPressed: (count > 0 && !_supplierSubmitting) ? _supplierSubmit : null,
+        style: FilledButton.styleFrom(
+          backgroundColor: const Color(0xFF1B7A43),
+          disabledBackgroundColor: const Color(0xFFD1FAE5),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        ),
+        child: _supplierSubmitting
+            ? const SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+            : Text(
+                count > 0 ? 'Submit response ($count)' : 'Submit response',
+                style: const TextStyle(
+                    fontSize: 15, fontWeight: FontWeight.w700, color: Colors.white),
+              ),
+      ),
+    );
   }
 
   Future<void> _answer(int inquiryId, String answer) async {
@@ -293,9 +383,12 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
             isOpen: _openGroup == 'pending',
             onToggle: () => _toggleGroup('pending'),
             items: _pending,
-            answeringIds: _answering,
-            onAnswer: _answer,
-            onBulkCompanyCategory: _bulkDontStockCompanyCategory,
+            answeringIds: const {},
+            answerOverrides: _supplierSelections,
+            onAnswer: (id, answer) =>
+                setState(() => _supplierSelections[id] = answer),
+            onBulkCompanyCategory: _bulkDontStockLocalPending,
+            submitButton: _buildSupplierSubmitButton(),
           ),
         if (_inquired.isNotEmpty) ...[
           if (_pending.isNotEmpty) const SizedBox(height: 8),
@@ -307,9 +400,8 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
             isOpen: _openGroup == 'inquired',
             onToggle: () => _toggleGroup('inquired'),
             items: _inquired,
-            answeringIds: _answering,
-            onAnswer: _answer,
-            onBulkCompanyCategory: _bulkDontStockCompanyCategory,
+            answeringIds: const {},
+            onAnswer: (_, __) {},
             readOnly: true,
           ),
         ],
@@ -324,9 +416,8 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
             isOpen: _openGroup == 'expired',
             onToggle: () => _toggleGroup('expired'),
             items: _expired,
-            answeringIds: _answering,
-            onAnswer: _answer,
-            onBulkCompanyCategory: _bulkDontStockCompanyCategory,
+            answeringIds: const {},
+            onAnswer: (_, __) {},
             readOnly: true,
           ),
         ],
@@ -344,9 +435,11 @@ class _InquiryGroup extends StatelessWidget {
   final VoidCallback onToggle;
   final List<Map<String, dynamic>> items;
   final Set<int> answeringIds;
-  final Future<void> Function(int, String) onAnswer;
-  final Future<int?> Function(String, String) onBulkCompanyCategory;
+  final Map<int, String> answerOverrides;
+  final void Function(int, String) onAnswer;
+  final Future<int?> Function(String, String)? onBulkCompanyCategory;
   final bool readOnly;
+  final Widget? submitButton;
 
   const _InquiryGroup({
     required this.label,
@@ -357,9 +450,11 @@ class _InquiryGroup extends StatelessWidget {
     required this.onToggle,
     required this.items,
     required this.answeringIds,
+    this.answerOverrides = const {},
     required this.onAnswer,
-    required this.onBulkCompanyCategory,
+    this.onBulkCompanyCategory,
     this.readOnly = false,
+    this.submitButton,
   });
 
   @override
@@ -421,14 +516,24 @@ class _InquiryGroup extends StatelessWidget {
                 height: 1, color: textColor.withValues(alpha: 0.2)),
             Padding(
               padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
-              child: InquiryAnswerList(
-                key: ValueKey('grp_${label}_${items.length}'),
-                items: items,
-                answeringIds: answeringIds,
-                onAnswer: onAnswer,
-                onBulkCompanyCategory: onBulkCompanyCategory,
-                readOnly: readOnly,
-                surface: 'supplier',
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  InquiryAnswerList(
+                    key: ValueKey('grp_${label}_${items.length}'),
+                    items: items,
+                    answerOverrides: answerOverrides,
+                    answeringIds: answeringIds,
+                    onAnswer: onAnswer,
+                    onBulkCompanyCategory: onBulkCompanyCategory,
+                    readOnly: readOnly,
+                    surface: 'supplier',
+                  ),
+                  if (submitButton != null) ...[
+                    const SizedBox(height: 12),
+                    submitButton!,
+                  ],
+                ],
               ),
             ),
           ],

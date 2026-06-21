@@ -198,6 +198,11 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   final Set<int> _settingAnswerFor = {}; // inquiry_ids currently being admin-set
   String? _expandedOrderId; // which supplier order row is expanded
 
+  // ── Inquiry select-and-submit state (#109) ───────────────────────────────
+  final Map<int, String> _adminSelections = {};
+  bool _adminSubmitting = false;
+  int _adminSubmitCount = 0;
+
   // ── Unassigned inquiry items (no current supplier) ───────────────────────
   List<Map<String, dynamic>> _unassignedItems = [];
   bool _unassignedLoading = false;
@@ -1719,6 +1724,43 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     } catch (_) {}
   }
 
+  // ── Batch submit admin inquiry answers (#109) ────────────────────────────
+  Future<void> _adminSubmit(String supplierName) async {
+    if (_adminSelections.isEmpty || _adminSubmitting) return;
+    final answers = _adminSelections.entries
+        .map((e) => {'inquiry_id': e.key, 'answer': e.value})
+        .toList();
+    if (mounted) setState(() => _adminSubmitting = true);
+    try {
+      final res = await Supabase.instance.client.rpc(
+        'admin_submit_inquiry_answers',
+        params: {'p_supplier_name': supplierName, 'p_answers': answers},
+      ) as Map;
+      if (res['error'] != null) {
+        if (mounted) showToast(context, 'Error: ${res['error']}', isError: true);
+        return;
+      }
+      final saved = (res['saved'] as num?)?.toInt() ?? 0;
+      _adminSubmitCount++;
+      RenderLog.write('inq_submit_called', _adminSubmitCount);
+      RenderLog.write('inq_submit_last_saved', saved);
+      if (mounted) {
+        showToast(context, 'Saved $saved response${saved == 1 ? '' : 's'}');
+        setState(() => _adminSelections.clear());
+        await Future.wait([
+          _fetchInquiryItems(supplierName),
+          _fetchInquiryOverview(silent: true),
+          _fetchUnassignedItems(silent: true),
+          _refetchOrders(),
+        ]);
+      }
+    } catch (e) {
+      if (mounted) showToast(context, 'Submit failed: $e', isError: true);
+    } finally {
+      if (mounted) setState(() => _adminSubmitting = false);
+    }
+  }
+
   // ── Inquiry tab: top-level view ───────────────────────────────────────────
 
   Widget _buildInquiryView(bool isDesktop) {
@@ -1949,9 +1991,9 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           behavior: HitTestBehavior.opaque,
           onTap: () {
             if (_expandedInquirySupplier == supName) {
-              setState(() => _expandedInquirySupplier = null);
+              setState(() { _expandedInquirySupplier = null; _adminSelections.clear(); });
             } else {
-              setState(() { _expandedInquirySupplier = supName; _inquiryItems = []; });
+              setState(() { _expandedInquirySupplier = supName; _inquiryItems = []; _adminSelections.clear(); });
               _fetchInquiryItems(supName);
             }
             RenderLog.write('inquiry_row_expanded', isExpanded ? 'collapse:$supName' : 'expand:$supName');
@@ -1964,27 +2006,29 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                   child: Text(supName,
                       style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
                 ),
+                AnimatedRotation(
+                  turns: isExpanded ? 0.5 : 0,
+                  duration: const Duration(milliseconds: 200),
+                  child: const Icon(Icons.expand_more_rounded, size: 18, color: Color(0xFF6B7280)),
+                ),
               ]),
               const SizedBox(height: 6),
-              Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-                Expanded(
-                  child: Wrap(spacing: 6, runSpacing: 4, children: [
-                    if (curCount > 0)
-                      _iqBadge('Current: $curCount', const Color(0xFFE6F4EA), const Color(0xFF1B7F3B)),
-                    if (nxtCount > 0)
-                      _iqBadge('Next: $nxtCount', const Color(0xFFFFF8E1), const Color(0xFF8A6D00)),
-                    if (formStatus != null) _iqStatusBadge(formStatus),
-                    if (expiresAt != null &&
-                        (formStatus == 'pending' || formStatus == 'partially_responded'))
-                      Text(
-                        _formatExpIST(expiresAt),
-                        style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280)),
-                      ),
-                  ]),
-                ),
-                const SizedBox(width: 8),
-                // Copy link button
-                GestureDetector(
+              LayoutBuilder(builder: (_, constraints) {
+                final narrow = constraints.maxWidth < 460;
+                final badges = Wrap(spacing: 6, runSpacing: 4, children: [
+                  if (curCount > 0)
+                    _iqBadge('Current: $curCount', const Color(0xFFE6F4EA), const Color(0xFF1B7F3B)),
+                  if (nxtCount > 0)
+                    _iqBadge('Next: $nxtCount', const Color(0xFFFFF8E1), const Color(0xFF8A6D00)),
+                  if (formStatus != null) _iqStatusBadge(formStatus),
+                  if (expiresAt != null &&
+                      (formStatus == 'pending' || formStatus == 'partially_responded'))
+                    Text(
+                      _formatExpIST(expiresAt),
+                      style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280)),
+                    ),
+                ]);
+                final copyBtn = GestureDetector(
                   onTap: () => _copyInquiryLink(supName),
                   behavior: HitTestBehavior.opaque,
                   child: Container(
@@ -2001,10 +2045,8 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                       Text('Copy link', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF1B7A43))),
                     ]),
                   ),
-                ),
-                const SizedBox(width: 6),
-                // Send button
-                Builder(builder: (btnCtx) => GestureDetector(
+                );
+                final sendBtn = Builder(builder: (btnCtx) => GestureDetector(
                   onTap: _inquiryLoading ? null : () => _sendPerSupplierDirect(supName, btnCtx),
                   behavior: HitTestBehavior.opaque,
                   child: Container(
@@ -2021,14 +2063,22 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                       Text('Send', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF128C7E))),
                     ]),
                   ),
-                )),
-                const SizedBox(width: 4),
-                AnimatedRotation(
-                  turns: isExpanded ? 0.5 : 0,
-                  duration: const Duration(milliseconds: 200),
-                  child: const Icon(Icons.expand_more_rounded, size: 18, color: Color(0xFF6B7280)),
-                ),
-              ]),
+                ));
+                if (narrow) {
+                  return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    badges,
+                    const SizedBox(height: 6),
+                    Row(children: [copyBtn, const SizedBox(width: 6), sendBtn]),
+                  ]);
+                }
+                return Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+                  Expanded(child: badges),
+                  const SizedBox(width: 8),
+                  copyBtn,
+                  const SizedBox(width: 6),
+                  sendBtn,
+                ]);
+              }),
             ]),
           ),
         ),
@@ -2085,6 +2135,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
 
   Widget _buildInquiryItemsPanel() {
     final supName = _expandedInquirySupplier ?? '';
+    final selectedCount = _adminSelections.length;
     return Container(
       margin: const EdgeInsets.fromLTRB(14, 0, 14, 12),
       padding: const EdgeInsets.all(14),
@@ -2104,53 +2155,81 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                   style: TextStyle(fontSize: 13, color: Color(0xFF6B7280)))
               : Builder(builder: (_) {
                   RenderLog.write('inquiry_v12_admin_dropdown', supName);
+                  RenderLog.write('inq_admin_submit_mode', 1);
+                  final isNarrow = MediaQuery.of(context).size.width <= 600;
+                  if (isNarrow) RenderLog.write('inq_admin_mobile_layout', 1);
                   final isFewest = _allocationMode == 'fewest_baskets';
-                  if (isFewest) {
-                    RenderLog.write('allocation_manual_control_shown', supName);
-                  }
-                  return InquiryAnswerList(
-                    key: ValueKey('admin_v12_${supName}_$_allocationMode'),
-                    items: _inquiryItems,
-                    answeringIds: _settingAnswerFor,
-                    onAnswer: (id, answer) => _adminSetInquiryAnswer(
-                      inquiryId: id,
-                      supplierName: supName,
-                      answer: answer,
-                    ),
-                    onBulk: (ids, answer) =>
-                        _adminBulkSetInquiryAnswer(
-                      ids: ids,
-                      supplierName: supName,
-                      answer: answer,
-                    ),
-                    onBulkCompanyCategory: (company, category) async {
-                      try {
-                        final res = await Supabase.instance.client.rpc(
-                          'admin_inquiry_dont_stock_company_category',
-                          params: {
-                            'p_supplier_name': supName,
-                            'p_company': company,
-                            'p_category': category,
-                          },
-                        ) as Map;
-                        if (res['error'] != null) return null;
-                        final marked =
-                            (res['marked'] as num?)?.toInt() ?? 0;
-                        RenderLog.write('admin_bulk_dont_stock',
-                            '${supName}_${company}_${category}_$marked');
-                        await Future.wait([
-                          _fetchInquiryItems(supName),
-                          _fetchInquiryOverview(silent: true),
-                        ]);
-                        return marked;
-                      } catch (e) {
-                        return null;
-                      }
-                    },
-                    itemTrailingWidget: isFewest
-                        ? (item) => _buildMoveControl(item)
-                        : null,
-                    surface: 'admin',
+                  if (isFewest) RenderLog.write('allocation_manual_control_shown', supName);
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      InquiryAnswerList(
+                        key: ValueKey('admin_v12_${supName}_$_allocationMode'),
+                        items: _inquiryItems,
+                        answerOverrides: _adminSelections,
+                        answeringIds: const {},
+                        onAnswer: (id, answer) =>
+                            setState(() => _adminSelections[id] = answer),
+                        onBulk: (ids, answer) => setState(() {
+                          if (answer.isEmpty) {
+                            for (final id in ids) _adminSelections.remove(id);
+                          } else {
+                            for (final id in ids) _adminSelections[id] = answer;
+                          }
+                        }),
+                        onBulkCompanyCategory: (company, category) async {
+                          final matching = _inquiryItems.where((i) {
+                            final c = (i['company'] as String? ?? '').toLowerCase();
+                            final cat = (i['therapeutic_class'] as String? ?? '').toUpperCase();
+                            return c == company.toLowerCase() && cat == category.toUpperCase();
+                          }).toList();
+                          final ids = matching
+                              .map((i) => (i['inquiry_id'] as num).toInt())
+                              .toList();
+                          setState(() {
+                            for (final id in ids) {
+                              _adminSelections[id] = "We don't stock this product";
+                            }
+                          });
+                          return ids.length;
+                        },
+                        itemTrailingWidget: isFewest
+                            ? (item) => _buildMoveControl(item)
+                            : null,
+                        surface: 'admin',
+                      ),
+                      const SizedBox(height: 12),
+                      SizedBox(
+                        width: double.infinity,
+                        height: 44,
+                        child: FilledButton(
+                          onPressed: (selectedCount > 0 && !_adminSubmitting)
+                              ? () => _adminSubmit(supName)
+                              : null,
+                          style: FilledButton.styleFrom(
+                            backgroundColor: const Color(0xFF1B7A43),
+                            disabledBackgroundColor: const Color(0xFFD1FAE5),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8)),
+                          ),
+                          child: _adminSubmitting
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                      color: Colors.white, strokeWidth: 2))
+                              : Text(
+                                  selectedCount > 0
+                                      ? 'Submit response ($selectedCount)'
+                                      : 'Submit response',
+                                  style: const TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w600,
+                                      color: Colors.white),
+                                ),
+                        ),
+                      ),
+                    ],
                   );
                 }),
     );

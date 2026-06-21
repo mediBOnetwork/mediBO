@@ -92,6 +92,9 @@ void main() {
     // #111 static build properties (3-group accordion, no refresh button)
     RenderLog.write('inq.norefreshbtn', 1);
     RenderLog.write('inq.colours', 'pending=yellow;inquired=green;expired=red');
+    // #109 static build properties (select+submit mode)
+    RenderLog.write('inq_admin_submit_mode', 1);
+    RenderLog.write('inq_supplier_submit_mode', 1);
     RenderLog.write('screen', 'boot');
 
     // Selftest hook (guarded; no-op without exact secret; mark for removal in #64).

@@ -4368,30 +4368,19 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen> {
 
   void _onFocus() {}
 
-  static const _kSubtitles = [
-    'Count stock at the supplier',
-    'Mark boxes arrived at warehouse',
-    'Pack & ship customer bags',
-  ];
-
   @override
   Widget build(BuildContext context) {
-    // #90: hide "Fulfillment" title + subtitle on mobile (<900px) to free vertical space.
+    // #113: title+subtitle removed on both mobile and desktop — tabs are the top content.
     final isWide = MediaQuery.of(context).size.width >= 900;
+    final viewport = isWide ? 'desktop' : 'mobile';
+    RenderLog.write('c113_fulfillment_built', viewport);
+    RenderLog.write('c113_no_title_header', viewport);
+    RenderLog.write('c113_fulfillment_tabs_top', viewport);
     return Column(children: [
       Container(
         color: _kCard,
-        padding: EdgeInsets.fromLTRB(16, isWide ? 14 : 10, 16, 0),
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          // Title + subtitle visible on wide only
-          if (isWide) ...[
-            const Text('Fulfillment',
-                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: _kText)),
-            const SizedBox(height: 2),
-            Text(_kSubtitles[_tab],
-                style: const TextStyle(fontSize: 12, color: _kSub)),
-            const SizedBox(height: 10),
-          ],
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: Row(children: [

@@ -410,6 +410,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c124_ready', 'per_clip_path=y'); // static: #124 per-clip signed URL
     RenderLog.write('c125_ready', 'server_seq=y'); // static: #125 seq from RPC not local counter
     RenderLog.write('c126_ready', 'auto_all=y;chips_single_row=y'); // static: #126 popup auto-reset + single-row chips
+    RenderLog.write('c127_ready', 'all_sync=y;fade=y'); // static: #127 body-sync + bottom fade
     // #85: agent button present — written in initState (IndexedStack always mounts)
     RenderLog.write('change_85_agent_button_present', '1');
     RenderLog.write('change_86_voice_card_present', '1');
@@ -3266,12 +3267,19 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
   int _uniqueNames(List<Map<String, dynamic>> rows) =>
       rows.map((r) => r['matched_name']?.toString() ?? '').toSet().length;
 
-  // #126: called after every recording — reset to "All" view and re-fetch
-  void _refreshForNewClip() {
+  // #126/#127: called after every recording — clear stale data, reset to All, fetch fresh
+  Future<void> _refreshForNewClip() async {
     if (!mounted) return;
-    setState(() => _selectedClipSeq = null);
-    _fetchMentions();
+    setState(() {
+      _selectedClipSeq = null; // switch chip to All
+      _mentions = null;        // clear stale flat-list data → shows spinner (not stale clip body)
+    });
     RenderLog.write('c126_reset_to_all', 'after_recording=y');
+    await _fetchMentions();
+    // After fetch, _selectedClipSeq is still null → grouped view rebuilt with fresh data
+    if (mounted && _selectedClipSeq == null) {
+      RenderLog.write('c127_view_synced', 'mode=grouped;after_recording=y');
+    }
   }
 
   // Whole-clip play — no seeking, no timestamps.
@@ -3417,11 +3425,16 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
           'is_mobile=${isMobile ? 'y' : 'n'};popup_width_px=${pw.toStringAsFixed(0)};screen_width_px=${sw.toStringAsFixed(0)}');
     });
 
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.stretch,
+    // #127: log bottom-fade present
+    RenderLog.write('c127_bottom_fade', 'present=y');
+
+    return Stack(
       children: [
-        // Header: title + close only (#120: ▶ moved to chip row below)
+        Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // Header: title + close only (#120: ▶ moved to chip row below)
         Padding(
           padding: const EdgeInsets.fromLTRB(14, 12, 10, 8),
           child: Row(children: [
@@ -3528,6 +3541,28 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
               ),
             ),
           ),
+          ],
+        ), // end Column
+        // #127: soft bottom fade so popup doesn't look hard-cut
+        Positioned(
+          left: 0, right: 0, bottom: 0,
+          child: IgnorePointer(
+            child: Container(
+              height: 20,
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [Colors.white.withOpacity(0), Colors.white],
+                ),
+                borderRadius: const BorderRadius.only(
+                  bottomLeft: Radius.circular(12),
+                  bottomRight: Radius.circular(12),
+                ),
+              ),
+            ),
+          ),
+        ),
       ],
     );
   }

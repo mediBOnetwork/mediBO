@@ -17,6 +17,7 @@ import 'package:xml/xml.dart' as xmlp;
 import '../../services/match_status_service.dart';
 import '../../utils/render_log.dart';
 import '../../widgets/inquiry_v12.dart';
+import '../../widgets/order_item_card.dart';
 
 const _ocrEdgeFn =
     'https://swojhmarmaijkshsbeih.supabase.co/functions/v1/gemini-ocr';
@@ -479,7 +480,8 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         return b.createdAt!.compareTo(a.createdAt!);
       });
 
-      final orders = orderRows.map((r) => _OrderRow.fromMap(Map<String, dynamic>.from(r as Map))).toList();
+      final rawOrders = orderRows.map((r) => _OrderRow.fromMap(Map<String, dynamic>.from(r as Map))).toList();
+      final orders = await _enrichOrderItems(rawOrders);
       final leads  = leadRows.map((r) {
         final m = Map<String, dynamic>.from(r as Map);
         return _LeadItem(
@@ -1718,13 +1720,62 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           .from('supplier_orders')
           .select()
           .order('created_at', ascending: false) as List;
+      final raw = rows.map((r) => _OrderRow.fromMap(Map<String, dynamic>.from(r as Map))).toList();
+      final enriched = await _enrichOrderItems(raw);
       if (mounted) {
         setState(() {
-          _orders = rows.map((r) => _OrderRow.fromMap(Map<String, dynamic>.from(r as Map))).toList();
+          _orders = enriched;
         });
         RenderLog.write('supplier_orders_refreshed', _orders.length);
       }
     } catch (_) {}
+  }
+
+  Future<List<_OrderRow>> _enrichOrderItems(List<_OrderRow> orders) async {
+    final ids = orders
+        .expand((o) => o.items)
+        .map((i) => (i['product_id'] as num?)?.toInt())
+        .whereType<int>()
+        .toSet()
+        .toList();
+    if (ids.isEmpty) return orders;
+    try {
+      final medRows = await Supabase.instance.client
+          .from('MEDICINE')
+          .select('id, therapeutic_class, marketer, image_url_1')
+          .inFilter('id', ids) as List;
+      final medMap = <int, Map<String, dynamic>>{
+        for (final r in medRows)
+          (r['id'] as num).toInt(): Map<String, dynamic>.from(r as Map),
+      };
+      int enrichedCount = 0;
+      final result = orders.map((order) {
+        final enrichedItems = order.items.map((item) {
+          final pid = (item['product_id'] as num?)?.toInt();
+          final med = pid != null ? medMap[pid] : null;
+          if (med != null) enrichedCount++;
+          return <String, dynamic>{
+            ...item,
+            'image_url': med?['image_url_1'] as String?,
+            'therapeutic_class': med?['therapeutic_class'] as String?,
+            'company': med?['marketer'] as String?,
+          };
+        }).toList();
+        return _OrderRow(
+          id: order.id,
+          supplierName: order.supplierName,
+          description: order.description,
+          totalAmount: order.totalAmount,
+          status: order.status,
+          createdAt: order.createdAt,
+          items: enrichedItems,
+        );
+      }).toList();
+      RenderLog.write('c108_admin_suporder_item_enriched', enrichedCount);
+      return result;
+    } catch (_) {
+      return orders;
+    }
   }
 
   // ── Batch submit admin inquiry answers (#109) ────────────────────────────
@@ -3397,45 +3448,23 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   }
 
   Widget _buildOrderItemsPanel(List<Map<String, dynamic>> items, {double padH = 16}) {
+    RenderLog.write('c108_admin_suporder_itemcard_built', items.length);
+    RenderLog.write('c108_admin_suporders_list_built', 'true');
     return Container(
       margin: EdgeInsets.fromLTRB(padH, 0, padH, 12),
-      padding: const EdgeInsets.all(10),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
       decoration: BoxDecoration(
         color: const Color(0xFFF9FAFB),
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: const Color(0xFFE5E7EB)),
       ),
       child: items.isEmpty
-          ? const Text('No items.', style: TextStyle(fontSize: 13, color: Color(0xFF6B7280)))
+          ? const Padding(
+              padding: EdgeInsets.all(8),
+              child: Text('No items.', style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+            )
           : Column(
-              children: items.map((item) {
-                final name = item['product_name'] as String? ?? '—';
-                final qty  = item['quantity'];
-                final mrp  = item['mrp'];
-                final lineTotal = mrp != null && qty != null
-                    ? (mrp as num) * (qty as num)
-                    : null;
-                return Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 5),
-                  child: Row(children: [
-                    Expanded(child: Text(name,
-                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: Color(0xFF111827)))),
-                    if (qty != null)
-                      Text('Qty: $qty',
-                          style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
-                    if (mrp != null) ...[
-                      const SizedBox(width: 12),
-                      Text('₹$mrp',
-                          style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
-                    ],
-                    if (lineTotal != null) ...[
-                      const SizedBox(width: 12),
-                      Text('= ₹${lineTotal.toStringAsFixed(0)}',
-                          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
-                    ],
-                  ]),
-                );
-              }).toList(),
+              children: items.map((item) => OrderItemCard(item: item)).toList(),
             ),
     );
   }

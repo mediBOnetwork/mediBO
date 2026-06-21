@@ -89,6 +89,9 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
           '${items.length}_items_${widget.token.substring(0, 8)}');
       RenderLog.write('inquiry_v12_public_form', 'true');
       RenderLog.write('inq_surface_link_grouped', 1);
+      final pendingCount = items.where((i) => i['locked'] != true).length;
+      RenderLog.write('form.render.ok',
+          'token=${widget.token.substring(0, 8)};pending=$pendingCount');
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -470,6 +473,8 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
               },
               onBulkCompanyCategory: _bulkDontStockCompanyCategory,
               surface: 'link',
+              showClusterDontStockHeaders: false,
+              anchoredDontStockPopup: true,
             ),
             const SizedBox(height: 8),
             SizedBox(

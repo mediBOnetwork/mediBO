@@ -87,6 +87,11 @@ class InquiryAnswerList extends StatefulWidget {
   final bool readOnly;
   final Widget Function(Map<String, dynamic> item)? itemTrailingWidget;
   final String? surface;
+  /// Whether to show "Don't stock all <Category>" cluster-header links.
+  final bool showClusterDontStockHeaders;
+  /// When true, the "Don't stock all…?" confirm popup floats anchored
+  /// above/below the tapped button instead of a bottom-center toast.
+  final bool anchoredDontStockPopup;
 
   const InquiryAnswerList({
     super.key,
@@ -99,6 +104,8 @@ class InquiryAnswerList extends StatefulWidget {
     this.readOnly = false,
     this.itemTrailingWidget,
     this.surface,
+    this.showClusterDontStockHeaders = true,
+    this.anchoredDontStockPopup = false,
   });
 
   @override
@@ -112,6 +119,10 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
 
   static int _popupShownCount = 0;
   static int _bulkCalledCount = 0;
+
+  final Map<int, GlobalKey> _dontStockKeys = {};
+  GlobalKey _dontStockKey(int id) =>
+      _dontStockKeys.putIfAbsent(id, () => GlobalKey());
 
   @override
   void dispose() {
@@ -177,31 +188,99 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
     _popupEntry = null;
   }
 
-  void _handleDontStockTap(int id, Map<String, dynamic> item) {
+  void _handleDontStockTap(int id, Map<String, dynamic> item,
+      {GlobalKey? buttonKey}) {
     widget.onAnswer(id, "We don't stock this product");
 
     final company = (item['company'] as String? ?? '').trim();
     final category = (item['therapeutic_class'] as String? ?? '').trim();
+
+    if (widget.anchoredDontStockPopup) {
+      RenderLog.write(
+          'dontstock.tap', '$id:$category|$company');
+    }
+
     if (company.isEmpty && category.isEmpty) return;
+    if (widget.onBulkCompanyCategory == null) return;
 
     _closePopup();
     _popupShownCount++;
     RenderLog.write('inq_dontstock_popup_shown', _popupShownCount);
-    RenderLog.write('inq_popup_compact', 1);
-    RenderLog.write('inq_popup_anchor', 'bottom_center');
+
+    if (widget.anchoredDontStockPopup && buttonKey != null) {
+      _showAnchoredPopup(buttonKey, id, company, category);
+    } else {
+      // Bottom-center toast (original behaviour — admin + supplier surfaces)
+      RenderLog.write('inq_popup_compact', 1);
+      RenderLog.write('inq_popup_anchor', 'bottom_center');
+      final overlay = Overlay.of(context, rootOverlay: true);
+      _popupEntry = OverlayEntry(
+        builder: (_) => _InqDontStockToast(
+          company: company,
+          category: category,
+          hasBulk: true,
+          onYesAll: () => _doBulkCompanyCategory(company, category),
+          onDismiss: _closePopup,
+        ),
+      );
+      overlay.insert(_popupEntry!);
+      _popupTimer = Timer(const Duration(seconds: 5), _closePopup);
+    }
+  }
+
+  void _showAnchoredPopup(
+      GlobalKey buttonKey, int id, String company, String category) {
+    final ctx = buttonKey.currentContext;
+    if (ctx == null) return;
+    final box = ctx.findRenderObject() as RenderBox?;
+    if (box == null || !box.hasSize) return;
+
+    final buttonTopLeft = box.localToGlobal(Offset.zero);
+    final buttonSize = box.size;
+    final screenSize = MediaQuery.of(context).size;
+    final safeTop = MediaQuery.of(context).padding.top;
+
+    const estimatedPopupHeight = 120.0;
+    const popupGap = 8.0;
+    const screenPad = 8.0;
+    const popupMaxW = 320.0;
+
+    final popupW =
+        popupMaxW < screenSize.width - screenPad * 2
+            ? popupMaxW
+            : screenSize.width - screenPad * 2;
+
+    var popupX =
+        buttonTopLeft.dx + (buttonSize.width - popupW) / 2;
+    if (popupX < screenPad) popupX = screenPad;
+    if (popupX + popupW > screenSize.width - screenPad) {
+      popupX = screenSize.width - popupW - screenPad;
+    }
+
+    final fitsAbove =
+        (buttonTopLeft.dy - estimatedPopupHeight - popupGap) >
+            (safeTop + screenPad);
+    final popupTop = fitsAbove
+        ? buttonTopLeft.dy - estimatedPopupHeight - popupGap
+        : buttonTopLeft.dy + buttonSize.height + popupGap;
+    final anchorSide = fitsAbove ? 'above' : 'below';
+
+    RenderLog.write('popup.anchor', '$anchorSide:$id');
+    RenderLog.write('popup.style.ok', 'bg=#FCE8E8;yesall=#D32F2F');
 
     final overlay = Overlay.of(context, rootOverlay: true);
     _popupEntry = OverlayEntry(
-      builder: (_) => _InqDontStockToast(
+      builder: (_) => _InqDontStockAnchoredPopup(
+        popupLeft: popupX,
+        popupTop: popupTop,
+        popupWidth: popupW,
         company: company,
         category: category,
-        hasBulk: widget.onBulkCompanyCategory != null,
         onYesAll: () => _doBulkCompanyCategory(company, category),
         onDismiss: _closePopup,
       ),
     );
     overlay.insert(_popupEntry!);
-    _popupTimer = Timer(const Duration(seconds: 5), _closePopup);
   }
 
   Future<void> _doBulkCompanyCategory(
@@ -219,6 +298,7 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
       RenderLog.write('inq_bulk_dontstock_called', _bulkCalledCount);
       if (marked != null) {
         RenderLog.write('inq_bulk_last_marked', marked);
+        RenderLog.write('bulk.yesall', '$company|$category:$marked');
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(
             content: Text(
@@ -228,6 +308,7 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
           ));
         }
       } else {
+        RenderLog.write('bulk.error', 'rpc_returned_null:$company|$category');
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
             content: Text('Could not mark — please try again'),
@@ -237,6 +318,9 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
         }
       }
     } catch (e) {
+      RenderLog.write('bulk.error', e.toString().length > 80
+          ? e.toString().substring(0, 80)
+          : e.toString());
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text('Error: $e'),
@@ -294,6 +378,12 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
       final isWide = constraints.maxWidth >= _kWideBreakpoint;
       final nested = _nestedGrouped();
 
+      RenderLog.write('headerlinks.count',
+          widget.showClusterDontStockHeaders ? nested.values
+              .expand((cats) => cats.entries)
+              .where((e) => _hasAnswerable(e.value))
+              .length : 0);
+
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
@@ -301,6 +391,7 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
           for (final compEntry in nested.entries)
             for (final catEntry in compEntry.value.entries) ...[
               if (!widget.readOnly &&
+                  widget.showClusterDontStockHeaders &&
                   _hasAnswerable(catEntry.value))
                 _buildClusterDontStockRow(
                     compEntry.key, catEntry.key),
@@ -496,11 +587,15 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
         final chip = _kChips[i];
         final selected = currentAnswer == chip.answer;
         final isDontStock = chip.answer == "We don't stock this product";
+        final dsKey = (isDontStock && widget.anchoredDontStockPopup)
+            ? _dontStockKey(id)
+            : null;
         return Padding(
           padding: EdgeInsets.only(left: i > 0 ? 8 : 0),
           child: GestureDetector(
+            key: dsKey,
             onTap: isDontStock
-                ? () => _handleDontStockTap(id, item)
+                ? () => _handleDontStockTap(id, item, buttonKey: dsKey)
                 : () => widget.onAnswer(id, chip.answer),
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 120),
@@ -660,13 +755,17 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
         final chip = _kChips[i];
         final selected = currentAnswer == chip.answer;
         final isDontStock = chip.answer == "We don't stock this product";
+        final dsKey = (isDontStock && widget.anchoredDontStockPopup)
+            ? _dontStockKey(id)
+            : null;
         return Expanded(
           child: Padding(
             padding: EdgeInsets.only(
                 right: i < _kChips.length - 1 ? 8 : 0),
             child: GestureDetector(
+              key: dsKey,
               onTap: isDontStock
-                  ? () => _handleDontStockTap(id, item)
+                  ? () => _handleDontStockTap(id, item, buttonKey: dsKey)
                   : () => widget.onAnswer(id, chip.answer),
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 120),
@@ -801,6 +900,135 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
               fontSize: 11,
               fontWeight: FontWeight.w500,
               color: Color(0xFF6B7280))),
+    );
+  }
+}
+
+// ── Anchored "Don't stock all" popup (token form — CHANGE #109) ───────────────
+
+class _InqDontStockAnchoredPopup extends StatelessWidget {
+  final double popupLeft;
+  final double popupTop;
+  final double popupWidth;
+  final String company;
+  final String category;
+  final VoidCallback onYesAll;
+  final VoidCallback onDismiss;
+
+  const _InqDontStockAnchoredPopup({
+    required this.popupLeft,
+    required this.popupTop,
+    required this.popupWidth,
+    required this.company,
+    required this.category,
+    required this.onYesAll,
+    required this.onDismiss,
+  });
+
+  String get _text {
+    final cat = category;
+    final comp = company;
+    if (cat.isNotEmpty && comp.isNotEmpty) {
+      return "Don't stock all $cat from $comp?";
+    }
+    if (cat.isNotEmpty) return "Don't stock all $cat?";
+    if (comp.isNotEmpty) return "Don't stock all from $comp?";
+    return "Don't stock all?";
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        // Transparent barrier — tap outside dismisses
+        Positioned.fill(
+          child: GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onTap: onDismiss,
+          ),
+        ),
+        // Anchored popup box
+        Positioned(
+          left: popupLeft,
+          top: popupTop,
+          width: popupWidth,
+          child: Material(
+            color: Colors.transparent,
+            child: Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFCE8E8),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                    color: const Color(0xFFF1B0B0), width: 1),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.12),
+                    blurRadius: 12,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    _text,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                      color: Color(0xFF111827),
+                      height: 1.4,
+                    ),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      GestureDetector(
+                        onTap: onDismiss,
+                        child: Container(
+                          width: 32,
+                          height: 32,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF3F4F6),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: const Icon(Icons.close,
+                              size: 16, color: Color(0xFF6B7280)),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      GestureDetector(
+                        onTap: onYesAll,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFD32F2F),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: const Text(
+                            'Yes, all',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                              color: Colors.white,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -7,6 +5,7 @@ import '../../utils/render_log.dart';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
+// Wide layout only when order-item content area >= 900px.
 const _kWideBreakpoint = 900.0;
 
 const Map<String, List<Color>> _kClassColors = {
@@ -36,7 +35,7 @@ class _SupplierOrdersScreenState extends State<SupplierOrdersScreen> {
   List<Map<String, dynamic>> _orders = [];
   bool _loading = false;
   bool _firstLoad = true;
-  String? _expandedOrderId; // which order card is open
+  String? _expandedOrderId;
   RealtimeChannel? _rt;
 
   @override
@@ -70,6 +69,8 @@ class _SupplierOrdersScreenState extends State<SupplierOrdersScreen> {
     if (!silent) setState(() => _loading = true);
     try {
       final sid = widget.viewAsSupplierId;
+      // Pass p_supplier_id when acting-as (admin View As Supplier flow).
+      // When null, the RPC resolves via current_supplier_profile().
       final params = sid != null
           ? <String, dynamic>{'p_supplier_id': sid}
           : <String, dynamic>{};
@@ -81,7 +82,8 @@ class _SupplierOrdersScreenState extends State<SupplierOrdersScreen> {
           .map((e) => Map<String, dynamic>.from(e as Map))
           .toList();
 
-      // Preserve expansion; if new order arrived at top, expand it
+      // On first load, auto-expand the newest (first) order.
+      // On subsequent fetches, keep current expansion unless a new order arrived at top.
       String? newExpanded = _expandedOrderId;
       if (_firstLoad) {
         newExpanded = list.isNotEmpty ? (list.first['order_id'] as String?) : null;
@@ -89,7 +91,6 @@ class _SupplierOrdersScreenState extends State<SupplierOrdersScreen> {
         final topId = list.first['order_id'] as String?;
         final existingIds = _orders.map((o) => o['order_id'] as String?).toSet();
         if (topId != null && !existingIds.contains(topId)) {
-          // Brand-new order arrived — expand it
           newExpanded = topId;
         }
       }
@@ -103,10 +104,13 @@ class _SupplierOrdersScreenState extends State<SupplierOrdersScreen> {
 
       RenderLog.write('supplier_orders_rows', list.length);
       RenderLog.write('supplier_orders_src', source);
-      if (newExpanded != null) RenderLog.write('supplier_orders_expanded', newExpanded);
+      if (list.isNotEmpty) {
+        RenderLog.write('supplier_orders_first_no', list.first['order_no']?.toString() ?? '?');
+      }
+      if (newExpanded != null) RenderLog.write('supplier_orders_expanded', 'yes');
     } catch (e) {
-      RenderLog.write('supplier_orders_error', e.toString().length > 80
-          ? e.toString().substring(0, 80) : e.toString());
+      final msg = e.toString();
+      RenderLog.write('supplier_orders_error', msg.length > 80 ? msg.substring(0, 80) : msg);
       if (mounted) setState(() { _loading = false; });
     }
   }
@@ -121,27 +125,29 @@ class _SupplierOrdersScreenState extends State<SupplierOrdersScreen> {
   Widget build(BuildContext context) {
     RenderLog.write('supplier_orders_screen_built', 1);
 
-    if (_loading && _firstLoad) {
-      return const Center(
-        child: CircularProgressIndicator(color: Color(0xFF1B7A43)),
-      );
-    }
+    // LayoutBuilder wraps the whole build so supplier_orders_vp_w is always stamped.
+    return LayoutBuilder(builder: (context, constraints) {
+      RenderLog.write('supplier_orders_vp_w', constraints.maxWidth.toInt());
 
-    if (_orders.isEmpty && !_loading) {
-      return Center(
-        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-          const Icon(Icons.receipt_long_outlined, size: 56, color: Color(0xFFD1D5DB)),
-          const SizedBox(height: 12),
-          const Text('No orders yet.',
-              style: TextStyle(fontSize: 15, color: Color(0xFF6B7280))),
-        ]),
-      );
-    }
+      if (_loading && _firstLoad) {
+        return const Center(
+          child: CircularProgressIndicator(color: Color(0xFF1B7A43)),
+        );
+      }
 
-    return LayoutBuilder(builder: (context, outerConstraints) {
-      RenderLog.write('supplier_orders_vp_w', outerConstraints.maxWidth.toInt());
+      if (_orders.isEmpty && !_loading) {
+        return Center(
+          child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+            const Icon(Icons.receipt_long_outlined, size: 56, color: Color(0xFFD1D5DB)),
+            const SizedBox(height: 12),
+            const Text('No orders yet.',
+                style: TextStyle(fontSize: 15, color: Color(0xFF6B7280))),
+          ]),
+        );
+      }
+
       return ListView.builder(
-        padding: EdgeInsets.all(outerConstraints.maxWidth >= 900 ? 24 : 12),
+        padding: EdgeInsets.all(constraints.maxWidth >= 900 ? 24 : 12),
         itemCount: _orders.length,
         itemBuilder: (context, i) {
           final order = _orders[i];
@@ -169,10 +175,11 @@ class _OrderCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final orderNo     = order['order_no']     as String? ?? '';
+    // order_no is integer in DB
+    final orderNo    = order['order_no']?.toString() ?? '';
     final totalAmount = (order['total_amount'] as num?)?.toDouble();
-    final itemCount   = (order['item_count']  as num?)?.toInt() ?? 0;
-    final createdAt   = order['created_at'] != null
+    final itemCount  = (order['item_count'] as num?)?.toInt() ?? 0;
+    final createdAt  = order['created_at'] != null
         ? DateTime.tryParse(order['created_at'] as String)?.toLocal()
         : null;
     final items = (order['items'] as List<dynamic>? ?? [])
@@ -197,7 +204,7 @@ class _OrderCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // ── Header (always visible) ──────────────────────────────────────
+          // ── Header ──────────────────────────────────────────────────────────
           InkWell(
             borderRadius: isOpen
                 ? const BorderRadius.vertical(top: Radius.circular(12))
@@ -206,7 +213,6 @@ class _OrderCard extends StatelessWidget {
             child: Padding(
               padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
               child: Row(children: [
-                // Order number + date
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -229,15 +235,12 @@ class _OrderCard extends StatelessWidget {
                     ],
                   ),
                 ),
-                // Right side: amount + item count + status + chevron
                 Row(mainAxisSize: MainAxisSize.min, children: [
                   if (totalAmount != null && totalAmount > 0) ...[
                     Text(
                       '₹${totalAmount % 1 == 0 ? totalAmount.toInt() : totalAmount.toStringAsFixed(2)}',
                       style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
-                        color: Color(0xFF111827),
+                        fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF111827),
                       ),
                     ),
                     const SizedBox(width: 8),
@@ -265,7 +268,7 @@ class _OrderCard extends StatelessWidget {
             ),
           ),
 
-          // ── Expanded body: item list ─────────────────────────────────────
+          // ── Expanded body ────────────────────────────────────────────────────
           if (isOpen) ...[
             const Divider(height: 1, color: Color(0xFFF3F4F6)),
             Padding(
@@ -287,7 +290,8 @@ class _OrderCard extends StatelessWidget {
 
   String _formatDate(DateTime dt) {
     const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-    final h = dt.hour > 12 ? dt.hour - 12 : (dt.hour == 0 ? 12 : dt.hour);
+    var h = dt.hour % 12;
+    if (h == 0) h = 12;
     final ampm = dt.hour >= 12 ? 'PM' : 'AM';
     final m = dt.minute.toString().padLeft(2, '0');
     return '${dt.day} ${months[dt.month - 1]}, $h:$m $ampm';
@@ -321,7 +325,7 @@ class _StatusBadge extends StatelessWidget {
   }
 }
 
-// ── Order item card (inquiry-style) ──────────────────────────────────────────
+// ── Order item card — inquiry-style ──────────────────────────────────────────
 
 class _OrderItemCard extends StatelessWidget {
   final Map<String, dynamic> item;
@@ -370,6 +374,7 @@ class _OrderItemCard extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  // No ellipsis-truncation: name wraps freely
                   Text(
                     name,
                     style: const TextStyle(
@@ -431,6 +436,7 @@ class _OrderItemCard extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      // No ellipsis-truncation
                       Text(
                         name,
                         style: const TextStyle(

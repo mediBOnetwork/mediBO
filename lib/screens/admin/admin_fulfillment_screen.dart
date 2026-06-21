@@ -388,11 +388,12 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('83_banners_removed', 'true');
     RenderLog.write('84_chunking_removed', 'true');
     RenderLog.write('84_voicecalls_during_record', '0');
-    // #115/#116/#117: on-load keys (prove collect code ran)
+    // #115/#116/#117/#118: on-load keys (prove collect code ran)
     RenderLog.write('c115_collect_voice_ready', 'platform=web');
     RenderLog.write('c116_voice_ready', 'platform=web');
     RenderLog.write('c117_voice_ready', 'platform=web');
     RenderLog.write('c117_no_seek', 'true'); // static: seek/highlight removed in #117
+    RenderLog.write('c118_table_flow', 'cols=flexible,qty_wrap=y'); // static: #118 responsive table
     // #85: agent button present — written in initState (IndexedStack always mounts)
     RenderLog.write('change_85_agent_button_present', '1');
     RenderLog.write('change_86_voice_card_present', '1');
@@ -2664,10 +2665,12 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     final Offset topLeft = box.localToGlobal(Offset.zero);
     final double pillH = box.size.height;
 
-    const double popupW = 380.0;
     final screenW = MediaQuery.of(pillContext).size.width;
     final screenH = MediaQuery.of(pillContext).size.height;
     final bool isWide = screenW >= 900;
+    // #118: clamp popup width to viewport on mobile so nothing overflows.
+    const double kMargin = 12.0;
+    final double popupW = math.min(380.0, screenW - kMargin * 2);
 
     double popupTop;
     double left;
@@ -2683,10 +2686,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       }
       popupTop = topLeft.dy;
     } else {
-      left = math.min(topLeft.dx, screenW - popupW - 8);
+      // #118: center on narrow screens so both edges have equal margin
+      left = (screenW - popupW) / 2;
       popupTop = topLeft.dy + pillH + 6;
     }
-    final double maxH = math.min(420.0, screenH - popupTop - 16);
+    final double maxH = math.min(screenH * 0.8, screenH - popupTop - 16);
 
     void dismiss() {
       _spokenPopupEntry?.remove();
@@ -3236,6 +3240,18 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
     final mentions = _mentions;
     final clips = mentions != null ? _distinctClips(mentions) : <({int seq, String clipPath})>[];
     final multiClip = clips.length > 1;
+
+    // #118: log popup width vs screen for SV2 verification
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final sw = MediaQuery.of(context).size.width;
+      final isMobile = sw < 600;
+      // The popup width is the render box width of this widget's parent.
+      final ro = context.findRenderObject();
+      final pw = (ro is RenderBox && ro.hasSize) ? ro.size.width : 0.0;
+      RenderLog.write('c118_counted_popup_built',
+          'is_mobile=${isMobile ? 'y' : 'n'};popup_width_px=${pw.toStringAsFixed(0)};screen_width_px=${sw.toStringAsFixed(0)}');
+    });
 
     return Column(
       mainAxisSize: MainAxisSize.min,

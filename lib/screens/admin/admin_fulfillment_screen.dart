@@ -395,6 +395,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c117_no_seek', 'true'); // static: seek/highlight removed in #117
     RenderLog.write('c118_table_flow', 'cols=flexible,qty_wrap=y'); // static: #118 responsive table
     RenderLog.write('c119_no_timestamps', 'true'); // static: no t_start/t_end in #119
+    RenderLog.write('c120_no_timestamps', 'true'); // static: #120 no t_start/t_end
+    RenderLog.write('c120_view_mode', 'mode=grouped'); // static: default view is grouped
     // #85: agent button present — written in initState (IndexedStack always mounts)
     RenderLog.write('change_85_agent_button_present', '1');
     RenderLog.write('change_86_voice_card_present', '1');

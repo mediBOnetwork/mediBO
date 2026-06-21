@@ -94,6 +94,9 @@ void main() {
     // #111 static build properties (3-group accordion, no refresh button)
     RenderLog.write('inq.norefreshbtn', 1);
     RenderLog.write('inq.colours', 'pending=yellow;inquired=green;expired=red');
+    // #112 static build properties (captcha removed, 20-row pages, 200 cap)
+    RenderLog.write('c112_captcha_removed', 1);
+    RenderLog.write('c112_page_size', 20);
     // #109 static build properties (select+submit mode)
     RenderLog.write('inq_admin_submit_mode', 1);
     RenderLog.write('inq_supplier_submit_mode', 1);

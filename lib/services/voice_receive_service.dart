@@ -125,13 +125,16 @@ class VoiceReceiveService {
         'matched_name': name,
         'qty': (m['qty'] as num?)?.toInt() ?? 0,
         't_start_sec': (m['t_start'] as num?)?.toDouble(),
+        't_end_sec': (m['t_end'] as num?)?.toDouble(),
         if (id != null) 'product_id': id,
       };
     }).toList();
 
     await Supabase.instance.client.from('voice_clip_mentions').insert(rows);
-    RenderLog.write('c115_mentions_inserted',
-        'supplier=$supplierName;rows=${rows.length}');
+    final hasTStart = rows.any((r) => r['t_start_sec'] != null);
+    final hasTEnd = rows.any((r) => r['t_end_sec'] != null);
+    RenderLog.write('c116_mention_inserted',
+        'supplier=$supplierName;rows=${rows.length};has_tstart=${hasTStart ? 'y' : 'n'};has_tend=${hasTEnd ? 'y' : 'n'}');
   }
 
   /// [expected] = [{name, ordered_qty, unit?}] from the open order.

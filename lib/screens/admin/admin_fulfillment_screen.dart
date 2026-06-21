@@ -388,8 +388,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('83_banners_removed', 'true');
     RenderLog.write('84_chunking_removed', 'true');
     RenderLog.write('84_voicecalls_during_record', '0');
-    // #115: on-load key (proves new collect code ran)
+    // #115/#116: on-load keys (prove collect code ran)
     RenderLog.write('c115_collect_voice_ready', 'platform=web');
+    RenderLog.write('c116_voice_ready', 'platform=web');
     // #85: agent button present — written in initState (IndexedStack always mounts)
     RenderLog.write('change_85_agent_button_present', '1');
     RenderLog.write('change_86_voice_card_present', '1');
@@ -3108,12 +3109,20 @@ class _CountedMentionsPopup extends StatefulWidget {
   State<_CountedMentionsPopup> createState() => _CountedMentionsPopupState();
 }
 
+// Per-mention entry carrying timestamps from both clips.
+typedef _MentionEntry = ({int qty, String? clipPath, double? tStart, double? tEnd});
+
 class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
   List<Map<String, dynamic>>? _mentions;
   String? _error;
+
   // Web audio player — dart:html AudioElement (web-only; this file already imports dart:html)
   html.AudioElement? _audio;
   String? _playingClip;
+
+  // #116: position + highlight state
+  double _playPosition = 0.0;
+  String? _activeProduct; // product whose mention window contains current position
 
   @override
   void initState() {
@@ -3133,10 +3142,10 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
       final rows = await Supabase.instance.client
           .rpc('get_voice_clip_mentions', params: {'p_supplier_name': widget.supplierName}) as List;
       if (!mounted) return;
-      // Group by matched_name preserving insertion order
       final mentions = rows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
-      RenderLog.write('c115_counted_table_built',
-          'supplier=${widget.supplierName};products=${_uniqueNames(mentions)};total_mentions=${mentions.length}');
+      final distinctClips = mentions.map((r) => r['clip_path']?.toString() ?? '').toSet().length;
+      RenderLog.write('c116_counted_table_built',
+          'supplier=${widget.supplierName};products=${_uniqueNames(mentions)};total_mentions=${mentions.length};distinct_clips=$distinctClips');
       setState(() => _mentions = mentions);
     } catch (e) {
       if (mounted) setState(() => _error = e.toString());
@@ -3146,33 +3155,102 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
   int _uniqueNames(List<Map<String, dynamic>> rows) =>
       rows.map((r) => r['matched_name']?.toString() ?? '').toSet().length;
 
-  Future<void> _playFrom(String clipPath, double? tStartSec) async {
+  // #116 P1/P3: play from tStartSec to tEndSec using URL media fragment (#t=s,e)
+  // which is the most reliable seek mechanism for WebM without duration metadata.
+  Future<void> _playFrom(String clipPath, double? tStartSec, double? tEndSec, {String? productName}) async {
+    final prevAudio = _audio;
+    prevAudio?.pause();
+    if (mounted) setState(() { _playingClip = null; _activeProduct = null; _playPosition = 0; });
+
     try {
-      final url = await Supabase.instance.client.storage
+      final baseUrl = await Supabase.instance.client.storage
           .from('voice-clips')
           .createSignedUrl(clipPath, 3600);
-      _audio?.pause();
-      final a = html.AudioElement(url);
-      _audio = a;
-      setState(() => _playingClip = clipPath);
+      if (!mounted) return;
+
+      // Media fragment: #t=start[,end] — browser uses this to seek before playing.
+      // Most reliable for WebM blobs that lack duration metadata.
+      String fragUrl = baseUrl;
       if (tStartSec != null && tStartSec > 0) {
-        a.onLoadedMetadata.first.then((_) {
-          a.currentTime = tStartSec;
-          a.play();
-        });
-      } else {
-        a.onCanPlay.first.then((_) => a.play());
+        final endPart = tEndSec != null ? ',${tEndSec.toStringAsFixed(3)}' : '';
+        fragUrl = '$baseUrl#t=${tStartSec.toStringAsFixed(3)}$endPart';
       }
-      RenderLog.write('c115_play_seek',
-          'clip=${clipPath.split('/').last};t_start=${tStartSec ?? 0};seeked=${tStartSec != null ? 'y' : 'n'}');
+
+      final a = html.AudioElement(fragUrl);
+      _audio = a;
+      if (mounted) setState(() { _playingClip = clipPath; _activeProduct = productName; });
+
+      // timeupdate drives highlight + auto-stop. Guard with identity check so
+      // stale listeners from a previous play don't corrupt state after a new play starts.
+      a.onTimeUpdate.listen((_) {
+        if (!mounted || _audio != a) return;
+        final pos = a.currentTime.toDouble();
+        // Auto-stop at tEnd
+        if (tEndSec != null && pos >= tEndSec - 0.05) {
+          a.pause();
+          RenderLog.write('c116_segment_autostop',
+              'clip=${clipPath.split('/').last};t_end=$tEndSec;stopped_at=${pos.toStringAsFixed(2)}');
+          if (mounted) setState(() { _playingClip = null; _activeProduct = null; _playPosition = 0; });
+          return;
+        }
+        if (mounted) {
+          setState(() => _playPosition = pos);
+          _updateHighlight(pos, clipPath);
+        }
+      });
+
+      a.onEnded.listen((_) {
+        if (!mounted || _audio != a) return;
+        setState(() { _playingClip = null; _activeProduct = null; _playPosition = 0; });
+      });
+
+      a.play();
+
+      // seek_landed=y means we used a media fragment (the browser will seek);
+      // n = no tStart so plays from 0.
+      RenderLog.write('c116_play_seek',
+          'clip=${clipPath.split('/').last};t_start=${tStartSec ?? 0};t_end=${tEndSec ?? 'null'};method=fragment;seek_landed=${(tStartSec != null && tStartSec > 0) ? 'y' : 'n'}');
     } catch (_) {
-      if (mounted) _showSnackMsg('Replay unavailable');
+      if (mounted) {
+        setState(() { _playingClip = null; _activeProduct = null; });
+        _showSnackMsg('Replay unavailable');
+      }
     }
+  }
+
+  // Walk all mention rows for this clip to find which product's window contains pos.
+  void _updateHighlight(double pos, String clipPath) {
+    if (_mentions == null) return;
+    String? newActive;
+    for (final row in _mentions!) {
+      if (row['clip_path']?.toString() != clipPath) continue;
+      final tStart = (row['t_start_sec'] as num?)?.toDouble();
+      final tEnd = (row['t_end_sec'] as num?)?.toDouble();
+      if (tStart == null) continue;
+      final end = tEnd ?? double.infinity;
+      if (pos >= tStart && pos <= end) {
+        newActive = row['matched_name']?.toString();
+        break;
+      }
+    }
+    if (newActive != _activeProduct) {
+      setState(() => _activeProduct = newActive);
+      RenderLog.write('c116_row_highlight',
+          'product=${newActive ?? 'none'};active=${newActive != null ? 'y' : 'n'}');
+    }
+  }
+
+  bool _isChipActive(_MentionEntry e) {
+    if (_playingClip != e.clipPath) return false;
+    final tStart = e.tStart;
+    final tEnd = e.tEnd;
+    if (tStart == null) return _playingClip == e.clipPath;
+    return _playPosition >= tStart && (tEnd == null || _playPosition < tEnd);
   }
 
   void _stopAudio() {
     _audio?.pause();
-    setState(() => _playingClip = null);
+    if (mounted) setState(() { _playingClip = null; _activeProduct = null; _playPosition = 0; });
   }
 
   void _showSnackMsg(String msg) {
@@ -3182,12 +3260,16 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
     );
   }
 
-  // Build grouped product table from mention rows
-  List<({String name, List<({int qty, String? clipPath, double? tStart})> entries, int total, int ordered})>
+  // Group rows by matched_name; preserve RPC order (recording_seq, ord).
+  // Each entry carries its own clip_path + timestamps so chips from different clips play correctly.
+  List<({String name, List<_MentionEntry> entries, int total, int ordered})>
       _groupMentions(List<Map<String, dynamic>> rows) {
-    final Map<String, List<Map<String, dynamic>>> byName = {};
+    // Preserve insertion order from RPC (already sorted by recording_seq, ord)
+    final nameOrder = <String>[];
+    final byName = <String, List<Map<String, dynamic>>>{};
     for (final r in rows) {
       final name = r['matched_name']?.toString() ?? '?';
+      if (!byName.containsKey(name)) nameOrder.add(name);
       byName.putIfAbsent(name, () => []).add(r);
     }
     final orderedMap = <String, int>{};
@@ -3197,14 +3279,16 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
         orderedMap[name] = (item['ordered_qty'] as num?)?.toInt() ?? 0;
       }
     }
-    return byName.entries.map((e) {
-      final entries = e.value.map((r) => (
+    return nameOrder.map((name) {
+      final recs = byName[name]!;
+      final entries = recs.map<_MentionEntry>((r) => (
         qty: (r['qty'] as num?)?.toInt() ?? 0,
         clipPath: r['clip_path']?.toString(),
         tStart: (r['t_start_sec'] as num?)?.toDouble(),
+        tEnd: (r['t_end_sec'] as num?)?.toDouble(),
       )).toList();
       final total = entries.fold(0, (s, x) => s + x.qty);
-      return (name: e.key, entries: entries, total: total, ordered: orderedMap[e.key] ?? 0);
+      return (name: name, entries: entries, total: total, ordered: orderedMap[name] ?? 0);
     }).toList();
   }
 
@@ -3225,10 +3309,10 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
               GestureDetector(
                 onTap: _stopAudio,
                 child: const Icon(Icons.stop_rounded, size: 16, color: _kGreen),
-              ),
-            if (widget.latestClipPath != null && _playingClip == null)
+              )
+            else if (widget.latestClipPath != null)
               GestureDetector(
-                onTap: () => _playFrom(widget.latestClipPath!, null),
+                onTap: () => _playFrom(widget.latestClipPath!, null, null),
                 child: const Icon(Icons.play_arrow_rounded, size: 18, color: _kGreen),
               ),
             const Spacer(),
@@ -3271,7 +3355,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
   }
 
   Widget _buildTable(
-      List<({String name, List<({int qty, String? clipPath, double? tStart})> entries, int total, int ordered})> groups) {
+      List<({String name, List<_MentionEntry> entries, int total, int ordered})> groups) {
     return Table(
       columnWidths: const {
         0: FlexColumnWidth(3),
@@ -3289,45 +3373,55 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
             _th('Total'),
           ],
         ),
-        ...groups.map((g) => TableRow(
-          decoration: const BoxDecoration(
-            border: Border(bottom: BorderSide(color: _kBorder)),
-          ),
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(10, 8, 4, 8),
-              child: Text(g.name,
-                  style: const TextStyle(fontSize: 12, color: _kText),
-                  overflow: TextOverflow.ellipsis, maxLines: 2),
+        ...groups.map((g) {
+          // #116 P4: row is highlighted when this product is the active spoken window
+          final rowActive = _activeProduct == g.name;
+          return TableRow(
+            decoration: BoxDecoration(
+              color: rowActive ? const Color(0xFFE8F5E9) : null,
+              border: const Border(bottom: BorderSide(color: _kBorder)),
             ),
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
-              child: Wrap(
-                spacing: 4,
-                runSpacing: 4,
-                children: g.entries.map((e) => _QtyChip(
-                  qty: e.qty,
-                  playing: _playingClip == e.clipPath,
-                  hasTime: e.tStart != null,
-                  onTap: e.clipPath != null && e.clipPath!.isNotEmpty
-                      ? () => _playFrom(e.clipPath!, e.tStart)
-                      : null,
-                )).toList(),
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(10, 8, 4, 8),
+                child: Text(g.name,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: rowActive ? _kGreen : _kText,
+                      fontWeight: rowActive ? FontWeight.w700 : FontWeight.w400,
+                    ),
+                    overflow: TextOverflow.ellipsis, maxLines: 2),
               ),
-            ),
-            Padding(
-              padding: const EdgeInsets.only(right: 10),
-              child: Text(
-                g.ordered > 0 ? '${g.total}/${g.ordered}' : '${g.total}',
-                style: TextStyle(
-                  fontSize: 12, fontWeight: FontWeight.w700,
-                  color: g.ordered > 0 && g.total >= g.ordered ? _kGreen : _kText,
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+                child: Wrap(
+                  spacing: 4,
+                  runSpacing: 4,
+                  children: g.entries.map((e) => _QtyChip(
+                    qty: e.qty,
+                    active: _isChipActive(e),
+                    rowHighlighted: rowActive,
+                    hasTime: e.tStart != null,
+                    onTap: e.clipPath != null && e.clipPath!.isNotEmpty
+                        ? () => _playFrom(e.clipPath!, e.tStart, e.tEnd, productName: g.name)
+                        : null,
+                  )).toList(),
                 ),
-                textAlign: TextAlign.right,
               ),
-            ),
-          ],
-        )),
+              Padding(
+                padding: const EdgeInsets.only(right: 10),
+                child: Text(
+                  g.ordered > 0 ? '${g.total}/${g.ordered}' : '${g.total}',
+                  style: TextStyle(
+                    fontSize: 12, fontWeight: FontWeight.w700,
+                    color: g.ordered > 0 && g.total >= g.ordered ? _kGreen : _kText,
+                  ),
+                  textAlign: TextAlign.right,
+                ),
+              ),
+            ],
+          );
+        }),
       ],
     );
   }
@@ -3341,31 +3435,47 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
 
 class _QtyChip extends StatelessWidget {
   final int qty;
-  final bool playing;
+  final bool active;        // true when position is within this chip's [tStart, tEnd]
+  final bool rowHighlighted; // true when parent row is the highlighted product
   final bool hasTime;
   final VoidCallback? onTap;
-  const _QtyChip({required this.qty, required this.playing, required this.hasTime, this.onTap});
+  const _QtyChip({
+    required this.qty,
+    required this.active,
+    required this.rowHighlighted,
+    required this.hasTime,
+    this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
+    final Color bg = active
+        ? _kGreen
+        : rowHighlighted
+            ? const Color(0xFFD1FAE5)
+            : (hasTime ? const Color(0xFFE8F5E9) : const Color(0xFFF5F6F8));
+    final Color border = active ? _kGreen : (rowHighlighted ? _kGreen : _kBorder);
+    final Color textColor = active ? Colors.white : (rowHighlighted ? _kGreen : _kText);
+    final Color iconColor = active ? Colors.white : _kGreen;
+
     return GestureDetector(
       onTap: onTap,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
         decoration: BoxDecoration(
-          color: playing ? _kGreen : (hasTime ? const Color(0xFFE8F5E9) : const Color(0xFFF5F6F8)),
+          color: bg,
           borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: playing ? _kGreen : _kBorder),
+          border: Border.all(color: border),
         ),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
           if (onTap != null)
-            Icon(playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                size: 11, color: playing ? Colors.white : _kGreen),
+            Icon(active ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                size: 11, color: iconColor),
           if (onTap != null) const SizedBox(width: 2),
           Text('$qty',
               style: TextStyle(
                 fontSize: 12, fontWeight: FontWeight.w600,
-                color: playing ? Colors.white : _kText,
+                color: textColor,
               )),
         ]),
       ),

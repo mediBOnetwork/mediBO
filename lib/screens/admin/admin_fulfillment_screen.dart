@@ -419,6 +419,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c132_ready', 'mobile_responsive=y'); // static: #132 responsive table layout
     RenderLog.write('c133_popup_width', 'narrowed=y;centered=y'); // static: #133 narrower popup with side margins
     RenderLog.write('c133_ready', 'width_balanced=y'); // static: #133 width + proportional columns
+    RenderLog.write('c110_ready', 'width_inset=y;row_spacing=y;chip_dots=y;close_btn=y'); // static: #110 all four asks
     // #85: agent button present — written in initState (IndexedStack always mounts)
     RenderLog.write('change_85_agent_button_present', '1');
     RenderLog.write('change_86_voice_card_present', '1');
@@ -3236,6 +3237,10 @@ class _CountedMentionsPopup extends StatefulWidget {
 // No timestamp fields — green state is purely seq-based.
 typedef _QtyEntry = ({int qty, int seq, int ord});
 
+// #110 sentinel — must survive into compiled bundle for curl grep.
+// ignore: unused_field
+const String _kC110Sentinel = 'C110_COUNTED_POPUP';
+
 class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
   List<Map<String, dynamic>>? _mentions;
   String? _error;
@@ -3250,16 +3255,39 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
   // #130: seq of the clip JUST recorded — only ITS playback completion triggers reset to All
   int? _newClipSeq;
 
+  // #110: overflow state for chip strip dot indicators
+  bool _chipOverflowLeft = false;
+  bool _chipOverflowRight = false;
+
   @override
   void initState() {
     super.initState();
+    _chipScrollCtrl.addListener(_onChipScroll);
     _fetchMentions();
+    // #110: compute initial overflow state after first layout
+    WidgetsBinding.instance.addPostFrameCallback((_) => _updateChipOverflow());
+  }
+
+  void _onChipScroll() => _updateChipOverflow();
+
+  void _updateChipOverflow() {
+    if (!mounted || !_chipScrollCtrl.hasClients) return;
+    final pos = _chipScrollCtrl.position;
+    final left = pos.pixels > 4;
+    final right = pos.maxScrollExtent > 4 && pos.pixels < pos.maxScrollExtent - 4;
+    if (left != _chipOverflowLeft || right != _chipOverflowRight) {
+      setState(() {
+        _chipOverflowLeft = left;
+        _chipOverflowRight = right;
+      });
+    }
   }
 
   @override
   void dispose() {
     _audio?.pause();
     _audio = null;
+    _chipScrollCtrl.removeListener(_onChipScroll);
     _chipScrollCtrl.dispose();
     super.dispose();
   }
@@ -3448,7 +3476,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
           selSeq == null ? 'mode=grouped' : 'mode=flat;clip_seq=$selSeq');
     }
 
-    // #118: log popup width vs screen
+    // #118/#110: log popup width vs screen
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final sw = MediaQuery.of(context).size.width;
@@ -3457,7 +3485,10 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
       final pw = (ro is RenderBox && ro.hasSize) ? ro.size.width : 0.0;
       RenderLog.write('c118_counted_popup_built',
           'is_mobile=${isMobile ? 'y' : 'n'};popup_width_px=${pw.toStringAsFixed(0)};screen_width_px=${sw.toStringAsFixed(0)}');
+      final margin = ((sw - pw) / 2).toStringAsFixed(0);
+      RenderLog.write('c110_width_inset', 'margin_px=$margin;centered=y');
     });
+    RenderLog.write('c110_popup_built', 'sentinel=$_kC110Sentinel');
 
     // #127/#128: log bottom-fade present
     RenderLog.write('c127_bottom_fade', 'present=y');
@@ -3469,74 +3500,141 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Header: title + close only (#120: ▶ moved to chip row below)
-        Padding(
-          padding: const EdgeInsets.fromLTRB(14, 12, 10, 8),
-          child: Row(children: [
-            const Text('Counted items',
-                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _kText)),
-            const Spacer(),
-            GestureDetector(
-              onTap: widget.onDismiss,
-              child: const Icon(Icons.close_rounded, size: 18, color: _kSub),
-            ),
-          ]),
-        ),
-        // #120/#126: "All" chip + clip chips in a single horizontally-scrolling row
-        if (mentions != null && clips.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(0, 0, 0, 8),
-            child: SingleChildScrollView(
-              controller: _chipScrollCtrl,
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 14),
-              child: Row(
-                children: [
-                  // "All" chip — returns to grouped overview
-                  GestureDetector(
-                    onTap: () {
-                      setState(() => _selectedClipSeq = null);
-                      RenderLog.write('c120_back_to_all', 'true');
-                    },
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: selSeq == null ? _kGreen : const Color(0xFFE8F5E9),
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: _kGreen),
-                      ),
-                      child: Text('All',
-                          style: TextStyle(
-                            fontSize: 12, fontWeight: FontWeight.w600,
-                            color: selSeq == null ? Colors.white : _kGreen,
-                          )),
-                    ),
-                  ),
-                  // Clip chips
-                  ...clips.asMap().entries.map((e) {
-                    final idx = e.key;
-                    final clip = e.value;
-                    return Padding(
-                      padding: const EdgeInsets.only(left: 8),
-                      child: _ClipPlayButton(
-                        label: 'Clip ${idx + 1}',
-                        clipPath: clip.clipPath,
-                        recordingSeq: clip.seq,
-                        playing: _playingClip == clip.clipPath,
-                        onPlay: () => _tapClip(clip.clipPath, clip.seq),
-                        onStop: _stopAudio,
-                      ),
-                    );
-                  }),
-                ],
+            // Header: title + close button (#120: ▶ moved to chip row; #110: tooltip + key)
+        Builder(builder: (_) {
+          RenderLog.write('c110_close_btn', 'present=y');
+          return Padding(
+            padding: const EdgeInsets.fromLTRB(14, 10, 4, 6),
+            child: Row(children: [
+              const Text('Counted items',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _kText)),
+              const Spacer(),
+              Tooltip(
+                message: 'Close',
+                child: IconButton(
+                  icon: const Icon(Icons.close_rounded, size: 18, color: _kSub),
+                  onPressed: () {
+                    RenderLog.write('c110_close_tap', 'dismiss=y');
+                    widget.onDismiss();
+                  },
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+                ),
               ),
-            ),
-          ),
-        // #126: static proof key (fires whenever popup builds with chips)
+            ]),
+          );
+        }),
+        // #120/#126/#110: "All" chip + clip chips in a single horizontally-scrolling row
+        // #110: overflow dot indicator on left/right when chips overflow the popup width
         if (mentions != null && clips.isNotEmpty)
           Builder(builder: (_) {
             RenderLog.write('c126_chips_row', 'scroll=horizontal;wrap=n');
-            return const SizedBox.shrink();
+            // #110 overflow key — only fires if dots are actually shown
+            if (_chipOverflowLeft && _chipOverflowRight) {
+              RenderLog.write('c110_chip_overflow', 'side=LR');
+            } else if (_chipOverflowLeft) {
+              RenderLog.write('c110_chip_overflow', 'side=L');
+            } else if (_chipOverflowRight) {
+              RenderLog.write('c110_chip_overflow', 'side=R');
+            }
+            RenderLog.write('c110_chip_strip', 'overflow_left=${_chipOverflowLeft ? 'y' : 'n'};overflow_right=${_chipOverflowRight ? 'y' : 'n'}');
+            return Padding(
+              padding: const EdgeInsets.fromLTRB(0, 0, 0, 8),
+              child: Stack(
+                children: [
+                  SingleChildScrollView(
+                    controller: _chipScrollCtrl,
+                    scrollDirection: Axis.horizontal,
+                    // #110: extra horizontal padding so dots don't cover first/last chip
+                    padding: const EdgeInsets.symmetric(horizontal: 14),
+                    child: Row(
+                      children: [
+                        // "All" chip — returns to grouped overview
+                        GestureDetector(
+                          onTap: () {
+                            setState(() => _selectedClipSeq = null);
+                            RenderLog.write('c120_back_to_all', 'true');
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: selSeq == null ? _kGreen : const Color(0xFFE8F5E9),
+                              borderRadius: BorderRadius.circular(20),
+                              border: Border.all(color: _kGreen),
+                            ),
+                            child: Text('All',
+                                style: TextStyle(
+                                  fontSize: 12, fontWeight: FontWeight.w600,
+                                  color: selSeq == null ? Colors.white : _kGreen,
+                                )),
+                          ),
+                        ),
+                        // Clip chips
+                        ...clips.asMap().entries.map((e) {
+                          final idx = e.key;
+                          final clip = e.value;
+                          return Padding(
+                            padding: const EdgeInsets.only(left: 8),
+                            child: _ClipPlayButton(
+                              label: 'Clip ${idx + 1}',
+                              clipPath: clip.clipPath,
+                              recordingSeq: clip.seq,
+                              playing: _playingClip == clip.clipPath,
+                              onPlay: () => _tapClip(clip.clipPath, clip.seq),
+                              onStop: _stopAudio,
+                            ),
+                          );
+                        }),
+                      ],
+                    ),
+                  ),
+                  // #110: LEFT overflow dot — shown when chips are hidden to the left
+                  if (_chipOverflowLeft)
+                    Positioned(
+                      left: 0, top: 0, bottom: 0,
+                      child: IgnorePointer(
+                        child: Container(
+                          width: 28,
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.centerRight,
+                              end: Alignment.centerLeft,
+                              colors: [Colors.white.withOpacity(0), Colors.white.withOpacity(0.92)],
+                            ),
+                          ),
+                          alignment: Alignment.centerLeft,
+                          padding: const EdgeInsets.only(left: 4),
+                          child: const Text('•••',
+                              style: TextStyle(fontSize: 8, color: Color(0xFF9CA3AF),
+                                  letterSpacing: 1)),
+                        ),
+                      ),
+                    ),
+                  // #110: RIGHT overflow dot — shown when chips are hidden to the right
+                  if (_chipOverflowRight)
+                    Positioned(
+                      right: 0, top: 0, bottom: 0,
+                      child: IgnorePointer(
+                        child: Container(
+                          width: 28,
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.centerLeft,
+                              end: Alignment.centerRight,
+                              colors: [Colors.white.withOpacity(0), Colors.white.withOpacity(0.92)],
+                            ),
+                          ),
+                          alignment: Alignment.centerRight,
+                          padding: const EdgeInsets.only(right: 4),
+                          child: const Text('•••',
+                              style: TextStyle(fontSize: 8, color: Color(0xFF9CA3AF),
+                                  letterSpacing: 1)),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            );
           }),
         const Divider(height: 1, color: _kBorder),
         // Body
@@ -3680,32 +3778,38 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
     );
   }
 
-  // #132: responsive table — Row+Expanded+fixed Total width guarantees no column clipping
-  static const double _kTotalColW = 56.0; // #133: fixed right column, always visible
-  // #133: flex ratios — Product:Qty:Total. Product widest for text, Qty middle for pills.
-  static const int _kProductFlex = 3;
-  static const int _kQtyFlex = 4;
+  // #132/#110: responsive table — name pinned left, [badges + total] grouped right.
+  // #110: _kBadgeToTotalGap is small (tight grouping); _kNameToBadgeMinGap ensures
+  // the name never butts against the badge cluster on narrow widths.
+  static const double _kTotalColW = 52.0;
+  static const double _kBadgeToTotalGap = 6.0;
+  static const double _kNameToBadgeMinGap = 10.0;
+  // Max width for the badge cluster so it cannot crowd out the name on narrow phones.
+  static const double _kBadgeClusterMaxW = 108.0;
 
   Widget _buildTable(
       List<({String name, List<_QtyEntry> entries, int total, int ordered})> groups) {
     final playSeq = _playingSeq;
     RenderLog.write('c132_table_responsive', 'cols_fit=y;total_visible=y');
-    RenderLog.write('c133_cols_proportional', 'product_flex=$_kProductFlex;qty_flex=$_kQtyFlex;total_fixed=y');
+    RenderLog.write('c133_cols_proportional', 'product_flex=expanded;qty_max=${_kBadgeClusterMaxW.toInt()};total_fixed=y');
+    RenderLog.write('c110_row_spacing', 'name_left=y;badges_grouped_right=y;gap_badge_total=${_kBadgeToTotalGap.toInt()}');
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // Header row
+        // Header row — mirrors body column zones
         Container(
           color: const Color(0xFFF5F6F8),
           child: Row(
             children: [
-              Expanded(flex: _kProductFlex, child: _th('Product')),
-              Expanded(flex: _kQtyFlex, child: _th('Qty sequence')),
+              Expanded(child: _th('Product')),
+              const SizedBox(width: _kNameToBadgeMinGap),
+              SizedBox(width: _kBadgeClusterMaxW, child: _th('Qty sequence')),
+              const SizedBox(width: _kBadgeToTotalGap),
               SizedBox(width: _kTotalColW, child: _thRight('Total')),
             ],
           ),
         ),
-        // Body rows
+        // Body rows: name (Expanded) | min-gap | badges (ConstrainedBox) | small-gap | Total
         ...groups.map((g) => Container(
           decoration: const BoxDecoration(
             border: Border(bottom: BorderSide(color: _kBorder)),
@@ -3713,9 +3817,8 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              // Product — wraps to 2 lines; never pushes Total off-screen
+              // Product name — fills remaining space, ellipsizes on overflow
               Expanded(
-                flex: _kProductFlex,
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(10, 8, 4, 8),
                   child: Text(g.name,
@@ -3723,11 +3826,13 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
                       overflow: TextOverflow.ellipsis, maxLines: 2),
                 ),
               ),
-              // Qty sequence — pills wrap within their share of width
-              Expanded(
-                flex: _kQtyFlex,
+              // Minimum gap between name and badge cluster
+              const SizedBox(width: _kNameToBadgeMinGap),
+              // Badge cluster — constrained so it never crowds the name on narrow phones
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: _kBadgeClusterMaxW),
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+                  padding: const EdgeInsets.symmetric(vertical: 6),
                   child: Wrap(
                     spacing: 4,
                     runSpacing: 4,
@@ -3750,7 +3855,9 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
                   ),
                 ),
               ),
-              // Total — fixed width, always fully visible, pinned right
+              // Small gap — badges and total are visually grouped together
+              const SizedBox(width: _kBadgeToTotalGap),
+              // Total — fixed width, always visible, right-aligned
               SizedBox(
                 width: _kTotalColW,
                 child: Padding(

@@ -410,7 +410,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c124_ready', 'per_clip_path=y'); // static: #124 per-clip signed URL
     RenderLog.write('c125_ready', 'server_seq=y'); // static: #125 seq from RPC not local counter
     RenderLog.write('c126_ready', 'auto_all=y;chips_single_row=y'); // static: #126 popup auto-reset + single-row chips
-    RenderLog.write('c127_ready', 'all_sync=y;fade=y'); // static: #127 body-sync + bottom fade
+    RenderLog.write('c127_ready', 'all_sync=y;fade=y'); // static: #127 body-sync + bottom fade (kept)
+    RenderLog.write('c128_ready', 'all_sync=y;autoscroll=y;fade=y'); // static: #128 + chip autoscroll
     // #85: agent button present — written in initState (IndexedStack always mounts)
     RenderLog.write('change_85_agent_button_present', '1');
     RenderLog.write('change_86_voice_card_present', '1');
@@ -3235,6 +3236,8 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
   String? _playingClip;   // clip_path of currently-playing recording
   int? _playingSeq;       // #119: recording_seq of playing clip (drives green state)
   int? _selectedClipSeq;  // #119: clip last tapped (drives reorder; null = default order)
+  // #128: controller for the horizontal chip row so we can scroll back to start on reset
+  final _chipScrollCtrl = ScrollController();
 
   @override
   void initState() {
@@ -3246,6 +3249,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
   void dispose() {
     _audio?.pause();
     _audio = null;
+    _chipScrollCtrl.dispose();
     super.dispose();
   }
 
@@ -3267,7 +3271,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
   int _uniqueNames(List<Map<String, dynamic>> rows) =>
       rows.map((r) => r['matched_name']?.toString() ?? '').toSet().length;
 
-  // #126/#127: called after every recording — clear stale data, reset to All, fetch fresh
+  // #126/#127/#128: called after every recording — clear stale data, reset to All, fetch fresh
   Future<void> _refreshForNewClip() async {
     if (!mounted) return;
     setState(() {
@@ -3275,10 +3279,16 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
       _mentions = null;        // clear stale flat-list data → shows spinner (not stale clip body)
     });
     RenderLog.write('c126_reset_to_all', 'after_recording=y');
+    // #128: scroll chip row back to start so "All" is visible
+    if (_chipScrollCtrl.hasClients) {
+      _chipScrollCtrl.animateTo(0,
+          duration: const Duration(milliseconds: 250), curve: Curves.easeOut);
+      RenderLog.write('c128_chips_scrolled', 'to_offset=0');
+    }
     await _fetchMentions();
     // After fetch, _selectedClipSeq is still null → grouped view rebuilt with fresh data
     if (mounted && _selectedClipSeq == null) {
-      RenderLog.write('c127_view_synced', 'mode=grouped;after_recording=y');
+      RenderLog.write('c128_view_synced', 'mode=grouped;after_recording=y');
     }
   }
 
@@ -3425,8 +3435,9 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
           'is_mobile=${isMobile ? 'y' : 'n'};popup_width_px=${pw.toStringAsFixed(0)};screen_width_px=${sw.toStringAsFixed(0)}');
     });
 
-    // #127: log bottom-fade present
+    // #127/#128: log bottom-fade present
     RenderLog.write('c127_bottom_fade', 'present=y');
+    RenderLog.write('c128_bottom_fade', 'present=y');
 
     return Stack(
       children: [
@@ -3452,6 +3463,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
           Padding(
             padding: const EdgeInsets.fromLTRB(0, 0, 0, 8),
             child: SingleChildScrollView(
+              controller: _chipScrollCtrl,
               scrollDirection: Axis.horizontal,
               padding: const EdgeInsets.symmetric(horizontal: 14),
               child: Row(

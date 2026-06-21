@@ -1512,6 +1512,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   // ── Narrow layout (< 900px) — existing tree verbatim ────────────────────────
   Widget _buildCollectNarrow(bool isAdmin) {
+    // #114 render-log (mobile path)
+    RenderLog.write('c114_fulfillment_header_built', 'mobile');
     // #90 render-log
     RenderLog.write('change_90_layout', 'narrow');
     RenderLog.write('change_90_header_hidden', '1');
@@ -1904,6 +1906,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('change_87_single_bar_present', '1');
     RenderLog.write('change_87_pills_inline', '1');
     RenderLog.write('change_86_voice_pills_present', '1');
+    // #114 render-log
+    RenderLog.write('c114_fulfillment_header_built', 'desktop');
+    RenderLog.write('c114_spoken_chip_left', 'desktop');
+    RenderLog.write('c114_progress_expanded', 'desktop');
     final doneCount = _items.length - _pendingCount;
     final total = _items.length;
     final countingDisabled = _agentPhase != AgentPhase.idle;
@@ -1924,9 +1930,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       ),
       child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
 
-        // 1. Supplier dropdown — #99: Expanded (tight) keeps arrow at constant right X
-        Expanded(
-          flex: 3,
+        // 1. Supplier dropdown — #114: constrained width (no Expanded) so no gap before chip
+        ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 240),
           child: _suppliers.isEmpty
               ? const Text('No supplier orders to collect yet',
                   style: TextStyle(fontSize: 14, color: _kSub), overflow: TextOverflow.ellipsis)
@@ -1956,20 +1962,17 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                 }),
         ),
 
-        // 2. Spacer
-        const Expanded(child: SizedBox()),
-
-        // 3. "N spoken" pill (left of bar) + progress bar + "N/N" count
+        // 2. "N spoken" pill immediately right of dropdown + Expanded progress bar
         if (_items.isNotEmpty) ...[
-          // #97: constant reserved slot — always green, always visible, tappable when count>0
-          const SizedBox(width: 12),
+          // #114: chip sits right after dropdown — no Expanded spacer between them
+          const SizedBox(width: 8),
           SizedBox(
             width: 110, // kSpokenSlotW — constant so bar never shifts
             child: Builder(builder: (ctx) => _buildSpokenPill(ctx)),
           ),
           const SizedBox(width: 12),
-          ConstrainedBox(
-            constraints: const BoxConstraints(minWidth: 120, maxWidth: 200),
+          // #114: Expanded fills the freed horizontal space
+          Expanded(
             child: LinearProgressIndicator(
               value: total == 0 ? 0 : doneCount / total,
               backgroundColor: _kBorder,
@@ -1983,7 +1986,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             '$doneCount/$total',
             style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
           ),
-        ],
+        ] else
+          // No items: spacer pushes buttons to the right
+          const Spacer(),
 
         // 4. Count items pill — FIXED SIZE BOX (never changes width/height across states)
         if (_voiceSupported) ...[

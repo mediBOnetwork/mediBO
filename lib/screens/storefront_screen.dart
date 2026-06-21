@@ -416,8 +416,11 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
   }
 
   void _onScroll() {
-    // Scroll listener kept for _scrollToProducts / _scrollToTop only;
-    // products are now loaded exclusively via the Load More button.
+    if (!_scroll.hasClients) return;
+    final pos = _scroll.position;
+    if (pos.pixels >= pos.maxScrollExtent - 300) {
+      _loadMore();
+    }
   }
 
   void _handleLoadMore() => _loadMore();

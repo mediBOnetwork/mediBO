@@ -3193,16 +3193,16 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
     }
   }
 
-  // #119: tap a clip chip — reorder + play.
+  // #119/#120: tap a clip chip — switch to flat spoken-order view + play.
+  // Tapping the currently-playing clip stops audio but keeps the flat view.
   void _tapClip(String clipPath, int recordingSeq) {
     if (_playingClip == clipPath) {
-      // Already playing — stop and clear reorder
+      // Already playing — stop; stay in flat view for this clip
       _stopAudio();
-      setState(() => _selectedClipSeq = null);
     } else {
       setState(() => _selectedClipSeq = recordingSeq);
       _playWholeClip(clipPath, recordingSeq);
-      RenderLog.write('c119_clip_tapped', 'seq=$recordingSeq;reordered=y;playing=y');
+      RenderLog.write('c119_clip_tapped', 'seq=$recordingSeq;flat_view=y;playing=y');
     }
   }
 
@@ -3259,36 +3259,20 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
     }).toList();
   }
 
-  // #119: reorder groups so selected clip's products come first (in clip's spoken order).
-  List<({String name, List<_QtyEntry> entries, int total, int ordered})> _reorder(
-    List<({String name, List<_QtyEntry> entries, int total, int ordered})> groups,
-    int? clipSeq,
-  ) {
-    if (clipSeq == null) return groups;
-    // First-ord of each product in this clip (for ordering).
-    final firstOrd = <String, int>{};
-    for (final g in groups) {
-      for (final e in g.entries) {
-        if (e.seq == clipSeq) {
-          if (!firstOrd.containsKey(g.name) || e.ord < firstOrd[g.name]!) {
-            firstOrd[g.name] = e.ord;
-          }
-        }
-      }
-    }
-    final inClip = groups.where((g) => firstOrd.containsKey(g.name)).toList()
-      ..sort((a, b) => firstOrd[a.name]!.compareTo(firstOrd[b.name]!));
-    final notInClip = groups.where((g) => !firstOrd.containsKey(g.name)).toList();
-    return [...inClip, ...notInClip];
-  }
-
   @override
   Widget build(BuildContext context) {
     RenderLog.write('c119_no_timestamps', 'true'); // static: no t_start/t_end used
+    RenderLog.write('c120_no_timestamps', 'true'); // static: #120 no timestamps
 
     final mentions = _mentions;
     final clips = mentions != null ? _distinctClips(mentions) : <({int seq, String clipPath})>[];
-    final multiClip = clips.length > 1;
+    final selSeq = _selectedClipSeq;
+
+    // #120: log view mode on every build
+    if (mentions != null && mentions.isNotEmpty) {
+      RenderLog.write('c120_view_mode',
+          selSeq == null ? 'mode=grouped' : 'mode=flat;clip_seq=$selSeq');
+    }
 
     // #118: log popup width vs screen
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -3305,22 +3289,12 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // Header: title + single-clip play (if only one clip)
+        // Header: title + close only (#120: ▶ moved to chip row below)
         Padding(
           padding: const EdgeInsets.fromLTRB(14, 12, 10, 8),
           child: Row(children: [
             const Text('Counted items',
                 style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _kText)),
-            const SizedBox(width: 8),
-            if (!multiClip && clips.isNotEmpty)
-              _ClipPlayButton(
-                label: null,
-                clipPath: clips.first.clipPath,
-                recordingSeq: clips.first.seq,
-                playing: _playingClip == clips.first.clipPath,
-                onPlay: () => _tapClip(clips.first.clipPath, clips.first.seq),
-                onStop: _stopAudio,
-              ),
             const Spacer(),
             GestureDetector(
               onTap: widget.onDismiss,
@@ -3328,25 +3302,48 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
             ),
           ]),
         ),
-        // Multi-clip row: "Clip 1 ▶  Clip 2 ▶ …" — tap = reorder + play
-        if (multiClip)
+        // #120: "All" chip + clip chips always shown when clips available
+        if (mentions != null && clips.isNotEmpty)
           Padding(
             padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
             child: Wrap(
               spacing: 8,
               runSpacing: 4,
-              children: clips.asMap().entries.map((e) {
-                final idx = e.key;
-                final clip = e.value;
-                return _ClipPlayButton(
-                  label: 'Clip ${idx + 1}',
-                  clipPath: clip.clipPath,
-                  recordingSeq: clip.seq,
-                  playing: _playingClip == clip.clipPath,
-                  onPlay: () => _tapClip(clip.clipPath, clip.seq),
-                  onStop: _stopAudio,
-                );
-              }).toList(),
+              children: [
+                // "All" chip — returns to grouped overview
+                GestureDetector(
+                  onTap: () {
+                    setState(() => _selectedClipSeq = null);
+                    RenderLog.write('c120_back_to_all', 'true');
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: selSeq == null ? _kGreen : const Color(0xFFE8F5E9),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: _kGreen),
+                    ),
+                    child: Text('All',
+                        style: TextStyle(
+                          fontSize: 12, fontWeight: FontWeight.w600,
+                          color: selSeq == null ? Colors.white : _kGreen,
+                        )),
+                  ),
+                ),
+                // Clip chips
+                ...clips.asMap().entries.map((e) {
+                  final idx = e.key;
+                  final clip = e.value;
+                  return _ClipPlayButton(
+                    label: 'Clip ${idx + 1}',
+                    clipPath: clip.clipPath,
+                    recordingSeq: clip.seq,
+                    playing: _playingClip == clip.clipPath,
+                    onPlay: () => _tapClip(clip.clipPath, clip.seq),
+                    onStop: _stopAudio,
+                  );
+                }),
+              ],
             ),
           ),
         const Divider(height: 1, color: _kBorder),
@@ -3368,16 +3365,104 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
             child: Text('No clips recorded yet today.',
                 style: TextStyle(fontSize: 13, color: _kSub)),
           )
-        else
+        else if (selSeq != null)
+          // #120: flat spoken-order view for selected clip
           Flexible(
             child: SingleChildScrollView(
               child: Padding(
                 padding: const EdgeInsets.symmetric(vertical: 4),
-                child: _buildTable(_reorder(_groupMentions(mentions), _selectedClipSeq)),
+                child: _buildFlatList(clips, selSeq),
+              ),
+            ),
+          )
+        else
+          // Default: grouped summary table (all clips combined, no reorder)
+          Flexible(
+            child: SingleChildScrollView(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: _buildTable(_groupMentions(mentions)),
               ),
             ),
           ),
       ],
+    );
+  }
+
+  // #120: flat spoken-order list for the selected clip.
+  // One row per mention (no grouping), ordered by ord asc for that recording_seq.
+  // No timestamps used — green is whole-clip (#119 rule).
+  Widget _buildFlatList(List<({int seq, String clipPath})> clips, int clipSeq) {
+    final rows = (_mentions ?? [])
+        .where((r) => (r['recording_seq'] as num?)?.toInt() == clipSeq)
+        .toList()
+      ..sort((a, b) => ((a['ord'] as num?)?.toInt() ?? 0)
+          .compareTo((b['ord'] as num?)?.toInt() ?? 0));
+
+    final clipIdx = clips.indexWhere((c) => c.seq == clipSeq);
+    final clipLabel = clipIdx >= 0 ? 'Clip ${clipIdx + 1}' : 'Clip';
+    final isPlaying = _playingSeq == clipSeq;
+
+    RenderLog.write('c120_flat_built',
+        'clip_seq=$clipSeq;rows=${rows.length};ord_sorted=y');
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 8, 14, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Text('$clipLabel — spoken order',
+                style: const TextStyle(
+                    fontSize: 11, fontWeight: FontWeight.w600, color: _kSub)),
+          ),
+          ...rows.asMap().entries.map((e) {
+            final n = e.key + 1;
+            final r = e.value;
+            final name = r['matched_name']?.toString() ?? '?';
+            final qty = (r['qty'] as num?)?.toInt() ?? 0;
+            return Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(
+                    width: 28,
+                    child: Text('$n.',
+                        style: TextStyle(
+                          fontSize: 12, fontWeight: FontWeight.w500,
+                          color: isPlaying ? _kGreen : _kSub,
+                        )),
+                  ),
+                  Expanded(
+                    child: Text(name,
+                        style: TextStyle(
+                          fontSize: 12, fontWeight: FontWeight.w500,
+                          color: isPlaying ? _kGreen : _kText,
+                        ),
+                        maxLines: 2, overflow: TextOverflow.ellipsis),
+                  ),
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: isPlaying ? _kGreen : const Color(0xFFF5F6F8),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: isPlaying ? _kGreen : _kBorder),
+                    ),
+                    child: Text('$qty',
+                        style: TextStyle(
+                          fontSize: 12, fontWeight: FontWeight.w600,
+                          color: isPlaying ? Colors.white : _kText,
+                        )),
+                  ),
+                ],
+              ),
+            );
+          }),
+        ],
+      ),
     );
   }
 

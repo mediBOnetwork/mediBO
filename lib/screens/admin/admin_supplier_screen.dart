@@ -3335,6 +3335,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   }
 
   Widget _buildOrdersView(bool isDesktop) {
+    RenderLog.write('c108_admin_suporders_list_built', _orders.length);
     if (_orders.isEmpty) return _emptyState('0 supplier orders');
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       if (isDesktop) _ordersTableHeader(),

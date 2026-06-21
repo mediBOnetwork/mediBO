@@ -63,7 +63,9 @@ const _kChips = [
   ),
 ];
 
-const _kWideBreakpoint = 500.0;
+// #111: 60/40 split — desktop only when content area >= 600px.
+// Shared by admin, supplier, and public link surfaces.
+const _kWideBreakpoint = 600.0;
 
 // ── Public widget ─────────────────────────────────────────────────────────────
 

@@ -340,6 +340,16 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
 
   @override
   Widget build(BuildContext context) {
+    return LayoutBuilder(builder: (context, constraints) {
+      // #111: write ACTUAL measured width — Phase 10 uses this to prove narrow
+      // layout without clicking into a group.
+      // At 390px: 390-40=350<600 → narrow guaranteed; at 1280px: 1240>=600 → wide.
+      RenderLog.write('inq_supplier_vp_w', constraints.maxWidth.toInt().toString());
+      return _buildContent(context);
+    });
+  }
+
+  Widget _buildContent(BuildContext context) {
     if (_loading) {
       return const Center(
         child: CircularProgressIndicator(

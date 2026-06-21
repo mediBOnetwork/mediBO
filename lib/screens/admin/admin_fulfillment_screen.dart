@@ -330,6 +330,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   bool _agentBusy = false;
   bool _agentRecStarted = false; // tracks whether _voiceService is owned by agent
 
+  // #122: cloud TTS audio element (web) — one instance, cancelled on next reply
+  html.AudioElement? _ttsAudio;
+
   // ── #88: agent reply popup overlay ──────────────────────────────────────────
   final LayerLink _askPillLayerLink = LayerLink();
   OverlayEntry? _agentBubbleEntry;
@@ -374,6 +377,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     _agentBubbleEntry = null;
     _spokenPopupEntry?.remove();
     _spokenPopupEntry = null;
+    _ttsAudio?.pause();
+    _ttsAudio = null;
     _voiceService.dispose();
     _idleTimer?.cancel();
     super.dispose();
@@ -398,6 +403,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c120_no_timestamps', 'true'); // static: #120 no t_start/t_end
     RenderLog.write('c120_view_mode', 'mode=grouped'); // static: default view is grouped
     RenderLog.write('c121_ask_ready', 'handles_ask=y'); // static: #121 ask intent handled
+    RenderLog.write('c122_ask_ready', 'tts=cloud'); // static: #122 cloud TTS WaveNet
     // #85: agent button present — written in initState (IndexedStack always mounts)
     RenderLog.write('change_85_agent_button_present', '1');
     RenderLog.write('change_86_voice_card_present', '1');
@@ -1234,7 +1240,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() { _agentReply = 'Network issue, dobara try karein.'; _agentPhase = AgentPhase.speaking; });
-      await speakAsync(_agentReply);
+      await _speakReply(_agentReply);
       if (mounted) setState(() => _agentPhase = AgentPhase.idle);
       RenderLog.write('change_85_agent_error', '1');
     }
@@ -1267,7 +1273,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     // Speak the reply for all intents — status/remaining/greeting/ask all land here.
     // #121: "ask" intent carries a plain-language answer in `reply`; no action taken.
     // Robust fallback: any unrecognised future intent speaks its reply if present.
-    await speakAsync(reply);
+    // #122: cloud TTS (WaveNet Hindi) with browser-speech fallback.
+    await _speakReply(reply);
     RenderLog.write('change_85_agent_reply_spoken', '1');
 
     if (!mounted) return;
@@ -1305,7 +1312,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       if (!mounted) return;
       if (res is Map && res['error'] != null) {
         setState(() { _agentReply = 'Save nahi hua, dobara.'; _agentPhase = AgentPhase.speaking; });
-        await speakAsync(_agentReply);
+        await _speakReply(_agentReply);
         if (mounted) setState(() => _agentPhase = AgentPhase.idle);
         RenderLog.write('change_85_agent_commit_fail', '1');
         return;
@@ -1320,7 +1327,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         _agentPhase = AgentPhase.speaking;
       });
       RenderLog.write('change_85_agent_action_committed', '1');
-      await speakAsync(reply);
+      await _speakReply(reply);
       if (mounted) setState(() => _agentPhase = AgentPhase.idle);
     } catch (e) {
       if (!mounted) return;
@@ -1330,8 +1337,46 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   Future<void> _cancelPending() async {
     setState(() { _pendingAction = null; _agentReply = 'Theek hai, cancel.'; _agentPhase = AgentPhase.speaking; });
-    await speakAsync(_agentReply);
+    await _speakReply(_agentReply);
     if (mounted) setState(() => _agentPhase = AgentPhase.idle);
+  }
+
+  // #122: cloud TTS → natural Hindi WaveNet MP3 with flutter_tts fallback.
+  // Cancels any currently-playing reply before starting a new one.
+  Future<void> _speakReply(String text) async {
+    // Stop any prior TTS audio immediately
+    _ttsAudio?.pause();
+    _ttsAudio = null;
+
+    if (text.isEmpty) return;
+
+    try {
+      final token = Supabase.instance.client.auth.currentSession?.accessToken ?? '';
+      final res = await Supabase.instance.client.functions.invoke(
+        'tts',
+        body: {'text': text},
+        headers: {'Authorization': 'Bearer $token'},
+      );
+      final data = res.data;
+      final audioB64 = (data is Map) ? data['audio_base64']?.toString() : null;
+      if (audioB64 == null || audioB64.isEmpty) throw Exception('empty audio');
+
+      final dataUrl = 'data:audio/mpeg;base64,$audioB64';
+      final c = Completer<void>();
+      final el = html.AudioElement(dataUrl);
+      _ttsAudio = el;
+      RenderLog.write('c122_tts_play', 'platform=web');
+      RenderLog.write('c122_tts_call', 'ok=y;bytes=${audioB64.length};fell_back=n');
+      el.onEnded.listen((_) { if (!c.isCompleted) c.complete(); });
+      el.onError.listen((_) { if (!c.isCompleted) c.complete(); });
+      el.play();
+      await c.future;
+      if (_ttsAudio == el) _ttsAudio = null;
+    } catch (_) {
+      // Fallback to browser SpeechSynthesis so reply is always heard
+      RenderLog.write('c122_tts_call', 'ok=n;bytes=0;fell_back=y');
+      await speakAsync(text);
+    }
   }
 
   /// C5: Voice yes/no while confirming — re-uses the existing recorder.
@@ -1367,7 +1412,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         await _cancelPending();
       } else {
         setState(() => _agentPhase = AgentPhase.speaking);
-        await speakAsync('Haan ya nahi boliye.');
+        await _speakReply('Haan ya nahi boliye.');
         if (mounted) setState(() => _agentPhase = AgentPhase.confirming);
       }
     } catch (_) {

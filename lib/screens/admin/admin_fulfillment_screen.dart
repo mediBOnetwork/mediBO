@@ -416,6 +416,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c129_ready', 'deploy_doctor=done'); // static: #129 deploy confirmed
     RenderLog.write('c130_ready', 'auto_all=y'); // static: #130 reset-on-playback-complete in bundle
     RenderLog.write('c131_ready', 'auto_return_on_play_end=y'); // static: #131 any-clip completion triggers All
+    RenderLog.write('c132_ready', 'mobile_responsive=y'); // static: #132 responsive table layout
     // #85: agent button present — written in initState (IndexedStack always mounts)
     RenderLog.write('change_85_agent_button_present', '1');
     RenderLog.write('change_86_voice_card_present', '1');
@@ -3677,72 +3678,89 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
     );
   }
 
+  // #132: responsive table — Row+Expanded+fixed Total width guarantees no column clipping
+  static const double _kTotalColW = 54.0; // wide enough for "10/14" at 12px bold
+
   Widget _buildTable(
       List<({String name, List<_QtyEntry> entries, int total, int ordered})> groups) {
-    final playSeq = _playingSeq; // current playing seq for pill coloring
-    return Table(
-      columnWidths: const {
-        0: FlexColumnWidth(3),
-        1: FlexColumnWidth(5),
-        2: IntrinsicColumnWidth(),
-      },
-      defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+    final playSeq = _playingSeq;
+    RenderLog.write('c132_table_responsive', 'cols_fit=y;total_visible=y');
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        TableRow(
-          decoration: const BoxDecoration(color: Color(0xFFF5F6F8)),
-          children: [
-            _th('Product'),
-            _th('Qty sequence'),
-            _th('Total'),
-          ],
+        // Header row
+        Container(
+          color: const Color(0xFFF5F6F8),
+          child: Row(
+            children: [
+              Expanded(flex: 2, child: _th('Product')),
+              Expanded(flex: 3, child: _th('Qty sequence')),
+              SizedBox(width: _kTotalColW, child: _thRight('Total')),
+            ],
+          ),
         ),
-        ...groups.map((g) => TableRow(
+        // Body rows
+        ...groups.map((g) => Container(
           decoration: const BoxDecoration(
             border: Border(bottom: BorderSide(color: _kBorder)),
           ),
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(10, 8, 4, 8),
-              child: Text(g.name,
-                  style: const TextStyle(fontSize: 12, color: _kText),
-                  overflow: TextOverflow.ellipsis, maxLines: 2),
-            ),
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
-              child: Wrap(
-                spacing: 4,
-                runSpacing: 4,
-                children: g.entries.map((e) {
-                  // #119: green if this pill's clip is playing
-                  final active = playSeq != null && e.seq == playSeq;
-                  return Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: active ? _kGreen : const Color(0xFFF5F6F8),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: active ? _kGreen : _kBorder),
-                    ),
-                    child: Text('${e.qty}',
-                        style: TextStyle(
-                          fontSize: 12, fontWeight: FontWeight.w600,
-                          color: active ? Colors.white : _kText,
-                        )),
-                  );
-                }).toList(),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.only(right: 10),
-              child: Text(
-                g.ordered > 0 ? '${g.total}/${g.ordered}' : '${g.total}',
-                style: TextStyle(
-                  fontSize: 12, fontWeight: FontWeight.w700,
-                  color: g.ordered > 0 && g.total >= g.ordered ? _kGreen : _kText,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              // Product — wraps to 2 lines; never pushes Total off-screen
+              Expanded(
+                flex: 2,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(10, 8, 4, 8),
+                  child: Text(g.name,
+                      style: const TextStyle(fontSize: 12, color: _kText),
+                      overflow: TextOverflow.ellipsis, maxLines: 2),
                 ),
-                textAlign: TextAlign.right,
               ),
-            ),
-          ],
+              // Qty sequence — pills wrap within their share of width
+              Expanded(
+                flex: 3,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+                  child: Wrap(
+                    spacing: 4,
+                    runSpacing: 4,
+                    children: g.entries.map((e) {
+                      final active = playSeq != null && e.seq == playSeq;
+                      return Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: active ? _kGreen : const Color(0xFFF5F6F8),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: active ? _kGreen : _kBorder),
+                        ),
+                        child: Text('${e.qty}',
+                            style: TextStyle(
+                              fontSize: 12, fontWeight: FontWeight.w600,
+                              color: active ? Colors.white : _kText,
+                            )),
+                      );
+                    }).toList(),
+                  ),
+                ),
+              ),
+              // Total — fixed width, always fully visible, pinned right
+              SizedBox(
+                width: _kTotalColW,
+                child: Padding(
+                  padding: const EdgeInsets.only(right: 10),
+                  child: Text(
+                    g.ordered > 0 ? '${g.total}/${g.ordered}' : '${g.total}',
+                    style: TextStyle(
+                      fontSize: 12, fontWeight: FontWeight.w700,
+                      color: g.ordered > 0 && g.total >= g.ordered ? _kGreen : _kText,
+                    ),
+                    textAlign: TextAlign.right,
+                  ),
+                ),
+              ),
+            ],
+          ),
         )),
       ],
     );
@@ -3751,6 +3769,13 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
   Widget _th(String text) => Padding(
     padding: const EdgeInsets.fromLTRB(10, 6, 4, 6),
     child: Text(text,
+        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _kSub)),
+  );
+
+  Widget _thRight(String text) => Padding(
+    padding: const EdgeInsets.fromLTRB(4, 6, 10, 6),
+    child: Text(text,
+        textAlign: TextAlign.right,
         style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _kSub)),
   );
 }

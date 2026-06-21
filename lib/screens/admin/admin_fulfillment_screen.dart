@@ -392,6 +392,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c115_collect_voice_ready', 'platform=web');
     RenderLog.write('c116_voice_ready', 'platform=web');
     RenderLog.write('c117_voice_ready', 'platform=web');
+    RenderLog.write('c117_no_seek', 'true'); // static: seek/highlight removed in #117
     // #85: agent button present — written in initState (IndexedStack always mounts)
     RenderLog.write('change_85_agent_button_present', '1');
     RenderLog.write('change_86_voice_card_present', '1');
@@ -3121,7 +3122,6 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
   @override
   void initState() {
     super.initState();
-    RenderLog.write('c117_no_seek', 'true'); // static proof: seek/highlight code is gone
     _fetchMentions();
   }
 

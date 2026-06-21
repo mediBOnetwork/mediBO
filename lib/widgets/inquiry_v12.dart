@@ -67,20 +67,22 @@ const _kWideBreakpoint = 500.0;
 
 // ── Public widget ─────────────────────────────────────────────────────────────
 
-/// Design v12 shared inquiry item list used across all three inquiry surfaces.
+/// Shared inquiry item list for all three surfaces (admin, token link, supplier).
 ///
-/// Default view: nested Company → Category grouping.
-/// Toggle allows switching to flat Category grouping.
+/// Items are ordered company→category→product_name A→Z.  No toggle, no header
+/// chrome — the card already shows category pill and company line.  A slim
+/// "Don't stock all <Category>" affordance precedes each cluster.
 ///
-/// onBulkCompanyCategory: called for per-category "Don't stock all" and popup
-///   "Mark all" — returns marked count on success, null on error.
-/// surface: 'admin' | 'link' | 'supplier' — for render-log instrumentation.
+/// onBulkCompanyCategory: bulk RPC for (company, category) — returns marked
+///   count on success, null on error.
+/// surface: 'admin' | 'link' | 'supplier' — for render-log.
 class InquiryAnswerList extends StatefulWidget {
   final List<Map<String, dynamic>> items;
   final Map<int, String> answerOverrides;
   final void Function(int inquiryId, String answer) onAnswer;
   final void Function(List<int> ids, String answer)? onBulk;
-  final Future<int?> Function(String company, String category)? onBulkCompanyCategory;
+  final Future<int?> Function(String company, String category)?
+      onBulkCompanyCategory;
   final Set<int> answeringIds;
   final bool readOnly;
   final Widget Function(Map<String, dynamic> item)? itemTrailingWidget;
@@ -104,14 +106,10 @@ class InquiryAnswerList extends StatefulWidget {
 }
 
 class _InquiryAnswerListState extends State<InquiryAnswerList> {
-  String _groupBy = 'company'; // default: nested Company → Category
-  final Set<String> _bulkGroups = {}; // for flat category toggle
   final Set<String> _bulkingCatKeys = {}; // "$company|$category" in-flight
-  final Map<int, LayerLink> _dontStockLinks = {};
   OverlayEntry? _popupEntry;
   Timer? _popupTimer;
 
-  // Global counters for render-log (persist across rebuild)
   static int _popupShownCount = 0;
   static int _bulkCalledCount = 0;
 
@@ -121,25 +119,8 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
     super.dispose();
   }
 
-  LayerLink _getDontStockLink(int id) =>
-      _dontStockLinks.putIfAbsent(id, LayerLink.new);
+  // ── Grouping: company → category → items, all A→Z ─────────────────────────
 
-  // ── Grouping helpers ───────────────────────────────────────────────────────
-
-  String _flatGroupKey(Map<String, dynamic> item) {
-    final tc = (item['therapeutic_class'] as String? ?? '').trim();
-    return tc.isEmpty ? 'Uncategorised' : tc.toUpperCase();
-  }
-
-  Map<String, List<Map<String, dynamic>>> _flatGrouped() {
-    final map = <String, List<Map<String, dynamic>>>{};
-    for (final item in widget.items) {
-      (map[_flatGroupKey(item)] ??= []).add(item);
-    }
-    return map;
-  }
-
-  // Returns: company → (category → items), all sorted A→Z, items by product_name
   Map<String, Map<String, List<Map<String, dynamic>>>> _nestedGrouped() {
     final raw = <String, Map<String, List<Map<String, dynamic>>>>{};
     for (final item in widget.items) {
@@ -149,22 +130,19 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
       final catKey = cat.isEmpty ? 'Uncategorised' : cat.toUpperCase();
       ((raw[compKey] ??= {})[catKey] ??= []).add(item);
     }
-    final sortedCompanies = raw.keys.toList()..sort();
+    final sortedComp = raw.keys.toList()..sort();
     final result = <String, Map<String, List<Map<String, dynamic>>>>{};
-    for (final comp in sortedCompanies) {
+    for (final comp in sortedComp) {
       final cats = raw[comp]!;
       final sortedCats = cats.keys.toList()..sort();
-      final sortedCatMap = <String, List<Map<String, dynamic>>>{};
+      final out = <String, List<Map<String, dynamic>>>{};
       for (final cat in sortedCats) {
-        final catItems = cats[cat]!
-          ..sort((a, b) {
-            final na = (a['product_name'] as String? ?? '');
-            final nb = (b['product_name'] as String? ?? '');
-            return na.compareTo(nb);
-          });
-        sortedCatMap[cat] = catItems;
+        out[cat] = cats[cat]!
+          ..sort((a, b) =>
+              (a['product_name'] as String? ?? '')
+                  .compareTo(b['product_name'] as String? ?? ''));
       }
-      result[comp] = sortedCatMap;
+      result[comp] = out;
     }
     return result;
   }
@@ -187,7 +165,10 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
     return widget.answerOverrides[id] ?? item['answer'] as String?;
   }
 
-  // ── Popup management ───────────────────────────────────────────────────────
+  bool _hasAnswerable(List<Map<String, dynamic>> items) =>
+      items.any((i) => !_isLocked(i) && !_noSupplier(i));
+
+  // ── Popup (bottom-center toast) ────────────────────────────────────────────
 
   void _closePopup() {
     _popupTimer?.cancel();
@@ -197,34 +178,34 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
   }
 
   void _handleDontStockTap(int id, Map<String, dynamic> item) {
-    // C1(a): answer the item immediately
     widget.onAnswer(id, "We don't stock this product");
 
-    // C1(b): show tiny popup above the chip
     final company = (item['company'] as String? ?? '').trim();
     final category = (item['therapeutic_class'] as String? ?? '').trim();
+    if (company.isEmpty && category.isEmpty) return;
 
     _closePopup();
     _popupShownCount++;
     RenderLog.write('inq_dontstock_popup_shown', _popupShownCount);
+    RenderLog.write('inq_popup_compact', 1);
+    RenderLog.write('inq_popup_anchor', 'bottom_center');
 
-    final link = _getDontStockLink(id);
     final overlay = Overlay.of(context, rootOverlay: true);
     _popupEntry = OverlayEntry(
-      builder: (_) => _DontStockPopup(
-        link: link,
+      builder: (_) => _InqDontStockToast(
         company: company,
         category: category,
         hasBulk: widget.onBulkCompanyCategory != null,
-        onMarkAll: () => _doBulkCompanyCategory(company, category),
+        onYesAll: () => _doBulkCompanyCategory(company, category),
         onDismiss: _closePopup,
       ),
     );
     overlay.insert(_popupEntry!);
-    _popupTimer = Timer(const Duration(seconds: 6), _closePopup);
+    _popupTimer = Timer(const Duration(seconds: 5), _closePopup);
   }
 
-  Future<void> _doBulkCompanyCategory(String company, String category) async {
+  Future<void> _doBulkCompanyCategory(
+      String company, String category) async {
     _closePopup();
     if (widget.onBulkCompanyCategory == null) return;
 
@@ -232,7 +213,8 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
     if (mounted) setState(() => _bulkingCatKeys.add(catKey));
 
     try {
-      final marked = await widget.onBulkCompanyCategory!(company, category);
+      final marked =
+          await widget.onBulkCompanyCategory!(company, category);
       _bulkCalledCount++;
       RenderLog.write('inq_bulk_dontstock_called', _bulkCalledCount);
       if (marked != null) {
@@ -240,7 +222,7 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(
             content: Text(
-                'Marked $marked ${category.isNotEmpty ? category : "item"}${marked == 1 ? "" : "s"} as don\'t stock'),
+                'Marked $marked item${marked == 1 ? '' : 's'} as don\'t stock'),
             backgroundColor: const Color(0xFF1B7A43),
             duration: const Duration(seconds: 3),
           ));
@@ -248,7 +230,7 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
       } else {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('Could not mark items — please try again'),
+            content: Text('Could not mark — please try again'),
             backgroundColor: Color(0xFFDC2626),
             duration: Duration(seconds: 3),
           ));
@@ -267,229 +249,19 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
     }
   }
 
-  // Flat category "Don't stock all" handler (toggle)
-  void _handleFlatBulkTap(
-      String groupKey, List<Map<String, dynamic>> groupItems) {
-    final ids = groupItems
-        .where((i) => !_isLocked(i) && !_noSupplier(i))
-        .map((i) => (i['inquiry_id'] as num).toInt())
-        .toList();
-    if (ids.isEmpty) return;
-
-    final wasBulked = _bulkGroups.contains(groupKey);
-    setState(() {
-      if (wasBulked) {
-        _bulkGroups.remove(groupKey);
-      } else {
-        _bulkGroups.add(groupKey);
-      }
-    });
-
-    final answer = wasBulked ? '' : "We don't stock this product";
-    if (widget.onBulk != null) {
-      widget.onBulk!(ids, answer);
-    } else if (!wasBulked) {
-      for (final id in ids) {
-        widget.onAnswer(id, answer);
-      }
-    }
-    RenderLog.write('inquiry_v12_bulk_dontstock',
-        '${wasBulked ? 'clear' : 'set'}:${ids.length}:$groupKey');
-  }
-
-  // ── Build ──────────────────────────────────────────────────────────────────
-
-  @override
-  Widget build(BuildContext context) {
-    RenderLog.write('inq_group_mode', 'company_category');
-    RenderLog.write('inquiry_v12_widget', _groupBy);
-
-    // Surface-specific render-log
-    final surf = widget.surface;
-    if (surf == 'admin') RenderLog.write('inq_surface_admin_grouped', 1);
-    if (surf == 'link') RenderLog.write('inq_surface_link_grouped', 1);
-    if (surf == 'supplier') RenderLog.write('inq_surface_supplier_grouped', 1);
-
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final isWide = constraints.maxWidth >= _kWideBreakpoint;
-
-        if (_groupBy == 'company') {
-          return _buildNestedCompanyView(isWide);
-        } else {
-          return _buildFlatCategoryView(isWide);
-        }
-      },
-    );
-  }
-
-  // ── Nested Company → Category view ────────────────────────────────────────
-
-  Widget _buildNestedCompanyView(bool isWide) {
-    final nested = _nestedGrouped();
-    final totalPending = widget.items
-        .where((i) => !_isLocked(i) && !_noSupplier(i))
-        .length;
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        if (!widget.readOnly) ...[
-          _buildGroupToggle(totalPending),
-          const SizedBox(height: 14),
-        ],
-        ...nested.entries.expand((compEntry) {
-          final company = compEntry.key;
-          final byCategory = compEntry.value;
-          final allCompanyItems =
-              byCategory.values.expand((x) => x).toList();
-          final pendingCount = allCompanyItems
-              .where((i) => !_isLocked(i) && !_noSupplier(i))
-              .length;
-          return [
-            _buildCompanyHeader(company, allCompanyItems.length, pendingCount),
-            const SizedBox(height: 6),
-            ...byCategory.entries.expand((catEntry) {
-              final category = catEntry.key;
-              final catItems = catEntry.value;
-              final catAnswerable = catItems
-                  .where((i) => !_isLocked(i) && !_noSupplier(i))
-                  .length;
-              return [
-                Padding(
-                  padding: const EdgeInsets.only(left: 16),
-                  child: _buildCategorySubHeader(
-                      company, category, catItems.length, catAnswerable),
-                ),
-                const SizedBox(height: 6),
-                ...catItems.map((item) => _buildItemCard(item, isWide)),
-                const SizedBox(height: 8),
-              ];
-            }),
-            const SizedBox(height: 10),
-          ];
-        }),
-      ],
-    );
-  }
-
-  Widget _buildCompanyHeader(String company, int total, int pending) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF0FDF4),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: const Color(0xFFBBF7D0)),
-      ),
-      child: Row(children: [
-        const Icon(Icons.store_outlined, size: 14, color: Color(0xFF0F6E56)),
-        const SizedBox(width: 7),
-        Expanded(
-          child: RichText(
-            text: TextSpan(children: [
-              TextSpan(
-                text: company,
-                style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                    color: Color(0xFF065F46)),
-              ),
-              TextSpan(
-                text: '  ·  $total item${total == 1 ? '' : 's'}',
-                style: const TextStyle(
-                    fontSize: 12, color: Color(0xFF0F6E56)),
-              ),
-              if (pending > 0)
-                TextSpan(
-                  text: '  ($pending pending)',
-                  style: const TextStyle(
-                      fontSize: 12, color: Color(0xFF6B7280)),
-                ),
-            ]),
-          ),
-        ),
-      ]),
-    );
-  }
-
-  Widget _buildCategorySubHeader(
-      String company, String category, int total, int answerable) {
-    final catKey = '$company|$category';
-    final inFlight = _bulkingCatKeys.contains(catKey);
-
-    return Row(children: [
-      const Icon(Icons.category_outlined, size: 12, color: Color(0xFF9CA3AF)),
-      const SizedBox(width: 5),
-      Expanded(
-        child: RichText(
-          text: TextSpan(children: [
-            TextSpan(
-              text: category,
-              style: const TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: Color(0xFF374151)),
-            ),
-            TextSpan(
-              text: ' · $total item${total == 1 ? '' : 's'}',
-              style: const TextStyle(
-                  fontSize: 11, color: Color(0xFF6B7280)),
-            ),
-          ]),
-        ),
-      ),
-      if (answerable > 0 && !widget.readOnly) ...[
-        const SizedBox(width: 6),
-        GestureDetector(
-          onTap: inFlight
-              ? null
-              : () => _categoryDontStockAll(company, category, []),
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 150),
-            padding:
-                const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-            decoration: BoxDecoration(
-              color: const Color(0xFFF1EFE8),
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: const Color(0xFFD1D5DB)),
-            ),
-            child: inFlight
-                ? const SizedBox(
-                    width: 10,
-                    height: 10,
-                    child: CircularProgressIndicator(
-                        strokeWidth: 1.5, color: Color(0xFF444441)))
-                : const Row(mainAxisSize: MainAxisSize.min, children: [
-                    Icon(Icons.do_not_disturb_on_outlined,
-                        size: 11, color: Color(0xFF6B7280)),
-                    SizedBox(width: 3),
-                    Text("Don't stock all",
-                        style: TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.w600,
-                            color: Color(0xFF6B7280))),
-                  ]),
-          ),
-        ),
-      ],
-    ]);
-  }
-
-  Future<void> _categoryDontStockAll(
-      String company, String category, List<Map<String, dynamic>> items) async {
+  Future<void> _clusterDontStockAll(
+      String company, String category) async {
     if (widget.onBulkCompanyCategory != null) {
       await _doBulkCompanyCategory(company, category);
     } else {
-      // Fallback: mark items one by one
       final ids = widget.items
           .where((i) {
-            final comp = (i['company'] as String? ?? '').trim();
-            final compKey = comp.isEmpty ? 'Other' : comp;
-            final cat = (i['therapeutic_class'] as String? ?? '').trim();
-            final catKey = cat.isEmpty ? 'Uncategorised' : cat.toUpperCase();
-            return compKey == company &&
-                catKey == category &&
+            final c = (i['company'] as String? ?? '').trim();
+            final ck = c.isEmpty ? 'Other' : c;
+            final t = (i['therapeutic_class'] as String? ?? '').trim();
+            final tk = t.isEmpty ? 'Uncategorised' : t.toUpperCase();
+            return ck == company &&
+                tk == category &&
                 !_isLocked(i) &&
                 !_noSupplier(i);
           })
@@ -505,160 +277,89 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
     }
   }
 
-  // ── Flat category view ─────────────────────────────────────────────────────
+  // ── Build ──────────────────────────────────────────────────────────────────
 
-  Widget _buildFlatCategoryView(bool isWide) {
-    final grouped = _flatGrouped();
-    final totalPending = widget.items
-        .where((i) => !_isLocked(i) && !_noSupplier(i))
-        .length;
+  @override
+  Widget build(BuildContext context) {
+    RenderLog.write('inq_chrome_stripped', 1);
+    RenderLog.write('inq_cluster_order', 'company_category');
+    RenderLog.write('inq_group_mode', 'company_category');
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        if (!widget.readOnly) ...[
-          _buildGroupToggle(totalPending),
-          const SizedBox(height: 14),
+    final surf = widget.surface;
+    if (surf == 'admin') RenderLog.write('inq_surface_admin_grouped', 1);
+    if (surf == 'link') RenderLog.write('inq_surface_link_grouped', 1);
+    if (surf == 'supplier') RenderLog.write('inq_surface_supplier_grouped', 1);
+
+    return LayoutBuilder(builder: (context, constraints) {
+      final isWide = constraints.maxWidth >= _kWideBreakpoint;
+      final nested = _nestedGrouped();
+
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (final compEntry in nested.entries)
+            for (final catEntry in compEntry.value.entries) ...[
+              if (!widget.readOnly &&
+                  _hasAnswerable(catEntry.value))
+                _buildClusterDontStockRow(
+                    compEntry.key, catEntry.key),
+              ...catEntry.value
+                  .map((item) => _buildItemCard(item, isWide)),
+              const SizedBox(height: 4),
+            ],
         ],
-        ...grouped.entries.expand((entry) {
-          final groupKey = entry.key;
-          final groupItems = entry.value;
-          return [
-            _buildFlatGroupHeader(groupKey, groupItems),
-            const SizedBox(height: 8),
-            ...groupItems.map((item) => _buildItemCard(item, isWide)),
-            const SizedBox(height: 14),
-          ];
-        }),
-      ],
-    );
+      );
+    });
   }
 
-  Widget _buildGroupToggle(int totalPending) {
-    return Row(
-      children: [
-        Container(
-          decoration: BoxDecoration(
-            color: const Color(0xFFF3F4F6),
-            borderRadius: BorderRadius.circular(20),
-          ),
-          padding: const EdgeInsets.all(3),
-          child: Row(mainAxisSize: MainAxisSize.min, children: [
-            _segment('company', 'Company'),
-            const SizedBox(width: 2),
-            _segment('category', 'Category'),
-          ]),
-        ),
-        const Spacer(),
-        if (totalPending > 0)
-          Text(
-            '$totalPending item${totalPending == 1 ? '' : 's'} pending',
-            style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
-          ),
-      ],
-    );
-  }
+  // ── Slim "Don't stock all <Category>" affordance ───────────────────────────
 
-  Widget _segment(String value, String label) {
-    final active = _groupBy == value;
-    return GestureDetector(
-      onTap: () {
-        if (_groupBy == value) return;
-        setState(() {
-          _groupBy = value;
-          _bulkGroups.clear();
-        });
-        RenderLog.write('inquiry_v12_group_toggle', value);
-      },
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
-        decoration: BoxDecoration(
-          color: active ? const Color(0xFF0F6E56) : Colors.transparent,
-          borderRadius: BorderRadius.circular(17),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            fontSize: 12,
-            fontWeight: FontWeight.w600,
-            color: active ? Colors.white : const Color(0xFF6B7280),
-          ),
-        ),
-      ),
-    );
-  }
+  Widget _buildClusterDontStockRow(String company, String category) {
+    final catKey = '$company|$category';
+    final inFlight = _bulkingCatKeys.contains(catKey);
+    final label = category.isNotEmpty
+        ? "Don't stock all $category"
+        : "Don't stock all";
 
-  Widget _buildFlatGroupHeader(
-      String groupKey, List<Map<String, dynamic>> items) {
-    final isBulked = _bulkGroups.contains(groupKey);
-    final answerableCount =
-        items.where((i) => !_isLocked(i) && !_noSupplier(i)).length;
-
-    return Row(children: [
-      const Icon(Icons.category_outlined,
-          size: 14, color: Color(0xFF6B7280)),
-      const SizedBox(width: 6),
-      Expanded(
-        child: RichText(
-          text: TextSpan(children: [
-            TextSpan(
-              text: groupKey,
-              style: const TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
-                  color: Color(0xFF111827)),
-            ),
-            TextSpan(
-              text: ' · ${items.length} item${items.length == 1 ? '' : 's'}',
-              style: const TextStyle(
-                  fontSize: 12, color: Color(0xFF6B7280)),
-            ),
-          ]),
-        ),
-      ),
-      if (answerableCount > 0 && !widget.readOnly) ...[
-        const SizedBox(width: 8),
-        GestureDetector(
-          onTap: () => _handleFlatBulkTap(groupKey, items),
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 150),
-            padding:
-                const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(
-              color: isBulked ? const Color(0xFFF1EFE8) : Colors.white,
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(
-                color: isBulked
-                    ? const Color(0xFFB4B2A9)
-                    : const Color(0xFFD1D5DB),
-              ),
-            ),
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
-              Icon(
-                Icons.do_not_disturb_on_outlined,
-                size: 12,
-                color: isBulked
-                    ? const Color(0xFF444441)
-                    : const Color(0xFF6B7280),
-              ),
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: inFlight ? null : () => _clusterDontStockAll(company, category),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 3),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (inFlight)
+                const SizedBox(
+                  width: 10,
+                  height: 10,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 1.5, color: Color(0xFF9CA3AF)),
+                )
+              else
+                const Icon(Icons.do_not_disturb_on_outlined,
+                    size: 11, color: Color(0xFF9CA3AF)),
               const SizedBox(width: 4),
-              Text(
-                "Don't stock all",
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
-                  color: isBulked
-                      ? const Color(0xFF444441)
-                      : const Color(0xFF6B7280),
+              Flexible(
+                child: Text(
+                  label,
+                  style: const TextStyle(
+                      fontSize: 11,
+                      color: Color(0xFF9CA3AF),
+                      decoration: TextDecoration.underline,
+                      decorationColor: Color(0xFF9CA3AF)),
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1,
                 ),
               ),
-            ]),
+            ],
           ),
         ),
-      ],
-    ]);
+      ),
+    );
   }
 
   // ── Item card dispatcher ───────────────────────────────────────────────────
@@ -673,7 +374,7 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
     }
   }
 
-  // ── Wide layout: single horizontal row ────────────────────────────────────
+  // ── Wide card ─────────────────────────────────────────────────────────────
 
   Widget _buildWideCard(Map<String, dynamic> item) {
     final id = (item['inquiry_id'] as num).toInt();
@@ -685,8 +386,8 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
     final noSup = !locked && _noSupplier(item);
     final isAnswering = widget.answeringIds.contains(id);
     final currentAnswer = _currentAnswer(item);
-
     final trailing = !locked ? widget.itemTrailingWidget?.call(item) : null;
+
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       decoration: BoxDecoration(
@@ -695,17 +396,17 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
         border: Border.all(color: const Color(0xFFE5E7EB), width: 0.5),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 6,
-            offset: const Offset(0, 2),
-          ),
+              color: Colors.black.withValues(alpha: 0.04),
+              blurRadius: 6,
+              offset: const Offset(0, 2)),
         ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            padding:
+                const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
@@ -750,7 +451,9 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
                   ),
                 ),
                 const SizedBox(width: 18),
-                if (locked && currentAnswer != null && currentAnswer.isNotEmpty)
+                if (locked &&
+                    currentAnswer != null &&
+                    currentAnswer.isNotEmpty)
                   Row(children: [
                     _buildReadOnlyPill(currentAnswer),
                     const SizedBox(width: 6),
@@ -792,61 +495,53 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
       children: List.generate(_kChips.length, (i) {
         final chip = _kChips[i];
         final selected = currentAnswer == chip.answer;
-        final isDontStock =
-            chip.answer == "We don't stock this product";
-
-        Widget chipWidget = AnimatedContainer(
-          duration: const Duration(milliseconds: 120),
-          width: 90,
-          padding: const EdgeInsets.symmetric(vertical: 9),
-          decoration: BoxDecoration(
-            color: selected ? chip.selBg : Colors.white,
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(
-              color: selected ? chip.selBorder : const Color(0xFFE5E7EB),
-              width: 0.5,
-            ),
-          ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(chip.icon, size: 14,
-                  color: selected ? chip.selText : const Color(0xFF6B7280)),
-              const SizedBox(width: 5),
-              Text(chip.label,
-                  style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
-                      color: selected
-                          ? chip.selText
-                          : const Color(0xFF6B7280))),
-            ],
-          ),
-        );
-
-        final gesture = GestureDetector(
-          onTap: isDontStock
-              ? () => _handleDontStockTap(id, item)
-              : () => widget.onAnswer(id, chip.answer),
-          child: chipWidget,
-        );
-
-        Widget child = isDontStock
-            ? CompositedTransformTarget(
-                link: _getDontStockLink(id),
-                child: gesture,
-              )
-            : gesture;
-
+        final isDontStock = chip.answer == "We don't stock this product";
         return Padding(
           padding: EdgeInsets.only(left: i > 0 ? 8 : 0),
-          child: child,
+          child: GestureDetector(
+            onTap: isDontStock
+                ? () => _handleDontStockTap(id, item)
+                : () => widget.onAnswer(id, chip.answer),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 120),
+              width: 90,
+              padding: const EdgeInsets.symmetric(vertical: 9),
+              decoration: BoxDecoration(
+                color: selected ? chip.selBg : Colors.white,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: selected
+                      ? chip.selBorder
+                      : const Color(0xFFE5E7EB),
+                  width: 0.5,
+                ),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(chip.icon,
+                      size: 14,
+                      color: selected
+                          ? chip.selText
+                          : const Color(0xFF6B7280)),
+                  const SizedBox(width: 5),
+                  Text(chip.label,
+                      style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                          color: selected
+                              ? chip.selText
+                              : const Color(0xFF6B7280))),
+                ],
+              ),
+            ),
+          ),
         );
       }),
     );
   }
 
-  // ── Narrow layout: stacked ─────────────────────────────────────────────────
+  // ── Narrow card ───────────────────────────────────────────────────────────
 
   Widget _buildNarrowCard(Map<String, dynamic> item) {
     final id = (item['inquiry_id'] as num).toInt();
@@ -867,10 +562,9 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
         border: Border.all(color: const Color(0xFFE5E7EB), width: 0.5),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 6,
-            offset: const Offset(0, 2),
-          ),
+              color: Colors.black.withValues(alpha: 0.04),
+              blurRadius: 6,
+              offset: const Offset(0, 2)),
         ],
       ),
       child: Padding(
@@ -965,61 +659,53 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
       children: List.generate(_kChips.length, (i) {
         final chip = _kChips[i];
         final selected = currentAnswer == chip.answer;
-        final isDontStock =
-            chip.answer == "We don't stock this product";
-
-        Widget chipWidget = AnimatedContainer(
-          duration: const Duration(milliseconds: 120),
-          padding: const EdgeInsets.symmetric(vertical: 10),
-          decoration: BoxDecoration(
-            color: selected ? chip.selBg : Colors.white,
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(
-              color: selected ? chip.selBorder : const Color(0xFFE5E7EB),
-              width: 0.5,
-            ),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(chip.icon, size: 18,
-                  color: selected ? chip.selText : const Color(0xFF6B7280)),
-              const SizedBox(height: 4),
-              Text(
-                chip.label,
-                style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w500,
-                    color: selected
-                        ? chip.selText
-                        : const Color(0xFF6B7280)),
-                textAlign: TextAlign.center,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ],
-          ),
-        );
-
-        final gesture = GestureDetector(
-          onTap: isDontStock
-              ? () => _handleDontStockTap(id, item)
-              : () => widget.onAnswer(id, chip.answer),
-          child: chipWidget,
-        );
-
-        Widget child = isDontStock
-            ? CompositedTransformTarget(
-                link: _getDontStockLink(id),
-                child: gesture,
-              )
-            : gesture;
-
+        final isDontStock = chip.answer == "We don't stock this product";
         return Expanded(
           child: Padding(
-            padding:
-                EdgeInsets.only(right: i < _kChips.length - 1 ? 8 : 0),
-            child: child,
+            padding: EdgeInsets.only(
+                right: i < _kChips.length - 1 ? 8 : 0),
+            child: GestureDetector(
+              onTap: isDontStock
+                  ? () => _handleDontStockTap(id, item)
+                  : () => widget.onAnswer(id, chip.answer),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 120),
+                padding: const EdgeInsets.symmetric(vertical: 10),
+                decoration: BoxDecoration(
+                  color: selected ? chip.selBg : Colors.white,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: selected
+                        ? chip.selBorder
+                        : const Color(0xFFE5E7EB),
+                    width: 0.5,
+                  ),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(chip.icon,
+                        size: 18,
+                        color: selected
+                            ? chip.selText
+                            : const Color(0xFF6B7280)),
+                    const SizedBox(height: 4),
+                    Text(
+                      chip.label,
+                      style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w500,
+                          color: selected
+                              ? chip.selText
+                              : const Color(0xFF6B7280)),
+                      textAlign: TextAlign.center,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+            ),
           ),
         );
       }),
@@ -1040,11 +726,9 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
       ),
       clipBehavior: Clip.antiAlias,
       child: imageUrl != null && imageUrl.isNotEmpty
-          ? Image.network(
-              imageUrl,
+          ? Image.network(imageUrl,
               fit: BoxFit.cover,
-              errorBuilder: (_, __, ___) => _placeholder(),
-            )
+              errorBuilder: (_, __, ___) => _placeholder())
           : _placeholder(),
     );
   }
@@ -1070,22 +754,18 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 2),
       decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Text(
-        cls,
-        style: TextStyle(
-            fontSize: 12, fontWeight: FontWeight.w500, color: fg),
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-      ),
+          color: bg, borderRadius: BorderRadius.circular(20)),
+      child: Text(cls,
+          style: TextStyle(
+              fontSize: 12, fontWeight: FontWeight.w500, color: fg),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis),
     );
   }
 
   Widget _buildReadOnlyPill(String answer) {
-    Color bg;
-    Color fg;
+    final Color bg;
+    final Color fg;
     if (answer == 'Available') {
       bg = const Color(0xFFE1F5EE);
       fg = const Color(0xFF0F6E56);
@@ -1099,16 +779,12 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
       decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Text(
-        answer,
-        style: TextStyle(
-            fontSize: 12, fontWeight: FontWeight.w600, color: fg),
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-      ),
+          color: bg, borderRadius: BorderRadius.circular(20)),
+      child: Text(answer,
+          style: TextStyle(
+              fontSize: 12, fontWeight: FontWeight.w600, color: fg),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis),
     );
   }
 
@@ -1120,54 +796,54 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
         borderRadius: BorderRadius.circular(6),
         border: Border.all(color: const Color(0xFFD1D5DB)),
       ),
-      child: const Text(
-        'No supplier available',
-        style: TextStyle(
-            fontSize: 11,
-            fontWeight: FontWeight.w500,
-            color: Color(0xFF6B7280)),
-      ),
+      child: const Text('No supplier available',
+          style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w500,
+              color: Color(0xFF6B7280))),
     );
   }
 }
 
-// ── Don't stock tiny popup (overlay widget) ───────────────────────────────────
+// ── Bottom-center "Don't stock all" toast ─────────────────────────────────────
 
-class _DontStockPopup extends StatefulWidget {
-  final LayerLink link;
+class _InqDontStockToast extends StatefulWidget {
   final String company;
   final String category;
   final bool hasBulk;
-  final VoidCallback onMarkAll;
+  final VoidCallback onYesAll;
   final VoidCallback onDismiss;
 
-  const _DontStockPopup({
-    required this.link,
+  const _InqDontStockToast({
     required this.company,
     required this.category,
     required this.hasBulk,
-    required this.onMarkAll,
+    required this.onYesAll,
     required this.onDismiss,
   });
 
   @override
-  State<_DontStockPopup> createState() => _DontStockPopupState();
+  State<_InqDontStockToast> createState() => _InqDontStockToastState();
 }
 
-class _DontStockPopupState extends State<_DontStockPopup>
+class _InqDontStockToastState extends State<_InqDontStockToast>
     with SingleTickerProviderStateMixin {
   late final AnimationController _ctrl;
   late final Animation<double> _fade;
-  late final Animation<double> _scale;
+  late final Animation<Offset> _slide;
 
   @override
   void initState() {
     super.initState();
     _ctrl = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 180));
-    _fade = CurvedAnimation(parent: _ctrl, curve: Curves.easeOut);
-    _scale = Tween<double>(begin: 0.88, end: 1.0)
-        .animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOut));
+        vsync: this,
+        duration: const Duration(milliseconds: 200));
+    _fade =
+        CurvedAnimation(parent: _ctrl, curve: Curves.easeOut);
+    _slide = Tween<Offset>(
+            begin: const Offset(0, 0.4), end: Offset.zero)
+        .animate(
+            CurvedAnimation(parent: _ctrl, curve: Curves.easeOut));
     _ctrl.forward();
   }
 
@@ -1177,105 +853,100 @@ class _DontStockPopupState extends State<_DontStockPopup>
     super.dispose();
   }
 
-  String get _label {
-    final c = widget.company;
-    final k = widget.category;
-    if (c.isNotEmpty && k.isNotEmpty) return "We don't stock $c – $k products";
-    if (c.isNotEmpty) return "We don't stock $c products";
-    if (k.isNotEmpty) return "We don't stock $k products";
-    return "We don't stock these products";
+  String get _text {
+    final cat = widget.category;
+    final comp = widget.company;
+    if (cat.isNotEmpty && comp.isNotEmpty) {
+      return "Don't stock all $cat from $comp?";
+    }
+    if (cat.isNotEmpty) return "Don't stock all $cat?";
+    if (comp.isNotEmpty) return "Don't stock all from $comp?";
+    return "Don't stock all?";
   }
 
   @override
   Widget build(BuildContext context) {
     return Stack(
       children: [
-        // Dismiss on outside tap
         Positioned.fill(
           child: GestureDetector(
             behavior: HitTestBehavior.translucent,
             onTap: widget.onDismiss,
           ),
         ),
-        CompositedTransformFollower(
-          link: widget.link,
-          showWhenUnlinked: false,
-          targetAnchor: Alignment.topCenter,
-          followerAnchor: Alignment.bottomCenter,
-          offset: const Offset(0, -8),
-          child: FadeTransition(
-            opacity: _fade,
-            child: ScaleTransition(
-              scale: _scale,
-              alignment: Alignment.bottomCenter,
-              child: Material(
-                color: Colors.transparent,
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 340),
-                  child: Container(
-                    padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: const Color(0xFFE5E7EB)),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.12),
-                          blurRadius: 14,
-                          offset: const Offset(0, 4),
+        Align(
+          alignment: Alignment.bottomCenter,
+          child: SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+              child: FadeTransition(
+                opacity: _fade,
+                child: SlideTransition(
+                  position: _slide,
+                  child: Material(
+                    color: Colors.transparent,
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 420),
+                      child: Container(
+                        padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF1F2937),
+                          borderRadius: BorderRadius.circular(10),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.22),
+                              blurRadius: 14,
+                              offset: const Offset(0, 4),
+                            ),
+                          ],
                         ),
-                      ],
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(Icons.do_not_disturb_on_outlined,
-                            size: 14, color: Color(0xFF6B7280)),
-                        const SizedBox(width: 8),
-                        Flexible(
-                          child: Text(
-                            _label,
-                            style: const TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w500,
-                                color: Color(0xFF111827)),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        if (widget.hasBulk) ...[
-                          const SizedBox(width: 8),
-                          GestureDetector(
-                            onTap: widget.onMarkAll,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 8, vertical: 4),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFF1EFE8),
-                                borderRadius: BorderRadius.circular(6),
-                                border: Border.all(
-                                    color: const Color(0xFFB4B2A9)),
-                              ),
-                              child: const Text(
-                                'Mark all',
-                                style: TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w600,
-                                    color: Color(0xFF444441)),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                _text,
+                                style: const TextStyle(
+                                    fontSize: 13,
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w500,
+                                    height: 1.35),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
                               ),
                             ),
-                          ),
-                        ],
-                        const SizedBox(width: 4),
-                        GestureDetector(
-                          onTap: widget.onDismiss,
-                          child: const Padding(
-                            padding: EdgeInsets.all(4),
-                            child: Icon(Icons.close,
-                                size: 14, color: Color(0xFF9CA3AF)),
-                          ),
+                            if (widget.hasBulk) ...[
+                              const SizedBox(width: 10),
+                              GestureDetector(
+                                onTap: widget.onYesAll,
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 12, vertical: 7),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF1B7A43),
+                                    borderRadius:
+                                        BorderRadius.circular(7),
+                                  ),
+                                  child: const Text('Yes, all',
+                                      style: TextStyle(
+                                          fontSize: 12,
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.w600)),
+                                ),
+                              ),
+                            ],
+                            const SizedBox(width: 6),
+                            GestureDetector(
+                              onTap: widget.onDismiss,
+                              child: const Padding(
+                                padding: EdgeInsets.all(4),
+                                child: Icon(Icons.close,
+                                    size: 16,
+                                    color: Color(0xFFD1D5DB)),
+                              ),
+                            ),
+                          ],
                         ),
-                      ],
+                      ),
                     ),
                   ),
                 ),

@@ -220,15 +220,26 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
   }
 
   Widget _buildSupplierSubmitButton() {
+    final answerableItems = _pending
+        .where((item) => item['locked'] != true && item['answered'] != true)
+        .toList();
+    final answerableCount = answerableItems.length;
+    final answeredCount = answerableItems
+        .where((item) => _supplierSelections
+            .containsKey((item['inquiry_id'] as num).toInt()))
+        .length;
+    final allAnswered =
+        answerableCount > 0 && answeredCount >= answerableCount;
     final count = _supplierSelections.length;
     return SizedBox(
       width: double.infinity,
       height: 48,
       child: FilledButton(
-        onPressed: (count > 0 && !_supplierSubmitting) ? _supplierSubmit : null,
+        onPressed: (allAnswered && !_supplierSubmitting) ? _supplierSubmit : null,
         style: FilledButton.styleFrom(
           backgroundColor: const Color(0xFF1B7A43),
           disabledBackgroundColor: const Color(0xFFD1FAE5),
+          disabledForegroundColor: const Color(0xFF6B7280),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         ),
         child: _supplierSubmitting
@@ -237,7 +248,9 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
                 height: 18,
                 child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
             : Text(
-                count > 0 ? 'Submit response ($count)' : 'Submit response',
+                allAnswered
+                    ? 'Submit response ($count)'
+                    : 'Respond to all to submit',
                 style: const TextStyle(
                     fontSize: 15, fontWeight: FontWeight.w700, color: Colors.white),
               ),

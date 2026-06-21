@@ -2138,6 +2138,11 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
 
   Widget _buildInquiryItemsPanel() {
     final supName = _expandedInquirySupplier ?? '';
+    final answerableCount = _inquiryItems
+        .where((i) => i['locked'] != true && i['answered'] != true)
+        .length;
+    final allAnswered =
+        answerableCount > 0 && _adminSelections.length >= answerableCount;
     final selectedCount = _adminSelections.length;
     return Container(
       margin: const EdgeInsets.fromLTRB(14, 0, 14, 12),
@@ -2171,13 +2176,6 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                         answeringIds: const {},
                         onAnswer: (id, answer) =>
                             setState(() => _adminSelections[id] = answer),
-                        onBulk: (ids, answer) => setState(() {
-                          if (answer.isEmpty) {
-                            for (final id in ids) _adminSelections.remove(id);
-                          } else {
-                            for (final id in ids) _adminSelections[id] = answer;
-                          }
-                        }),
                         onBulkCompanyCategory: (company, category) async {
                           final matching = _inquiryItems.where((i) {
                             final c = (i['company'] as String? ?? '').toLowerCase();
@@ -2204,12 +2202,13 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                         width: double.infinity,
                         height: 44,
                         child: FilledButton(
-                          onPressed: (selectedCount > 0 && !_adminSubmitting)
+                          onPressed: (allAnswered && !_adminSubmitting)
                               ? () => _adminSubmit(supName)
                               : null,
                           style: FilledButton.styleFrom(
                             backgroundColor: const Color(0xFF1B7A43),
                             disabledBackgroundColor: const Color(0xFFD1FAE5),
+                            disabledForegroundColor: const Color(0xFF6B7280),
                             shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(8)),
                           ),
@@ -2220,9 +2219,9 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                                   child: CircularProgressIndicator(
                                       color: Colors.white, strokeWidth: 2))
                               : Text(
-                                  selectedCount > 0
+                                  allAnswered
                                       ? 'Submit response ($selectedCount)'
-                                      : 'Submit response',
+                                      : 'Respond to all to submit',
                                   style: const TextStyle(
                                       fontSize: 14,
                                       fontWeight: FontWeight.w600,

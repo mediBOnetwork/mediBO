@@ -63,9 +63,10 @@ const _kChips = [
   ),
 ];
 
-// #111: 60/40 split — desktop only when content area >= 600px.
-// Shared by admin, supplier, and public link surfaces.
-const _kWideBreakpoint = 600.0;
+// #112: WIDE only when content area >= 960px.
+// At 960px viewport, admin gets 872px and supplier gets 920px — both < 960 → narrow.
+// At 1280px, both surfaces get > 1000px → wide.
+const _kWideBreakpoint = 960.0;
 
 // ── Public widget ─────────────────────────────────────────────────────────────
 
@@ -82,7 +83,6 @@ class InquiryAnswerList extends StatefulWidget {
   final List<Map<String, dynamic>> items;
   final Map<int, String> answerOverrides;
   final void Function(int inquiryId, String answer) onAnswer;
-  final void Function(List<int> ids, String answer)? onBulk;
   final Future<int?> Function(String company, String category)?
       onBulkCompanyCategory;
   final Set<int> answeringIds;
@@ -95,7 +95,6 @@ class InquiryAnswerList extends StatefulWidget {
     required this.items,
     this.answerOverrides = const {},
     required this.onAnswer,
-    this.onBulk,
     this.onBulkCompanyCategory,
     this.answeringIds = const {},
     this.readOnly = false,
@@ -109,19 +108,9 @@ class InquiryAnswerList extends StatefulWidget {
 
 class _InquiryAnswerListState extends State<InquiryAnswerList> {
   final Set<String> _bulkingCatKeys = {}; // "$company|$category" in-flight
-  OverlayEntry? _popupEntry;
-  Timer? _popupTimer;
-
-  static int _popupShownCount = 0;
-  static int _bulkCalledCount = 0;
-
-  final Map<int, GlobalKey> _dontStockKeys = {};
-  GlobalKey _dontStockKey(int id) =>
-      _dontStockKeys.putIfAbsent(id, () => GlobalKey());
 
   @override
   void dispose() {
-    _closePopup();
     super.dispose();
   }
 
@@ -173,149 +162,33 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
 
   // ── Popup (bottom-center toast) ────────────────────────────────────────────
 
-  void _closePopup() {
-    _popupTimer?.cancel();
-    _popupTimer = null;
-    _popupEntry?.remove();
-    _popupEntry = null;
-  }
-
-  void _handleDontStockTap(int id, Map<String, dynamic> item,
-      {GlobalKey? buttonKey}) {
-    widget.onAnswer(id, "We don't stock this product");
-
-    final company = (item['company'] as String? ?? '').trim();
-    final category = (item['therapeutic_class'] as String? ?? '').trim();
-
-    RenderLog.write('dontstock.tap', '$id:$category|$company');
-
-    if (company.isEmpty && category.isEmpty) return;
+  // Slim row: call bulk callback, show snackbar result.
+  Future<void> _doBulkCompanyCategory(String company, String category) async {
     if (widget.onBulkCompanyCategory == null) return;
-
-    _closePopup();
-    _popupShownCount++;
-    RenderLog.write('inq_dontstock_popup_shown', _popupShownCount);
-    RenderLog.write('inq_dontstock_popup_compact', 1);
-
-    // Responsive: anchored above button on desktop (>600px), bottom-center on mobile.
-    final isWide = MediaQuery.of(context).size.width > 600;
-    if (isWide && buttonKey != null) {
-      _showAnchoredPopup(buttonKey, id, company, category);
-    } else {
-      RenderLog.write('inq_popup_anchor', 'bottom_center');
-      final overlay = Overlay.of(context, rootOverlay: true);
-      _popupEntry = OverlayEntry(
-        builder: (_) => _InqDontStockToast(
-          company: company,
-          category: category,
-          hasBulk: true,
-          onMarkAll: () => _doBulkCompanyCategory(company, category),
-          onDismiss: _closePopup,
-        ),
-      );
-      overlay.insert(_popupEntry!);
-      _popupTimer = Timer(const Duration(seconds: 5), _closePopup);
-    }
-  }
-
-  void _showAnchoredPopup(
-      GlobalKey buttonKey, int id, String company, String category) {
-    final ctx = buttonKey.currentContext;
-    if (ctx == null) return;
-    final box = ctx.findRenderObject() as RenderBox?;
-    if (box == null || !box.hasSize) return;
-
-    final buttonTopLeft = box.localToGlobal(Offset.zero);
-    final buttonSize = box.size;
-    final screenSize = MediaQuery.of(context).size;
-    final safeTop = MediaQuery.of(context).padding.top;
-
-    const estimatedPopupHeight = 120.0;
-    const popupGap = 8.0;
-    const screenPad = 8.0;
-    const popupMaxW = 320.0;
-
-    final popupW =
-        popupMaxW < screenSize.width - screenPad * 2
-            ? popupMaxW
-            : screenSize.width - screenPad * 2;
-
-    var popupX =
-        buttonTopLeft.dx + (buttonSize.width - popupW) / 2;
-    if (popupX < screenPad) popupX = screenPad;
-    if (popupX + popupW > screenSize.width - screenPad) {
-      popupX = screenSize.width - popupW - screenPad;
-    }
-
-    final fitsAbove =
-        (buttonTopLeft.dy - estimatedPopupHeight - popupGap) >
-            (safeTop + screenPad);
-    final popupTop = fitsAbove
-        ? buttonTopLeft.dy - estimatedPopupHeight - popupGap
-        : buttonTopLeft.dy + buttonSize.height + popupGap;
-    final anchorSide = fitsAbove ? 'above' : 'below';
-
-    RenderLog.write('popup.anchor', '$anchorSide:$id');
-    RenderLog.write('inq_popup_anchor', '$anchorSide:$id');
-
-    final overlay = Overlay.of(context, rootOverlay: true);
-    _popupEntry = OverlayEntry(
-      builder: (_) => _InqDontStockAnchoredPopup(
-        popupLeft: popupX,
-        popupTop: popupTop,
-        popupWidth: popupW,
-        company: company,
-        category: category,
-        onMarkAll: () => _doBulkCompanyCategory(company, category),
-        onDismiss: _closePopup,
-      ),
-    );
-    overlay.insert(_popupEntry!);
-  }
-
-  Future<void> _doBulkCompanyCategory(
-      String company, String category) async {
-    _closePopup();
-    if (widget.onBulkCompanyCategory == null) return;
-
     final catKey = '$company|$category';
     if (mounted) setState(() => _bulkingCatKeys.add(catKey));
-
     try {
-      final marked =
-          await widget.onBulkCompanyCategory!(company, category);
-      _bulkCalledCount++;
-      RenderLog.write('inq_bulk_dontstock_called', _bulkCalledCount);
-      if (marked != null) {
-        RenderLog.write('inq_bulk_last_marked', marked);
-        RenderLog.write('bulk.yesall', '$company|$category:$marked');
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text(
-                'Marked $marked item${marked == 1 ? '' : 's'} as don\'t stock'),
-            backgroundColor: const Color(0xFF1B7A43),
-            duration: const Duration(seconds: 3),
-          ));
-        }
-      } else {
-        RenderLog.write('bulk.error', 'rpc_returned_null:$company|$category');
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('Could not mark — please try again'),
-            backgroundColor: Color(0xFFDC2626),
-            duration: Duration(seconds: 3),
-          ));
-        }
-      }
-    } catch (e) {
-      RenderLog.write('bulk.error', e.toString().length > 80
-          ? e.toString().substring(0, 80)
-          : e.toString());
-      if (mounted) {
+      final marked = await widget.onBulkCompanyCategory!(company, category);
+      if (marked != null && mounted) {
+        RenderLog.write('inq_slim_bulk_marked', '$company|$category:$marked');
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Error: $e'),
-          backgroundColor: const Color(0xFFDC2626),
+          content: Text("Marked $marked item${marked == 1 ? '' : 's'} as don't stock"),
+          backgroundColor: const Color(0xFF1B7A43),
           duration: const Duration(seconds: 3),
+        ));
+      } else if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Could not mark — please try again'),
+          backgroundColor: Color(0xFFDC2626),
+          duration: Duration(seconds: 3),
+        ));
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Error — please try again'),
+          backgroundColor: Color(0xFFDC2626),
+          duration: Duration(seconds: 3),
         ));
       }
     } finally {
@@ -342,17 +215,26 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
       final isWide = constraints.maxWidth >= _kWideBreakpoint;
       final nested = _nestedGrouped();
 
+      final showSlim = !widget.readOnly && widget.onBulkCompanyCategory != null;
+      int slimRowCount = 0;
+      final children = <Widget>[];
+      for (final compEntry in nested.entries) {
+        for (final catEntry in compEntry.value.entries) {
+          final items = catEntry.value;
+          if (showSlim && items.length > 3) {
+            children.add(_buildSlimRow(compEntry.key, catEntry.key));
+            slimRowCount++;
+          }
+          children.addAll(items.map((item) => _buildItemCard(item, isWide)));
+          children.add(const SizedBox(height: 4));
+        }
+      }
+      RenderLog.write('inq_slim_rows', slimRowCount);
+
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
-        children: [
-          for (final compEntry in nested.entries)
-            for (final catEntry in compEntry.value.entries) ...[
-              ...catEntry.value
-                  .map((item) => _buildItemCard(item, isWide)),
-              const SizedBox(height: 4),
-            ],
-        ],
+        children: children,
       );
     });
   }
@@ -421,8 +303,6 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
                               ? const Color(0xFF9CA3AF)
                               : const Color(0xFF111827),
                         ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
                       ),
                       if (tc.isNotEmpty) ...[
                         const SizedBox(height: 5),
@@ -490,15 +370,10 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
       children: List.generate(_kChips.length, (i) {
         final chip = _kChips[i];
         final selected = currentAnswer == chip.answer;
-        final isDontStock = chip.answer == "We don't stock this product";
-        final dsKey = isDontStock ? _dontStockKey(id) : null;
         return Padding(
           padding: EdgeInsets.only(left: i > 0 ? 8 : 0),
           child: GestureDetector(
-            key: dsKey,
-            onTap: isDontStock
-                ? () => _handleDontStockTap(id, item, buttonKey: dsKey)
-                : () => widget.onAnswer(id, chip.answer),
+            onTap: () => widget.onAnswer(id, chip.answer),
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 120),
               width: 90,
@@ -588,8 +463,6 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
                               : const Color(0xFF111827),
                           height: 1.3,
                         ),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
                       ),
                       if (tc.isNotEmpty) ...[
                         const SizedBox(height: 6),
@@ -656,17 +529,12 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
       children: List.generate(_kChips.length, (i) {
         final chip = _kChips[i];
         final selected = currentAnswer == chip.answer;
-        final isDontStock = chip.answer == "We don't stock this product";
-        final dsKey = isDontStock ? _dontStockKey(id) : null;
         return Expanded(
           child: Padding(
             padding: EdgeInsets.only(
                 right: i < _kChips.length - 1 ? 8 : 0),
             child: GestureDetector(
-              key: dsKey,
-              onTap: isDontStock
-                  ? () => _handleDontStockTap(id, item, buttonKey: dsKey)
-                  : () => widget.onAnswer(id, chip.answer),
+              onTap: () => widget.onAnswer(id, chip.answer),
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 120),
                 padding: const EdgeInsets.symmetric(vertical: 10),
@@ -802,276 +670,44 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
               color: Color(0xFF6B7280))),
     );
   }
-}
 
-// ── Shared popup text helper ──────────────────────────────────────────────────
-
-String _dontStockPopupText(String category, String company) {
-  final cat = category;
-  final raw = company;
-  final comp = raw.length > 18 ? '${raw.substring(0, 18)}…' : raw;
-  if (cat.isNotEmpty && comp.isNotEmpty) {
-    return 'Also mark all $cat from $comp as "Don\'t stock"?';
-  }
-  if (cat.isNotEmpty) return 'Also mark all $cat as "Don\'t stock"?';
-  if (comp.isNotEmpty) return 'Also mark all from $comp as "Don\'t stock"?';
-  return 'Also mark all as "Don\'t stock"?';
-}
-
-// ── Anchored "Don't stock all" popup (desktop) ────────────────────────────────
-
-class _InqDontStockAnchoredPopup extends StatelessWidget {
-  final double popupLeft;
-  final double popupTop;
-  final double popupWidth;
-  final String company;
-  final String category;
-  final VoidCallback onMarkAll;
-  final VoidCallback onDismiss;
-
-  const _InqDontStockAnchoredPopup({
-    required this.popupLeft,
-    required this.popupTop,
-    required this.popupWidth,
-    required this.company,
-    required this.category,
-    required this.onMarkAll,
-    required this.onDismiss,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final text = _dontStockPopupText(category, company);
-    return Stack(
-      children: [
-        // Transparent barrier — tap outside dismisses
-        Positioned.fill(
-          child: GestureDetector(
-            behavior: HitTestBehavior.translucent,
-            onTap: onDismiss,
+  Widget _buildSlimRow(String company, String category) {
+    final compDisplay = company.length > 22 ? '${company.substring(0, 22)}…' : company;
+    final catDisplay = category.length > 16 ? '${category.substring(0, 16)}…' : category;
+    final catKey = '$company|$category';
+    final isBulking = _bulkingCatKeys.contains(catKey);
+    return Container(
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.fromLTRB(12, 7, 8, 7),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF0FDF4),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFFD1FAE5)),
+      ),
+      child: Row(children: [
+        Expanded(
+          child: Text(
+            "I don't stock $catDisplay from $compDisplay",
+            style: const TextStyle(fontSize: 12, color: Color(0xFF065F46), fontWeight: FontWeight.w500),
+            maxLines: 1, overflow: TextOverflow.ellipsis,
           ),
         ),
-        // Anchored popup box
-        Positioned(
-          left: popupLeft,
-          top: popupTop,
-          width: popupWidth,
-          child: Material(
-            color: Colors.transparent,
-            child: Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                    color: const Color(0xFFE5E7EB), width: 1),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.12),
-                    blurRadius: 12,
-                    offset: const Offset(0, 4),
-                  ),
-                ],
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    text,
-                    style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w500,
-                      color: Color(0xFF111827),
-                      height: 1.4,
-                    ),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  const SizedBox(height: 10),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.end,
-                    children: [
-                      GestureDetector(
-                        onTap: onDismiss,
-                        child: const Padding(
-                          padding: EdgeInsets.all(6),
-                          child: Icon(Icons.close,
-                              size: 16, color: Color(0xFF9CA3AF)),
-                        ),
-                      ),
-                      const SizedBox(width: 6),
-                      GestureDetector(
-                        onTap: onMarkAll,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 14, vertical: 8),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF1B7A43),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: const Text(
-                            'Mark all',
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                              color: Colors.white,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
+        const SizedBox(width: 8),
+        GestureDetector(
+          onTap: isBulking ? null : () => _doBulkCompanyCategory(company, category),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            decoration: BoxDecoration(
+              color: isBulking ? const Color(0xFF6B7280) : const Color(0xFF1B7A43),
+              borderRadius: BorderRadius.circular(6),
             ),
+            child: isBulking
+                ? const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 1.5, color: Colors.white))
+                : Text("Don't stock $catDisplay",
+                    style: const TextStyle(fontSize: 11, color: Colors.white, fontWeight: FontWeight.w600)),
           ),
         ),
-      ],
-    );
-  }
-}
-
-// ── Bottom-center "Don't stock all" toast ─────────────────────────────────────
-
-class _InqDontStockToast extends StatefulWidget {
-  final String company;
-  final String category;
-  final bool hasBulk;
-  final VoidCallback onMarkAll;
-  final VoidCallback onDismiss;
-
-  const _InqDontStockToast({
-    required this.company,
-    required this.category,
-    required this.hasBulk,
-    required this.onMarkAll,
-    required this.onDismiss,
-  });
-
-  @override
-  State<_InqDontStockToast> createState() => _InqDontStockToastState();
-}
-
-class _InqDontStockToastState extends State<_InqDontStockToast>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _ctrl;
-  late final Animation<double> _fade;
-  late final Animation<Offset> _slide;
-
-  @override
-  void initState() {
-    super.initState();
-    _ctrl = AnimationController(
-        vsync: this,
-        duration: const Duration(milliseconds: 200));
-    _fade =
-        CurvedAnimation(parent: _ctrl, curve: Curves.easeOut);
-    _slide = Tween<Offset>(
-            begin: const Offset(0, 0.4), end: Offset.zero)
-        .animate(
-            CurvedAnimation(parent: _ctrl, curve: Curves.easeOut));
-    _ctrl.forward();
-  }
-
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final text = _dontStockPopupText(widget.category, widget.company);
-    return Stack(
-      children: [
-        Positioned.fill(
-          child: GestureDetector(
-            behavior: HitTestBehavior.translucent,
-            onTap: widget.onDismiss,
-          ),
-        ),
-        Align(
-          alignment: Alignment.bottomCenter,
-          child: SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-              child: FadeTransition(
-                opacity: _fade,
-                child: SlideTransition(
-                  position: _slide,
-                  child: Material(
-                    color: Colors.transparent,
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 320),
-                      child: Container(
-                        padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF1F2937),
-                          borderRadius: BorderRadius.circular(10),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.22),
-                              blurRadius: 14,
-                              offset: const Offset(0, 4),
-                            ),
-                          ],
-                        ),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                text,
-                                style: const TextStyle(
-                                    fontSize: 13,
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.w500,
-                                    height: 1.35),
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                            if (widget.hasBulk) ...[
-                              const SizedBox(width: 10),
-                              GestureDetector(
-                                onTap: widget.onMarkAll,
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 12, vertical: 7),
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFF1B7A43),
-                                    borderRadius:
-                                        BorderRadius.circular(7),
-                                  ),
-                                  child: const Text('Mark all',
-                                      style: TextStyle(
-                                          fontSize: 12,
-                                          color: Colors.white,
-                                          fontWeight: FontWeight.w600)),
-                                ),
-                              ),
-                            ],
-                            const SizedBox(width: 6),
-                            GestureDetector(
-                              onTap: widget.onDismiss,
-                              child: const Padding(
-                                padding: EdgeInsets.all(4),
-                                child: Icon(Icons.close,
-                                    size: 16,
-                                    color: Color(0xFFD1D5DB)),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
-      ],
+      ]),
     );
   }
 }

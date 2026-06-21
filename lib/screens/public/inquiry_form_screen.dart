@@ -462,15 +462,6 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
               answerOverrides: _selections,
               onAnswer: (id, ans) =>
                   setState(() => _selections[id] = ans),
-              onBulk: (ids, answer) {
-                setState(() {
-                  if (answer.isEmpty) {
-                    for (final id in ids) _selections.remove(id);
-                  } else {
-                    for (final id in ids) _selections[id] = answer;
-                  }
-                });
-              },
               onBulkCompanyCategory: _bulkDontStockCompanyCategory,
               surface: 'link',
             ),

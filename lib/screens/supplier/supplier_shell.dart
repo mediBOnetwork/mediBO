@@ -1,8 +1,4 @@
-// ignore_for_file: avoid_web_libraries_in_flutter
-import 'dart:async';
-
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../user_state.dart';
 import '../../utils/render_log.dart';
@@ -32,7 +28,6 @@ class SupplierShell extends StatefulWidget {
 class _SupplierShellState extends State<SupplierShell> {
   int _index = 0;
   int _pendingInquiryCount = 0;
-  Timer? _pollTimer;
   bool _bannerDismissed = false;
 
   // Keys to allow deep-linking into child screens
@@ -49,43 +44,16 @@ class _SupplierShellState extends State<SupplierShell> {
   void initState() {
     super.initState();
     RenderLog.write('supplier_shell', 'init');
-    _startPolling();
   }
 
-  @override
-  void dispose() {
-    _pollTimer?.cancel();
-    super.dispose();
-  }
-
-  void _startPolling() {
-    _fetchPendingCount();
-    _pollTimer = Timer.periodic(const Duration(seconds: 30), (_) => _fetchPendingCount());
-  }
-
-  Future<void> _fetchPendingCount() async {
-    try {
-      final viewAsSupplierId = widget.viewAsSupplierId;
-      final int? res;
-      if (viewAsSupplierId != null) {
-        res = await Supabase.instance.client
-            .rpc('admin_preview_supplier_inquiry_count',
-                params: {'p_supplier_id': viewAsSupplierId}) as int?;
-      } else {
-        res = await Supabase.instance.client
-            .rpc('supplier_pending_inquiry_count') as int?;
-      }
-      if (mounted) {
-        final count = res ?? 0;
-        RenderLog.write('inq.badge.count', count);
-        if (count != _pendingInquiryCount) {
-          setState(() {
-            _pendingInquiryCount = count;
-            if (count > 0) _bannerDismissed = false;
-          });
-        }
-      }
-    } catch (_) {}
+  void _onPendingCount(int count) {
+    if (!mounted) return;
+    if (count != _pendingInquiryCount) {
+      setState(() {
+        _pendingInquiryCount = count;
+        if (count > 0) _bannerDismissed = false;
+      });
+    }
   }
 
   void _goToInquiry() {
@@ -108,7 +76,7 @@ class _SupplierShellState extends State<SupplierShell> {
         key: _inquiryKey,
         viewAsSupplierId: viewAsSupplierId,
         viewAsSupplierName: widget.viewAsSupplierName,
-        onRefreshBadge: _fetchPendingCount,
+        onPendingCount: _onPendingCount,
       ),
       SupplierOrdersScreen(viewAsSupplierId: viewAsSupplierId),
     ];

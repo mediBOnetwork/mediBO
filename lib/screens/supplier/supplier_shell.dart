@@ -77,6 +77,7 @@ class _SupplierShellState extends State<SupplierShell> {
       }
       if (mounted) {
         final count = res ?? 0;
+        RenderLog.write('inq.badge.count', count);
         if (count != _pendingInquiryCount) {
           setState(() {
             _pendingInquiryCount = count;
@@ -103,7 +104,12 @@ class _SupplierShellState extends State<SupplierShell> {
       SupplierHomeScreen(viewAsSupplierId: viewAsSupplierId),
       if (viewAsSupplierId == null) const SupplierAddMedicineScreen()
       else const _ViewAsReadOnlyPlaceholder(label: 'Add Medicine (read-only in preview)'),
-      SupplierInquiryScreen(key: _inquiryKey, viewAsSupplierId: viewAsSupplierId),
+      SupplierInquiryScreen(
+        key: _inquiryKey,
+        viewAsSupplierId: viewAsSupplierId,
+        viewAsSupplierName: widget.viewAsSupplierName,
+        onRefreshBadge: _fetchPendingCount,
+      ),
       SupplierOrdersScreen(viewAsSupplierId: viewAsSupplierId),
     ];
 

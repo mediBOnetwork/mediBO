@@ -122,13 +122,13 @@ class _HomeShellState extends State<HomeShell> {
     final hasFragment = fragment.contains('access_token=') ||
         fragment.contains('refresh_token=') ||
         fragment.contains('error=');
-    RenderLog.write('c109_init_url_diag', 'path=${currentPath()};hasCode=$hasCode;hasFragment=$hasFragment');
+    final path = currentPath(); // read once — captureInitialPath() is consumed on first call
+    RenderLog.write('c109_init_url_diag', 'path=$path;hasCode=$hasCode;hasFragment=$hasFragment');
     if (hasCode || hasFragment) {
       final cleaned = hasCode ? 'code' : 'fragment';
       _stripOAuthUrlWhenReady(cleaned);
       return;
     }
-    final path = currentPath();
     if (path.startsWith('/c/')) {
       _category = _slugToCat(path.substring(3));
     } else if (path == '/orders') {

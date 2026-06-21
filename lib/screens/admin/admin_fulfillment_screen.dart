@@ -317,6 +317,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // ── supplier_orders items for reconciliation expected list ──
   List<Map<String, dynamic>> _supplierOrderItems = [];
 
+  // ── #115: clip persistence ──────────────────────────────────────────────────
+  int _recordingSeq = 0;      // increments each clip for this supplier session
+  String? _latestClipPath;    // last uploaded clip path (for ▶ whole-clip play)
+
   // ── "Ask mediBO" voice-agent state (#85) ────────────────────────────────────
   AgentPhase _agentPhase = AgentPhase.idle;
   String _agentTranscript = '';
@@ -384,6 +388,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('83_banners_removed', 'true');
     RenderLog.write('84_chunking_removed', 'true');
     RenderLog.write('84_voicecalls_during_record', '0');
+    // #115: on-load key (proves new collect code ran)
+    RenderLog.write('c115_collect_voice_ready', 'platform=web');
     // #85: agent button present — written in initState (IndexedStack always mounts)
     RenderLog.write('change_85_agent_button_present', '1');
     RenderLog.write('change_86_voice_card_present', '1');
@@ -488,6 +494,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       _supplierOrderItems = [];
       _tally.clear();
       _voiceCallsDuringRecord = 0; _voiceCallsAfterStop = 0;
+      _recordingSeq = 0; _latestClipPath = null; // #115: reset clip state per supplier
     });
     try {
       final res = await Supabase.instance.client
@@ -716,13 +723,38 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         return;
       }
 
+      // #115: upload clip (fire-and-forget — failure must not block counting)
+      final supplier = _selectedSupplier;
+      final seq = ++_recordingSeq;
+      String clipPath = '';
+      if (supplier != null) {
+        try {
+          clipPath = await _voiceService.uploadClip(
+            result.bytes, supplier, seq, result.ext,
+          );
+          setState(() => _latestClipPath = clipPath);
+        } catch (_) {} // upload failure must not block counting
+      }
+
       final expected = _buildExpectedList();
       _voiceCallsAfterStop++;
-      final (:items, :transcript, :droppedNoQty, :droppedLowConf) = await _voiceService.transcribe(
+      final (:items, :transcript, :droppedNoQty, :droppedLowConf, :mentions) =
+          await _voiceService.transcribe(
         result.bytes, result.mime, expected: expected.isEmpty ? null : expected,
       );
       if (!mounted) { setState(() => _voiceProcessing = false); return; }
       RenderLog.write('84_voicecalls_after_stop', '$_voiceCallsAfterStop');
+
+      // #115: persist mentions (fire-and-forget)
+      if (mentions.isNotEmpty && supplier != null) {
+        _voiceService.insertMentions(
+          mentions: mentions,
+          supplierName: supplier,
+          clipPath: clipPath ?? '',
+          recordingSeq: seq,
+          orderItems: _items,
+        ).ignore();
+      }
 
       // #93 Part D: name-without-number hint (non-blocking — shows alongside any kept items)
       if (droppedNoQty > 0) {
@@ -2629,16 +2661,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     final Offset topLeft = box.localToGlobal(Offset.zero);
     final double pillH = box.size.height;
 
-    final counted = _items
-        .where((r) => ((r['received_qty'] as num?) ?? 0) > 0)
-        .toList()
-      ..sort((a, b) {
-        final aAt = (a['received_at'] as String?) ?? '';
-        final bAt = (b['received_at'] as String?) ?? '';
-        return bAt.compareTo(aAt); // DESC — most recent first
-      });
-
-    const double popupW = 300.0;
+    const double popupW = 380.0;
     final screenW = MediaQuery.of(pillContext).size.width;
     final screenH = MediaQuery.of(pillContext).size.height;
     final bool isWide = screenW >= 900;
@@ -2650,7 +2673,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       RenderLog.write('change_101_popup_right', '1');
       final double pillRight = topLeft.dx + (pillContext.findRenderObject() as RenderBox).size.width;
       final double rightOfPill = pillRight + 8;
-      // Right-edge safety: if popup overflows screen right, open to the LEFT of the pill instead
       if (rightOfPill + popupW <= screenW - 8) {
         left = rightOfPill;
       } else {
@@ -2658,24 +2680,27 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       }
       popupTop = topLeft.dy;
     } else {
-      // narrow — keep #99 behaviour: open below the pill
       left = math.min(topLeft.dx, screenW - popupW - 8);
       popupTop = topLeft.dy + pillH + 6;
     }
-    final double maxH = math.min(320.0, screenH - popupTop - 16);
+    final double maxH = math.min(420.0, screenH - popupTop - 16);
 
     void dismiss() {
       _spokenPopupEntry?.remove();
       _spokenPopupEntry = null;
+      setState(() {}); // rebuild so pill reflects any state change
     }
 
+    final supplierForPopup = _selectedSupplier ?? '';
+    final latestClip = _latestClipPath;
+    // Snapshot of order items for matched qty display (immutable copy)
+    final orderSnapshot = List<Map<String, dynamic>>.from(_items);
+
     _spokenPopupEntry = OverlayEntry(builder: (_) => Stack(children: [
-      // Transparent barrier — tap outside to dismiss
       Positioned.fill(child: GestureDetector(
         behavior: HitTestBehavior.translucent,
         onTap: dismiss,
       )),
-      // #101 wide: popup to the RIGHT of pill, top-aligned; narrow: below pill
       Positioned(
         top: popupTop,
         left: left,
@@ -2686,49 +2711,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           color: Colors.white,
           child: ConstrainedBox(
             constraints: BoxConstraints(maxHeight: maxH),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(14, 12, 10, 8),
-                  child: Row(children: [
-                    const Text('Counted items',
-                        style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _kText)),
-                    const Spacer(),
-                    GestureDetector(
-                      onTap: dismiss,
-                      child: const Icon(Icons.close_rounded, size: 18, color: _kSub),
-                    ),
-                  ]),
-                ),
-                const Divider(height: 1, color: _kBorder),
-                Flexible(
-                  child: ListView.separated(
-                    shrinkWrap: true,
-                    padding: const EdgeInsets.symmetric(vertical: 4),
-                    itemCount: counted.length,
-                    separatorBuilder: (_, __) => const Divider(height: 1, color: _kBorder),
-                    itemBuilder: (_, i) {
-                      final r = counted[i];
-                      final name = r['product_name']?.toString() ?? '?';
-                      final recQty = (r['received_qty'] as num?)?.toInt() ?? 0;
-                      final ordQty = (r['ordered_qty'] as num?)?.toInt() ?? 0;
-                      return Padding(
-                        padding: const EdgeInsets.fromLTRB(14, 9, 14, 9),
-                        child: Row(children: [
-                          Expanded(child: Text(name,
-                              style: const TextStyle(fontSize: 13, color: _kText))),
-                          const SizedBox(width: 10),
-                          Text('$recQty/$ordQty',
-                              style: const TextStyle(
-                                  fontSize: 13, fontWeight: FontWeight.w700, color: _kGreen)),
-                        ]),
-                      );
-                    },
-                  ),
-                ),
-              ],
+            child: _CountedMentionsPopup(
+              supplierName: supplierForPopup,
+              orderItems: orderSnapshot,
+              latestClipPath: latestClip,
+              onDismiss: dismiss,
             ),
           ),
         ),
@@ -3098,6 +3085,289 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             ]),
           );
         },
+      ),
+    );
+  }
+}
+
+// ── #115: Counted items popup — mentions table with tap-to-play ───────────────
+
+class _CountedMentionsPopup extends StatefulWidget {
+  final String supplierName;
+  final List<Map<String, dynamic>> orderItems;
+  final String? latestClipPath;
+  final VoidCallback onDismiss;
+  const _CountedMentionsPopup({
+    required this.supplierName,
+    required this.orderItems,
+    required this.latestClipPath,
+    required this.onDismiss,
+  });
+
+  @override
+  State<_CountedMentionsPopup> createState() => _CountedMentionsPopupState();
+}
+
+class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
+  List<Map<String, dynamic>>? _mentions;
+  String? _error;
+  // Web audio player — dart:html AudioElement (web-only; this file already imports dart:html)
+  html.AudioElement? _audio;
+  String? _playingClip;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchMentions();
+  }
+
+  @override
+  void dispose() {
+    _audio?.pause();
+    _audio = null;
+    super.dispose();
+  }
+
+  Future<void> _fetchMentions() async {
+    try {
+      final rows = await Supabase.instance.client
+          .rpc('get_voice_clip_mentions', params: {'p_supplier_name': widget.supplierName}) as List;
+      if (!mounted) return;
+      // Group by matched_name preserving insertion order
+      final mentions = rows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
+      RenderLog.write('c115_counted_table_built',
+          'supplier=${widget.supplierName};products=${_uniqueNames(mentions)};total_mentions=${mentions.length}');
+      setState(() => _mentions = mentions);
+    } catch (e) {
+      if (mounted) setState(() => _error = e.toString());
+    }
+  }
+
+  int _uniqueNames(List<Map<String, dynamic>> rows) =>
+      rows.map((r) => r['matched_name']?.toString() ?? '').toSet().length;
+
+  Future<void> _playFrom(String clipPath, double? tStartSec) async {
+    try {
+      final url = await Supabase.instance.client.storage
+          .from('voice-clips')
+          .createSignedUrl(clipPath, 3600);
+      _audio?.pause();
+      final a = html.AudioElement(url);
+      _audio = a;
+      setState(() => _playingClip = clipPath);
+      if (tStartSec != null && tStartSec > 0) {
+        a.onLoadedMetadata.first.then((_) {
+          a.currentTime = tStartSec;
+          a.play();
+        });
+      } else {
+        a.onCanPlay.first.then((_) => a.play());
+      }
+      RenderLog.write('c115_play_seek',
+          'clip=${clipPath.split('/').last};t_start=${tStartSec ?? 0};seeked=${tStartSec != null ? 'y' : 'n'}');
+    } catch (_) {
+      if (mounted) _showSnackMsg('Replay unavailable');
+    }
+  }
+
+  void _stopAudio() {
+    _audio?.pause();
+    setState(() => _playingClip = null);
+  }
+
+  void _showSnackMsg(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(msg), duration: const Duration(seconds: 2)),
+    );
+  }
+
+  // Build grouped product table from mention rows
+  List<({String name, List<({int qty, String? clipPath, double? tStart})> entries, int total, int ordered})>
+      _groupMentions(List<Map<String, dynamic>> rows) {
+    final Map<String, List<Map<String, dynamic>>> byName = {};
+    for (final r in rows) {
+      final name = r['matched_name']?.toString() ?? '?';
+      byName.putIfAbsent(name, () => []).add(r);
+    }
+    final orderedMap = <String, int>{};
+    for (final item in widget.orderItems) {
+      final name = item['product_name']?.toString();
+      if (name != null) {
+        orderedMap[name] = (item['ordered_qty'] as num?)?.toInt() ?? 0;
+      }
+    }
+    return byName.entries.map((e) {
+      final entries = e.value.map((r) => (
+        qty: (r['qty'] as num?)?.toInt() ?? 0,
+        clipPath: r['clip_path']?.toString(),
+        tStart: (r['t_start_sec'] as num?)?.toDouble(),
+      )).toList();
+      final total = entries.fold(0, (s, x) => s + x.qty);
+      return (name: e.key, entries: entries, total: total, ordered: orderedMap[e.key] ?? 0);
+    }).toList();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // Header
+        Padding(
+          padding: const EdgeInsets.fromLTRB(14, 12, 10, 8),
+          child: Row(children: [
+            const Text('Counted items',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _kText)),
+            const SizedBox(width: 8),
+            if (_playingClip != null)
+              GestureDetector(
+                onTap: _stopAudio,
+                child: const Icon(Icons.stop_rounded, size: 16, color: _kGreen),
+              ),
+            if (widget.latestClipPath != null && _playingClip == null)
+              GestureDetector(
+                onTap: () => _playFrom(widget.latestClipPath!, null),
+                child: const Icon(Icons.play_arrow_rounded, size: 18, color: _kGreen),
+              ),
+            const Spacer(),
+            GestureDetector(
+              onTap: widget.onDismiss,
+              child: const Icon(Icons.close_rounded, size: 18, color: _kSub),
+            ),
+          ]),
+        ),
+        const Divider(height: 1, color: _kBorder),
+        // Body
+        if (_error != null)
+          Padding(
+            padding: const EdgeInsets.all(14),
+            child: Text('Error: $_error', style: const TextStyle(fontSize: 12, color: Colors.red)),
+          )
+        else if (_mentions == null)
+          const Padding(
+            padding: EdgeInsets.all(20),
+            child: Center(child: SizedBox(width: 20, height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2, color: _kGreen))),
+          )
+        else if (_mentions!.isEmpty)
+          const Padding(
+            padding: EdgeInsets.all(14),
+            child: Text('No clips recorded yet today.',
+                style: TextStyle(fontSize: 13, color: _kSub)),
+          )
+        else
+          Flexible(
+            child: SingleChildScrollView(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: _buildTable(_groupMentions(_mentions!)),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildTable(
+      List<({String name, List<({int qty, String? clipPath, double? tStart})> entries, int total, int ordered})> groups) {
+    return Table(
+      columnWidths: const {
+        0: FlexColumnWidth(3),
+        1: FlexColumnWidth(5),
+        2: IntrinsicColumnWidth(),
+      },
+      defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+      children: [
+        // Header row
+        TableRow(
+          decoration: const BoxDecoration(color: Color(0xFFF5F6F8)),
+          children: [
+            _th('Product'),
+            _th('Qty sequence'),
+            _th('Total'),
+          ],
+        ),
+        ...groups.map((g) => TableRow(
+          decoration: const BoxDecoration(
+            border: Border(bottom: BorderSide(color: _kBorder)),
+          ),
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(10, 8, 4, 8),
+              child: Text(g.name,
+                  style: const TextStyle(fontSize: 12, color: _kText),
+                  overflow: TextOverflow.ellipsis, maxLines: 2),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+              child: Wrap(
+                spacing: 4,
+                runSpacing: 4,
+                children: g.entries.map((e) => _QtyChip(
+                  qty: e.qty,
+                  playing: _playingClip == e.clipPath,
+                  hasTime: e.tStart != null,
+                  onTap: e.clipPath != null && e.clipPath!.isNotEmpty
+                      ? () => _playFrom(e.clipPath!, e.tStart)
+                      : null,
+                )).toList(),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.only(right: 10),
+              child: Text(
+                g.ordered > 0 ? '${g.total}/${g.ordered}' : '${g.total}',
+                style: TextStyle(
+                  fontSize: 12, fontWeight: FontWeight.w700,
+                  color: g.ordered > 0 && g.total >= g.ordered ? _kGreen : _kText,
+                ),
+                textAlign: TextAlign.right,
+              ),
+            ),
+          ],
+        )),
+      ],
+    );
+  }
+
+  Widget _th(String text) => Padding(
+    padding: const EdgeInsets.fromLTRB(10, 6, 4, 6),
+    child: Text(text,
+        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _kSub)),
+  );
+}
+
+class _QtyChip extends StatelessWidget {
+  final int qty;
+  final bool playing;
+  final bool hasTime;
+  final VoidCallback? onTap;
+  const _QtyChip({required this.qty, required this.playing, required this.hasTime, this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+          color: playing ? _kGreen : (hasTime ? const Color(0xFFE8F5E9) : const Color(0xFFF5F6F8)),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: playing ? _kGreen : _kBorder),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          if (onTap != null)
+            Icon(playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                size: 11, color: playing ? Colors.white : _kGreen),
+          if (onTap != null) const SizedBox(width: 2),
+          Text('$qty',
+              style: TextStyle(
+                fontSize: 12, fontWeight: FontWeight.w600,
+                color: playing ? Colors.white : _kText,
+              )),
+        ]),
       ),
     );
   }

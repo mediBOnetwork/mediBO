@@ -298,30 +298,30 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
         RenderLog.write('change_106_search_all', '1');
       }
       final page = pageResult.items;
-      // Log any browse_medicines RPC error for diagnostics.
+      // Log any storefront-feed RPC error for diagnostics.
       final browseErr = MedicineRepository.browseRpcError;
       if (browseErr != null) {
-        RenderLog.write('c109_browse_rpc_error', browseErr);
+        RenderLog.write('c109_feed_rpc_error', browseErr);
         MedicineRepository.browseRpcError = null;
       }
-      // Set browse count (browse_medicines_count result) for both All and category.
+      // Set count from get_storefront_count for both All and category.
       if (pageResult.exactCount != null) {
         setState(() => _buyableCategoryTotal = pageResult.exactCount);
         if (_onlyBuyable) {
-          RenderLog.write('c109_browse_count',
+          RenderLog.write('c109_feed_count',
               'category=${widget.category};N=${pageResult.exactCount}');
         }
       }
-      // Render-log: c109 browse instrumentation
+      // Render-log: c109 feed instrumentation
       if (_onlyBuyable) {
         final distinctMarketers = page.map((p) => p.manufacturer).toSet().length;
         final anyMissingImage = page.any((p) => p.imageUrl.isEmpty) ? 'y' : 'n';
         final cat = widget.category;
         if (cat == 'All') {
-          RenderLog.write('c109_home_grid_rpc',
+          RenderLog.write('c109_home_feed_rpc',
               'category=All;offset=0;limit=${MedicineRepository.pageSize};rows=${page.length};distinct_marketers=$distinctMarketers;any_missing_image=$anyMissingImage');
         } else {
-          RenderLog.write('c109_category_grid_rpc',
+          RenderLog.write('c109_category_feed_rpc',
               'category=$cat;offset=0;limit=${MedicineRepository.pageSize};rows=${page.length};distinct_marketers=$distinctMarketers;any_missing_image=$anyMissingImage');
         }
       }

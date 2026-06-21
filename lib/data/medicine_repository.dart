@@ -166,18 +166,18 @@ class MedicineRepository {
       return result;
     }
 
-    // ── Browse path: browse_medicines RPC (image-only, shuffled) ─────────────
+    // ── Browse path: get_storefront_feed (precomputed, image-only, fast) ────────
     // Used for BOTH home "Best Sellers" (All) and category pages.
-    // browse_medicines_count runs in parallel for the "Showing X of N" label.
+    // get_storefront_count runs in parallel for the "Showing X of N" label.
     if (onlyBuyable) {
       try {
         final results = await Future.wait<dynamic>([
-          _client.rpc('browse_medicines', params: {
+          _client.rpc('get_storefront_feed', params: {
             'category_filter': category,
             'page_offset': offset,
             'page_limit': limit,
           }),
-          _client.rpc('browse_medicines_count', params: {
+          _client.rpc('get_storefront_count', params: {
             'category_filter': category,
           }),
         ]);
@@ -189,8 +189,7 @@ class MedicineRepository {
         _cacheSet(_resultCache, cacheKey, result);
         return result;
       } catch (e) {
-        // browse_medicines failed — fall through to the direct table query.
-        // This ensures the browse grid still works even if the RPC is unavailable.
+        // get_storefront_feed failed — fall back to direct buyable table query.
         _browseRpcError = '${category}:${e.toString().substring(0, e.toString().length.clamp(0, 80))}';
         var fb = _client.from('MEDICINE').select(_kListCols).eq('buyable', true);
         if (category != 'All') fb = fb.eq('therapeutic_class', category);

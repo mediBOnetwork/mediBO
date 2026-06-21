@@ -420,7 +420,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c133_popup_width', 'narrowed=y;centered=y'); // static: #133 narrower popup with side margins
     RenderLog.write('c133_ready', 'width_balanced=y'); // static: #133 width + proportional columns
     RenderLog.write('c110_ready', 'width_inset=y;row_spacing=y;chip_dots=y;close_btn=y'); // static: #110 all four asks
-    RenderLog.write('c111_ready', 'x_visible=y;width_2pct=y;header_aligned=y'); // static: #111 three fixes
+    RenderLog.write('c111_ready', 'sentinel=$_kC111Sentinel;x_visible=y;width_2pct=y;header_aligned=y'); // static: #111 three fixes
     // #85: agent button present — written in initState (IndexedStack always mounts)
     RenderLog.write('change_85_agent_button_present', '1');
     RenderLog.write('change_86_voice_card_present', '1');

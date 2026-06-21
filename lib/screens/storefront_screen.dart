@@ -298,10 +298,33 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
         RenderLog.write('change_106_search_all', '1');
       }
       final page = pageResult.items;
-      // Exact buyable count from the list query — only for specific categories.
-      // All view M uses the full catalog total (meta.total), not the buyable subset.
-      if (pageResult.exactCount != null && widget.category != 'All') {
+      // Set browse count (browse_medicines_count result) for both All and category.
+      if (pageResult.exactCount != null) {
         setState(() => _buyableCategoryTotal = pageResult.exactCount);
+        if (_onlyBuyable) {
+          RenderLog.write('c109_browse_count',
+              'category=${widget.category};N=${pageResult.exactCount}');
+        }
+      }
+      // Render-log: c109 browse instrumentation
+      if (_onlyBuyable) {
+        final distinctMarketers = page.map((p) => p.manufacturer).toSet().length;
+        final anyMissingImage = page.any((p) => p.imageUrl.isEmpty) ? 'y' : 'n';
+        final cat = widget.category;
+        if (cat == 'All') {
+          RenderLog.write('c109_home_grid_rpc',
+              'category=All;offset=0;limit=${MedicineRepository.pageSize};rows=${page.length};distinct_marketers=$distinctMarketers;any_missing_image=$anyMissingImage');
+        } else {
+          RenderLog.write('c109_category_grid_rpc',
+              'category=$cat;offset=0;limit=${MedicineRepository.pageSize};rows=${page.length};distinct_marketers=$distinctMarketers;any_missing_image=$anyMissingImage');
+        }
+      }
+      if (widget.query.trim().isNotEmpty) {
+        final term = widget.query.trim();
+        final anyNoImage = page.any((p) => p.imageUrl.isEmpty) ? 'y' : 'n';
+        final anyNonBuyable = page.any((p) => p.buyable != true) ? 'y' : 'n';
+        RenderLog.write('c109_search_untouched',
+            'term=$term;rows=${page.length};includes_no_image=$anyNoImage;includes_non_buyable=$anyNonBuyable');
       }
       setState(() {
         _items
@@ -350,7 +373,7 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
       );
       if (token != _loadToken || !mounted) return;
       final page = pageResult.items;
-      if (pageResult.exactCount != null && widget.category != 'All') {
+      if (pageResult.exactCount != null) {
         setState(() => _buyableCategoryTotal = pageResult.exactCount);
       }
       setState(() {
@@ -392,7 +415,7 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
       );
       if (loadToken != _loadToken || !mounted) return;
       final page = pageResult.items;
-      if (pageResult.exactCount != null && widget.category != 'All') {
+      if (pageResult.exactCount != null) {
         setState(() => _buyableCategoryTotal = pageResult.exactCount);
       }
       // Record where new items start so _gridBody can animate them,
@@ -474,10 +497,9 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
   int _categoryTotal() {
     final meta = _meta;
     if (_onlyBuyable) {
-      // All/Best Sellers: M = full catalog total (not buyable subset).
-      if (widget.category == 'All') return meta?.total ?? _items.length;
-      // Specific category: M = exact buyable count from the list query.
-      return _buyableCategoryTotal ?? _items.length;
+      // N = browse_medicines_count result (image-only subset), set for both
+      // All and specific categories. Fall back to catalog estimate if not yet loaded.
+      return _buyableCategoryTotal ?? meta?.total ?? _items.length;
     }
     // Search mode: use meta totals.
     if (meta == null) return _items.length;

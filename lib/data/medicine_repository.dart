@@ -162,18 +162,25 @@ class MedicineRepository {
       return result;
     }
 
-    // ── Browse buyable-only: home/All + category. Count comes from same query ──
+    // ── Browse path: browse_medicines RPC (image-only, shuffled) ─────────────
+    // Used for BOTH home "Best Sellers" (All) and category pages.
+    // browse_medicines_count runs in parallel for the "Showing X of N" label.
     if (onlyBuyable) {
-      var fb = _client.from('MEDICINE').select(_kListCols).eq('buyable', true);
-      if (category != 'All') fb = fb.eq('therapeutic_class', category);
-      final res = await fb
-          .order('sales_count', ascending: false)
-          .range(offset, offset + limit - 1)
-          .count(CountOption.exact);
-      final items = (res.data as List)
+      final results = await Future.wait<dynamic>([
+        _client.rpc('browse_medicines', params: {
+          'category_filter': category,
+          'page_offset': offset,
+          'page_limit': limit,
+        }),
+        _client.rpc('browse_medicines_count', params: {
+          'category_filter': category,
+        }),
+      ]);
+      final items = (results[0] as List)
           .map((r) => Product.fromMap(r as Map<String, dynamic>))
           .toList(growable: false);
-      final result = (items: items, exactCount: res.count);
+      final count = (results[1] as num?)?.toInt();
+      final result = (items: items, exactCount: count);
       _cacheSet(_resultCache, cacheKey, result);
       return result;
     }

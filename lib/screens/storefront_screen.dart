@@ -298,6 +298,12 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
         RenderLog.write('change_106_search_all', '1');
       }
       final page = pageResult.items;
+      // Log any browse_medicines RPC error for diagnostics.
+      final browseErr = MedicineRepository.browseRpcError;
+      if (browseErr != null) {
+        RenderLog.write('c109_browse_rpc_error', browseErr);
+        MedicineRepository.browseRpcError = null;
+      }
       // Set browse count (browse_medicines_count result) for both All and category.
       if (pageResult.exactCount != null) {
         setState(() => _buyableCategoryTotal = pageResult.exactCount);

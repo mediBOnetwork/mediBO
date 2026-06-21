@@ -59,6 +59,10 @@ class MedicineRepository {
   /// Set to true when the last [fetchPage] call was served from cache.
   static bool lastCallWasCacheHit = false;
 
+  /// Set to the error string when browse_medicines RPC fails (for diagnostics).
+  static String? browseRpcError;
+  static set _browseRpcError(String? v) => browseRpcError = v;
+
   /// Estimated total row count from Postgres planner stats — instant,
   /// no sequential scan. Accuracy: within ~1-2% after autovacuum.
   Future<int> fetchTotalEstimate() async {
@@ -166,23 +170,41 @@ class MedicineRepository {
     // Used for BOTH home "Best Sellers" (All) and category pages.
     // browse_medicines_count runs in parallel for the "Showing X of N" label.
     if (onlyBuyable) {
-      final results = await Future.wait<dynamic>([
-        _client.rpc('browse_medicines', params: {
-          'category_filter': category,
-          'page_offset': offset,
-          'page_limit': limit,
-        }),
-        _client.rpc('browse_medicines_count', params: {
-          'category_filter': category,
-        }),
-      ]);
-      final items = (results[0] as List)
-          .map((r) => Product.fromMap(r as Map<String, dynamic>))
-          .toList(growable: false);
-      final count = (results[1] as num?)?.toInt();
-      final result = (items: items, exactCount: count);
-      _cacheSet(_resultCache, cacheKey, result);
-      return result;
+      try {
+        final results = await Future.wait<dynamic>([
+          _client.rpc('browse_medicines', params: {
+            'category_filter': category,
+            'page_offset': offset,
+            'page_limit': limit,
+          }),
+          _client.rpc('browse_medicines_count', params: {
+            'category_filter': category,
+          }),
+        ]);
+        final items = (results[0] as List)
+            .map((r) => Product.fromMap(r as Map<String, dynamic>))
+            .toList(growable: false);
+        final count = (results[1] as num?)?.toInt();
+        final result = (items: items, exactCount: count);
+        _cacheSet(_resultCache, cacheKey, result);
+        return result;
+      } catch (e) {
+        // browse_medicines failed — fall through to the direct table query.
+        // This ensures the browse grid still works even if the RPC is unavailable.
+        _browseRpcError = '${category}:${e.toString().substring(0, e.toString().length.clamp(0, 80))}';
+        var fb = _client.from('MEDICINE').select(_kListCols).eq('buyable', true);
+        if (category != 'All') fb = fb.eq('therapeutic_class', category);
+        final res = await fb
+            .order('sales_count', ascending: false)
+            .range(offset, offset + limit - 1)
+            .count(CountOption.exact);
+        final items = (res.data as List)
+            .map((r) => Product.fromMap(r as Map<String, dynamic>))
+            .toList(growable: false);
+        final result = (items: items, exactCount: res.count);
+        _cacheSet(_resultCache, cacheKey, result);
+        return result;
+      }
     }
 
     // ── Browse non-buyable: category/all priority RPC ─────────────────────────

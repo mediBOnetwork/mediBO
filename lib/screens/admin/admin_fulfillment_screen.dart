@@ -417,6 +417,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c130_ready', 'auto_all=y'); // static: #130 reset-on-playback-complete in bundle
     RenderLog.write('c131_ready', 'auto_return_on_play_end=y'); // static: #131 any-clip completion triggers All
     RenderLog.write('c132_ready', 'mobile_responsive=y'); // static: #132 responsive table layout
+    RenderLog.write('c133_popup_width', 'narrowed=y;centered=y'); // static: #133 narrower popup with side margins
+    RenderLog.write('c133_ready', 'width_balanced=y'); // static: #133 width + proportional columns
     // #85: agent button present — written in initState (IndexedStack always mounts)
     RenderLog.write('change_85_agent_button_present', '1');
     RenderLog.write('change_86_voice_card_present', '1');
@@ -2781,9 +2783,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     final screenW = MediaQuery.of(pillContext).size.width;
     final screenH = MediaQuery.of(pillContext).size.height;
     final bool isWide = screenW >= 900;
-    // #118: clamp popup width to viewport on mobile so nothing overflows.
-    const double kMargin = 12.0;
-    final double popupW = math.min(380.0, screenW - kMargin * 2);
+    // #118/#133: comfortable side margins; cap at 440 on wide/desktop.
+    const double kMargin = 20.0; // #133: 20px each side → ~88-90% on phones
+    final double popupW = math.min(440.0, screenW - kMargin * 2);
 
     double popupTop;
     double left;
@@ -3679,12 +3681,16 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
   }
 
   // #132: responsive table — Row+Expanded+fixed Total width guarantees no column clipping
-  static const double _kTotalColW = 54.0; // wide enough for "10/14" at 12px bold
+  static const double _kTotalColW = 56.0; // #133: fixed right column, always visible
+  // #133: flex ratios — Product:Qty:Total. Product widest for text, Qty middle for pills.
+  static const int _kProductFlex = 3;
+  static const int _kQtyFlex = 4;
 
   Widget _buildTable(
       List<({String name, List<_QtyEntry> entries, int total, int ordered})> groups) {
     final playSeq = _playingSeq;
     RenderLog.write('c132_table_responsive', 'cols_fit=y;total_visible=y');
+    RenderLog.write('c133_cols_proportional', 'product_flex=$_kProductFlex;qty_flex=$_kQtyFlex;total_fixed=y');
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -3693,8 +3699,8 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
           color: const Color(0xFFF5F6F8),
           child: Row(
             children: [
-              Expanded(flex: 2, child: _th('Product')),
-              Expanded(flex: 3, child: _th('Qty sequence')),
+              Expanded(flex: _kProductFlex, child: _th('Product')),
+              Expanded(flex: _kQtyFlex, child: _th('Qty sequence')),
               SizedBox(width: _kTotalColW, child: _thRight('Total')),
             ],
           ),
@@ -3709,7 +3715,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
             children: [
               // Product — wraps to 2 lines; never pushes Total off-screen
               Expanded(
-                flex: 2,
+                flex: _kProductFlex,
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(10, 8, 4, 8),
                   child: Text(g.name,
@@ -3719,7 +3725,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
               ),
               // Qty sequence — pills wrap within their share of width
               Expanded(
-                flex: 3,
+                flex: _kQtyFlex,
                 child: Padding(
                   padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
                   child: Wrap(

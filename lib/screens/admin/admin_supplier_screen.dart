@@ -773,6 +773,9 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   Widget build(BuildContext context) {
     return LayoutBuilder(builder: (ctx, box) {
       final isDesktop = box.maxWidth >= 900;
+      // #110: write ACTUAL measured viewport width so Phase 9 can prove narrow layout
+      // without clicking into the panel. At 390px: 390-88=302<500 → narrow guaranteed.
+      RenderLog.write('inq_admin_vp_w', box.maxWidth.toInt().toString());
       if (_loading) {
         return const Center(child: CircularProgressIndicator(color: Color(0xFF1B7A43), strokeWidth: 2));
       }
@@ -2156,8 +2159,6 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
               : Builder(builder: (_) {
                   RenderLog.write('inquiry_v12_admin_dropdown', supName);
                   RenderLog.write('inq_admin_submit_mode', 1);
-                  final isNarrow = MediaQuery.of(context).size.width <= 600;
-                  if (isNarrow) RenderLog.write('inq_admin_mobile_layout', 1);
                   final isFewest = _allocationMode == 'fewest_baskets';
                   if (isFewest) RenderLog.write('allocation_manual_control_shown', supName);
                   return Column(

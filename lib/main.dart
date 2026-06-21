@@ -79,6 +79,8 @@ void main() {
       final raw = await html.HttpRequest.getString('/version.json');
       final info = jsonDecode(raw) as Map<String, dynamic>;
       RenderLog.setBuildHash(info['commit'] as String? ?? 'unknown');
+      final changeNum = info['change'] as String?;
+      if (changeNum != null) RenderLog.write('change', changeNum);
     } catch (_) {
       RenderLog.setBuildHash('unknown');
     }

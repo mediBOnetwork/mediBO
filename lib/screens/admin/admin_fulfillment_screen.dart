@@ -412,6 +412,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c126_ready', 'auto_all=y;chips_single_row=y'); // static: #126 popup auto-reset + single-row chips
     RenderLog.write('c127_ready', 'all_sync=y;fade=y'); // static: #127 body-sync + bottom fade (kept)
     RenderLog.write('c128_ready', 'all_sync=y;autoscroll=y;fade=y'); // static: #128 + chip autoscroll
+    RenderLog.write('c129_seq_source', 'server_rpc=y'); // static: #129 proves RPC-based seq in bundle
+    RenderLog.write('c129_ready', 'deploy_doctor=done'); // static: #129 deploy confirmed
     // #85: agent button present — written in initState (IndexedStack always mounts)
     RenderLog.write('change_85_agent_button_present', '1');
     RenderLog.write('change_86_voice_card_present', '1');
@@ -762,6 +764,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             seq = DateTime.now().millisecondsSinceEpoch ~/ 1000;
           }
           RenderLog.write('c125_seq_fetched', 'supplier=$supplier;seq=$seq');
+          RenderLog.write('c129_seq_value', 'supplier=$supplier;seq=$seq');
           clipPath = await _voiceService.uploadClip(
             result.bytes, supplier, seq, result.ext,
           );

@@ -10,6 +10,7 @@ import 'package:flutter_web_plugins/url_strategy.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'app_state.dart';
+import 'url_sync_web.dart' show captureInitialPath;
 import 'utils/render_log.dart';
 import 'view_as_state.dart';
 import 'models/cart_model.dart';
@@ -37,6 +38,7 @@ void main() {
       } catch (_) {}
     };
 
+    captureInitialPath(); // must be called BEFORE usePathUrlStrategy() resets pathname
     usePathUrlStrategy();
 
     // Supabase init is crash-isolated: failure renders app in signed-out state.

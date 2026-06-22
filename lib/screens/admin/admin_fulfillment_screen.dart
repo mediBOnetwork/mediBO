@@ -448,6 +448,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c147_label', 'text=Collected and sent to warehouse'); // static: locked label renamed
     RenderLog.write('c148_ready', 'collect_v7=y'); // static: #148 wide/mobile branch restored
     RenderLog.write('c149_ready', 'collect_v8=y'); // static: #149 pinned action bar above bottom nav
+    RenderLog.write('c151_ready', 'collect_v10=y'); // static: #151 in-scroll footer + unified container
     // #85: agent button present — written in initState (IndexedStack always mounts)
     RenderLog.write('change_85_agent_button_present', '1');
     RenderLog.write('change_86_voice_card_present', '1');
@@ -1798,46 +1799,24 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           style: TextStyle(color: _kSub, fontSize: 15)));
     }
 
-    // #147 FIX B: inline accordion — header pins to top via Scrollable.ensureVisible.
-    // AnimatedSwitcher removed; AnimatedSize in each row handles smooth open/close.
-    // #149: Column layout — Expanded list + static pinned action bar above bottom nav.
-    final locked = _boxLocked;
-    final showPinnedBar = _selectedSupplier != null && !_loadingBox && _items.isNotEmpty;
-    final safeBottom = MediaQuery.of(context).padding.bottom;
-    if (showPinnedBar) {
-      RenderLog.write('c149_pinned_bar', 'static=y;above_nav=y;state=${locked ? 'locked' : 'active'}');
-      RenderLog.write('c149_list_pad', 'bottom_pad=0');
-    }
+    // #147: inline accordion — header pins to top via Scrollable.ensureVisible.
+    // #151: footer moved INSIDE the dropdown scroll (not pinned); simple ListView restored.
     RenderLog.write('c149_web_untouched', 'wide_layout=unchanged');
+    RenderLog.write('c151_web_untouched', 'wide_layout=unchanged');
 
     return LayoutBuilder(builder: (_, constraints) {
       final maxW = constraints.maxWidth >= 900 ? 700.0 : double.infinity;
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Expanded(
-            child: Align(
-              alignment: Alignment.topCenter,
-              child: ConstrainedBox(
-                constraints: BoxConstraints(maxWidth: maxW),
-                child: ListView.builder(
-                  controller: _listScrollCtrl,
-                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-                  itemCount: _suppliers.length,
-                  itemBuilder: (_, i) => _buildSupplierAccordionRow(_suppliers[i], isAdmin),
-                ),
-              ),
-            ),
+      return Align(
+        alignment: Alignment.topCenter,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: maxW),
+          child: ListView.builder(
+            controller: _listScrollCtrl,
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+            itemCount: _suppliers.length,
+            itemBuilder: (_, i) => _buildSupplierAccordionRow(_suppliers[i], isAdmin),
           ),
-          // #149: pinned action bar — static, always above bottom nav, never scrolls away.
-          if (showPinnedBar) ...[
-            const Divider(height: 1, color: _kBorder),
-            Padding(
-              padding: EdgeInsets.fromLTRB(16, 12, 16, 12 + safeBottom),
-              child: _buildConfirmFooter(locked),
-            ),
-          ],
-        ],
+        ),
       );
     });
   }
@@ -2013,13 +1992,13 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           ),
 
           // ── Expanded content — AnimatedSize for smooth open/close ─────────
+          // #151: no Divider (unified container); footer in-scroll (showFooter:true,shrinkWrap).
           AnimatedSize(
             duration: const Duration(milliseconds: 280),
             curve: Curves.easeInOutCubic,
             clipBehavior: Clip.antiAlias,
             child: isExpanded
                 ? Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                    const Divider(height: 1, color: _kBorder),
                     _buildNarrowVoiceBar(isAdmin),
                     if (_items.isNotEmpty) _buildNarrowProgressRow(),
                     const SizedBox(height: 8),
@@ -2036,10 +2015,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                             style: TextStyle(color: _kSub, fontSize: 14)),
                       )
                     else
-                      ConstrainedBox(
-                        constraints: const BoxConstraints(maxHeight: 500),
-                        child: _buildNarrowItemList(showFooter: false),
-                      ),
+                      _buildNarrowItemList(showFooter: true, shrinkWrap: true),
                   ])
                 : const SizedBox.shrink(),
           ),
@@ -2246,8 +2222,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   }
 
   // ── #89: Dense narrow item list — compact rows, render-log key ───────────────
-  // showFooter=false when called from full-screen view (footer is pinned externally).
-  Widget _buildNarrowItemList({bool showFooter = true}) {
+  // #151: shrinkWrap=true when inside accordion (outer ListView handles scroll).
+  Widget _buildNarrowItemList({bool showFooter = true, bool shrinkWrap = false}) {
     RenderLog.write('change_89_dense_items', '1');
     RenderLog.write('81_item_list_rendered', '${_items.length}');
     RenderLog.write('81_progress', '${_items.length - _pendingCount}/${_items.length}');
@@ -2255,9 +2231,19 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     if (locked) RenderLog.write('change_91_locked', '1');
     else RenderLog.write('change_91_confirm_present', '1');
 
+    if (showFooter) {
+      final safeB = MediaQuery.of(context).padding.bottom;
+      RenderLog.write('c151_footer_in_scroll', 'pinned=n;in_dropdown=y;state=${locked ? 'locked' : 'active'}');
+      RenderLog.write('c151_unified_container', 'one_surface=y;inner_border=none;header_body_split=n');
+      RenderLog.write('c151_bottom_pad', 'clears_nav=y;pad=${(24 + safeB).toInt()}');
+    }
+
     final footerCount = showFooter ? 1 : 0;
+    final safeBottom = showFooter ? MediaQuery.of(context).padding.bottom : 0.0;
     return ListView.separated(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+      shrinkWrap: shrinkWrap,
+      physics: shrinkWrap ? const NeverScrollableScrollPhysics() : null,
+      padding: EdgeInsets.fromLTRB(16, 8, 16, 24 + safeBottom),
       itemCount: _items.length + footerCount, // +1 for Confirm/Locked footer #91
       separatorBuilder: (_, i) => SizedBox(height: i == _items.length - 1 ? 16 : 4),
       itemBuilder: (_, i) {

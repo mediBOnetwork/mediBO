@@ -428,6 +428,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c136_ready', 'x_grey_circle=y'); // static: #136 grey circle + black X
     RenderLog.write('c137_ready', 'two_case_flow=y'); // static: #137 two-case workflow wired
     RenderLog.write('c138_ready', 'rw_responsive=y'); // static: #138 fully responsive layout
+    RenderLog.write('c139_ready', 'arrivals_v2=y'); // static: #139 new mode-driven Arrivals
     // #85: agent button present — written in initState (IndexedStack always mounts)
     RenderLog.write('change_85_agent_button_present', '1');
     RenderLog.write('change_86_voice_card_present', '1');
@@ -5068,6 +5069,7 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen> {
       final mode = state['mode']?.toString();
       setState(() => _fwStates[supplier] = state);
       RenderLog.write('c137_arrivals_mode', 'supplier=$supplier;mode=${mode ?? 'null'}');
+      RenderLog.write('c139_arrivals_mode', 'supplier=$supplier;mode=${mode ?? 'null'}');
     } catch (_) {
       // ignore; card falls back to old UI
     } finally {
@@ -5318,6 +5320,7 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen> {
       _redesignLogged = true;
       RenderLog.write('change_88_arrivals_redesigned', '1');
       RenderLog.write('c138_arrivals_responsive', 'rows_fit=y;btns_wrap=y'); // #138
+      RenderLog.write('c139_arrivals_new', 'old_removed=y'); // #139 new mode-driven UI
     }
 
     final fwState       = _fwStates[name];
@@ -5330,9 +5333,9 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen> {
     // Use fw_state-driven card when mode is available; fall back to legacy for null/unset mode
     final useFwUI = mode != null;
 
-    final borderColor = fullyLocked || fullyArrived
+    final borderColor = fullyLocked
         ? _kReceivedFg.withValues(alpha: 0.20)
-        : inTransit > 0 || useFwUI
+        : useFwUI
             ? _kPendingFg.withValues(alpha: 0.20)
             : const Color(0xFFE5E7EB);
 
@@ -5362,7 +5365,7 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen> {
                 borderRadius: BorderRadius.circular(20),
               ),
               child: Text(
-                fullyLocked ? 'All received' : (fullyArrived ? 'All arrived' : (useFwUI ? (mode == 'shop' ? 'Shop counted' : 'Count at WH') : '$inTransit on the way')),
+                fullyLocked ? 'All received' : (useFwUI ? (mode == 'shop' ? 'Shop counted' : 'Count at WH') : 'Awaiting'),
                 style: TextStyle(
                   fontSize: 12, fontWeight: FontWeight.w700,
                   color: (fullyLocked || fullyArrived) ? _kReceivedFg : _kPendingFg,
@@ -5412,35 +5415,15 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen> {
               ],
             ],
           ]
-          // ── Legacy UI (mode==null / not yet fw_ confirmed) ──────────────────
+          // ── #139: mode==null — awaiting Collect decision (no action buttons) ──
           else ...[
-            const SizedBox(height: 12),
-            if (fullyArrived)
-              Row(children: [
-                const Icon(Icons.check_circle_rounded, size: 16, color: _kReceivedFg),
-                const SizedBox(width: 6),
-                const Text('All arrived — ready to pack',
-                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _kReceivedFg)),
-              ])
-            else
-              SizedBox(
-                width: double.infinity, height: 46,
-                child: FilledButton.icon(
-                  onPressed: _marking.contains(name) ? null : () => _markArrived(name, inTransit),
-                  icon: _marking.contains(name)
-                      ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                      : const Icon(Icons.warehouse_outlined, size: 18),
-                  label: Text(
-                    _marking.contains(name) ? 'Marking…' : 'Mark $inTransit arrived at warehouse',
-                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
-                  ),
-                  style: FilledButton.styleFrom(
-                    backgroundColor: _kGreen,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                    elevation: 3,
-                  ),
-                ),
-              ),
+            const SizedBox(height: 10),
+            Row(children: [
+              const Icon(Icons.hourglass_top_rounded, size: 14, color: _kSub),
+              const SizedBox(width: 6),
+              const Text('Awaiting Collect decision',
+                  style: TextStyle(fontSize: 12, color: _kSub)),
+            ]),
           ],
         ]),
       ),

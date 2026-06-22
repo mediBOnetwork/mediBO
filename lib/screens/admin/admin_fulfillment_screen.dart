@@ -437,6 +437,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c117_voice_ready', 'platform=web');
     RenderLog.write('c117_no_seek', 'true'); // static: seek/highlight removed in #117
     RenderLog.write('c118_table_flow', 'cols=flexible,qty_wrap=y'); // static: #118 responsive table
+    RenderLog.write('c119_collect_dropdown_anim_fixed', 'true'); // static: badge always present, no layout jump
+    RenderLog.write('c119_arrivals_dropdown_anim_fixed', 'true'); // static: same fix covers arrivals
     RenderLog.write('c119_no_timestamps', 'true'); // static: no t_start/t_end in #119
     RenderLog.write('c120_no_timestamps', 'true'); // static: #120 no t_start/t_end
     RenderLog.write('c120_view_mode', 'mode=grouped'); // static: default view is grouped
@@ -2456,6 +2458,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
     RenderLog.write('c116_supplier_header_pinned', 'true');
     RenderLog.write('c116_footer_gap_fixed', 'true');
+    RenderLog.write('c118_footer_bottom_gap', '24');
     if (widget.arrivals) {
       if (_supplierMode == 'shop') {
         RenderLog.write('c116_arrivals_shop_filter_applied', 'true');
@@ -2521,7 +2524,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           Expanded(
             child: PinnedFooterList(
               // Single source of bottom clearance — no extra SafeArea below.
-              padding: EdgeInsets.only(bottom: 12 + safeBottom),
+              padding: EdgeInsets.only(bottom: 24 + safeBottom),
               footerGap: 16,
               children: [
                 _buildNarrowVoiceBar(isAdmin),
@@ -5892,10 +5895,8 @@ class _SupplierAccordionShell extends StatelessWidget {
                       maxLines: 2, overflow: TextOverflow.ellipsis),
                 ),
                 const SizedBox(width: 12),
-                if (mode != null) ...[
-                  CountBadge(mode: mode),
-                  const SizedBox(width: 8),
-                ],
+                CountBadge(mode: mode),
+                const SizedBox(width: 8),
                 Container(
                   width: 12, height: 12,
                   decoration: BoxDecoration(
@@ -5927,6 +5928,8 @@ class CountBadge extends StatelessWidget {
   final String? mode;
   @override
   Widget build(BuildContext context) {
+    // Always occupies 38×24 so header height is constant — invisible when mode=null.
+    if (mode == null) return const SizedBox(width: 38, height: 24);
     final bool counted = mode == 'shop';
     final String label = counted ? 'C' : 'CR';
     final Color color = counted

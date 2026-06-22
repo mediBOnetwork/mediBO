@@ -436,6 +436,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c141_ready', 'arrivals_v3=y;mark_all=y'); // static: #141 card redesign + in-place counting
     RenderLog.write('c142_ready', 'collect_list=y'); // static: #142 accordion supplier list
     RenderLog.write('c143_ready', 'no_border=y;fullscreen=y;pinned_footer=y'); // static: #143 three accordion fixes
+    RenderLog.write('c145_ready', 'dropdown_anim=y'); // static: #145 smooth open/close animation
     // #85: agent button present — written in initState (IndexedStack always mounts)
     RenderLog.write('change_85_agent_button_present', '1');
     RenderLog.write('change_86_voice_card_present', '1');
@@ -1819,25 +1820,48 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           style: TextStyle(color: _kSub, fontSize: 15)));
     }
 
-    // #143 FIX 2: full-screen single-supplier view when one is expanded.
-    if (_selectedSupplier != null) {
-      return _buildCollectSingleSupplier(isAdmin);
-    }
+    // #145: smooth animated open/close — AnimatedSwitcher keys on list vs single-supplier.
+    RenderLog.write('c145_dropdown_anim',
+        'smooth=y;ms=280;curve=easeInOutCubic;both_ways=y');
 
-    return LayoutBuilder(builder: (_, constraints) {
-      final maxW = constraints.maxWidth >= 900 ? 700.0 : double.infinity;
-      return Align(
-        alignment: Alignment.topCenter,
-        child: ConstrainedBox(
-          constraints: BoxConstraints(maxWidth: maxW),
-          child: ListView.builder(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-            itemCount: _suppliers.length,
-            itemBuilder: (_, i) => _buildSupplierAccordionRow(_suppliers[i], isAdmin),
-          ),
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 280),
+      switchInCurve: Curves.easeInOutCubic,
+      switchOutCurve: Curves.easeInOutCubic,
+      transitionBuilder: (child, animation) => FadeTransition(
+        opacity: animation,
+        child: SlideTransition(
+          position: Tween<Offset>(
+            begin: const Offset(0, 0.015),
+            end: Offset.zero,
+          ).animate(CurvedAnimation(parent: animation, curve: Curves.easeInOutCubic)),
+          child: child,
         ),
-      );
-    });
+      ),
+      child: _selectedSupplier != null
+          ? KeyedSubtree(
+              key: ValueKey<String>('single-$_selectedSupplier'),
+              child: _buildCollectSingleSupplier(isAdmin),
+            )
+          : KeyedSubtree(
+              key: const ValueKey<String>('list'),
+              child: LayoutBuilder(builder: (_, constraints) {
+                final maxW = constraints.maxWidth >= 900 ? 700.0 : double.infinity;
+                return Align(
+                  alignment: Alignment.topCenter,
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(maxWidth: maxW),
+                    child: ListView.builder(
+                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+                      itemCount: _suppliers.length,
+                      itemBuilder: (_, i) =>
+                          _buildSupplierAccordionRow(_suppliers[i], isAdmin),
+                    ),
+                  ),
+                );
+              }),
+            ),
+    );
   }
 
   // #143 FIX 2+3: full-screen view for the expanded supplier.

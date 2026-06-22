@@ -296,6 +296,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   bool _recording = false;
   bool _showListView = false;
 
+  // #142: per-supplier dot state: 'green' | 'light_yellow' | 'yellow'
+  Map<String, String> _supplierDotMap = {};
+
   // ── Voice service (Vertex Gemini edge function) ──
   final _voiceService = VoiceReceiveService();
   bool _recStarted = false;
@@ -431,6 +434,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c139_ready', 'arrivals_v2=y'); // static: #139 new mode-driven Arrivals
     RenderLog.write('c140_ready', 'arrivals_autosync=y'); // static: #140 fw_list_arrivals + auto-refresh
     RenderLog.write('c141_ready', 'arrivals_v3=y;mark_all=y'); // static: #141 card redesign + in-place counting
+    RenderLog.write('c142_ready', 'collect_list=y'); // static: #142 accordion supplier list
     // #85: agent button present — written in initState (IndexedStack always mounts)
     RenderLog.write('change_85_agent_button_present', '1');
     RenderLog.write('change_86_voice_card_present', '1');
@@ -515,10 +519,70 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       names.sort();
       RenderLog.write('78_collect_suppliers_count', '${names.length}');
       setState(() { _suppliers = names; _loadingSuppliers = false; });
+      _loadSupplierDots(); // #142: populate status dots
     } catch (e) {
       if (!mounted) return;
       RenderLog.write('78_collect_query_error', e.toString().substring(0, e.toString().length.clamp(0, 80)));
       setState(() { _loadingSuppliers = false; _error = e.toString(); });
+    }
+  }
+
+  // #142: query per-supplier dot state for the accordion list.
+  Future<void> _loadSupplierDots() async {
+    if (_suppliers.isEmpty || !mounted) return;
+    try {
+      // Parallel queries: order_items summary + supplier_count_mode
+      final futures = await Future.wait([
+        Supabase.instance.client
+            .from('order_items')
+            .select('assigned_supplier, collect_locked, received_qty')
+            .inFilter('assigned_supplier', _suppliers)
+            .not('fulfillment_state', 'in', '("shipped","cancelled")') as Future,
+        Supabase.instance.client
+            .from('supplier_count_mode')
+            .select('assigned_supplier, mode')
+            .inFilter('assigned_supplier', _suppliers) as Future,
+      ]);
+      if (!mounted) return;
+
+      final itemsRes  = futures[0] as List;
+      final modesRes  = futures[1] as List;
+
+      // Mode set: suppliers with a mode set
+      final modeSet = <String>{};
+      for (final m in modesRes) {
+        final s = (m as Map)['assigned_supplier']?.toString();
+        final mode = m['mode']?.toString();
+        if (s != null && mode != null && mode.isNotEmpty) modeSet.add(s);
+      }
+
+      // Per-supplier: any collect_locked + any received_qty > 0
+      final lockedSet  = <String>{};
+      final receivedSet = <String>{};
+      for (final r in itemsRes) {
+        final s = (r as Map)['assigned_supplier']?.toString();
+        if (s == null) continue;
+        if (r['collect_locked'] == true) lockedSet.add(s);
+        final recv = (r['received_qty'] as num?)?.toInt() ?? 0;
+        if (recv > 0) receivedSet.add(s);
+      }
+
+      final dotMap = <String, String>{};
+      for (final name in _suppliers) {
+        final String dot;
+        if (lockedSet.contains(name) || modeSet.contains(name)) {
+          dot = 'green';
+        } else if (receivedSet.contains(name)) {
+          dot = 'light_yellow';
+        } else {
+          dot = 'yellow';
+        }
+        dotMap[name] = dot;
+        RenderLog.write('c142_status_dot', 'supplier=$name;state=$dot');
+      }
+      if (mounted) setState(() => _supplierDotMap = dotMap);
+    } catch (_) {
+      // Silently fail — dots just stay default
     }
   }
 
@@ -1211,6 +1275,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       if (res['error'] != null) throw Exception(res['error'].toString());
       await _reloadItemsFromDB();
       RenderLog.write('c137_collect_action', 'action=confirm;supplier=$supplier');
+      _loadSupplierDots();
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1246,6 +1311,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       if (res['error'] != null) throw Exception(res['error'].toString());
       await _reloadItemsFromDB();
       RenderLog.write('c137_collect_action', 'action=warehouse;supplier=$supplier');
+      _loadSupplierDots();
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1732,6 +1798,151 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     ));
   }
 
+  // ── #142: Supplier list + accordion ─────────────────────────────────────────
+
+  Widget _buildCollectList(bool isAdmin) {
+    RenderLog.write('c142_supplier_list',
+        'dropdown_removed=y;count=${_suppliers.length}');
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (_agentPhase != AgentPhase.idle && _agentReply.isNotEmpty) {
+        _ensureAgentBubble();
+      } else {
+        _hideAgentBubble();
+      }
+    });
+
+    if (_suppliers.isEmpty) {
+      return const Center(child: Text('No supplier orders to collect yet',
+          style: TextStyle(color: _kSub, fontSize: 15)));
+    }
+
+    return LayoutBuilder(builder: (_, constraints) {
+      final maxW = constraints.maxWidth >= 900 ? 700.0 : double.infinity;
+      return Align(
+        alignment: Alignment.topCenter,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: maxW),
+          child: ListView.builder(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+            itemCount: _suppliers.length,
+            itemBuilder: (_, i) => _buildSupplierAccordionRow(_suppliers[i], isAdmin),
+          ),
+        ),
+      );
+    });
+  }
+
+  // Dot colour constants for the 3-state indicator.
+  static const _kDotGreen       = Color(0xFF1B7A43); // confirmed/sent
+  static const _kDotLightYellow = Color(0xFFFEF3C7); // counting in progress
+  static const _kDotYellow      = Color(0xFFFCD34D); // nothing started yet
+  static const _kDotBorderLight = Color(0xFFF59E0B); // border for yellow tones
+
+  Widget _buildSupplierAccordionRow(String name, bool isAdmin) {
+    final isExpanded = _selectedSupplier == name;
+    final dot = _supplierDotMap[name] ?? 'yellow';
+    final dotFill   = dot == 'green' ? _kDotGreen
+        : dot == 'light_yellow' ? _kDotLightYellow
+        : _kDotYellow;
+    final dotBorder = dot == 'green' ? _kDotGreen : _kDotBorderLight;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: isExpanded ? _kGreen : _kBorder),
+          boxShadow: [BoxShadow(
+              color: Colors.black.withValues(alpha: 0.04),
+              blurRadius: 6, offset: const Offset(0, 2))],
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          // ── Header row — tap to toggle ────────────────────────────────────
+          InkWell(
+            borderRadius: BorderRadius.vertical(
+              top: const Radius.circular(12),
+              bottom: Radius.circular(isExpanded ? 0 : 12),
+            ),
+            onTap: () {
+              RenderLog.write('c142_expand',
+                  'supplier=$name;expanded=${isExpanded ? 'n' : 'y'}');
+              if (isExpanded) {
+                setState(() { _selectedSupplier = null; _items = []; });
+              } else {
+                setState(() => _selectedSupplier = name);
+                _loadBox(name);
+              }
+            },
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              child: Row(children: [
+                Expanded(
+                  child: Text(name,
+                      style: TextStyle(
+                        fontSize: 15, fontWeight: FontWeight.w600,
+                        color: isExpanded ? _kGreen : _kText,
+                      ),
+                      maxLines: 2, overflow: TextOverflow.ellipsis),
+                ),
+                const SizedBox(width: 12),
+                // Status dot
+                Container(
+                  width: 12, height: 12,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: dotFill,
+                    border: Border.all(color: dotBorder, width: 1.5),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Icon(
+                  isExpanded
+                      ? Icons.keyboard_arrow_up_rounded
+                      : Icons.keyboard_arrow_down_rounded,
+                  size: 18, color: _kSub,
+                ),
+              ]),
+            ),
+          ),
+
+          // ── Expanded content — AnimatedSize for smooth open/close ─────────
+          AnimatedSize(
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeInOut,
+            child: isExpanded
+                ? Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                    const Divider(height: 1, color: _kBorder),
+                    _buildNarrowVoiceBar(isAdmin),
+                    if (_items.isNotEmpty) _buildNarrowProgressRow(),
+                    const SizedBox(height: 8),
+                    if (_loadingBox)
+                      const Padding(
+                        padding: EdgeInsets.all(24),
+                        child: Center(child: CircularProgressIndicator(
+                            color: _kGreen, strokeWidth: 2)),
+                      )
+                    else if (_items.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.fromLTRB(16, 12, 16, 16),
+                        child: Text('No items in this box',
+                            style: TextStyle(color: _kSub, fontSize: 14)),
+                      )
+                    else
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(maxHeight: 500),
+                        child: _buildNarrowItemList(),
+                      ),
+                  ])
+                : const SizedBox.shrink(),
+          ),
+        ]),
+      ),
+    );
+  }
+
   // ── BUILD ───────────────────────────────────────────────────────────────────
 
   @override
@@ -1751,10 +1962,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       final _cw = constraints.maxWidth;
       final _band = _cw < 340 ? 'verySmall' : _cw < 400 ? 'small' : _cw < 600 ? 'medium' : _cw < 900 ? 'large' : 'desktop';
       RenderLog.write('c138_size_band', 'band=$_band;w=${_cw.toInt()}');
-      if (constraints.maxWidth >= 900) {
-        return _buildCollectWide(isAdmin);
-      }
-      return _buildCollectNarrow(isAdmin);
+      // #142: accordion list for all widths
+      return _buildCollectList(isAdmin);
     });
   }
 

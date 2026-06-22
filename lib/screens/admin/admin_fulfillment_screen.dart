@@ -448,7 +448,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c147_label', 'text=Collected and sent to warehouse'); // static: locked label renamed
     RenderLog.write('c148_ready', 'collect_v7=y'); // static: #148 wide/mobile branch restored
     RenderLog.write('c149_ready', 'collect_v8=y'); // static: #149 pinned action bar above bottom nav
-    RenderLog.write('c150_ready', 'collect_v9=y'); // static: #150 unified supplier dropdown container
     // #85: agent button present — written in initState (IndexedStack always mounts)
     RenderLog.write('change_85_agent_button_present', '1');
     RenderLog.write('change_86_voice_card_present', '1');
@@ -1810,7 +1809,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       RenderLog.write('c149_list_pad', 'bottom_pad=0');
     }
     RenderLog.write('c149_web_untouched', 'wide_layout=unchanged');
-    RenderLog.write('c150_web_untouched', 'wide_layout=unchanged');
 
     return LayoutBuilder(builder: (_, constraints) {
       final maxW = constraints.maxWidth >= 900 ? 700.0 : double.infinity;
@@ -1831,18 +1829,12 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
               ),
             ),
           ),
-          // #149/#150: pinned action bar — static above bottom nav; white bg reads as card footer.
+          // #149: pinned action bar — static, always above bottom nav, never scrolls away.
           if (showPinnedBar) ...[
-            Container(
-              decoration: const BoxDecoration(
-                color: Colors.white,
-                border: Border(top: BorderSide(color: _kBorder)),
-              ),
+            const Divider(height: 1, color: _kBorder),
+            Padding(
               padding: EdgeInsets.fromLTRB(16, 12, 16, 12 + safeBottom),
-              child: Builder(builder: (_) {
-                RenderLog.write('c150_footer_attached', 'attached=y;pinned=y');
-                return _buildConfirmFooter(locked);
-              }),
+              child: _buildConfirmFooter(locked),
             ),
           ],
         ],
@@ -2027,11 +2019,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             clipBehavior: Clip.antiAlias,
             child: isExpanded
                 ? Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                    // #150: no divider — header and body are one continuous surface.
-                    Builder(builder: (_) {
-                      RenderLog.write('c150_unified_container', 'one_surface=y;inner_border=none;header_body_split=n');
-                      return const SizedBox.shrink();
-                    }),
+                    const Divider(height: 1, color: _kBorder),
                     _buildNarrowVoiceBar(isAdmin),
                     if (_items.isNotEmpty) _buildNarrowProgressRow(),
                     const SizedBox(height: 8),

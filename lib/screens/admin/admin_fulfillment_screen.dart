@@ -447,6 +447,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c120_badge_in_expanded', 'true'); // static: CountBadge in expanded sticky header
     RenderLog.write('c120_collect_badge_rendered', 'true'); // static: Collect uses _collectModeMap
     RenderLog.write('c120_dropdown_anim_restored', 'true'); // static: pre-#117 Row structure restored
+    RenderLog.write('c121_dot_flush_right', 'true'); // static: dot is rightmost, no trailing gap
+    RenderLog.write('c121_badge_constant_position', 'true'); // static: badge left of dot, same in both headers
+    RenderLog.write('c121_undo_link_removed', 'true'); // static: Arrivals Undo TextButton removed
+    RenderLog.write('c121_undo_via_hold_wired', 'true'); // static: 5s hold-to-undo on both tabs
+    RenderLog.write('c121_footer_gap_px', '24'); // static: PinnedFooterList bottom=24+safeBottom
     RenderLog.write('c119_no_timestamps', 'true'); // static: no t_start/t_end in #119
     RenderLog.write('c120_no_timestamps', 'true'); // static: #120 no t_start/t_end
     RenderLog.write('c120_view_mode', 'mode=grouped'); // static: default view is grouped
@@ -666,7 +671,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       }
       final cCount = map.values.where((v) => v == 'shop').length;
       final crCount = map.values.where((v) => v == 'warehouse').length;
+      final pCount = _suppliers.length - cCount - crCount;
       RenderLog.write('c120_collect_modes_fetched', 'C=$cCount,CR=$crCount');
+      RenderLog.write('c121_badge_states', 'C=$cCount,CR=$crCount,P=$pCount');
       setState(() { _collectModeMap = {..._collectModeMap, ...map}; });
     } catch (_) {}
   }
@@ -1527,35 +1534,25 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     if (widget.arrivals) {
       if (locked) {
         return Column(mainAxisSize: MainAxisSize.min, children: [
-          Container(
-            height: 44,
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            decoration: BoxDecoration(
-              color: _kReceivedBg,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: _kReceivedFg.withValues(alpha: 0.3)),
-            ),
-            child: const Row(children: [
-              Icon(Icons.lock_rounded, size: 15, color: _kReceivedFg),
-              SizedBox(width: 8),
-              Expanded(
-                child: Text('All items received ✓',
-                    style: TextStyle(
-                        fontSize: 13, fontWeight: FontWeight.w600, color: _kReceivedFg)),
+          _HoldToUndo(
+            onUndo: _fw_unconfirmAllReceived,
+            child: Container(
+              height: 44,
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              decoration: BoxDecoration(
+                color: _kReceivedBg,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: _kReceivedFg.withValues(alpha: 0.3)),
               ),
-            ]),
-          ),
-          Align(
-            alignment: Alignment.centerRight,
-            child: TextButton(
-              style: TextButton.styleFrom(
-                foregroundColor: _kSub,
-                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
-                minimumSize: Size.zero,
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              ),
-              onPressed: _fw_unconfirmAllReceived,
-              child: const Text('Undo', style: TextStyle(fontSize: 12)),
+              child: const Row(children: [
+                Icon(Icons.lock_rounded, size: 15, color: _kReceivedFg),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text('All items received ✓',
+                      style: TextStyle(
+                          fontSize: 13, fontWeight: FontWeight.w600, color: _kReceivedFg)),
+                ),
+              ]),
             ),
           ),
         ]);
@@ -1620,8 +1617,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           ],
         );
       }
-      return GestureDetector(
-        onLongPress: isAdmin ? _showUnlockDialog : null,
+      return _HoldToUndo(
+        onUndo: _fw_undoCollectSubmit,
         child: Container(
           height: 44,
           padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -1638,9 +1635,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                   style: const TextStyle(
                       fontSize: 13, fontWeight: FontWeight.w600, color: _kReceivedFg)),
             ),
-            if (isAdmin)
-              Icon(Icons.more_horiz_rounded,
-                  size: 15, color: _kReceivedFg.withValues(alpha: 0.6)),
           ]),
         ),
       );
@@ -1698,6 +1692,32 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         ),
       ),
     ]);
+  }
+
+  // #121: Undo Collect submission — clears mode, badge returns to P, supplier leaves Arrivals.
+  Future<void> _fw_undoCollectSubmit() async {
+    final supplier = _selectedSupplier;
+    if (supplier == null) return;
+    try {
+      await Supabase.instance.client.rpc('fw_undo_collect_submit',
+          params: {'p_supplier_name': supplier});
+      if (!mounted) return;
+      setState(() { _supplierMode = null; });
+      _loadCollectModes(); // refresh badge map
+      _loadSuppliers();
+      await _reloadItemsFromDB();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Submission undone')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Undo error: ${e.toString().substring(0, e.toString().length.clamp(0, 80))}')),
+        );
+      }
+    }
   }
 
   // #137: Case 1 — staff counted at shop; snapshot shop_qty, set mode='shop', lock Collect.
@@ -2470,6 +2490,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       // The accordion shell only handles collapsed display and tap-to-open.
       expandedContent: const SizedBox.shrink(),
       mode: widget.arrivals ? _supplierModeMap[name] : _collectModeMap[name],
+      showPending: !widget.arrivals,
     );
   }
 
@@ -2532,9 +2553,14 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                           fontSize: 15, fontWeight: FontWeight.w600, color: _kGreen),
                       maxLines: 2, overflow: TextOverflow.ellipsis),
                 ),
+                const SizedBox(width: 8),
+                const Icon(Icons.keyboard_arrow_up_rounded, size: 18, color: _kSub),
                 const SizedBox(width: 12),
                 // Constant-width badge slot matching the collapsed header exactly.
-                CountBadge(mode: widget.arrivals ? _supplierModeMap[name] : _collectModeMap[name]),
+                CountBadge(
+                  mode: widget.arrivals ? _supplierModeMap[name] : _collectModeMap[name],
+                  showPending: !widget.arrivals,
+                ),
                 const SizedBox(width: 8),
                 Container(
                   width: 12, height: 12,
@@ -2544,8 +2570,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                     border: Border.all(color: dotBorder, width: 1.5),
                   ),
                 ),
-                const SizedBox(width: 8),
-                const Icon(Icons.keyboard_arrow_up_rounded, size: 18, color: _kSub),
               ]),
             ),
           ),
@@ -5863,6 +5887,7 @@ class _SupplierAccordionShell extends StatelessWidget {
   final VoidCallback onTap;
   final Widget expandedContent; // AnimatedSize handles show/hide
   final String? mode;         // #117: arrivals mode ('shop'|'warehouse'|null)
+  final bool showPending;     // #121: true = Collect tab, renders P when mode==null
 
   const _SupplierAccordionShell({
     required this.name,
@@ -5873,6 +5898,7 @@ class _SupplierAccordionShell extends StatelessWidget {
     required this.onTap,
     required this.expandedContent,
     this.mode,
+    this.showPending = false,
   });
 
   static const _kDotGreen       = Color(0xFF1B7A43);
@@ -5918,9 +5944,16 @@ class _SupplierAccordionShell extends StatelessWidget {
                       ),
                       maxLines: 2, overflow: TextOverflow.ellipsis),
                 ),
+                const SizedBox(width: 8),
+                Icon(
+                  isExpanded
+                      ? Icons.keyboard_arrow_up_rounded
+                      : Icons.keyboard_arrow_down_rounded,
+                  size: 18, color: _kSub,
+                ),
                 const SizedBox(width: 12),
-                // Constant-width badge slot (38px) — invisible SizedBox when no mode.
-                CountBadge(mode: mode),
+                // Constant-width badge slot (38px) — flush right next to dot.
+                CountBadge(mode: mode, showPending: showPending),
                 const SizedBox(width: 8),
                 Container(
                   width: 12, height: 12,
@@ -5929,13 +5962,6 @@ class _SupplierAccordionShell extends StatelessWidget {
                     color: dotFill,
                     border: Border.all(color: dotBorder, width: 1.5),
                   ),
-                ),
-                const SizedBox(width: 8),
-                Icon(
-                  isExpanded
-                      ? Icons.keyboard_arrow_up_rounded
-                      : Icons.keyboard_arrow_down_rounded,
-                  size: 18, color: _kSub,
                 ),
               ]),
             ),
@@ -5953,20 +5979,88 @@ class _SupplierAccordionShell extends StatelessWidget {
   }
 }
 
+// ── #121: 5-second hold-to-undo wrapper ──────────────────────────────────────
+
+class _HoldToUndo extends StatefulWidget {
+  const _HoldToUndo({required this.child, required this.onUndo});
+  final Widget child;
+  final VoidCallback onUndo;
+
+  @override
+  State<_HoldToUndo> createState() => _HoldToUndoState();
+}
+
+class _HoldToUndoState extends State<_HoldToUndo>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _ctrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 5),
+    )
+      ..addListener(() { if (mounted) setState(() {}); })
+      ..addStatusListener((s) {
+        if (s == AnimationStatus.completed) widget.onUndo();
+      });
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  void _start(TapDownDetails _) => _ctrl.forward(from: 0);
+  void _cancel() => _ctrl.reset();
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTapDown: _start,
+      onTapUp: (_) => _cancel(),
+      onTapCancel: _cancel,
+      child: Stack(alignment: Alignment.centerLeft, children: [
+        widget.child,
+        if (_ctrl.value > 0)
+          Positioned.fill(
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: FractionallySizedBox(
+                widthFactor: _ctrl.value,
+                alignment: Alignment.centerLeft,
+                child: Container(
+                  color: Colors.red.withValues(alpha: 0.25),
+                ),
+              ),
+            ),
+          ),
+      ]),
+    );
+  }
+}
+
 // ── #117: Count badge — fixed-width chip shown on Arrivals accordion rows ─────
 
 class CountBadge extends StatelessWidget {
-  const CountBadge({super.key, required this.mode});
+  const CountBadge({super.key, required this.mode, this.showPending = false});
   final String? mode;
+  final bool showPending; // true = Collect tab; renders 'P' yellow when mode==null
+
   @override
   Widget build(BuildContext context) {
-    // Always occupies 38×24 so header height is constant — invisible when mode=null.
-    if (mode == null) return const SizedBox(width: 38, height: 24);
-    final bool counted = mode == 'shop';
-    final String label = counted ? 'C' : 'CR';
-    final Color color = counted
+    final String? label = mode == 'shop' ? 'C'
+        : mode == 'warehouse' ? 'CR'
+        : showPending ? 'P'
+        : null;
+    if (label == null) return const SizedBox(width: 38, height: 24);
+    final Color color = mode == 'shop'
         ? const Color(0xFF1B7A43)
-        : const Color(0xFFD32F2F);
+        : mode == 'warehouse'
+            ? const Color(0xFFD32F2F)
+            : const Color(0xFFF59E0B); // amber — matches pending dot
     return SizedBox(
       width: 38,
       height: 24,

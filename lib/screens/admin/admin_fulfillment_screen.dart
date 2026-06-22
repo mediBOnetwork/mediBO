@@ -18,6 +18,7 @@ import '../../user_state.dart';
 import '../../services/voice_receive_service.dart';
 import '../../supabase_config.dart' show SupabaseConfig;
 import 'voice_receive.dart';
+import '../../widgets/pinned_footer_list.dart';
 
 // #93: JS interop — mediboCheckLoudness is defined in web/index.html
 @JS('mediboCheckLoudness')
@@ -2379,8 +2380,19 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                       style: TextStyle(color: _kSub, fontSize: 14)),
                 )
               else
-                // #156: arrivals gets its own confirm footer via _buildConfirmFooter arrivals branch
-                _buildNarrowItemList(showFooter: true, shrinkWrap: true),
+                // #113: PinnedFooterList pushes footer to viewport bottom when items are few
+                Builder(builder: (ctx) {
+                  final locked = _boxLocked;
+                  RenderLog.write('c113_pinned_footer',
+                      'items=${_items.length};type=${widget.arrivals ? 'arrivals' : 'collect'};locked=${(widget.arrivals ? _arrivalsLocked : locked) ? 'y' : 'n'}');
+                  return PinnedFooterList(
+                    minHeight: MediaQuery.of(ctx).size.height * 0.55,
+                    items: _items.map(_buildItemTile).toList(),
+                    footer: _buildConfirmFooter(widget.arrivals ? _arrivalsLocked : locked),
+                    footerPadding: EdgeInsets.fromLTRB(
+                        16, 12, 16, 12 + MediaQuery.of(ctx).padding.bottom),
+                  );
+                }),
             ])
           : const SizedBox.shrink(),
     );
@@ -2613,59 +2625,61 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         if (showFooter && i == _items.length)
           return _buildConfirmFooter(widget.arrivals ? _arrivalsLocked : locked); // #156
 
-        final item     = _items[i];
-        final state    = item['fulfillment_state']?.toString() ?? 'pending';
-        final name     = item['product_name']?.toString() ?? '—';
-        final ordQty   = (item['ordered_qty'] as num?)?.toInt() ?? 0;
-        final recQty   = (item['received_qty'] as num?)?.toInt() ?? 0;
-        final packType = item['pack_type']?.toString() ?? '';
-        final imageUrl = item['image_url']?.toString();
+        return _buildItemTile(_items[i]);
+      },
+    );
+  }
 
-        return GestureDetector(
-          onTap: (widget.arrivals && _arrivalsLocked) ? null : () => _showItemSheet(item), // #156
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            decoration: BoxDecoration(
-              color: _kCard,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(
-                color: state == 'pending' ? _kBorder : (_stateBgMap[state] ?? _kBorder),
-              ),
-            ),
-            child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-              _FulfilImageTile(imageUrl, size: 40),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min, children: [
-                  Text(name,
-                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
-                      maxLines: 1, overflow: TextOverflow.ellipsis),
-                  const SizedBox(height: 1),
-                  Text(packType.isNotEmpty ? packType : '$recQty/$ordQty',
-                      style: const TextStyle(fontSize: 11, color: _kSub),
-                      maxLines: 1, overflow: TextOverflow.ellipsis),
-                ]),
-              ),
-              const SizedBox(width: 8),
-              Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
-                Text('$recQty/$ordQty',
-                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText)),
-                const SizedBox(height: 2),
-                _StatePill(state),
-                // #157: mismatch indicator — shows but never blocks
-                if (widget.arrivals && item['count_mismatch'] == true) ...[
-                  const SizedBox(height: 2),
-                  Text(
-                    'shop ${(item['shop_qty'] as num?)?.toInt() ?? '?'}',
-                    style: const TextStyle(fontSize: 10, color: Color(0xFF92400E)),
-                  ),
-                ],
-              ]),
+  // #113: extracted so PinnedFooterList can pass items as List<Widget>
+  Widget _buildItemTile(Map<String, dynamic> item) {
+    final state    = item['fulfillment_state']?.toString() ?? 'pending';
+    final name     = item['product_name']?.toString() ?? '—';
+    final ordQty   = (item['ordered_qty'] as num?)?.toInt() ?? 0;
+    final recQty   = (item['received_qty'] as num?)?.toInt() ?? 0;
+    final packType = item['pack_type']?.toString() ?? '';
+    final imageUrl = item['image_url']?.toString();
+    return GestureDetector(
+      onTap: (widget.arrivals && _arrivalsLocked) ? null : () => _showItemSheet(item),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: _kCard,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: state == 'pending' ? _kBorder : (_stateBgMap[state] ?? _kBorder),
+          ),
+        ),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+          _FulfilImageTile(imageUrl, size: 40),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min, children: [
+              Text(name,
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
+                  maxLines: 1, overflow: TextOverflow.ellipsis),
+              const SizedBox(height: 1),
+              Text(packType.isNotEmpty ? packType : '$recQty/$ordQty',
+                  style: const TextStyle(fontSize: 11, color: _kSub),
+                  maxLines: 1, overflow: TextOverflow.ellipsis),
             ]),
           ),
-        );
-      },
+          const SizedBox(width: 8),
+          Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
+            Text('$recQty/$ordQty',
+                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText)),
+            const SizedBox(height: 2),
+            _StatePill(state),
+            if (widget.arrivals && item['count_mismatch'] == true) ...[
+              const SizedBox(height: 2),
+              Text(
+                'shop ${(item['shop_qty'] as num?)?.toInt() ?? '?'}',
+                style: const TextStyle(fontSize: 10, color: Color(0xFF92400E)),
+              ),
+            ],
+          ]),
+        ]),
+      ),
     );
   }
 

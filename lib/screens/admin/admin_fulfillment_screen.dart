@@ -1920,135 +1920,76 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   Widget _buildSupplierAccordionRow(String name, bool isAdmin) {
     final isExpanded = _selectedSupplier == name;
     final dot = _supplierDotMap[name] ?? 'yellow';
-    final dotFill   = dot == 'green' ? _kDotGreen
-        : dot == 'light_yellow' ? _kDotLightYellow
-        : _kDotYellow;
-    final dotBorder = dot == 'green' ? _kDotGreen : _kDotBorderLight;
     // #147 FIX A: per-row GlobalKey for Scrollable.ensureVisible (header pin)
     final rowKey = _rowKeys.putIfAbsent(name, () => GlobalKey());
 
-    // #152 TWEAK 2: larger bottom gap when any supplier is open.
-    final bottomGap = _selectedSupplier != null ? 16.0 : 8.0;
-
-    return Padding(
-      key: rowKey,
-      padding: EdgeInsets.only(bottom: bottomGap),
-      child: Container(
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: _kBorder),
-          boxShadow: [BoxShadow(
-              color: Colors.black.withValues(alpha: 0.04),
-              blurRadius: 6, offset: const Offset(0, 2))],
-        ),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          // ── Header row — tap to toggle ────────────────────────────────────
-          InkWell(
-            borderRadius: BorderRadius.vertical(
-              top: const Radius.circular(12),
-              bottom: Radius.circular(isExpanded ? 0 : 12),
-            ),
-            onTap: () {
-              RenderLog.write('c142_expand',
-                  'supplier=$name;expanded=${isExpanded ? 'n' : 'y'}');
-              if (isExpanded) {
-                // #152 TWEAK 3: restore saved scroll position on close.
-                setState(() { _selectedSupplier = null; _items = []; });
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  if (!mounted) return;
-                  if (_listScrollCtrl.hasClients) {
-                    _listScrollCtrl.animateTo(
-                      _savedScrollOffset,
-                      duration: const Duration(milliseconds: 280),
-                      curve: Curves.easeInOutCubic,
-                    );
-                  }
-                });
-              } else {
-                // #152 TWEAK 3: save offset, then scroll to top synchronized with open.
-                _savedScrollOffset = _listScrollCtrl.hasClients ? _listScrollCtrl.offset : 0.0;
-                setState(() => _selectedSupplier = name);
-                _loadBox(name);
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  if (!mounted) return;
-                  // Scroll to top — fires in same post-frame as AnimatedSize starts opening.
-                  if (_listScrollCtrl.hasClients) {
-                    _listScrollCtrl.animateTo(
-                      0.0,
-                      duration: const Duration(milliseconds: 280),
-                      curve: Curves.easeInOutCubic,
-                    );
-                  }
-                  RenderLog.write('c152_sync_scroll', 'open_scroll_top=y;same_frame=y;close_restore=y');
-                  RenderLog.write('c147_header_pin', 'autoscroll=y;ms=280');
-                  RenderLog.write('c147_open_anim',
-                      'type=size_fade;ms=280;curve=easeInOutCubic;flip=n');
-                });
-              }
-            },
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-              child: Row(children: [
-                Expanded(
-                  child: Text(name,
-                      style: TextStyle(
-                        fontSize: 15, fontWeight: FontWeight.w600,
-                        color: isExpanded ? _kGreen : _kText,
-                      ),
-                      maxLines: 2, overflow: TextOverflow.ellipsis),
-                ),
-                const SizedBox(width: 12),
-                // Status dot
-                Container(
-                  width: 12, height: 12,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: dotFill,
-                    border: Border.all(color: dotBorder, width: 1.5),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Icon(
-                  isExpanded
-                      ? Icons.keyboard_arrow_up_rounded
-                      : Icons.keyboard_arrow_down_rounded,
-                  size: 18, color: _kSub,
-                ),
-              ]),
-            ),
-          ),
-
-          // ── Expanded content — AnimatedSize for smooth open/close ─────────
-          // #151: no Divider (unified container); footer in-scroll (showFooter:true,shrinkWrap).
-          AnimatedSize(
-            duration: const Duration(milliseconds: 280),
-            curve: Curves.easeInOutCubic,
-            clipBehavior: Clip.antiAlias,
-            child: isExpanded
-                ? Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                    _buildNarrowVoiceBar(isAdmin),
-                    if (_items.isNotEmpty) _buildNarrowProgressRow(),
-                    const SizedBox(height: 8),
-                    if (_loadingBox)
-                      const Padding(
-                        padding: EdgeInsets.all(24),
-                        child: Center(child: CircularProgressIndicator(
-                            color: _kGreen, strokeWidth: 2)),
-                      )
-                    else if (_items.isEmpty)
-                      const Padding(
-                        padding: EdgeInsets.fromLTRB(16, 12, 16, 16),
-                        child: Text('No items in this box',
-                            style: TextStyle(color: _kSub, fontSize: 14)),
-                      )
-                    else
-                      _buildNarrowItemList(showFooter: true, shrinkWrap: true),
-                  ])
-                : const SizedBox.shrink(),
-          ),
-        ]),
-      ),
+    // #153: outer shell is shared with Arrivals; only expandedContent differs.
+    return _SupplierAccordionShell(
+      name: name,
+      dot: dot,
+      isExpanded: isExpanded,
+      anyExpanded: _selectedSupplier != null,
+      rowKey: rowKey,
+      onTap: () {
+        RenderLog.write('c142_expand',
+            'supplier=$name;expanded=${isExpanded ? 'n' : 'y'}');
+        if (isExpanded) {
+          // #152 TWEAK 3: restore saved scroll position on close.
+          setState(() { _selectedSupplier = null; _items = []; });
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            if (_listScrollCtrl.hasClients) {
+              _listScrollCtrl.animateTo(
+                _savedScrollOffset,
+                duration: const Duration(milliseconds: 280),
+                curve: Curves.easeInOutCubic,
+              );
+            }
+          });
+        } else {
+          // #152 TWEAK 3: save offset, scroll to top synchronized with open.
+          _savedScrollOffset = _listScrollCtrl.hasClients ? _listScrollCtrl.offset : 0.0;
+          setState(() => _selectedSupplier = name);
+          _loadBox(name);
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            if (_listScrollCtrl.hasClients) {
+              _listScrollCtrl.animateTo(
+                0.0,
+                duration: const Duration(milliseconds: 280),
+                curve: Curves.easeInOutCubic,
+              );
+            }
+            RenderLog.write('c152_sync_scroll', 'open_scroll_top=y;same_frame=y;close_restore=y');
+            RenderLog.write('c147_header_pin', 'autoscroll=y;ms=280');
+            RenderLog.write('c147_open_anim',
+                'type=size_fade;ms=280;curve=easeInOutCubic;flip=n');
+          });
+        }
+      },
+      // Only build expanded body when actually expanded — avoids building voice bar
+      // for every collapsed row on every rebuild.
+      expandedContent: isExpanded
+          ? Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              _buildNarrowVoiceBar(isAdmin),
+              if (_items.isNotEmpty) _buildNarrowProgressRow(),
+              const SizedBox(height: 8),
+              if (_loadingBox)
+                const Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Center(child: CircularProgressIndicator(
+                      color: _kGreen, strokeWidth: 2)),
+                )
+              else if (_items.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(16, 12, 16, 16),
+                  child: Text('No items in this box',
+                      style: TextStyle(color: _kSub, fontSize: 14)),
+                )
+              else
+                _buildNarrowItemList(showFooter: true, shrinkWrap: true),
+            ])
+          : const SizedBox.shrink(),
     );
   }
 
@@ -5282,6 +5223,103 @@ class _BagLabelsInlineState extends State<_BagLabelsInline> {
   }
 }
 
+// ── #153: SHARED ACCORDION SHELL — used by Collect AND Arrivals ───────────────
+// Both tabs instantiate this widget; only expandedContent differs.
+
+class _SupplierAccordionShell extends StatelessWidget {
+  final String name;
+  final String dot;           // 'green' | 'light_yellow' | 'yellow'
+  final bool isExpanded;
+  final bool anyExpanded;     // any supplier open → bigger bottom gap
+  final GlobalKey rowKey;
+  final VoidCallback onTap;
+  final Widget expandedContent; // AnimatedSize handles show/hide
+
+  const _SupplierAccordionShell({
+    required this.name,
+    required this.dot,
+    required this.isExpanded,
+    required this.anyExpanded,
+    required this.rowKey,
+    required this.onTap,
+    required this.expandedContent,
+  });
+
+  static const _kDotGreen       = Color(0xFF1B7A43);
+  static const _kDotLightYellow = Color(0xFFFEF3C7);
+  static const _kDotYellow      = Color(0xFFFCD34D);
+  static const _kDotBorderLight = Color(0xFFF59E0B);
+
+  @override
+  Widget build(BuildContext context) {
+    final dotFill   = dot == 'green'        ? _kDotGreen
+                    : dot == 'light_yellow' ? _kDotLightYellow
+                    : _kDotYellow;
+    final dotBorder = dot == 'green' ? _kDotGreen : _kDotBorderLight;
+    final bottomGap = anyExpanded ? 16.0 : 8.0;
+
+    return Padding(
+      key: rowKey,
+      padding: EdgeInsets.only(bottom: bottomGap),
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: _kBorder),
+          boxShadow: [BoxShadow(
+              color: Colors.black.withValues(alpha: 0.04),
+              blurRadius: 6, offset: const Offset(0, 2))],
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          InkWell(
+            borderRadius: BorderRadius.vertical(
+              top: const Radius.circular(12),
+              bottom: Radius.circular(isExpanded ? 0 : 12),
+            ),
+            onTap: onTap,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              child: Row(children: [
+                Expanded(
+                  child: Text(name,
+                      style: TextStyle(
+                        fontSize: 15, fontWeight: FontWeight.w600,
+                        color: isExpanded ? _kGreen : _kText,
+                      ),
+                      maxLines: 2, overflow: TextOverflow.ellipsis),
+                ),
+                const SizedBox(width: 12),
+                Container(
+                  width: 12, height: 12,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: dotFill,
+                    border: Border.all(color: dotBorder, width: 1.5),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Icon(
+                  isExpanded
+                      ? Icons.keyboard_arrow_up_rounded
+                      : Icons.keyboard_arrow_down_rounded,
+                  size: 18, color: _kSub,
+                ),
+              ]),
+            ),
+          ),
+          // AnimatedSize — #153 shared; same 280ms/easeInOutCubic/antiAlias as Collect.
+          AnimatedSize(
+            duration: const Duration(milliseconds: 280),
+            curve: Curves.easeInOutCubic,
+            clipBehavior: Clip.antiAlias,
+            child: isExpanded ? expandedContent : const SizedBox.shrink(),
+          ),
+        ]),
+      ),
+    );
+  }
+}
+
 // ── ARRIVALS SCREEN ───────────────────────────────────────────────────────────
 
 class _ArrivalsScreen extends StatefulWidget {
@@ -5298,13 +5336,18 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen>
   bool _loading = true;
   String? _error;
   final Set<String> _marking = {};
-  bool _redesignLogged = false;
 
   // #137: fw_get_state per supplier
   final Map<String, Map<String, dynamic>> _fwStates = {};
   final Set<String> _fwLoading = {};
   final Set<String> _markingItems = {}; // "supplier|product_id"
   final Set<String> _markingAll   = {}; // supplier names with in-flight mark-all
+
+  // #153: accordion state — mirrors Collect #152 behaviors
+  String? _selectedSupplier;
+  final ScrollController _listScrollCtrl = ScrollController();
+  final Map<String, GlobalKey> _rowKeys = {};
+  double _savedScrollOffset = 0.0;
 
   // realtime + debounce
   RealtimeChannel? _channel;
@@ -5341,6 +5384,7 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen>
     _pollTimer?.cancel();
     _channel?.unsubscribe();
     _channel = null;
+    _listScrollCtrl.dispose();
     super.dispose();
   }
 
@@ -5415,6 +5459,11 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen>
       setState(() { _suppliers = suppliers; _loading = false; _error = null; });
       RenderLog.write('c140_arrivals_source', 'rpc=fw_list_arrivals;count=${suppliers.length}');
       RenderLog.write('arrivals_area_rendered', '${suppliers.length}');
+      RenderLog.write('c153_ready', 'arrivals_v4=y');
+      RenderLog.write('c153_arrivals_source', 'src=fw_list_arrivals');
+      RenderLog.write('c153_shared_widget', 'collect=y;arrivals=y;same_widget=y');
+      RenderLog.write('c153_arrivals_layout', 'matches_collect=y;footer=receiving');
+      RenderLog.write('c153_footer_diff', 'collect_footer=two_buttons;arrivals_footer=mark_count');
       // Load fw_get_state for items detail (non-blocking)
       for (final s in suppliers) {
         final name = s['supplier_name']?.toString();
@@ -5572,8 +5621,17 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen>
       ));
     }
 
+    // #153: accordion list — same structure as Collect (shared _SupplierAccordionShell).
+    final supplierNames = _suppliers
+        .map((s) => s['supplier_name']?.toString() ?? '')
+        .where((n) => n.isNotEmpty)
+        .toList();
+
+    final isOpen = _selectedSupplier != null;
+    // #152 TWEAK 4 equivalent: show only open supplier when expanded.
+    final displayList = isOpen ? [_selectedSupplier!] : supplierNames;
+
     return Column(children: [
-      // ── Header row: supplier count ────────────────────────────────────────────
       Padding(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
         child: Row(children: [
@@ -5581,21 +5639,19 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen>
               style: const TextStyle(fontSize: 13, color: _kSub, fontWeight: FontWeight.w500)),
         ]),
       ),
-
-      const SizedBox(height: 8),
-      // #138: on large/desktop constrain list to 800px and center; scales on all sizes.
+      const SizedBox(height: 4),
       Expanded(
-        child: LayoutBuilder(builder: (lbCtx, lbConstraints) {
-          final maxW = lbConstraints.maxWidth >= 900 ? 800.0 : double.infinity;
+        child: LayoutBuilder(builder: (_, lbC) {
+          final maxW = lbC.maxWidth >= 900 ? 700.0 : double.infinity;
           return Align(
             alignment: Alignment.topCenter,
             child: ConstrainedBox(
               constraints: BoxConstraints(maxWidth: maxW),
-              child: ListView.separated(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-                itemCount: _suppliers.length,
-                separatorBuilder: (_, __) => const SizedBox(height: 8),
-                itemBuilder: (_, i) => _buildSupplierCard(_suppliers[i]),
+              child: ListView.builder(
+                controller: _listScrollCtrl,
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+                itemCount: displayList.length,
+                itemBuilder: (_, i) => _buildArrivalsAccordionRow(displayList[i]),
               ),
             ),
           );
@@ -5658,176 +5714,233 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen>
     }
   }
 
-  // ── Supplier card — #141 redesign ────────────────────────────────────────────
-  Widget _buildSupplierCard(Map<String, dynamic> supplier) {
-    final name       = supplier['supplier_name']?.toString() ?? '—';
-
-    if (!_redesignLogged) {
-      _redesignLogged = true;
-      RenderLog.write('change_88_arrivals_redesigned', '1');
-      RenderLog.write('c138_arrivals_responsive', 'rows_fit=y;btns_wrap=y');
-      RenderLog.write('c139_arrivals_new', 'old_removed=y');
-      RenderLog.write('c141_cards_redesigned', 'aligned=y'); // #141 redesign proof
-    }
-
-    final fwState     = _fwStates[name];
-    final mode        = fwState?['mode']?.toString();
-    final fullyLocked = fwState?['supplier_fully_locked'] == true;
-    final fwItems     = fwState != null
+  // ── #153: Accordion row — shared shell, Arrivals-specific expanded content ────
+  Widget _buildArrivalsAccordionRow(String name) {
+    final isExpanded   = _selectedSupplier == name;
+    final fwState      = _fwStates[name];
+    final fullyLocked  = fwState?['supplier_fully_locked'] == true;
+    final fwItems      = fwState != null
         ? (fwState['items'] as List? ?? [])
-            .map((i) => Map<String, dynamic>.from(i as Map))
-            .toList()
+            .map((i) => Map<String, dynamic>.from(i as Map)).toList()
         : <Map<String, dynamic>>[];
+    final receivedCount = fwItems.where((i) => i['received_locked'] == true).length;
+    final dot = fullyLocked ? 'green'
+        : receivedCount > 0 ? 'light_yellow'
+        : 'yellow';
+    final rowKey = _rowKeys.putIfAbsent(name, () => GlobalKey());
 
-    // Counts derived from items
-    final totalItems    = fwItems.length;
+    return _SupplierAccordionShell(
+      name: name,
+      dot: dot,
+      isExpanded: isExpanded,
+      anyExpanded: _selectedSupplier != null,
+      rowKey: rowKey,
+      onTap: () {
+        if (isExpanded) {
+          setState(() => _selectedSupplier = null);
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            if (_listScrollCtrl.hasClients) {
+              _listScrollCtrl.animateTo(
+                _savedScrollOffset,
+                duration: const Duration(milliseconds: 280),
+                curve: Curves.easeInOutCubic,
+              );
+            }
+          });
+        } else {
+          _savedScrollOffset = _listScrollCtrl.hasClients ? _listScrollCtrl.offset : 0.0;
+          setState(() => _selectedSupplier = name);
+          if (!_fwStates.containsKey(name) && !_fwLoading.contains(name)) {
+            _loadFwState(name);
+          }
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            if (_listScrollCtrl.hasClients) {
+              _listScrollCtrl.animateTo(
+                0.0,
+                duration: const Duration(milliseconds: 280),
+                curve: Curves.easeInOutCubic,
+              );
+            }
+          });
+        }
+      },
+      expandedContent: isExpanded
+          ? _buildArrivalsExpandedContent(name, fwState, fwItems)
+          : const SizedBox.shrink(),
+    );
+  }
+
+  Widget _buildArrivalsExpandedContent(
+    String name,
+    Map<String, dynamic>? fwState,
+    List<Map<String, dynamic>> fwItems,
+  ) {
+    final mode         = fwState?['mode']?.toString();
+    final fullyLocked  = fwState?['supplier_fully_locked'] == true;
+    final totalItems   = fwItems.length;
     final receivedItems = fwItems.where((i) => i['received_locked'] == true).length;
-    final pendingItems  = totalItems - receivedItems;
-    final isMarkingAll  = _markingAll.contains(name);
-    final useFwUI       = mode != null;
+    final pendingItems = totalItems - receivedItems;
+    final isMarkingAll = _markingAll.contains(name);
+    final isLoading    = _fwLoading.contains(name) && fwItems.isEmpty;
 
-    // Border colour: green-tinted when fully done, amber when active, neutral when awaiting
-    final borderColor = fullyLocked
-        ? _kReceivedFg.withValues(alpha: 0.18)
-        : useFwUI
-            ? _kPendingFg.withValues(alpha: 0.18)
-            : _kBorder;
-
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: borderColor),
-        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 8, offset: const Offset(0, 2))],
-      ),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-
-          // ── Header: name + mode badge + progress ────────────────────────────
-          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Expanded(
-              child: Text(name,
-                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _kText),
-                  maxLines: 2, overflow: TextOverflow.ellipsis),
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      // Primary action button
+      if (mode != null && !fullyLocked)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+          child: SizedBox(
+            height: 44,
+            child: FilledButton.icon(
+              style: FilledButton.styleFrom(
+                backgroundColor: _kGreen,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+              icon: Icon(mode == 'shop' ? Icons.find_replace_rounded : Icons.mic_none_rounded,
+                  size: 17, color: Colors.white),
+              label: Text(
+                mode == 'shop' ? 'Double-check' : 'Count item (voice)',
+                style: const TextStyle(
+                    fontSize: 13, fontWeight: FontWeight.w600, color: Colors.white),
+              ),
+              onPressed: () => _openCountingSheet(name, mode),
             ),
-            const SizedBox(width: 8),
-            // Mode badge
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-              decoration: BoxDecoration(
-                color: fullyLocked ? _kReceivedBg
-                    : useFwUI ? _kPendingBg
-                    : _kBg,
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Text(
-                fullyLocked ? 'All received'
-                    : useFwUI ? (mode == 'shop' ? 'Counted at shop' : 'Count at WH')
-                    : 'Awaiting',
-                style: TextStyle(
-                  fontSize: 11, fontWeight: FontWeight.w700,
-                  color: fullyLocked ? _kReceivedFg
-                      : useFwUI ? _kPendingFg
-                      : _kSub,
-                ),
-              ),
-            ),
-            // Received progress pill (only when mode is known)
-            if (useFwUI && totalItems > 0) ...[
-              const SizedBox(width: 6),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: fullyLocked ? _kReceivedBg : _kBg,
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: _kBorder),
-                ),
-                child: Text('$receivedItems/$totalItems',
-                    style: TextStyle(
-                      fontSize: 11, fontWeight: FontWeight.w600,
-                      color: fullyLocked ? _kReceivedFg : _kSub,
-                    )),
-              ),
-            ],
+          ),
+        ),
+      // Progress bar
+      if (totalItems > 0 && !fullyLocked)
+        _buildArrivalsProgressRow(receivedItems, totalItems),
+      const SizedBox(height: 8),
+      // Items / loading / states
+      if (isLoading)
+        const Padding(
+          padding: EdgeInsets.all(24),
+          child: Center(child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2)),
+        )
+      else if (mode == null)
+        const Padding(
+          padding: EdgeInsets.fromLTRB(16, 4, 16, 16),
+          child: Row(children: [
+            Icon(Icons.hourglass_top_rounded, size: 13, color: _kSub),
+            SizedBox(width: 6),
+            Text('Awaiting Collect decision',
+                style: TextStyle(fontSize: 12, color: _kSub)),
           ]),
+        )
+      else if (fwItems.isEmpty)
+        const Padding(
+          padding: EdgeInsets.fromLTRB(16, 4, 16, 16),
+          child: Text('No items found', style: TextStyle(color: _kSub, fontSize: 14)),
+        )
+      else
+        _buildArrivalsItemList(name, fwItems, pendingItems, isMarkingAll, fullyLocked),
+    ]);
+  }
 
-          if (useFwUI) ...[
-            const SizedBox(height: 12),
+  Widget _buildArrivalsProgressRow(int received, int total) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+        Container(
+          constraints: const BoxConstraints(maxWidth: 110),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          decoration: BoxDecoration(
+            color: _kReceivedBg,
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Text('$received received',
+              style: const TextStyle(
+                  fontSize: 11, fontWeight: FontWeight.w600, color: _kReceivedFg),
+              maxLines: 1, overflow: TextOverflow.clip),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: LinearProgressIndicator(
+            value: total == 0 ? 0.0 : received / total,
+            backgroundColor: _kBorder,
+            color: _kGreen,
+            minHeight: 6,
+            borderRadius: BorderRadius.circular(4),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Text('$received/$total',
+            style: const TextStyle(
+                fontSize: 13, fontWeight: FontWeight.w700, color: _kText)),
+      ]),
+    );
+  }
 
-            // ── Fully received: done state ──────────────────────────────────
-            if (fullyLocked)
-              Row(children: [
-                const Icon(Icons.check_circle_rounded, size: 15, color: _kReceivedFg),
-                const SizedBox(width: 6),
-                const Text('All items received',
-                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _kReceivedFg)),
-              ])
-            else ...[
-              // ── Primary action button (in-place counting) ─────────────────
-              SizedBox(
-                width: double.infinity, height: 44,
-                child: FilledButton.icon(
-                  style: FilledButton.styleFrom(
-                    backgroundColor: _kGreen,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                  ),
-                  icon: Icon(mode == 'shop' ? Icons.find_replace_rounded : Icons.mic_rounded,
-                      size: 17, color: Colors.white),
-                  label: Text(
-                    mode == 'shop' ? 'Double-check (recount)' : 'Count item (voice)',
-                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.white),
-                  ),
-                  onPressed: () => _openCountingSheet(name, mode!),
-                ),
-              ),
+  Widget _buildArrivalsItemList(
+    String name,
+    List<Map<String, dynamic>> items,
+    int pendingItems,
+    bool isMarkingAll,
+    bool fullyLocked,
+  ) {
+    final safeBottom = MediaQuery.of(context).padding.bottom;
+    return ListView.separated(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      padding: EdgeInsets.fromLTRB(16, 4, 16, 16 + safeBottom),
+      itemCount: items.length + 1, // +1 for footer
+      separatorBuilder: (_, __) => const SizedBox(height: 4),
+      itemBuilder: (_, i) {
+        if (i == items.length) {
+          return _buildArrivalsFooter(name, pendingItems, isMarkingAll, fullyLocked);
+        }
+        return _buildFwItemRow(name, items[i]);
+      },
+    );
+  }
 
-              // ── Item rows ──────────────────────────────────────────────────
-              if (fwItems.isNotEmpty) ...[
-                const SizedBox(height: 12),
-                const Divider(height: 1, color: _kBorder),
-                const SizedBox(height: 4),
-                ...fwItems.map((item) => _buildFwItemRow(name, item)),
-              ],
-
-              // ── Mark all received button ───────────────────────────────────
-              if (pendingItems > 0) ...[
-                const SizedBox(height: 8),
-                const Divider(height: 1, color: _kBorder),
-                const SizedBox(height: 8),
-                SizedBox(
-                  width: double.infinity, height: 40,
-                  child: OutlinedButton.icon(
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: _kReceivedFg,
-                      side: BorderSide(color: _kReceivedFg.withValues(alpha: 0.5)),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                    ),
-                    icon: isMarkingAll
-                        ? const SizedBox(width: 14, height: 14,
-                            child: CircularProgressIndicator(color: _kReceivedFg, strokeWidth: 2))
-                        : const Icon(Icons.done_all_rounded, size: 16),
-                    label: Text(
-                      isMarkingAll ? 'Marking…' : 'Mark all received ($pendingItems)',
-                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-                    ),
-                    onPressed: isMarkingAll ? null : () => _markAllReceived(name, pendingItems),
-                  ),
-                ),
-              ],
-            ],
-          ]
-          // ── Awaiting Collect decision ─────────────────────────────────────
-          else ...[
-            const SizedBox(height: 10),
-            Row(children: [
-              const Icon(Icons.hourglass_top_rounded, size: 13, color: _kSub),
-              const SizedBox(width: 6),
-              const Text('Awaiting Collect decision',
-                  style: TextStyle(fontSize: 12, color: _kSub)),
-            ]),
-          ],
+  Widget _buildArrivalsFooter(
+    String name,
+    int pendingItems,
+    bool isMarkingAll,
+    bool fullyLocked,
+  ) {
+    if (fullyLocked) {
+      return Container(
+        height: 44,
+        margin: const EdgeInsets.only(top: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        decoration: BoxDecoration(
+          color: _kReceivedBg,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: _kReceivedFg.withValues(alpha: 0.3)),
+        ),
+        child: const Row(children: [
+          Icon(Icons.check_circle_rounded, size: 15, color: _kReceivedFg),
+          SizedBox(width: 8),
+          Expanded(child: Text('All items received',
+              style: TextStyle(
+                  fontSize: 13, fontWeight: FontWeight.w600, color: _kReceivedFg))),
         ]),
+      );
+    }
+    if (pendingItems <= 0) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: SizedBox(
+        height: 44,
+        child: OutlinedButton.icon(
+          style: OutlinedButton.styleFrom(
+            foregroundColor: _kReceivedFg,
+            side: BorderSide(color: _kReceivedFg.withValues(alpha: 0.5)),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          ),
+          icon: isMarkingAll
+              ? const SizedBox(width: 14, height: 14,
+                  child: CircularProgressIndicator(color: _kReceivedFg, strokeWidth: 2))
+              : const Icon(Icons.done_all_rounded, size: 16),
+          label: Text(
+            isMarkingAll ? 'Marking…' : 'Mark all received ($pendingItems)',
+            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+          ),
+          onPressed: isMarkingAll ? null : () => _markAllReceived(name, pendingItems),
+        ),
       ),
     );
   }

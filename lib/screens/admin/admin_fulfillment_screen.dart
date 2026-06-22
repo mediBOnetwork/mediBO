@@ -436,6 +436,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c141_ready', 'arrivals_v3=y;mark_all=y'); // static: #141 card redesign + in-place counting
     RenderLog.write('c142_ready', 'collect_list=y'); // static: #142 accordion supplier list
     RenderLog.write('c143_ready', 'no_border=y;fullscreen=y;pinned_footer=y'); // static: #143 three accordion fixes
+    RenderLog.write('c144_ready', 'collect_v4=y'); // static: #144 tab divider + card width + animation
     // #85: agent button present — written in initState (IndexedStack always mounts)
     RenderLog.write('change_85_agent_button_present', '1');
     RenderLog.write('change_86_voice_card_present', '1');
@@ -1819,25 +1820,48 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           style: TextStyle(color: _kSub, fontSize: 15)));
     }
 
-    // #143 FIX 2: full-screen single-supplier view when one is expanded.
-    if (_selectedSupplier != null) {
-      return _buildCollectSingleSupplier(isAdmin);
-    }
+    // #144 FIX 3: smooth animated switch between list and single-supplier view.
+    RenderLog.write('c144_anim', 'smooth=y;ms=280;curve=easeInOutCubic');
 
-    return LayoutBuilder(builder: (_, constraints) {
-      final maxW = constraints.maxWidth >= 900 ? 700.0 : double.infinity;
-      return Align(
-        alignment: Alignment.topCenter,
-        child: ConstrainedBox(
-          constraints: BoxConstraints(maxWidth: maxW),
-          child: ListView.builder(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-            itemCount: _suppliers.length,
-            itemBuilder: (_, i) => _buildSupplierAccordionRow(_suppliers[i], isAdmin),
-          ),
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 280),
+      switchInCurve: Curves.easeInOutCubic,
+      switchOutCurve: Curves.easeInOutCubic,
+      transitionBuilder: (child, animation) => FadeTransition(
+        opacity: animation,
+        child: SlideTransition(
+          position: Tween<Offset>(
+            begin: const Offset(0, 0.02),
+            end: Offset.zero,
+          ).animate(CurvedAnimation(parent: animation, curve: Curves.easeInOutCubic)),
+          child: child,
         ),
-      );
-    });
+      ),
+      // Key changes drive the animated switch: 'list' ↔ 'single-<name>'.
+      child: _selectedSupplier != null
+          ? KeyedSubtree(
+              key: ValueKey<String>('single-$_selectedSupplier'),
+              child: _buildCollectSingleSupplier(isAdmin),
+            )
+          : KeyedSubtree(
+              key: const ValueKey<String>('list'),
+              child: LayoutBuilder(builder: (_, constraints) {
+                final maxW = constraints.maxWidth >= 900 ? 700.0 : double.infinity;
+                return Align(
+                  alignment: Alignment.topCenter,
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(maxWidth: maxW),
+                    child: ListView.builder(
+                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+                      itemCount: _suppliers.length,
+                      itemBuilder: (_, i) =>
+                          _buildSupplierAccordionRow(_suppliers[i], isAdmin),
+                    ),
+                  ),
+                );
+              }),
+            ),
+    );
   }
 
   // #143 FIX 2+3: full-screen view for the expanded supplier.
@@ -1854,67 +1878,99 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c143_fullscreen', 'supplier=$name;pinned_footer=y');
     RenderLog.write('c143_buttons_clear', 'bottom_pad=y;pinned=y');
     RenderLog.write('c143_no_border', 'expanded_border=none');
+    RenderLog.write('c144_card_width', 'contained=y;fullbleed=n');
 
-    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      // ── Compact header: supplier name + dot + collapse chevron ────────────
-      InkWell(
-        onTap: () {
-          RenderLog.write('c142_expand', 'supplier=$name;expanded=n');
-          setState(() { _selectedSupplier = null; _items = []; });
-        },
-        child: Container(
-          color: Colors.white,
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-          child: Row(children: [
-            Icon(Icons.keyboard_arrow_left_rounded, size: 20, color: _kSub),
-            const SizedBox(width: 4),
-            Expanded(
-              child: Text(name,
-                  style: const TextStyle(
-                    fontSize: 15, fontWeight: FontWeight.w600, color: _kText),
-                  maxLines: 1, overflow: TextOverflow.ellipsis),
-            ),
-            const SizedBox(width: 12),
-            Container(
-              width: 12, height: 12,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: dotFill,
-                border: Border.all(color: dotBorder, width: 1.5),
+    // #144 FIX 2: contained card with same 16px side margins as the supplier list.
+    // The card fills available height; footer pins inside the card above the nav gap.
+    return LayoutBuilder(builder: (_, constraints) {
+      final maxW = constraints.maxWidth >= 900 ? 700.0 : double.infinity;
+      final bottomPad = MediaQuery.of(context).padding.bottom;
+      return Align(
+        alignment: Alignment.topCenter,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: maxW),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: _kBorder),
+                      boxShadow: [BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.04),
+                          blurRadius: 6, offset: const Offset(0, 2))],
+                    ),
+                    clipBehavior: Clip.antiAlias,
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                      // ── Compact header: back chevron + name + dot ──────────
+                      InkWell(
+                        onTap: () {
+                          RenderLog.write('c142_expand', 'supplier=$name;expanded=n');
+                          setState(() { _selectedSupplier = null; _items = []; });
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                          child: Row(children: [
+                            Icon(Icons.keyboard_arrow_left_rounded, size: 20, color: _kSub),
+                            const SizedBox(width: 4),
+                            Expanded(
+                              child: Text(name,
+                                  style: const TextStyle(
+                                    fontSize: 15, fontWeight: FontWeight.w600, color: _kText),
+                                  maxLines: 1, overflow: TextOverflow.ellipsis),
+                            ),
+                            const SizedBox(width: 12),
+                            Container(
+                              width: 12, height: 12,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: dotFill,
+                                border: Border.all(color: dotBorder, width: 1.5),
+                              ),
+                            ),
+                          ]),
+                        ),
+                      ),
+                      const Divider(height: 1, color: _kBorder),
+
+                      // ── Voice bar + progress ───────────────────────────────
+                      _buildNarrowVoiceBar(isAdmin),
+                      if (_items.isNotEmpty) _buildNarrowProgressRow(),
+                      const SizedBox(height: 8),
+
+                      // ── Item list fills remaining card space ───────────────
+                      if (_loadingBox)
+                        const Expanded(child: Center(child: CircularProgressIndicator(
+                            color: _kGreen, strokeWidth: 2)))
+                      else if (_items.isEmpty)
+                        const Expanded(child: Center(child: Text('No items in this box',
+                            style: TextStyle(color: _kSub, fontSize: 15))))
+                      else
+                        Expanded(child: _buildNarrowItemList(showFooter: false)),
+
+                      // ── Footer pinned inside card, always reachable ────────
+                      if (!_loadingBox && _items.isNotEmpty) ...[
+                        const Divider(height: 1, color: _kBorder),
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                          child: _buildConfirmFooter(locked),
+                        ),
+                      ],
+                    ]),
+                  ),
+                ),
               ),
-            ),
-          ]),
+              // Gap below the card — provides safe-area clearance above nav bar.
+              SizedBox(height: 12.0 + bottomPad),
+            ],
+          ),
         ),
-      ),
-      const Divider(height: 1, color: _kBorder),
-
-      // ── Voice bar + progress ──────────────────────────────────────────────
-      _buildNarrowVoiceBar(isAdmin),
-      if (_items.isNotEmpty) _buildNarrowProgressRow(),
-      const SizedBox(height: 8),
-
-      // ── Item list — Expanded so it fills remaining space ─────────────────
-      if (_loadingBox)
-        const Expanded(child: Center(
-            child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2)))
-      else if (_items.isEmpty)
-        const Expanded(child: Center(
-            child: Text('No items in this box',
-                style: TextStyle(color: _kSub, fontSize: 15))))
-      else
-        Expanded(child: _buildNarrowItemList(showFooter: false)),
-
-      // ── Pinned footer — sits above the bottom nav, always reachable ───────
-      if (!_loadingBox && _items.isNotEmpty) ...[
-        const Divider(height: 1, color: _kBorder),
-        Padding(
-          padding: EdgeInsets.fromLTRB(
-              16, 12, 16,
-              12 + MediaQuery.of(context).padding.bottom),
-          child: _buildConfirmFooter(locked),
-        ),
-      ],
-    ]);
+      );
+    });
   }
 
   // Dot colour constants for the 3-state indicator.
@@ -6255,8 +6311,11 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen> {
               _TabBtn('Pack',      _tab == 2, () => setState(() => _tab = 2)),
             ]),
           ),
-          const SizedBox(height: 1),
-          const Divider(height: 1, color: _kBorder),
+          // #144: divider removed — no line under the tab bar
+          Builder(builder: (ctx) {
+            RenderLog.write('c144_tabline_removed', 'divider=none');
+            return const SizedBox.shrink();
+          }),
         ]),
       ),
       Expanded(

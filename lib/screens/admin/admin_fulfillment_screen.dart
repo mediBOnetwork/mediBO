@@ -567,6 +567,13 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         RenderLog.write('c158_confirm_warn', 'lists_mismatch=y;force_path=y');
         RenderLog.write('c158_confirm_lock',
             'ok_locks=y;undo=fw_unconfirm_all_received');
+        RenderLog.write('c159_ready', 'arrivals_v10=y');
+        RenderLog.write('c159_clone',
+            'image=y;pack=y;dot=backend;mark_received=removed;ask_medibo=y;spoken=y');
+        RenderLog.write('c159_sheet_rpc', 'uses=set_item_receiving');
+        RenderLog.write('c159_voice', 'uses=set_voice_received;chip_moves=y');
+        RenderLog.write('c159_confirm_flow',
+            'block_uncounted=y;warn_mismatch=y;force=y;ok_lock=y;undo=y');
         setState(() {
           _suppliers = names;
           _loadingSuppliers = false;
@@ -680,30 +687,37 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       _arrivalsLocked = false; // #156: reset per-supplier lock when opening a new supplier
     });
 
-    // #157: Arrivals loads from fw_get_state (has count_mismatch, received_locked, shop_qty).
+    // #159: Arrivals dual-fetch — get_receiving_box provides order_item_id+fulfillment_state;
+    // fw_get_state provides count_mismatch+shop_qty+arrivals lock state. Merged by product_id.
     if (widget.arrivals) {
       try {
-        final res = await Supabase.instance.client
-            .rpc('fw_get_state', params: {'p_supplier_name': supplier}) as Map;
+        final results = await Future.wait([
+          Supabase.instance.client
+              .rpc('get_receiving_box', params: {'p_supplier_name': supplier}),
+          Supabase.instance.client
+              .rpc('fw_get_state', params: {'p_supplier_name': supplier}),
+        ]);
         if (!mounted) return;
-        final rawItems = (res['items'] as List? ?? []);
-        final items = rawItems.map((r) {
-          final m = Map<String, dynamic>.from(r as Map);
-          final orderedQty = (m['ordered'] as num?)?.toInt() ?? 0;
-          final receivedQty = (m['received_qty'] as num?)?.toInt() ?? 0;
-          final receivedLocked = m['received_locked'] == true;
-          final state = receivedLocked
-              ? 'received'
-              : receivedQty > 0 && orderedQty > 0 && receivedQty >= orderedQty
-                  ? 'received'
-                  : receivedQty > 0
-                      ? 'partial'
-                      : 'pending';
-          m['ordered_qty'] = orderedQty;
-          m['fulfillment_state'] = state;
-          return m;
-        }).toList();
-        items.sort((a, b) {
+        final boxItems = (results[0] as List)
+            .map((r) => Map<String, dynamic>.from(r as Map))
+            .toList();
+        final stateRes = results[1] as Map;
+        final stateByPid = <int, Map>{};
+        for (final r in (stateRes['items'] as List? ?? [])) {
+          final m = r as Map;
+          final pid = (m['product_id'] as num?)?.toInt();
+          if (pid != null) stateByPid[pid] = m;
+        }
+        for (final item in boxItems) {
+          final pid = (item['product_id'] as num?)?.toInt();
+          final s = pid != null ? stateByPid[pid] : null;
+          if (s != null) {
+            item['count_mismatch'] = s['count_mismatch'];
+            item['shop_qty'] = s['shop_qty'];
+            item['received_locked'] = s['received_locked'];
+          }
+        }
+        boxItems.sort((a, b) {
           final aPending = (a['fulfillment_state'] as String?) == 'pending' ? 0 : 1;
           final bPending = (b['fulfillment_state'] as String?) == 'pending' ? 0 : 1;
           if (aPending != bPending) return aPending - bPending;
@@ -711,17 +725,19 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
               .compareTo((b['product_name'] ?? '').toString());
         });
         final firstPending =
-            items.indexWhere((i) => (i['fulfillment_state'] as String?) == 'pending');
-        final confirmed = res['arrivals_confirmed'] == true ||
-            res['supplier_fully_locked'] == true;
+            boxItems.indexWhere((i) => (i['fulfillment_state'] as String?) == 'pending');
+        final confirmed = stateRes['arrivals_confirmed'] == true ||
+            stateRes['supplier_fully_locked'] == true;
         setState(() {
-          _items = items;
+          _items = boxItems;
           _focusIdx = firstPending >= 0 ? firstPending : 0;
           _loadingBox = false;
           _showListView = false;
           _arrivalsLocked = confirmed;
         });
-        RenderLog.write('arrivals_box_loaded', '${items.length}');
+        RenderLog.write('c159_sheet_rpc', 'uses=set_item_receiving');
+        RenderLog.write('c159_voice', 'uses=set_voice_received;chip_moves=y');
+        RenderLog.write('arrivals_box_loaded', '${boxItems.length}');
       } catch (e) {
         if (!mounted) return;
         setState(() { _loadingBox = false; _error = e.toString(); });
@@ -1367,40 +1383,46 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   Future<void> _reloadItemsFromDB() async {
     final supplier = _selectedSupplier;
     if (supplier == null) return;
-    // #157: Arrivals reloads from fw_get_state (not get_receiving_box)
+    // #159: Arrivals dual-fetch reload (same merge as _loadBox)
     if (widget.arrivals) {
       try {
-        final res = await Supabase.instance.client
-            .rpc('fw_get_state', params: {'p_supplier_name': supplier}) as Map;
+        final results = await Future.wait([
+          Supabase.instance.client
+              .rpc('get_receiving_box', params: {'p_supplier_name': supplier}),
+          Supabase.instance.client
+              .rpc('fw_get_state', params: {'p_supplier_name': supplier}),
+        ]);
         if (!mounted) return;
-        final rawItems = (res['items'] as List? ?? []);
-        final items = rawItems.map((r) {
-          final m = Map<String, dynamic>.from(r as Map);
-          final orderedQty = (m['ordered'] as num?)?.toInt() ?? 0;
-          final receivedQty = (m['received_qty'] as num?)?.toInt() ?? 0;
-          final receivedLocked = m['received_locked'] == true;
-          final state = receivedLocked
-              ? 'received'
-              : receivedQty > 0 && orderedQty > 0 && receivedQty >= orderedQty
-                  ? 'received'
-                  : receivedQty > 0
-                      ? 'partial'
-                      : 'pending';
-          m['ordered_qty'] = orderedQty;
-          m['fulfillment_state'] = state;
-          return m;
-        }).toList();
-        items.sort((a, b) {
+        final boxItems = (results[0] as List)
+            .map((r) => Map<String, dynamic>.from(r as Map))
+            .toList();
+        final stateRes = results[1] as Map;
+        final stateByPid = <int, Map>{};
+        for (final r in (stateRes['items'] as List? ?? [])) {
+          final m = r as Map;
+          final pid = (m['product_id'] as num?)?.toInt();
+          if (pid != null) stateByPid[pid] = m;
+        }
+        for (final item in boxItems) {
+          final pid = (item['product_id'] as num?)?.toInt();
+          final s = pid != null ? stateByPid[pid] : null;
+          if (s != null) {
+            item['count_mismatch'] = s['count_mismatch'];
+            item['shop_qty'] = s['shop_qty'];
+            item['received_locked'] = s['received_locked'];
+          }
+        }
+        boxItems.sort((a, b) {
           final aPend = (a['fulfillment_state'] as String?) == 'pending' ? 0 : 1;
           final bPend = (b['fulfillment_state'] as String?) == 'pending' ? 0 : 1;
           if (aPend != bPend) return aPend - bPend;
           return (a['product_name'] ?? '').toString()
               .compareTo((b['product_name'] ?? '').toString());
         });
-        final confirmed = res['arrivals_confirmed'] == true ||
-            res['supplier_fully_locked'] == true;
+        final confirmed = stateRes['arrivals_confirmed'] == true ||
+            stateRes['supplier_fully_locked'] == true;
         setState(() {
-          _items = items;
+          _items = boxItems;
           if (confirmed != _arrivalsLocked) _arrivalsLocked = confirmed;
         });
       } catch (_) {}
@@ -3855,7 +3877,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   }
 
   void _showItemSheet(Map<String, dynamic> item) {
-    if (_boxLocked) return; // #91 locked — no manual edits
+    // #159: Arrivals uses _arrivalsLocked; Collect uses _boxLocked (collect_locked field)
+    if (widget.arrivals ? _arrivalsLocked : _boxLocked) return;
     final idx = _items.indexOf(item);
     if (idx >= 0) _focusItem(idx);
     final name   = item['product_name']?.toString() ?? '—';

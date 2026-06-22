@@ -430,6 +430,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c138_ready', 'rw_responsive=y'); // static: #138 fully responsive layout
     RenderLog.write('c139_ready', 'arrivals_v2=y'); // static: #139 new mode-driven Arrivals
     RenderLog.write('c140_ready', 'arrivals_autosync=y'); // static: #140 fw_list_arrivals + auto-refresh
+    RenderLog.write('c141_ready', 'arrivals_v3=y;mark_all=y'); // static: #141 card redesign + in-place counting
     // #85: agent button present — written in initState (IndexedStack always mounts)
     RenderLog.write('change_85_agent_button_present', '1');
     RenderLog.write('change_86_voice_card_present', '1');
@@ -4966,6 +4967,7 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen>
   final Map<String, Map<String, dynamic>> _fwStates = {};
   final Set<String> _fwLoading = {};
   final Set<String> _markingItems = {}; // "supplier|product_id"
+  final Set<String> _markingAll   = {}; // supplier names with in-flight mark-all
 
   // realtime + debounce
   RealtimeChannel? _channel;
@@ -5265,34 +5267,94 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen>
     ]);
   }
 
-  // ── Supplier card — #137: fw_get_state-driven when mode is set ─────────────
+  // #141: open in-place counting sheet — does NOT navigate to Collect.
+  Future<void> _openCountingSheet(String supplier, String mode) async {
+    RenderLog.write('c141_count_in_place',
+        'opened_as=modal;supplier=$supplier;navigated_to_collect=n');
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _ArrivalsCountingSheet(supplierName: supplier, mode: mode),
+    );
+    if (!mounted) return;
+    await _loadFwState(supplier);
+    _load(silent: true);
+  }
+
+  // #141: Mark all items received for a supplier (fw_mark_all_received).
+  Future<void> _markAllReceived(String supplier, int pendingCount) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dCtx) => AlertDialog(
+        title: const Text('Mark all received?',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+        content: Text(
+          'Mark all $pendingCount pending item${pendingCount == 1 ? '' : 's'} from $supplier as received?',
+          style: const TextStyle(fontSize: 14),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dCtx, false), child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: _kGreen),
+            onPressed: () => Navigator.pop(dCtx, true),
+            child: const Text('Mark all'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => _markingAll.add(supplier));
+    try {
+      final res = await Supabase.instance.client
+          .rpc('fw_mark_all_received', params: {'p_supplier_name': supplier}) as Map;
+      if (!mounted) return;
+      if (res['error'] != null) { _showSnack('Error: ${res['error']}'); return; }
+      final lockedNow = (res['locked_now'] as num?)?.toInt() ?? 0;
+      RenderLog.write('c141_mark_all', 'supplier=$supplier;locked_now=$lockedNow');
+      await _loadFwState(supplier);
+      _load(silent: true);
+    } catch (e) {
+      if (mounted) _showSnack('Error: $e');
+    } finally {
+      if (mounted) setState(() => _markingAll.remove(supplier));
+    }
+  }
+
+  // ── Supplier card — #141 redesign ────────────────────────────────────────────
   Widget _buildSupplierCard(Map<String, dynamic> supplier) {
-    final name         = supplier['supplier_name']?.toString() ?? '—';
-    final inTransit    = (supplier['in_transit']   as num?)?.toInt() ?? 0;
-    final fullyArrived = (supplier['fully_arrived'] as bool?) == true;
+    final name       = supplier['supplier_name']?.toString() ?? '—';
 
     if (!_redesignLogged) {
       _redesignLogged = true;
       RenderLog.write('change_88_arrivals_redesigned', '1');
-      RenderLog.write('c138_arrivals_responsive', 'rows_fit=y;btns_wrap=y'); // #138
-      RenderLog.write('c139_arrivals_new', 'old_removed=y'); // #139 new mode-driven UI
+      RenderLog.write('c138_arrivals_responsive', 'rows_fit=y;btns_wrap=y');
+      RenderLog.write('c139_arrivals_new', 'old_removed=y');
+      RenderLog.write('c141_cards_redesigned', 'aligned=y'); // #141 redesign proof
     }
 
-    final fwState       = _fwStates[name];
-    final mode          = fwState?['mode']?.toString();
-    final fullyLocked   = fwState?['supplier_fully_locked'] == true;
-    final fwItems       = fwState != null
-        ? (fwState['items'] as List? ?? []).map((i) => Map<String, dynamic>.from(i as Map)).toList()
+    final fwState     = _fwStates[name];
+    final mode        = fwState?['mode']?.toString();
+    final fullyLocked = fwState?['supplier_fully_locked'] == true;
+    final fwItems     = fwState != null
+        ? (fwState['items'] as List? ?? [])
+            .map((i) => Map<String, dynamic>.from(i as Map))
+            .toList()
         : <Map<String, dynamic>>[];
 
-    // Use fw_state-driven card when mode is available; fall back to legacy for null/unset mode
-    final useFwUI = mode != null;
+    // Counts derived from items
+    final totalItems    = fwItems.length;
+    final receivedItems = fwItems.where((i) => i['received_locked'] == true).length;
+    final pendingItems  = totalItems - receivedItems;
+    final isMarkingAll  = _markingAll.contains(name);
+    final useFwUI       = mode != null;
 
+    // Border colour: green-tinted when fully done, amber when active, neutral when awaiting
     final borderColor = fullyLocked
-        ? _kReceivedFg.withValues(alpha: 0.20)
+        ? _kReceivedFg.withValues(alpha: 0.18)
         : useFwUI
-            ? _kPendingFg.withValues(alpha: 0.20)
-            : const Color(0xFFE5E7EB);
+            ? _kPendingFg.withValues(alpha: 0.18)
+            : _kBorder;
 
     return Container(
       decoration: BoxDecoration(
@@ -5302,79 +5364,127 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen>
         boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 8, offset: const Offset(0, 2))],
       ),
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
 
-          // Header row: name + status pill
-          Row(children: [
+          // ── Header: name + mode badge + progress ────────────────────────────
+          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Expanded(
               child: Text(name,
-                  style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: _kText),
-                  maxLines: 1, overflow: TextOverflow.ellipsis),
+                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _kText),
+                  maxLines: 2, overflow: TextOverflow.ellipsis),
             ),
             const SizedBox(width: 8),
+            // Mode badge
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
               decoration: BoxDecoration(
-                color: (fullyLocked || fullyArrived) ? _kReceivedBg : _kPendingBg,
+                color: fullyLocked ? _kReceivedBg
+                    : useFwUI ? _kPendingBg
+                    : _kBg,
                 borderRadius: BorderRadius.circular(20),
               ),
               child: Text(
-                fullyLocked ? 'All received' : (useFwUI ? (mode == 'shop' ? 'Shop counted' : 'Count at WH') : 'Awaiting'),
+                fullyLocked ? 'All received'
+                    : useFwUI ? (mode == 'shop' ? 'Counted at shop' : 'Count at WH')
+                    : 'Awaiting',
                 style: TextStyle(
-                  fontSize: 12, fontWeight: FontWeight.w700,
-                  color: (fullyLocked || fullyArrived) ? _kReceivedFg : _kPendingFg,
+                  fontSize: 11, fontWeight: FontWeight.w700,
+                  color: fullyLocked ? _kReceivedFg
+                      : useFwUI ? _kPendingFg
+                      : _kSub,
                 ),
               ),
             ),
+            // Received progress pill (only when mode is known)
+            if (useFwUI && totalItems > 0) ...[
+              const SizedBox(width: 6),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: fullyLocked ? _kReceivedBg : _kBg,
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: _kBorder),
+                ),
+                child: Text('$receivedItems/$totalItems',
+                    style: TextStyle(
+                      fontSize: 11, fontWeight: FontWeight.w600,
+                      color: fullyLocked ? _kReceivedFg : _kSub,
+                    )),
+              ),
+            ],
           ]),
 
-          // ── #137 fw_state-driven UI ──────────────────────────────────────────
           if (useFwUI) ...[
             const SizedBox(height: 12),
 
-            // Fully locked: just a done message
+            // ── Fully received: done state ──────────────────────────────────
             if (fullyLocked)
               Row(children: [
-                const Icon(Icons.check_circle_rounded, size: 16, color: _kReceivedFg),
+                const Icon(Icons.check_circle_rounded, size: 15, color: _kReceivedFg),
                 const SizedBox(width: 6),
-                const Text('All items received', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _kReceivedFg)),
+                const Text('All items received',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _kReceivedFg)),
               ])
             else ...[
-              // Top action button: Double-check (shop) or Count item (warehouse)
+              // ── Primary action button (in-place counting) ─────────────────
               SizedBox(
                 width: double.infinity, height: 44,
-                child: OutlinedButton.icon(
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: _kGreen,
-                    side: const BorderSide(color: _kGreen),
+                child: FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: _kGreen,
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                   ),
-                  icon: Icon(mode == 'shop' ? Icons.find_replace_rounded : Icons.mic_rounded, size: 17),
+                  icon: Icon(mode == 'shop' ? Icons.find_replace_rounded : Icons.mic_rounded,
+                      size: 17, color: Colors.white),
                   label: Text(
                     mode == 'shop' ? 'Double-check (recount)' : 'Count item (voice)',
-                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.white),
                   ),
-                  onPressed: () {
-                    widget.onVoiceCount?.call(name);
-                  },
+                  onPressed: () => _openCountingSheet(name, mode!),
                 ),
               ),
 
-              // Per-item rows
+              // ── Item rows ──────────────────────────────────────────────────
               if (fwItems.isNotEmpty) ...[
                 const SizedBox(height: 12),
                 const Divider(height: 1, color: _kBorder),
-                const SizedBox(height: 8),
+                const SizedBox(height: 4),
                 ...fwItems.map((item) => _buildFwItemRow(name, item)),
+              ],
+
+              // ── Mark all received button ───────────────────────────────────
+              if (pendingItems > 0) ...[
+                const SizedBox(height: 8),
+                const Divider(height: 1, color: _kBorder),
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: double.infinity, height: 40,
+                  child: OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: _kReceivedFg,
+                      side: BorderSide(color: _kReceivedFg.withValues(alpha: 0.5)),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                    icon: isMarkingAll
+                        ? const SizedBox(width: 14, height: 14,
+                            child: CircularProgressIndicator(color: _kReceivedFg, strokeWidth: 2))
+                        : const Icon(Icons.done_all_rounded, size: 16),
+                    label: Text(
+                      isMarkingAll ? 'Marking…' : 'Mark all received ($pendingItems)',
+                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                    ),
+                    onPressed: isMarkingAll ? null : () => _markAllReceived(name, pendingItems),
+                  ),
+                ),
               ],
             ],
           ]
-          // ── #139: mode==null — awaiting Collect decision (no action buttons) ──
+          // ── Awaiting Collect decision ─────────────────────────────────────
           else ...[
             const SizedBox(height: 10),
             Row(children: [
-              const Icon(Icons.hourglass_top_rounded, size: 14, color: _kSub),
+              const Icon(Icons.hourglass_top_rounded, size: 13, color: _kSub),
               const SizedBox(width: 6),
               const Text('Awaiting Collect decision',
                   style: TextStyle(fontSize: 12, color: _kSub)),
@@ -5385,84 +5495,407 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen>
     );
   }
 
-  // #137/#138: one product row — fully adaptive via LayoutBuilder.
+  // #141: one product row — aligned count chip + fixed trailing column.
   Widget _buildFwItemRow(String supplier, Map<String, dynamic> item) {
-    final productId      = (item['product_id'] as num?)?.toInt() ?? 0;
-    final productName    = item['product_name']?.toString() ?? '—';
-    final shopQty        = (item['shop_qty']       as num?)?.toInt();
-    final whQty          = (item['wh_recount_qty'] as num?)?.toInt();
+    final productId   = (item['product_id']    as num?)?.toInt() ?? 0;
+    final productName = item['product_name']?.toString() ?? '—';
+    final ordered     = (item['ordered']        as num?)?.toInt() ?? 0;
+    final receivedQty = (item['received_qty']   as num?)?.toInt() ?? 0;
+    final shopQty     = (item['shop_qty']       as num?)?.toInt();
+    final whQty       = (item['wh_recount_qty'] as num?)?.toInt();
     final receivedLocked = item['received_locked'] == true;
     final mismatch       = item['count_mismatch'] == true;
     final itemKey        = '$supplier|$productId';
     final isMarking      = _markingItems.contains(itemKey);
 
-    // Name + mismatch indicator column (shared by both row and stacked layouts).
+    // ── Name column (wraps; mismatch pill below name) ──────────────────────
     Widget nameCol() => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Text(productName,
           style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: _kText),
           maxLines: 2, overflow: TextOverflow.ellipsis),
       if (mismatch && shopQty != null && whQty != null)
         Padding(
-          padding: const EdgeInsets.only(top: 2),
+          padding: const EdgeInsets.only(top: 3),
           child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
             decoration: BoxDecoration(color: _kPendingBg, borderRadius: BorderRadius.circular(6)),
             child: Text('shop $shopQty / recount $whQty',
-                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _kPendingFg)),
+                style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: _kPendingFg)),
           ),
         ),
     ]);
 
-    // Trailing badge or button (shared).
-    Widget trailing() => receivedLocked
+    // ── Count chip: "recv/ordered" — green when full/locked ───────────────
+    Widget countChip() {
+      final full = receivedLocked || receivedQty >= ordered;
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+        decoration: BoxDecoration(
+          color: full ? _kReceivedBg : _kBg,
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: full ? _kReceivedFg.withValues(alpha: 0.3) : _kBorder),
+        ),
+        child: Text('$receivedQty/$ordered',
+            style: TextStyle(
+              fontSize: 11, fontWeight: FontWeight.w600,
+              color: full ? _kReceivedFg : _kSub,
+            )),
+      );
+    }
+
+    // ── Trailing: "Received" badge OR "Mark received" button ──────────────
+    // Mismatch does NOT disable marking (M3: always enabled unless received_locked).
+    Widget trailingAction() => receivedLocked
         ? Container(
-            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
             decoration: BoxDecoration(color: _kReceivedBg, borderRadius: BorderRadius.circular(8)),
             child: Row(mainAxisSize: MainAxisSize.min, children: [
-              const Icon(Icons.lock_rounded, size: 12, color: _kReceivedFg),
-              const SizedBox(width: 4),
-              const Text('Received', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: _kReceivedFg)),
+              const Icon(Icons.check_rounded, size: 11, color: _kReceivedFg),
+              const SizedBox(width: 3),
+              const Text('Received',
+                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: _kReceivedFg)),
             ]),
           )
         : SizedBox(
-            height: 34,
+            height: 32, width: 100,
             child: FilledButton(
               style: FilledButton.styleFrom(
                 backgroundColor: _kGreen,
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                padding: const EdgeInsets.symmetric(horizontal: 12),
+                padding: EdgeInsets.zero,
               ),
               onPressed: isMarking ? null : () => _markItemReceived(supplier, productId),
               child: isMarking
-                  ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                  : const Text('Mark received', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+                  ? const SizedBox(width: 13, height: 13,
+                      child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                  : const Text('Mark received',
+                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700),
+                      textAlign: TextAlign.center),
             ),
           );
 
-    // #138: LayoutBuilder chooses Row (>= 340) or stacked Column (< 340 verySmall).
-    return LayoutBuilder(builder: (lbCtx, lbConstraints) {
-      final w = lbConstraints.maxWidth;
-      if (w < 340) {
-        // Very-small: name+mismatch above, trailing right-aligned below — never clips.
+    return LayoutBuilder(builder: (_, c) {
+      if (c.maxWidth < 360) {
+        // Very-small stacked: name full-width, then count chip + action right-aligned
         return Padding(
-          padding: const EdgeInsets.only(bottom: 8),
+          padding: const EdgeInsets.symmetric(vertical: 6),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             nameCol(),
             const SizedBox(height: 6),
-            Align(alignment: Alignment.centerRight, child: trailing()),
+            Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+              countChip(),
+              const SizedBox(width: 8),
+              trailingAction(),
+            ]),
           ]),
         );
       }
-      // Normal: name Expanded, trailing right-aligned, gap 8.
+      // Normal: name Expanded, count chip, fixed trailing — all aligned.
       return Padding(
-        padding: const EdgeInsets.only(bottom: 8),
+        padding: const EdgeInsets.symmetric(vertical: 6),
         child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
           Expanded(child: nameCol()),
           const SizedBox(width: 8),
-          trailing(),
+          countChip(),
+          const SizedBox(width: 8),
+          trailingAction(),
         ]),
       );
     });
+  }
+}
+
+// ── #141: In-place counting sheet shown from Arrivals ────────────────────────
+
+class _ArrivalsCountingSheet extends StatefulWidget {
+  final String supplierName;
+  final String mode; // 'shop' | 'warehouse'
+  const _ArrivalsCountingSheet({required this.supplierName, required this.mode});
+
+  @override
+  State<_ArrivalsCountingSheet> createState() => _ArrivalsCountingSheetState();
+}
+
+class _ArrivalsCountingSheetState extends State<_ArrivalsCountingSheet> {
+  final _voiceService = VoiceReceiveService();
+  bool _recording    = false;
+  bool _processing   = false;
+  String _status     = '';
+  String _lastTranscript = '';
+  List<Map<String, dynamic>> _items = [];
+  bool _loadingItems = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadItems();
+  }
+
+  @override
+  void dispose() {
+    _voiceService.cancel();
+    _voiceService.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadItems() async {
+    if (!mounted) return;
+    setState(() => _loadingItems = true);
+    try {
+      final res = await Supabase.instance.client
+          .rpc('fw_get_state', params: {'p_supplier_name': widget.supplierName}) as Map;
+      if (!mounted) return;
+      final items = (res['items'] as List? ?? [])
+          .map((i) => Map<String, dynamic>.from(i as Map))
+          .toList();
+      setState(() { _items = items; _loadingItems = false; });
+    } catch (e) {
+      if (mounted) setState(() { _loadingItems = false; _status = 'Error: $e'; });
+    }
+  }
+
+  Future<void> _toggleRecord() async {
+    if (_processing) return;
+    if (_recording) {
+      await _stopAndProcess();
+    } else {
+      await _startRecord();
+    }
+  }
+
+  Future<void> _startRecord() async {
+    try {
+      final hasPerm = await _voiceService.hasPermission();
+      if (!hasPerm) {
+        if (mounted) setState(() => _status = 'Microphone permission denied');
+        return;
+      }
+      await _voiceService.start();
+      if (mounted) setState(() { _recording = true; _status = 'Recording — say product names and quantities'; });
+    } catch (e) {
+      if (mounted) setState(() => _status = 'Could not start mic: $e');
+    }
+  }
+
+  Future<void> _stopAndProcess() async {
+    if (!mounted) return;
+    setState(() { _recording = false; _processing = true; _status = 'Processing…'; });
+    try {
+      final clip = await _voiceService.stop();
+      if (clip == null || clip.bytes.isEmpty) {
+        if (mounted) setState(() { _processing = false; _status = 'No audio captured — try again'; });
+        return;
+      }
+      final expected = _items.map((i) => <String, dynamic>{
+        'name': i['product_name']?.toString() ?? '',
+        'ordered_qty': (i['ordered'] as num?)?.toInt() ?? 0,
+      }).toList();
+      final result = await _voiceService.transcribe(clip.bytes, clip.mime, expected: expected);
+      if (!mounted) return;
+      setState(() => _lastTranscript = result.transcript);
+
+      int committed = 0;
+      for (final hit in result.items) {
+        final matchedName = (hit['matched_name'] ?? '').toString();
+        final qty = (hit['qty'] as num?)?.toDouble() ?? 0;
+        if (qty <= 0) continue;
+        // Match by name (case-insensitive)
+        final match = _items.firstWhere(
+          (i) => (i['product_name'] ?? '').toString().toLowerCase() ==
+              matchedName.toLowerCase(),
+          orElse: () => <String, dynamic>{},
+        );
+        final pid = (match['product_id'] as num?)?.toInt();
+        if (pid == null) continue;
+        try {
+          await Supabase.instance.client.rpc('set_voice_received', params: {
+            'p_supplier_name': widget.supplierName,
+            'p_product_id': pid,
+            'p_qty': qty,
+            'p_note': 'arrivals voice #141',
+          });
+          committed++;
+        } catch (_) {}
+      }
+
+      await _loadItems();
+      if (mounted) {
+        setState(() {
+          _processing = false;
+          _status = committed > 0
+              ? 'Saved $committed item${committed == 1 ? '' : 's'}'
+              : (result.items.isEmpty ? 'No items recognized — try again' : 'No matching items');
+        });
+      }
+    } catch (e) {
+      if (mounted) setState(() { _processing = false; _status = 'Error: $e'; });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isWH = widget.mode == 'warehouse';
+    return Container(
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      child: SafeArea(
+        top: false,
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          // Drag handle
+          Center(child: Container(
+            margin: const EdgeInsets.only(top: 10, bottom: 6),
+            width: 36, height: 4,
+            decoration: BoxDecoration(color: _kBorder, borderRadius: BorderRadius.circular(2)),
+          )),
+
+          // Header
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 4, 12, 0),
+            child: Row(children: [
+              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(widget.supplierName,
+                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _kText),
+                    maxLines: 1, overflow: TextOverflow.ellipsis),
+                const SizedBox(height: 2),
+                Text(isWH ? 'Count at warehouse (voice)' : 'Double-check recount (voice)',
+                    style: const TextStyle(fontSize: 12, color: _kSub)),
+              ])),
+              IconButton(
+                onPressed: () => Navigator.of(context).pop(),
+                icon: const Icon(Icons.close_rounded, color: _kSub, size: 20),
+              ),
+            ]),
+          ),
+
+          const Divider(height: 16, indent: 20, endIndent: 20),
+
+          // Mic row
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 0),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+              GestureDetector(
+                onTap: _toggleRecord,
+                child: Container(
+                  width: 52, height: 52,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: _recording ? const Color(0xFFDC2626) : _kGreen,
+                    boxShadow: [BoxShadow(
+                      color: (_recording ? const Color(0xFFDC2626) : _kGreen).withValues(alpha: 0.3),
+                      blurRadius: 8, offset: const Offset(0, 2),
+                    )],
+                  ),
+                  child: _processing
+                      ? const Padding(padding: EdgeInsets.all(14),
+                          child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                      : Icon(_recording ? Icons.stop_rounded : Icons.mic_rounded,
+                          color: Colors.white, size: 26),
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(
+                  _recording ? 'Recording… tap to stop'
+                      : _processing ? 'Processing…'
+                      : 'Tap mic to record',
+                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: _kText),
+                ),
+                if (_status.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Text(_status,
+                        style: const TextStyle(fontSize: 12, color: _kSub),
+                        maxLines: 2, overflow: TextOverflow.ellipsis),
+                  ),
+                if (_lastTranscript.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Text('"$_lastTranscript"',
+                        style: const TextStyle(fontSize: 11, color: _kSub, fontStyle: FontStyle.italic),
+                        maxLines: 2, overflow: TextOverflow.ellipsis),
+                  ),
+              ])),
+            ]),
+          ),
+
+          // Item list
+          if (_loadingItems)
+            const Padding(padding: EdgeInsets.all(20),
+                child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2))
+          else if (_items.isNotEmpty) ...[
+            const Divider(height: 20, indent: 20, endIndent: 20),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 260),
+              child: ListView.separated(
+                shrinkWrap: true,
+                physics: const ClampingScrollPhysics(),
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 0),
+                itemCount: _items.length,
+                separatorBuilder: (_, __) => const Divider(height: 1, color: _kBorder),
+                itemBuilder: (_, idx) {
+                  final it      = _items[idx];
+                  final pname   = it['product_name']?.toString() ?? '—';
+                  final recv    = (it['received_qty'] as num?)?.toInt() ?? 0;
+                  final ord     = (it['ordered']      as num?)?.toInt() ?? 0;
+                  final locked  = it['received_locked'] == true;
+                  final mm      = it['count_mismatch'] == true;
+                  final shQty   = (it['shop_qty']       as num?)?.toInt();
+                  final whRcnt  = (it['wh_recount_qty'] as num?)?.toInt();
+                  final full    = locked || recv >= ord;
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    child: Row(children: [
+                      Expanded(child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(pname,
+                              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: _kText),
+                              maxLines: 2, overflow: TextOverflow.ellipsis),
+                          if (mm && shQty != null && whRcnt != null)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 2),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                decoration: BoxDecoration(color: _kPendingBg, borderRadius: BorderRadius.circular(5)),
+                                child: Text('shop $shQty / recount $whRcnt',
+                                    style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: _kPendingFg)),
+                              ),
+                            ),
+                        ],
+                      )),
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: full ? _kReceivedBg : _kBg,
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: full
+                              ? _kReceivedFg.withValues(alpha: 0.3) : _kBorder),
+                        ),
+                        child: Row(mainAxisSize: MainAxisSize.min, children: [
+                          if (locked) ...[
+                            const Icon(Icons.check_rounded, size: 10, color: _kReceivedFg),
+                            const SizedBox(width: 3),
+                          ],
+                          Text('$recv/$ord',
+                              style: TextStyle(
+                                fontSize: 11, fontWeight: FontWeight.w600,
+                                color: full ? _kReceivedFg : _kSub,
+                              )),
+                        ]),
+                      ),
+                    ]),
+                  );
+                },
+              ),
+            ),
+          ],
+          const SizedBox(height: 20),
+        ]),
+      ),
+    );
   }
 }
 

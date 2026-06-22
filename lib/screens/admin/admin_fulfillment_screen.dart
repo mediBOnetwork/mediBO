@@ -306,6 +306,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   bool _arrivalsLocked = false;
   bool _confirmingAll = false;
 
+  // #116: supplier count mode from fw_get_state ('shop'|'warehouse'|null)
+  String? _supplierMode;
+
   // #147: scroll controller for the supplier list + per-row keys for ensureVisible
   final ScrollController _listScrollCtrl = ScrollController();
   final Map<String, GlobalKey> _rowKeys = {};
@@ -369,6 +372,12 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       _items.where((i) => (i['fulfillment_state'] as String?) == 'pending').length;
 
   bool get _allDone => _items.isNotEmpty && _pendingCount == 0;
+
+  // #116: Arrivals shop-mode filter — only items with received_qty>0
+  List<Map<String, dynamic>> _visibleItems() {
+    if (!widget.arrivals || _supplierMode != 'shop') return _items;
+    return _items.where((it) => ((it['received_qty'] as num?)?.toInt() ?? 0) > 0).toList();
+  }
 
   // #91: true when get_receiving_box returns collect_locked=true on any row
   bool get _boxLocked =>
@@ -729,12 +738,19 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             boxItems.indexWhere((i) => (i['fulfillment_state'] as String?) == 'pending');
         final confirmed = stateRes['arrivals_confirmed'] == true ||
             stateRes['supplier_fully_locked'] == true;
+        // #116: parse supplier mode for Arrivals item filter
+        String? parsedMode;
+        for (final r in (stateRes['items'] as List? ?? [])) {
+          final v = (r as Map)['mode']?.toString();
+          if (v != null && v.isNotEmpty) { parsedMode = v; break; }
+        }
         setState(() {
           _items = boxItems;
           _focusIdx = firstPending >= 0 ? firstPending : 0;
           _loadingBox = false;
           _showListView = false;
           _arrivalsLocked = confirmed;
+          _supplierMode = parsedMode;
         });
         RenderLog.write('c159_sheet_rpc', 'uses=set_item_receiving');
         RenderLog.write('c159_voice', 'uses=set_voice_received;chip_moves=y');
@@ -1422,9 +1438,16 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         });
         final confirmed = stateRes['arrivals_confirmed'] == true ||
             stateRes['supplier_fully_locked'] == true;
+        // #116: update mode on reload
+        String? reloadedMode;
+        for (final r in (stateRes['items'] as List? ?? [])) {
+          final v = (r as Map)['mode']?.toString();
+          if (v != null && v.isNotEmpty) { reloadedMode = v; break; }
+        }
         setState(() {
           _items = boxItems;
           if (confirmed != _arrivalsLocked) _arrivalsLocked = confirmed;
+          if (reloadedMode != _supplierMode) _supplierMode = reloadedMode;
         });
       } catch (_) {}
       return;
@@ -2204,7 +2227,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c152_web_untouched', 'wide_layout=unchanged');
 
     final isOpen = _selectedSupplier != null;
-    final displayList = isOpen ? [_selectedSupplier!] : _suppliers;
+    final displayList = _suppliers;
     if (isOpen) {
       RenderLog.write('c152_item_only_scroll', 'only_open_supplier=y');
       RenderLog.write('c152_gap_on_open', 'open_gap=16;closed_gap=8');
@@ -2212,6 +2235,25 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
     return LayoutBuilder(builder: (_, constraints) {
       final maxW = constraints.maxWidth >= 900 ? 700.0 : double.infinity;
+
+      // #116: when a supplier is open, show the full-height card with sticky header.
+      // Outer scroll is gone — content scrolls inside the card via PinnedFooterList.
+      if (isOpen) {
+        return Align(
+          alignment: Alignment.topCenter,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxWidth: maxW),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+              child: SizedBox(
+                height: constraints.maxHeight - 12, // fill viewport minus top gap
+                child: _buildExpandedSupplierCard(_selectedSupplier!, isAdmin),
+              ),
+            ),
+          ),
+        );
+      }
+
       return Align(
         alignment: Alignment.topCenter,
         child: ConstrainedBox(
@@ -2328,7 +2370,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             'supplier=$name;expanded=${isExpanded ? 'n' : 'y'}');
         if (isExpanded) {
           // #152 TWEAK 3: restore saved scroll position on close.
-          setState(() { _selectedSupplier = null; _items = []; });
+          setState(() { _selectedSupplier = null; _items = []; _supplierMode = null; });
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (!mounted) return;
             if (_listScrollCtrl.hasClients) {
@@ -2360,41 +2402,136 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           });
         }
       },
-      // Only build expanded body when actually expanded — avoids building voice bar
-      // for every collapsed row on every rebuild.
-      expandedContent: isExpanded
-          ? Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-              _buildNarrowVoiceBar(isAdmin),
-              if (_items.isNotEmpty) _buildNarrowProgressRow(),
-              const SizedBox(height: 8),
-              if (_loadingBox)
-                const Padding(
-                  padding: EdgeInsets.all(24),
-                  child: Center(child: CircularProgressIndicator(
-                      color: _kGreen, strokeWidth: 2)),
-                )
-              else if (_items.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.fromLTRB(16, 12, 16, 16),
-                  child: Text('No items in this box',
-                      style: TextStyle(color: _kSub, fontSize: 14)),
-                )
-              else
-                // #113: PinnedFooterList pushes footer to viewport bottom when items are few
-                Builder(builder: (ctx) {
-                  final locked = _boxLocked;
-                  RenderLog.write('c113_pinned_footer',
-                      'items=${_items.length};type=${widget.arrivals ? 'arrivals' : 'collect'};locked=${(widget.arrivals ? _arrivalsLocked : locked) ? 'y' : 'n'}');
-                  return PinnedFooterList(
-                    minHeight: MediaQuery.of(ctx).size.height * 0.55,
-                    items: _items.map(_buildItemTile).toList(),
-                    footer: _buildConfirmFooter(widget.arrivals ? _arrivalsLocked : locked),
-                    footerPadding: EdgeInsets.fromLTRB(
-                        16, 12, 16, 12 + MediaQuery.of(ctx).padding.bottom),
-                  );
-                }),
-            ])
-          : const SizedBox.shrink(),
+      // #116: expanded view is handled by _buildExpandedSupplierCard in _buildCollectList
+      // The accordion shell only handles collapsed display and tap-to-open.
+      expandedContent: const SizedBox.shrink(),
+    );
+  }
+
+  // ── #116: Full-height card with sticky supplier-name header ─────────────────
+  // Replaces the accordion expanded view — name row is pinned; content scrolls.
+  Widget _buildExpandedSupplierCard(String name, bool isAdmin) {
+    final dot = _supplierDotMap[name] ?? 'yellow';
+    final dotFill = dot == 'green' ? _kDotGreen
+        : dot == 'light_yellow' ? _kDotLightYellow : _kDotYellow;
+    final dotBorder = dot == 'green' ? _kDotGreen : _kDotBorderLight;
+    final locked = widget.arrivals ? _arrivalsLocked : _boxLocked;
+    final safeBottom = MediaQuery.of(context).padding.bottom;
+    final visibleItems = _visibleItems();
+
+    RenderLog.write('c116_supplier_header_pinned', 'true');
+    RenderLog.write('c116_footer_gap_fixed', 'true');
+    if (widget.arrivals) {
+      if (_supplierMode == 'shop') {
+        RenderLog.write('c116_arrivals_shop_filter_applied', 'true');
+        RenderLog.write('c116_arrivals_filtered_count', '${visibleItems.length}');
+      } else if (_supplierMode == 'warehouse') {
+        RenderLog.write('c116_arrivals_warehouse_all_shown', 'true');
+      }
+    }
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _kBorder),
+        boxShadow: [BoxShadow(
+          color: Colors.black.withValues(alpha: 0.04),
+          blurRadius: 6, offset: const Offset(0, 2))],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // ── STICKY SUPPLIER NAME ROW ──────────────────────────────────────
+          InkWell(
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+            onTap: () {
+              RenderLog.write('c142_expand', 'supplier=$name;expanded=n');
+              setState(() { _selectedSupplier = null; _items = []; _supplierMode = null; });
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (!mounted) return;
+                if (_listScrollCtrl.hasClients) {
+                  _listScrollCtrl.animateTo(_savedScrollOffset,
+                      duration: const Duration(milliseconds: 280),
+                      curve: Curves.easeInOutCubic);
+                }
+              });
+            },
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              child: Row(children: [
+                Expanded(
+                  child: Text(name,
+                      style: const TextStyle(
+                          fontSize: 15, fontWeight: FontWeight.w600, color: _kGreen),
+                      maxLines: 2, overflow: TextOverflow.ellipsis),
+                ),
+                const SizedBox(width: 12),
+                Container(
+                  width: 12, height: 12,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: dotFill,
+                    border: Border.all(color: dotBorder, width: 1.5),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                const Icon(Icons.keyboard_arrow_up_rounded, size: 18, color: _kSub),
+              ]),
+            ),
+          ),
+          const Divider(height: 1, color: _kBorder),
+
+          // ── SCROLLABLE CONTENT (voice, progress, items, footer) ───────────
+          Expanded(
+            child: PinnedFooterList(
+              // Single source of bottom clearance — no extra SafeArea below.
+              padding: EdgeInsets.only(bottom: 12 + safeBottom),
+              footerGap: 16,
+              children: [
+                _buildNarrowVoiceBar(isAdmin),
+                if (_items.isNotEmpty) _buildNarrowProgressRow(),
+                const SizedBox(height: 8),
+                if (_loadingBox)
+                  const Center(
+                    child: Padding(
+                      padding: EdgeInsets.all(24),
+                      child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2),
+                    ),
+                  )
+                else if (visibleItems.isEmpty)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+                    child: Text(
+                      _items.isEmpty ? 'No items in this box' : 'No counted items',
+                      style: const TextStyle(color: _kSub, fontSize: 14),
+                    ),
+                  )
+                else
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        for (int i = 0; i < visibleItems.length; i++) ...[
+                          _buildItemTile(visibleItems[i]),
+                          if (i < visibleItems.length - 1)
+                            const SizedBox(height: 4),
+                        ],
+                      ],
+                    ),
+                  ),
+              ],
+              footer: (!_loadingBox && _items.isNotEmpty)
+                  ? Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: _buildConfirmFooter(locked),
+                    )
+                  : const SizedBox.shrink(),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -2631,6 +2768,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   }
 
   // #113: extracted so PinnedFooterList can pass items as List<Widget>
+  // #116: arrivals shop mode shows recQty/recQty (counted/counted), not recQty/ordQty
   Widget _buildItemTile(Map<String, dynamic> item) {
     final state    = item['fulfillment_state']?.toString() ?? 'pending';
     final name     = item['product_name']?.toString() ?? '—';
@@ -2638,6 +2776,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     final recQty   = (item['received_qty'] as num?)?.toInt() ?? 0;
     final packType = item['pack_type']?.toString() ?? '';
     final imageUrl = item['image_url']?.toString();
+    final bool shopArrival = widget.arrivals && _supplierMode == 'shop';
+    final int denominator = shopArrival ? recQty : ordQty;
     return GestureDetector(
       onTap: (widget.arrivals && _arrivalsLocked) ? null : () => _showItemSheet(item),
       child: Container(
@@ -2659,14 +2799,14 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                   style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
                   maxLines: 1, overflow: TextOverflow.ellipsis),
               const SizedBox(height: 1),
-              Text(packType.isNotEmpty ? packType : '$recQty/$ordQty',
+              Text(packType.isNotEmpty ? packType : '$recQty/$denominator',
                   style: const TextStyle(fontSize: 11, color: _kSub),
                   maxLines: 1, overflow: TextOverflow.ellipsis),
             ]),
           ),
           const SizedBox(width: 8),
           Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
-            Text('$recQty/$ordQty',
+            Text('$recQty/$denominator',
                 style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText)),
             const SizedBox(height: 2),
             _StatePill(state),

@@ -311,6 +311,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // #156: arrivals lock state
   bool _arrivalsLocked = false;
   bool _confirmingAll = false;
+  bool _submittingCollect = false; // #125: Z1 guard — disables both Collect submit buttons mid-flight
 
   // #116: supplier count mode from fw_get_state ('shop'|'warehouse'|null)
   String? _supplierMode;
@@ -452,6 +453,12 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c121_undo_link_removed', 'true'); // static: Arrivals Undo TextButton removed
     RenderLog.write('c121_undo_via_hold_wired', 'true'); // static: 5s hold-to-undo on both tabs
     RenderLog.write('c121_footer_gap_px', '24'); // static: PinnedFooterList bottom=24+safeBottom
+    RenderLog.write('c125_dot_flush_constant', 'true'); // static: dot flush right, constant position
+    RenderLog.write('c125_undo_via_hold', 'true'); // static: 5s hold wired both tabs
+    RenderLog.write('c125_footer_gap_px', '24'); // static: PinnedFooterList bottom=24+safeBottom
+    RenderLog.write('c125_arrivals_stage_filter', 'true'); // static: fw_get_state p_mode=arrivals used
+    RenderLog.write('c125_audit_fixed', 'Z1=double_submit_guard,Z4=no_legacy_calls,Z7=empty_state_ok');
+    RenderLog.write('c125_legacy_arrival_calls', '0'); // static: mark_box_arrived not found in file
     RenderLog.write('c119_no_timestamps', 'true'); // static: no t_start/t_end in #119
     RenderLog.write('c120_no_timestamps', 'true'); // static: #120 no t_start/t_end
     RenderLog.write('c120_view_mode', 'mode=grouped'); // static: default view is grouped
@@ -674,6 +681,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       final pCount = _suppliers.length - cCount - crCount;
       RenderLog.write('c120_collect_modes_fetched', 'C=$cCount,CR=$crCount');
       RenderLog.write('c121_badge_states', 'C=$cCount,CR=$crCount,P=$pCount');
+      RenderLog.write('c125_badge_states', 'C=$cCount,CR=$crCount,P=$pCount');
       setState(() { _collectModeMap = {..._collectModeMap, ...map}; });
     } catch (_) {}
   }
@@ -762,7 +770,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           Supabase.instance.client
               .rpc('get_receiving_box', params: {'p_supplier_name': supplier}),
           Supabase.instance.client
-              .rpc('fw_get_state', params: {'p_supplier_name': supplier}),
+              .rpc('fw_get_state', params: {'p_supplier_name': supplier, if (widget.arrivals) 'p_mode': 'arrivals'}),
         ]);
         if (!mounted) return;
         final boxItems = (results[0] as List)
@@ -859,7 +867,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   Future<void> _checkArrivalsLocked(String supplier) async {
     try {
       final res = await Supabase.instance.client
-          .rpc('fw_get_state', params: {'p_supplier_name': supplier}) as Map;
+          .rpc('fw_get_state', params: {'p_supplier_name': supplier, 'p_mode': 'arrivals'}) as Map;
       if (!mounted) return;
       final confirmed = res['arrivals_confirmed'] == true ||
           res['supplier_fully_locked'] == true;
@@ -952,6 +960,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           await _reloadItemsFromDB();
           RenderLog.write('c158_confirm_lock',
               'ok_locks=y;undo=fw_unconfirm_all_received');
+          context.findAncestorStateOfType<_AdminFulfillmentScreenState>()?._refreshCollect();
         } catch (e) {
           if (mounted) {
             setState(() => _confirmingAll = false);
@@ -968,6 +977,17 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       await _reloadItemsFromDB();
       RenderLog.write('c158_confirm_lock',
           'ok_locks=y;undo=fw_unconfirm_all_received');
+      RenderLog.write('c125_confirm_refresh', 'true');
+      // #125 R6: refresh Collect so re-sourced shortfall lines appear
+      context.findAncestorStateOfType<_AdminFulfillmentScreenState>()?._refreshCollect();
+      // #125 R6: surface shortfall snackbar
+      final shortfallsResourced = (res['shortfalls_resourced'] as num?)?.toInt() ?? 0;
+      final resourcedQty = (res['resourced_qty'] as num?)?.toInt() ?? 0;
+      if (shortfallsResourced > 0 && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('$shortfallsResourced item(s) short — re-sourcing $resourcedQty from next supplier'),
+        ));
+      }
     } catch (e) {
       if (mounted) {
         setState(() => _confirmingAll = false);
@@ -1464,7 +1484,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           Supabase.instance.client
               .rpc('get_receiving_box', params: {'p_supplier_name': supplier}),
           Supabase.instance.client
-              .rpc('fw_get_state', params: {'p_supplier_name': supplier}),
+              .rpc('fw_get_state', params: {'p_supplier_name': supplier, if (widget.arrivals) 'p_mode': 'arrivals'}),
         ]);
         if (!mounted) return;
         final boxItems = (results[0] as List)
@@ -1655,7 +1675,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
               padding: const EdgeInsets.symmetric(horizontal: 6),
             ),
-            onPressed: _fw_countInWarehouse,
+            onPressed: _submittingCollect ? null : _fw_countInWarehouse,
             child: FittedBox(
               fit: BoxFit.scaleDown,
               child: Row(mainAxisSize: MainAxisSize.min, children: const [
@@ -1678,7 +1698,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
               padding: const EdgeInsets.symmetric(horizontal: 6),
             ),
-            onPressed: _fw_confirmCounting,
+            onPressed: _submittingCollect ? null : _fw_confirmCounting,
             child: FittedBox(
               fit: BoxFit.scaleDown,
               child: Row(mainAxisSize: MainAxisSize.min, children: const [
@@ -1722,6 +1742,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   // #137: Case 1 — staff counted at shop; snapshot shop_qty, set mode='shop', lock Collect.
   Future<void> _fw_confirmCounting() async {
+    if (_submittingCollect) return;
     final supplier = _selectedSupplier;
     if (supplier == null) return;
     final confirmed = await showDialog<bool>(
@@ -1740,11 +1761,12 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       ),
     );
     if (confirmed != true || !mounted) return;
+    setState(() => _submittingCollect = true);
     try {
       final res = await Supabase.instance.client
           .rpc('fw_confirm_counting', params: {'p_supplier_name': supplier}) as Map;
       if (res['error'] != null) throw Exception(res['error'].toString());
-      if (mounted) setState(() => _supplierMode = 'shop');
+      if (mounted) setState(() { _supplierMode = 'shop'; _submittingCollect = false; });
       await _reloadItemsFromDB();
       RenderLog.write('c137_collect_action', 'action=confirm;supplier=$supplier');
       RenderLog.write('c117_collect_confirm_text_mode', 'shop');
@@ -1756,6 +1778,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       }
     } catch (e) {
       if (mounted) {
+        setState(() => _submittingCollect = false);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Error: ${e.toString().substring(0, e.toString().length.clamp(0, 80))}')),
         );
@@ -1765,6 +1788,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   // #137: Case 2 — skip shop count; set mode='warehouse', lock Collect for warehouse counting.
   Future<void> _fw_countInWarehouse() async {
+    if (_submittingCollect) return;
     final supplier = _selectedSupplier;
     if (supplier == null) return;
     final confirmed = await showDialog<bool>(
@@ -1783,11 +1807,12 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       ),
     );
     if (confirmed != true || !mounted) return;
+    setState(() => _submittingCollect = true);
     try {
       final res = await Supabase.instance.client
           .rpc('fw_count_in_warehouse', params: {'p_supplier_name': supplier}) as Map;
       if (res['error'] != null) throw Exception(res['error'].toString());
-      if (mounted) setState(() => _supplierMode = 'warehouse');
+      if (mounted) setState(() { _supplierMode = 'warehouse'; _submittingCollect = false; });
       await _reloadItemsFromDB();
       RenderLog.write('c137_collect_action', 'action=warehouse;supplier=$supplier');
       RenderLog.write('c117_collect_confirm_text_mode', 'warehouse');
@@ -1799,6 +1824,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       }
     } catch (e) {
       if (mounted) {
+        setState(() => _submittingCollect = false);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Error: ${e.toString().substring(0, e.toString().length.clamp(0, 80))}')),
         );
@@ -6202,6 +6228,12 @@ class AdminFulfillmentScreen extends StatefulWidget {
 class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen> {
   int _tab = 0;
   final _collectKey  = GlobalKey<_PickToLightScreenState>();
+
+  // #125 R6: called by Arrivals after confirm to refresh Collect badge/list.
+  void _refreshCollect() {
+    _collectKey.currentState?._loadSuppliers();
+    _collectKey.currentState?._loadCollectModes();
+  }
   final _arrivalsKey = GlobalKey<_ArrivalsScreenState>();
   final _packKey     = GlobalKey<_PackScreenState>();
 

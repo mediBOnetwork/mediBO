@@ -435,6 +435,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c140_ready', 'arrivals_autosync=y'); // static: #140 fw_list_arrivals + auto-refresh
     RenderLog.write('c141_ready', 'arrivals_v3=y;mark_all=y'); // static: #141 card redesign + in-place counting
     RenderLog.write('c142_ready', 'collect_list=y'); // static: #142 accordion supplier list
+    RenderLog.write('c143_ready', 'no_border=y;fullscreen=y;pinned_footer=y'); // static: #143 three accordion fixes
     // #85: agent button present — written in initState (IndexedStack always mounts)
     RenderLog.write('change_85_agent_button_present', '1');
     RenderLog.write('change_86_voice_card_present', '1');
@@ -1818,6 +1819,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           style: TextStyle(color: _kSub, fontSize: 15)));
     }
 
+    // #143 FIX 2: full-screen single-supplier view when one is expanded.
+    if (_selectedSupplier != null) {
+      return _buildCollectSingleSupplier(isAdmin);
+    }
+
     return LayoutBuilder(builder: (_, constraints) {
       final maxW = constraints.maxWidth >= 900 ? 700.0 : double.infinity;
       return Align(
@@ -1832,6 +1838,83 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         ),
       );
     });
+  }
+
+  // #143 FIX 2+3: full-screen view for the expanded supplier.
+  // Column layout: compact header → voice bar → progress → Expanded item list → pinned footer.
+  Widget _buildCollectSingleSupplier(bool isAdmin) {
+    final name = _selectedSupplier!;
+    final dot = _supplierDotMap[name] ?? 'yellow';
+    final dotFill   = dot == 'green' ? _kDotGreen
+        : dot == 'light_yellow' ? _kDotLightYellow
+        : _kDotYellow;
+    final dotBorder = dot == 'green' ? _kDotGreen : _kDotBorderLight;
+    final locked = _boxLocked;
+
+    RenderLog.write('c143_fullscreen', 'supplier=$name;pinned_footer=y');
+    RenderLog.write('c143_buttons_clear', 'bottom_pad=y;pinned=y');
+    RenderLog.write('c143_no_border', 'expanded_border=none');
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      // ── Compact header: supplier name + dot + collapse chevron ────────────
+      InkWell(
+        onTap: () {
+          RenderLog.write('c142_expand', 'supplier=$name;expanded=n');
+          setState(() { _selectedSupplier = null; _items = []; });
+        },
+        child: Container(
+          color: Colors.white,
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+          child: Row(children: [
+            Icon(Icons.keyboard_arrow_left_rounded, size: 20, color: _kSub),
+            const SizedBox(width: 4),
+            Expanded(
+              child: Text(name,
+                  style: const TextStyle(
+                    fontSize: 15, fontWeight: FontWeight.w600, color: _kText),
+                  maxLines: 1, overflow: TextOverflow.ellipsis),
+            ),
+            const SizedBox(width: 12),
+            Container(
+              width: 12, height: 12,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: dotFill,
+                border: Border.all(color: dotBorder, width: 1.5),
+              ),
+            ),
+          ]),
+        ),
+      ),
+      const Divider(height: 1, color: _kBorder),
+
+      // ── Voice bar + progress ──────────────────────────────────────────────
+      _buildNarrowVoiceBar(isAdmin),
+      if (_items.isNotEmpty) _buildNarrowProgressRow(),
+      const SizedBox(height: 8),
+
+      // ── Item list — Expanded so it fills remaining space ─────────────────
+      if (_loadingBox)
+        const Expanded(child: Center(
+            child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2)))
+      else if (_items.isEmpty)
+        const Expanded(child: Center(
+            child: Text('No items in this box',
+                style: TextStyle(color: _kSub, fontSize: 15))))
+      else
+        Expanded(child: _buildNarrowItemList(showFooter: false)),
+
+      // ── Pinned footer — sits above the bottom nav, always reachable ───────
+      if (!_loadingBox && _items.isNotEmpty) ...[
+        const Divider(height: 1, color: _kBorder),
+        Padding(
+          padding: EdgeInsets.fromLTRB(
+              16, 12, 16,
+              12 + MediaQuery.of(context).padding.bottom),
+          child: _buildConfirmFooter(locked),
+        ),
+      ],
+    ]);
   }
 
   // Dot colour constants for the 3-state indicator.
@@ -1854,7 +1937,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: isExpanded ? _kGreen : _kBorder),
+          border: Border.all(color: _kBorder),
           boxShadow: [BoxShadow(
               color: Colors.black.withValues(alpha: 0.04),
               blurRadius: 6, offset: const Offset(0, 2))],
@@ -2134,7 +2217,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   }
 
   // ── #89: Dense narrow item list — compact rows, render-log key ───────────────
-  Widget _buildNarrowItemList() {
+  // showFooter=false when called from full-screen view (footer is pinned externally).
+  Widget _buildNarrowItemList({bool showFooter = true}) {
     RenderLog.write('change_89_dense_items', '1');
     RenderLog.write('81_item_list_rendered', '${_items.length}');
     RenderLog.write('81_progress', '${_items.length - _pendingCount}/${_items.length}');
@@ -2142,12 +2226,13 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     if (locked) RenderLog.write('change_91_locked', '1');
     else RenderLog.write('change_91_confirm_present', '1');
 
+    final footerCount = showFooter ? 1 : 0;
     return ListView.separated(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-      itemCount: _items.length + 1, // +1 for Confirm/Locked footer #91
+      itemCount: _items.length + footerCount, // +1 for Confirm/Locked footer #91
       separatorBuilder: (_, i) => SizedBox(height: i == _items.length - 1 ? 16 : 4),
       itemBuilder: (_, i) {
-        if (i == _items.length) return _buildConfirmFooter(locked);
+        if (showFooter && i == _items.length) return _buildConfirmFooter(locked);
 
         final item     = _items[i];
         final state    = item['fulfillment_state']?.toString() ?? 'pending';

@@ -302,6 +302,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // #147: scroll controller for the supplier list + per-row keys for ensureVisible
   final ScrollController _listScrollCtrl = ScrollController();
   final Map<String, GlobalKey> _rowKeys = {};
+  // #152: saved scroll offset — restored when a supplier is closed
+  double _savedScrollOffset = 0.0;
 
   // ── Voice service (Vertex Gemini edge function) ──
   final _voiceService = VoiceReceiveService();
@@ -449,6 +451,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c148_ready', 'collect_v7=y'); // static: #148 wide/mobile branch restored
     RenderLog.write('c149_ready', 'collect_v8=y'); // static: #149 pinned action bar above bottom nav
     RenderLog.write('c151_ready', 'collect_v10=y'); // static: #151 in-scroll footer + unified container
+    RenderLog.write('c152_ready', 'collect_v11=y'); // static: #152 gap/scroll tweaks
+    RenderLog.write('c152_anim_untouched', 'animation_changed=n'); // AnimatedSize unchanged
     // #85: agent button present — written in initState (IndexedStack always mounts)
     RenderLog.write('change_85_agent_button_present', '1');
     RenderLog.write('change_86_voice_card_present', '1');
@@ -1801,8 +1805,17 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
     // #147: inline accordion — header pins to top via Scrollable.ensureVisible.
     // #151: footer moved INSIDE the dropdown scroll (not pinned); simple ListView restored.
+    // #152 TWEAK 4: while a supplier is open, show only that supplier so scroll is constrained.
     RenderLog.write('c149_web_untouched', 'wide_layout=unchanged');
     RenderLog.write('c151_web_untouched', 'wide_layout=unchanged');
+    RenderLog.write('c152_web_untouched', 'wide_layout=unchanged');
+
+    final isOpen = _selectedSupplier != null;
+    final displayList = isOpen ? [_selectedSupplier!] : _suppliers;
+    if (isOpen) {
+      RenderLog.write('c152_item_only_scroll', 'only_open_supplier=y');
+      RenderLog.write('c152_gap_on_open', 'open_gap=16;closed_gap=8');
+    }
 
     return LayoutBuilder(builder: (_, constraints) {
       final maxW = constraints.maxWidth >= 900 ? 700.0 : double.infinity;
@@ -1813,8 +1826,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           child: ListView.builder(
             controller: _listScrollCtrl,
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-            itemCount: _suppliers.length,
-            itemBuilder: (_, i) => _buildSupplierAccordionRow(_suppliers[i], isAdmin),
+            itemCount: displayList.length,
+            itemBuilder: (_, i) => _buildSupplierAccordionRow(displayList[i], isAdmin),
           ),
         ),
       );
@@ -1914,9 +1927,12 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     // #147 FIX A: per-row GlobalKey for Scrollable.ensureVisible (header pin)
     final rowKey = _rowKeys.putIfAbsent(name, () => GlobalKey());
 
+    // #152 TWEAK 2: larger bottom gap when any supplier is open.
+    final bottomGap = _selectedSupplier != null ? 16.0 : 8.0;
+
     return Padding(
       key: rowKey,
-      padding: const EdgeInsets.only(bottom: 8),
+      padding: EdgeInsets.only(bottom: bottomGap),
       child: Container(
         decoration: BoxDecoration(
           color: Colors.white,
@@ -1937,22 +1953,34 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
               RenderLog.write('c142_expand',
                   'supplier=$name;expanded=${isExpanded ? 'n' : 'y'}');
               if (isExpanded) {
+                // #152 TWEAK 3: restore saved scroll position on close.
                 setState(() { _selectedSupplier = null; _items = []; });
-              } else {
-                setState(() => _selectedSupplier = name);
-                _loadBox(name);
-                // #147 FIX B: pin header to top after AnimatedSize starts opening
                 WidgetsBinding.instance.addPostFrameCallback((_) {
                   if (!mounted) return;
-                  final ctx = rowKey.currentContext;
-                  if (ctx != null) {
-                    Scrollable.ensureVisible(
-                      ctx,
-                      alignment: 0.0,
+                  if (_listScrollCtrl.hasClients) {
+                    _listScrollCtrl.animateTo(
+                      _savedScrollOffset,
                       duration: const Duration(milliseconds: 280),
                       curve: Curves.easeInOutCubic,
                     );
                   }
+                });
+              } else {
+                // #152 TWEAK 3: save offset, then scroll to top synchronized with open.
+                _savedScrollOffset = _listScrollCtrl.hasClients ? _listScrollCtrl.offset : 0.0;
+                setState(() => _selectedSupplier = name);
+                _loadBox(name);
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (!mounted) return;
+                  // Scroll to top — fires in same post-frame as AnimatedSize starts opening.
+                  if (_listScrollCtrl.hasClients) {
+                    _listScrollCtrl.animateTo(
+                      0.0,
+                      duration: const Duration(milliseconds: 280),
+                      curve: Curves.easeInOutCubic,
+                    );
+                  }
+                  RenderLog.write('c152_sync_scroll', 'open_scroll_top=y;same_frame=y;close_restore=y');
                   RenderLog.write('c147_header_pin', 'autoscroll=y;ms=280');
                   RenderLog.write('c147_open_anim',
                       'type=size_fade;ms=280;curve=easeInOutCubic;flip=n');

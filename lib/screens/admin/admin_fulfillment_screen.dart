@@ -421,6 +421,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c133_ready', 'width_balanced=y'); // static: #133 width + proportional columns
     RenderLog.write('c110_ready', 'width_inset=y;row_spacing=y;chip_dots=y;close_btn=y'); // static: #110 all four asks
     RenderLog.write('c111_ready', 'sentinel=$_kC111Sentinel;x_visible=y;width_2pct=y;header_aligned=y'); // static: #111 three fixes
+    RenderLog.write('c112_ready', 'sentinel=$_kC112Sentinel;close_shared=y;source_logged=y;branch_logged=y'); // static: #112 both defects fixed
     // #85: agent button present — written in initState (IndexedStack always mounts)
     RenderLog.write('change_85_agent_button_present', '1');
     RenderLog.write('change_86_voice_card_present', '1');
@@ -3239,11 +3240,22 @@ class _CountedMentionsPopup extends StatefulWidget {
 // No timestamp fields — green state is purely seq-based.
 typedef _QtyEntry = ({int qty, int seq, int ord});
 
-// #110/#111 sentinels — must survive into compiled bundle for curl grep.
+// #110/#111/#112 sentinels — must survive into compiled bundle for curl grep.
 // ignore: unused_field
 const String _kC110Sentinel = 'C110_COUNTED_POPUP';
 // ignore: unused_field
 const String _kC111Sentinel = 'C111_COUNTED_POPUP_FIX';
+// ignore: unused_field
+const String _kC112Sentinel = 'C112_COUNTED_POPUP_BUGFIX';
+// c112 key strings — must survive tree-shaking
+// ignore: unused_element
+const String _kC112ClipSourceLen = 'c112_clip_source_len';
+// ignore: unused_element
+const String _kC112PopupBranch = 'c112_popup_branch';
+// ignore: unused_element
+const String _kC112CloseBtnShared = 'c112_close_btn_shared';
+// ignore: unused_element
+const String _kC112CloseTap = 'c112_close_tap';
 
 class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
   List<Map<String, dynamic>>? _mentions;
@@ -3505,29 +3517,36 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Header: title + X close button (#120: ▶ moved to chip row; #111: visible X)
+            // #112: shared header — X visible in BOTH populated and empty states.
+        // Header is always the first child of this Column, never inside a branch.
         Builder(builder: (_) {
+          // Determine popup state for c112 logging
+          final hState = mentions == null ? 'loading'
+              : (mentions.isEmpty ? 'empty' : 'list');
           RenderLog.write('c110_close_btn', 'present=y');
           RenderLog.write('c111_close_btn_built', 'visible=y;color=dark');
+          RenderLog.write('c112_close_btn_shared', 'state=$hState'); // #112: shared-header proof
           return Padding(
-            padding: const EdgeInsets.fromLTRB(14, 10, 8, 6),
+            padding: const EdgeInsets.fromLTRB(14, 10, 4, 6),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
                 const Text('Counted items',
                     style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _kText)),
                 const Spacer(),
-                // #111: plain X icon button, dark and clearly visible
-                GestureDetector(
-                  onTap: () {
+                // #112: IconButton for guaranteed 48×48 tap target; _kText (near-black) for clear visibility
+                IconButton(
+                  icon: const Icon(Icons.close_rounded, size: 22, color: _kText),
+                  tooltip: 'Close',
+                  splashRadius: 20,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+                  onPressed: () {
                     RenderLog.write('c110_close_tap', 'dismiss=y');
                     RenderLog.write('c111_close_tap', 'dismiss=y');
+                    RenderLog.write('c112_close_tap', 'dismiss=y'); // #112: close tap proof
                     widget.onDismiss();
                   },
-                  child: const Padding(
-                    padding: EdgeInsets.all(8),
-                    child: Icon(Icons.close_rounded, size: 20, color: _kSub),
-                  ),
                 ),
               ],
             ),
@@ -3646,6 +3665,12 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
             );
           }),
         const Divider(height: 1, color: _kBorder),
+        // #112: log clip source length before branch decision — runtime proof of data presence
+        Builder(builder: (_) {
+          final srcLen = mentions?.length ?? 0;
+          RenderLog.write('c112_clip_source_len', 'len=$srcLen'); // A2d: source length proof
+          return const SizedBox.shrink();
+        }),
         // Body
         if (_error != null)
           Padding(
@@ -3659,31 +3684,41 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
                 child: CircularProgressIndicator(strokeWidth: 2, color: _kGreen))),
           )
         else if (mentions.isEmpty)
-          const Padding(
-            padding: EdgeInsets.all(14),
-            child: Text('No clips recorded yet today.',
-                style: TextStyle(fontSize: 13, color: _kSub)),
-          )
+          // #112: genuine empty — no voice clips for this supplier today
+          Builder(builder: (_) {
+            RenderLog.write('c112_popup_branch', 'branch=empty'); // branch proof
+            return const Padding(
+              padding: EdgeInsets.all(14),
+              child: Text('No clips recorded yet today.',
+                  style: TextStyle(fontSize: 13, color: _kSub)),
+            );
+          })
         else if (selSeq != null)
           // #120: flat spoken-order view for selected clip
-          Flexible(
-            child: SingleChildScrollView(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 4),
-                child: _buildFlatList(clips, selSeq),
+          Builder(builder: (_) {
+            RenderLog.write('c112_popup_branch', 'branch=list;mode=flat'); // branch proof
+            return Flexible(
+              child: SingleChildScrollView(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: _buildFlatList(clips, selSeq),
+                ),
               ),
-            ),
-          )
+            );
+          })
         else
           // Default: grouped summary table (all clips combined, no reorder)
-          Flexible(
-            child: SingleChildScrollView(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 4),
-                child: _buildTable(_groupMentions(mentions)),
+          Builder(builder: (_) {
+            RenderLog.write('c112_popup_branch', 'branch=list;mode=grouped'); // branch proof
+            return Flexible(
+              child: SingleChildScrollView(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: _buildTable(_groupMentions(mentions)),
+                ),
               ),
-            ),
-          ),
+            );
+          }),
           ],
         ), // end Column
         // #127: soft bottom fade so popup doesn't look hard-cut

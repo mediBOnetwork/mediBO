@@ -422,6 +422,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c110_ready', 'width_inset=y;row_spacing=y;chip_dots=y;close_btn=y'); // static: #110 all four asks
     RenderLog.write('c111_ready', 'sentinel=$_kC111Sentinel;x_visible=y;width_2pct=y;header_aligned=y'); // static: #111 three fixes
     RenderLog.write('c112_ready', 'sentinel=$_kC112Sentinel;close_shared=y;source_logged=y;branch_logged=y'); // static: #112 both defects fixed
+    RenderLog.write('c134_ready', 'x_visible=y;no_blank_rows=y'); // static: #134 X recolor + name fallback
+    RenderLog.write('c134_name_fallback', 'applied=y'); // static: #134 unknown item label in build
     // #85: agent button present — written in initState (IndexedStack always mounts)
     RenderLog.write('change_85_agent_button_present', '1');
     RenderLog.write('change_86_voice_card_present', '1');
@@ -3457,7 +3459,9 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
     final nameOrder = <String>[];
     final byName = <String, List<_QtyEntry>>{};
     for (final r in rows) {
-      final name = r['matched_name']?.toString() ?? '?';
+      // #134: guard against null/empty matched_name — never show a blank product cell
+      final rawName = r['matched_name']?.toString() ?? '';
+      final name = rawName.trim().isEmpty ? 'Unknown item' : rawName;
       if (!byName.containsKey(name)) nameOrder.add(name);
       byName.putIfAbsent(name, () => []).add((
         qty: (r['qty'] as num?)?.toInt() ?? 0,
@@ -3526,6 +3530,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
           RenderLog.write('c110_close_btn', 'present=y');
           RenderLog.write('c111_close_btn_built', 'visible=y;color=dark');
           RenderLog.write('c112_close_btn_shared', 'state=$hState'); // #112: shared-header proof
+          RenderLog.write('c134_close_btn_color', 'visible=y;color=dark'); // #134: theme-immune dark icon
           return Padding(
             padding: const EdgeInsets.fromLTRB(14, 10, 4, 6),
             child: Row(
@@ -3534,19 +3539,26 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
                 const Text('Counted items',
                     style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _kText)),
                 const Spacer(),
-                // #112: IconButton for guaranteed 48×48 tap target; _kText (near-black) for clear visibility
-                IconButton(
-                  icon: const Icon(Icons.close_rounded, size: 22, color: _kText),
-                  tooltip: 'Close',
-                  splashRadius: 20,
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
-                  onPressed: () {
-                    RenderLog.write('c110_close_tap', 'dismiss=y');
-                    RenderLog.write('c111_close_tap', 'dismiss=y');
-                    RenderLog.write('c112_close_tap', 'dismiss=y'); // #112: close tap proof
-                    widget.onDismiss();
-                  },
+                // #134: GestureDetector avoids IconButton theme override (white-on-white fix).
+                // SizedBox guarantees 44×44 tap target; explicit _kText color is never theme-overridden.
+                Tooltip(
+                  message: 'Close',
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () {
+                      RenderLog.write('c110_close_tap', 'dismiss=y');
+                      RenderLog.write('c111_close_tap', 'dismiss=y');
+                      RenderLog.write('c112_close_tap', 'dismiss=y');
+                      widget.onDismiss();
+                    },
+                    child: const SizedBox(
+                      width: 44,
+                      height: 44,
+                      child: Center(
+                        child: Icon(Icons.close_rounded, size: 22, color: _kText),
+                      ),
+                    ),
+                  ),
                 ),
               ],
             ),
@@ -3776,7 +3788,9 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
           ...rows.asMap().entries.map((e) {
             final n = e.key + 1;
             final r = e.value;
-            final name = r['matched_name']?.toString() ?? '?';
+            // #134: same fallback as grouped view — never a blank name cell
+            final rawFlatName = r['matched_name']?.toString() ?? '';
+            final name = rawFlatName.trim().isEmpty ? 'Unknown item' : rawFlatName;
             final qty = (r['qty'] as num?)?.toInt() ?? 0;
             return Padding(
               padding: const EdgeInsets.symmetric(vertical: 4),

@@ -447,6 +447,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c147_btn_row', 'layout=horizontal;equal_width=y;height=44;pill_height=44;match=y'); // static: buttons always side-by-side at 44px
     RenderLog.write('c147_label', 'text=Collected and sent to warehouse'); // static: locked label renamed
     RenderLog.write('c148_ready', 'collect_v7=y'); // static: #148 wide/mobile branch restored
+    RenderLog.write('c149_ready', 'collect_v8=y'); // static: #149 pinned action bar above bottom nav
     // #85: agent button present — written in initState (IndexedStack always mounts)
     RenderLog.write('change_85_agent_button_present', '1');
     RenderLog.write('change_86_voice_card_present', '1');
@@ -1799,19 +1800,44 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
     // #147 FIX B: inline accordion — header pins to top via Scrollable.ensureVisible.
     // AnimatedSwitcher removed; AnimatedSize in each row handles smooth open/close.
+    // #149: Column layout — Expanded list + static pinned action bar above bottom nav.
+    final locked = _boxLocked;
+    final showPinnedBar = _selectedSupplier != null && !_loadingBox && _items.isNotEmpty;
+    final safeBottom = MediaQuery.of(context).padding.bottom;
+    if (showPinnedBar) {
+      RenderLog.write('c149_pinned_bar', 'static=y;above_nav=y;state=${locked ? 'locked' : 'active'}');
+      RenderLog.write('c149_list_pad', 'bottom_pad=0');
+    }
+    RenderLog.write('c149_web_untouched', 'wide_layout=unchanged');
+
     return LayoutBuilder(builder: (_, constraints) {
       final maxW = constraints.maxWidth >= 900 ? 700.0 : double.infinity;
-      return Align(
-        alignment: Alignment.topCenter,
-        child: ConstrainedBox(
-          constraints: BoxConstraints(maxWidth: maxW),
-          child: ListView.builder(
-            controller: _listScrollCtrl,
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-            itemCount: _suppliers.length,
-            itemBuilder: (_, i) => _buildSupplierAccordionRow(_suppliers[i], isAdmin),
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Expanded(
+            child: Align(
+              alignment: Alignment.topCenter,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: maxW),
+                child: ListView.builder(
+                  controller: _listScrollCtrl,
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+                  itemCount: _suppliers.length,
+                  itemBuilder: (_, i) => _buildSupplierAccordionRow(_suppliers[i], isAdmin),
+                ),
+              ),
+            ),
           ),
-        ),
+          // #149: pinned action bar — static, always above bottom nav, never scrolls away.
+          if (showPinnedBar) ...[
+            const Divider(height: 1, color: _kBorder),
+            Padding(
+              padding: EdgeInsets.fromLTRB(16, 12, 16, 12 + safeBottom),
+              child: _buildConfirmFooter(locked),
+            ),
+          ],
+        ],
       );
     });
   }
@@ -2012,7 +2038,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                     else
                       ConstrainedBox(
                         constraints: const BoxConstraints(maxHeight: 500),
-                        child: _buildNarrowItemList(),
+                        child: _buildNarrowItemList(showFooter: false),
                       ),
                   ])
                 : const SizedBox.shrink(),

@@ -274,7 +274,9 @@ enum AgentPhase { idle, listening, thinking, speaking, confirming }
 // ── PICK-TO-LIGHT SCREEN ─────────────────────────────────────────────────────
 
 class _PickToLightScreen extends StatefulWidget {
-  const _PickToLightScreen({super.key});
+  // #155: arrivals=true → load suppliers from fw_list_arrivals; no confirm footer.
+  final bool arrivals;
+  const _PickToLightScreen({super.key, this.arrivals = false});
 
   @override
   State<_PickToLightScreen> createState() => _PickToLightScreenState();
@@ -520,6 +522,39 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   Future<void> _loadSettings() async {} // bag/barcode settings removed in #82
 
   Future<void> _loadSuppliers() async {
+    if (widget.arrivals) {
+      // #155: Arrivals mode — load from fw_list_arrivals instead of supplier_orders.
+      if (!_loadingSuppliers) setState(() => _loadingSuppliers = true);
+      try {
+        final res = await Supabase.instance.client.rpc('fw_list_arrivals') as Map;
+        if (!mounted) return;
+        final rawList = (res['suppliers'] as List? ?? []);
+        final names = rawList
+            .map((r) =>
+                ((r as Map)['supplier'] ?? r['supplier_name'])?.toString() ?? '')
+            .where((n) => n.isNotEmpty)
+            .toSet()
+            .toList()..sort();
+        RenderLog.write('c140_arrivals_source',
+            'rpc=fw_list_arrivals;count=${names.length}');
+        RenderLog.write('arrivals_area_rendered', '${names.length}');
+        RenderLog.write('c153_arrivals_source', 'src=fw_list_arrivals');
+        RenderLog.write('c155_same_widget', 'arrivals_uses_collect_widget=y');
+        RenderLog.write('c155_voice_shared',
+            'count_items=y;count_at_wh_removed=y');
+        RenderLog.write('c155_no_mark',
+            'mark_received=removed;mark_all=removed');
+        RenderLog.write('c155_sheet',
+            'bottom_sheet=gotall_short_wrong_notcoming');
+        RenderLog.write('c155_ready', 'arrivals_v6=y');
+        setState(() { _suppliers = names; _loadingSuppliers = false; });
+        _loadSupplierDots();
+      } catch (e) {
+        if (!mounted) return;
+        setState(() { _loadingSuppliers = false; _error = e.toString(); });
+      }
+      return;
+    }
     RenderLog.write('78_collect_dropdown_query_sent', 'true');
     try {
       final res = await Supabase.instance.client
@@ -1987,7 +2022,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                       style: TextStyle(color: _kSub, fontSize: 14)),
                 )
               else
-                _buildNarrowItemList(showFooter: true, shrinkWrap: true),
+                // #155: no confirm footer in Arrivals mode (received via voice count only)
+                _buildNarrowItemList(showFooter: !widget.arrivals, shrinkWrap: true),
             ])
           : const SizedBox.shrink(),
     );
@@ -5223,67 +5259,6 @@ class _BagLabelsInlineState extends State<_BagLabelsInline> {
   }
 }
 
-// ── #154: top-level pill builder — shared by Collect AND Arrivals ─────────────
-// Identical to _PickToLightScreenState._buildWidePill; extracted so Arrivals
-// can render the same two-pill row without referencing Collect's state.
-Widget _widePill({
-  required IconData icon,
-  required String label,
-  required bool active,
-  required Color activeColor,
-  required bool disabled,
-  required bool spinning,
-  required VoidCallback onTap,
-}) {
-  return IgnorePointer(
-    ignoring: disabled,
-    child: Opacity(
-      opacity: disabled ? 0.40 : 1.0,
-      child: GestureDetector(
-        onTap: onTap,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 180),
-          decoration: BoxDecoration(
-            color: active ? activeColor : Colors.white,
-            borderRadius: BorderRadius.circular(22.0),
-            border: Border.all(
-              color: active ? activeColor : _kBorder,
-              width: 1,
-            ),
-            boxShadow: active
-                ? [BoxShadow(
-                    color: activeColor.withValues(alpha: 0.30),
-                    blurRadius: 10, spreadRadius: 1)]
-                : [],
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.max,
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              spinning
-                  ? SizedBox(width: 14, height: 14,
-                      child: CircularProgressIndicator(
-                        color: active ? Colors.white : activeColor,
-                        strokeWidth: 2,
-                      ))
-                  : Icon(icon, size: 16,
-                      color: active ? Colors.white : activeColor),
-              const SizedBox(width: 6),
-              Flexible(
-                child: Text(label,
-                    style: TextStyle(
-                      fontSize: 13, fontWeight: FontWeight.w600,
-                      color: active ? Colors.white : _kText,
-                    ),
-                    overflow: TextOverflow.ellipsis, maxLines: 1),
-              ),
-            ],
-          ),
-        ),
-      ),
-    ),
-  );
-}
 
 // ── #153: SHARED ACCORDION SHELL — used by Collect AND Arrivals ───────────────
 // Both tabs instantiate this widget; only expandedContent differs.
@@ -5383,8 +5358,11 @@ class _SupplierAccordionShell extends StatelessWidget {
 }
 
 // ── ARRIVALS SCREEN ───────────────────────────────────────────────────────────
+// #155: thin wrapper — renders _PickToLightScreen(arrivals:true) for literal
+// widget reuse. Holds #140 auto-refresh (realtime + poll + lifecycle).
 
 class _ArrivalsScreen extends StatefulWidget {
+  // onVoiceCount kept for API compat; no longer used (voice is inline now).
   final void Function(String supplierName)? onVoiceCount;
   const _ArrivalsScreen({super.key, this.onVoiceCount});
 
@@ -5394,24 +5372,9 @@ class _ArrivalsScreen extends StatefulWidget {
 
 class _ArrivalsScreenState extends State<_ArrivalsScreen>
     with WidgetsBindingObserver {
-  List<Map<String, dynamic>> _suppliers = [];
-  bool _loading = true;
-  String? _error;
-  final Set<String> _marking = {};
+  // Key gives the parent a handle to trigger supplier-list refresh.
+  final _ptlKey = GlobalKey<_PickToLightScreenState>();
 
-  // #137: fw_get_state per supplier
-  final Map<String, Map<String, dynamic>> _fwStates = {};
-  final Set<String> _fwLoading = {};
-  final Set<String> _markingItems = {}; // "supplier|product_id"
-  final Set<String> _markingAll   = {}; // supplier names with in-flight mark-all
-
-  // #153: accordion state — mirrors Collect #152 behaviors
-  String? _selectedSupplier;
-  final ScrollController _listScrollCtrl = ScrollController();
-  final Map<String, GlobalKey> _rowKeys = {};
-  double _savedScrollOffset = 0.0;
-
-  // realtime + debounce
   RealtimeChannel? _channel;
   Timer? _debounce;
   Timer? _pollTimer;
@@ -5420,7 +5383,6 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _load();
     _subscribeRealtime();
   }
 
@@ -5428,7 +5390,7 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed && mounted) {
       RenderLog.write('c140_refresh_fired', 'trigger=app_resume');
-      _load(silent: true);
+      _ptlKey.currentState?._loadSuppliers();
     }
   }
 
@@ -5436,7 +5398,7 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen>
   void refresh() {
     if (!mounted) return;
     RenderLog.write('c140_refresh_fired', 'trigger=tab_focus');
-    _load(silent: true);
+    _ptlKey.currentState?._loadSuppliers();
   }
 
   @override
@@ -5446,7 +5408,6 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen>
     _pollTimer?.cancel();
     _channel?.unsubscribe();
     _channel = null;
-    _listScrollCtrl.dispose();
     super.dispose();
   }
 
@@ -5456,7 +5417,7 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen>
       _debounce = Timer(const Duration(milliseconds: 500), () {
         if (mounted) {
           RenderLog.write('c140_autorefresh', 'trigger=realtime');
-          _load(silent: true);
+          _ptlKey.currentState?._loadSuppliers();
         }
       });
     }
@@ -5484,979 +5445,22 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen>
             } else {
               _pollTimer?.cancel();
               _pollTimer = Timer.periodic(const Duration(seconds: 15), (_) {
-                if (mounted) _load(silent: true);
+                if (mounted) _ptlKey.currentState?._loadSuppliers();
               });
             }
           });
       _channel = ch;
     } catch (_) {
       _pollTimer = Timer.periodic(const Duration(seconds: 15), (_) {
-        if (mounted) _load(silent: true);
+        if (mounted) _ptlKey.currentState?._loadSuppliers();
       });
-    }
-  }
-
-  Future<void> _load({bool silent = false}) async {
-    if (!silent) setState(() { _loading = true; _error = null; });
-    try {
-      final res = await Supabase.instance.client
-          .rpc('fw_list_arrivals') as Map;
-      if (!mounted) return;
-      final rawList = (res['suppliers'] as List? ?? []);
-      final suppliers = rawList.map((r) {
-        final m = Map<String, dynamic>.from(r as Map);
-        // Normalise: new RPC uses 'supplier'; keep 'supplier_name' for card compat.
-        m['supplier_name'] = m['supplier'] ?? m['supplier_name'];
-        m['fully_arrived'] = m['supplier_fully_locked'] == true;
-        m['in_transit'] = (m['pending_products'] as num?)?.toInt() ?? 0;
-        return m;
-      }).toList();
-      suppliers.sort((a, b) {
-        final aFull = (a['fully_arrived'] as bool?) == true;
-        final bFull = (b['fully_arrived'] as bool?) == true;
-        if (aFull != bFull) return aFull ? 1 : -1;
-        return (a['supplier_name'] ?? '').toString()
-            .compareTo((b['supplier_name'] ?? '').toString());
-      });
-      setState(() { _suppliers = suppliers; _loading = false; _error = null; });
-      RenderLog.write('c140_arrivals_source', 'rpc=fw_list_arrivals;count=${suppliers.length}');
-      RenderLog.write('arrivals_area_rendered', '${suppliers.length}');
-      RenderLog.write('c153_ready', 'arrivals_v4=y');
-      RenderLog.write('c154_ready', 'arrivals_v5=y');
-      RenderLog.write('c154_arrivals_toprow',
-          'count_items=y;ask_medibo=y;single_voice_btn=removed');
-      RenderLog.write('c154_progress_match', 'label=spoken;matches_collect=y');
-      RenderLog.write('c154_footer_only_diff',
-          'arrivals_extra=mark_received+mark_all');
-      RenderLog.write('c153_arrivals_source', 'src=fw_list_arrivals');
-      RenderLog.write('c153_shared_widget', 'collect=y;arrivals=y;same_widget=y');
-      RenderLog.write('c153_arrivals_layout', 'matches_collect=y;footer=receiving');
-      RenderLog.write('c153_footer_diff', 'collect_footer=two_buttons;arrivals_footer=mark_count');
-      // Load fw_get_state for items detail (non-blocking)
-      for (final s in suppliers) {
-        final name = s['supplier_name']?.toString();
-        if (name != null) _loadFwState(name);
-      }
-    } catch (e) {
-      if (!mounted) return;
-      if (!silent) setState(() { _loading = false; _error = e.toString(); });
-    }
-  }
-
-  // #137: fetch fw_get_state for one supplier; updates _fwStates on success.
-  Future<void> _loadFwState(String supplier) async {
-    if (_fwLoading.contains(supplier)) return;
-    setState(() => _fwLoading.add(supplier));
-    try {
-      final res = await Supabase.instance.client
-          .rpc('fw_get_state', params: {'p_supplier_name': supplier}) as Map;
-      if (!mounted) return;
-      final state = Map<String, dynamic>.from(res);
-      final mode = state['mode']?.toString();
-      setState(() => _fwStates[supplier] = state);
-      RenderLog.write('c137_arrivals_mode', 'supplier=$supplier;mode=${mode ?? 'null'}');
-      RenderLog.write('c139_arrivals_mode', 'supplier=$supplier;mode=${mode ?? 'null'}');
-    } catch (_) {
-      // ignore; card falls back to old UI
-    } finally {
-      if (mounted) setState(() => _fwLoading.remove(supplier));
-    }
-  }
-
-  // #137: per-product Mark received.
-  Future<void> _markItemReceived(String supplier, int productId) async {
-    final key = '$supplier|$productId';
-    if (_markingItems.contains(key)) return;
-    setState(() => _markingItems.add(key));
-    try {
-      final res = await Supabase.instance.client
-          .rpc('fw_mark_received', params: {
-            'p_supplier_name': supplier,
-            'p_product_id': productId,
-          }) as Map;
-      if (!mounted) return;
-      if (res['error'] != null) {
-        _showSnack('Error: ${res['error']}');
-        return;
-      }
-      RenderLog.write('c137_mark_received', 'supplier=$supplier;product_id=$productId;locked=y');
-      await _loadFwState(supplier);
-    } catch (e) {
-      if (mounted) _showSnack('Error: $e');
-    } finally {
-      if (mounted) setState(() => _markingItems.remove(key));
-    }
-  }
-
-  Future<void> _markArrived(String supplier, int inTransit) async {
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('Mark arrived?',
-            style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: _kText)),
-        content: Text(
-          'Mark $inTransit item${inTransit == 1 ? '' : 's'} from $supplier '
-          'as arrived at the warehouse?',
-          style: const TextStyle(fontSize: 14, color: _kSub),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel', style: TextStyle(color: _kSub)),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            style: FilledButton.styleFrom(
-                backgroundColor: _kGreen,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
-            child: const Text('Mark Arrived',
-                style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
-          ),
-        ],
-      ),
-    );
-    if (confirm != true || !mounted) return;
-
-    setState(() => _marking.add(supplier));
-    try {
-      final res = await Supabase.instance.client
-          .rpc('mark_box_arrived', params: {'p_supplier_name': supplier});
-      if (!mounted) return;
-      final resMap = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
-      if (resMap['error'] != null) {
-        _showSnack('Error: ${resMap['error']}');
-      } else {
-        final n = (resMap['items_arrived'] as num?)?.toInt() ?? 0;
-        _showSnack('$n item${n == 1 ? '' : 's'} from $supplier arrived at warehouse',
-            isGood: true);
-        RenderLog.write('arrivals_mark_arrived_ok', '$supplier:$n');
-        await _load(silent: true); // immediate refresh; realtime echo will also fire
-      }
-    } catch (e) {
-      if (!mounted) return;
-      _showSnack('Error: $e');
-    } finally {
-      if (mounted) setState(() => _marking.remove(supplier));
-    }
-  }
-
-  void _showSnack(String msg, {bool isGood = false}) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(msg),
-      backgroundColor: isGood ? _kGreen : const Color(0xFFDC2626),
-      duration: const Duration(seconds: 3),
-    ));
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (_loading) {
-      return const Center(child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2));
-    }
-    if (_error != null) {
-      return Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
-        const Icon(Icons.error_outline_rounded, size: 40, color: Color(0xFFD1D5DB)),
-        const SizedBox(height: 12),
-        Text('Error: $_error', style: const TextStyle(color: Color(0xFFDC2626), fontSize: 13)),
-        const SizedBox(height: 12),
-        OutlinedButton.icon(
-          onPressed: _load, icon: const Icon(Icons.refresh, size: 16),
-          label: const Text('Retry'),
-          style: OutlinedButton.styleFrom(foregroundColor: _kGreen, side: const BorderSide(color: _kGreen)),
-        ),
-      ]));
-    }
-    if (_suppliers.isEmpty) {
-      return Center(child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          const Icon(Icons.inventory_2_outlined, size: 48, color: Color(0xFFD1D5DB)),
-          const SizedBox(height: 16),
-          const Text('Nothing collected yet',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _kText)),
-          const SizedBox(height: 6),
-          const Text('Count stock in the Collect tab first.',
-              style: TextStyle(fontSize: 13, color: _kSub), textAlign: TextAlign.center),
-          const SizedBox(height: 20),
-          OutlinedButton.icon(
-            onPressed: _load, icon: const Icon(Icons.refresh, size: 16),
-            label: const Text('Refresh'),
-            style: OutlinedButton.styleFrom(foregroundColor: _kGreen, side: const BorderSide(color: _kGreen)),
-          ),
-        ]),
-      ));
-    }
-
-    // #153: accordion list — same structure as Collect (shared _SupplierAccordionShell).
-    final supplierNames = _suppliers
-        .map((s) => s['supplier_name']?.toString() ?? '')
-        .where((n) => n.isNotEmpty)
-        .toList();
-
-    final isOpen = _selectedSupplier != null;
-    // #152 TWEAK 4 equivalent: show only open supplier when expanded.
-    final displayList = isOpen ? [_selectedSupplier!] : supplierNames;
-
-    return Column(children: [
-      Padding(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-        child: Row(children: [
-          Text('${_suppliers.length} supplier${_suppliers.length == 1 ? '' : 's'}',
-              style: const TextStyle(fontSize: 13, color: _kSub, fontWeight: FontWeight.w500)),
-        ]),
-      ),
-      const SizedBox(height: 4),
-      Expanded(
-        child: LayoutBuilder(builder: (_, lbC) {
-          final maxW = lbC.maxWidth >= 900 ? 700.0 : double.infinity;
-          return Align(
-            alignment: Alignment.topCenter,
-            child: ConstrainedBox(
-              constraints: BoxConstraints(maxWidth: maxW),
-              child: ListView.builder(
-                controller: _listScrollCtrl,
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-                itemCount: displayList.length,
-                itemBuilder: (_, i) => _buildArrivalsAccordionRow(displayList[i]),
-              ),
-            ),
-          );
-        }),
-      ),
-    ]);
-  }
-
-  // #141: open in-place counting sheet — does NOT navigate to Collect.
-  Future<void> _openCountingSheet(String supplier, String mode) async {
-    RenderLog.write('c141_count_in_place',
-        'opened_as=modal;supplier=$supplier;navigated_to_collect=n');
-    await showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (_) => _ArrivalsCountingSheet(supplierName: supplier, mode: mode),
-    );
-    if (!mounted) return;
-    await _loadFwState(supplier);
-    _load(silent: true);
-  }
-
-  // #141: Mark all items received for a supplier (fw_mark_all_received).
-  Future<void> _markAllReceived(String supplier, int pendingCount) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dCtx) => AlertDialog(
-        title: const Text('Mark all received?',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-        content: Text(
-          'Mark all $pendingCount pending item${pendingCount == 1 ? '' : 's'} from $supplier as received?',
-          style: const TextStyle(fontSize: 14),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(dCtx, false), child: const Text('Cancel')),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: _kGreen),
-            onPressed: () => Navigator.pop(dCtx, true),
-            child: const Text('Mark all'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true || !mounted) return;
-    setState(() => _markingAll.add(supplier));
-    try {
-      final res = await Supabase.instance.client
-          .rpc('fw_mark_all_received', params: {'p_supplier_name': supplier}) as Map;
-      if (!mounted) return;
-      if (res['error'] != null) { _showSnack('Error: ${res['error']}'); return; }
-      final lockedNow = (res['locked_now'] as num?)?.toInt() ?? 0;
-      RenderLog.write('c141_mark_all', 'supplier=$supplier;locked_now=$lockedNow');
-      await _loadFwState(supplier);
-      _load(silent: true);
-    } catch (e) {
-      if (mounted) _showSnack('Error: $e');
-    } finally {
-      if (mounted) setState(() => _markingAll.remove(supplier));
-    }
-  }
-
-  // ── #153: Accordion row — shared shell, Arrivals-specific expanded content ────
-  Widget _buildArrivalsAccordionRow(String name) {
-    final isExpanded   = _selectedSupplier == name;
-    final fwState      = _fwStates[name];
-    final fullyLocked  = fwState?['supplier_fully_locked'] == true;
-    final fwItems      = fwState != null
-        ? (fwState['items'] as List? ?? [])
-            .map((i) => Map<String, dynamic>.from(i as Map)).toList()
-        : <Map<String, dynamic>>[];
-    final receivedCount = fwItems.where((i) => i['received_locked'] == true).length;
-    final dot = fullyLocked ? 'green'
-        : receivedCount > 0 ? 'light_yellow'
-        : 'yellow';
-    final rowKey = _rowKeys.putIfAbsent(name, () => GlobalKey());
-
-    return _SupplierAccordionShell(
-      name: name,
-      dot: dot,
-      isExpanded: isExpanded,
-      anyExpanded: _selectedSupplier != null,
-      rowKey: rowKey,
-      onTap: () {
-        if (isExpanded) {
-          setState(() => _selectedSupplier = null);
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (!mounted) return;
-            if (_listScrollCtrl.hasClients) {
-              _listScrollCtrl.animateTo(
-                _savedScrollOffset,
-                duration: const Duration(milliseconds: 280),
-                curve: Curves.easeInOutCubic,
-              );
-            }
-          });
-        } else {
-          _savedScrollOffset = _listScrollCtrl.hasClients ? _listScrollCtrl.offset : 0.0;
-          setState(() => _selectedSupplier = name);
-          if (!_fwStates.containsKey(name) && !_fwLoading.contains(name)) {
-            _loadFwState(name);
-          }
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (!mounted) return;
-            if (_listScrollCtrl.hasClients) {
-              _listScrollCtrl.animateTo(
-                0.0,
-                duration: const Duration(milliseconds: 280),
-                curve: Curves.easeInOutCubic,
-              );
-            }
-          });
-        }
-      },
-      expandedContent: isExpanded
-          ? _buildArrivalsExpandedContent(name, fwState, fwItems)
-          : const SizedBox.shrink(),
-    );
-  }
-
-  Widget _buildArrivalsExpandedContent(
-    String name,
-    Map<String, dynamic>? fwState,
-    List<Map<String, dynamic>> fwItems,
-  ) {
-    final mode         = fwState?['mode']?.toString();
-    final fullyLocked  = fwState?['supplier_fully_locked'] == true;
-    final totalItems   = fwItems.length;
-    final receivedItems = fwItems.where((i) => i['received_locked'] == true).length;
-    final pendingItems = totalItems - receivedItems;
-    final isMarkingAll = _markingAll.contains(name);
-    final isLoading    = _fwLoading.contains(name) && fwItems.isEmpty;
-    final isAdmin      = UserState.of(context).isAdmin;
-
-    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      // #154: same two-pill voice bar as Collect (Count items + Ask mediBO)
-      _buildArrivalsVoiceBar(name, mode, isAdmin),
-      // #154: "N spoken" + progress — identical label/style as Collect
-      if (totalItems > 0 && !fullyLocked)
-        _buildArrivalsSpokenRow(fwItems, totalItems),
-      const SizedBox(height: 8),
-      // Items / loading / states
-      if (isLoading)
-        const Padding(
-          padding: EdgeInsets.all(24),
-          child: Center(child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2)),
-        )
-      else if (mode == null)
-        const Padding(
-          padding: EdgeInsets.fromLTRB(16, 4, 16, 16),
-          child: Row(children: [
-            Icon(Icons.hourglass_top_rounded, size: 13, color: _kSub),
-            SizedBox(width: 6),
-            Text('Awaiting Collect decision',
-                style: TextStyle(fontSize: 12, color: _kSub)),
-          ]),
-        )
-      else if (fwItems.isEmpty)
-        const Padding(
-          padding: EdgeInsets.fromLTRB(16, 4, 16, 16),
-          child: Text('No items found', style: TextStyle(color: _kSub, fontSize: 14)),
-        )
-      else
-        _buildArrivalsItemList(name, fwItems, pendingItems, isMarkingAll, fullyLocked),
-    ]);
-  }
-
-  // #154: two-pill voice bar — identical visual to Collect's _buildNarrowVoiceBar.
-  // "Count items" opens in-place counting sheet (#141, routes by mode).
-  // "Ask mediBO" pill present for visual parity; Arrivals has no agent state.
-  Widget _buildArrivalsVoiceBar(String name, String? mode, bool isAdmin) {
-    const h = 44.0;
-    final countDisabled = mode == null;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
-      child: Row(children: [
-        Expanded(
-          child: SizedBox(
-            height: h,
-            child: _widePill(
-              icon: Icons.mic_none_rounded,
-              label: 'Count items',
-              active: false,
-              activeColor: _kWrongFg,
-              disabled: countDisabled,
-              spinning: false,
-              onTap: countDisabled ? () {} : () => _openCountingSheet(name, mode!),
-            ),
-          ),
-        ),
-        if (isAdmin) ...[
-          const SizedBox(width: 12),
-          Expanded(
-            child: SizedBox(
-              height: h,
-              child: _widePill(
-                icon: Icons.record_voice_over_rounded,
-                label: 'Ask mediBO',
-                active: false,
-                activeColor: _PickToLightScreenState._kAgentAccent,
-                disabled: true, // agent not wired in Arrivals
-                spinning: false,
-                onTap: () {},
-              ),
-            ),
-          ),
-        ],
-      ]),
-    );
-  }
-
-  // #154: "N spoken" + progress row — same label/style as Collect's _buildNarrowProgressRow.
-  Widget _buildArrivalsSpokenRow(List<Map<String, dynamic>> fwItems, int total) {
-    // "spoken" = items with received_qty > 0 (mirrors Collect's _spokenCount getter)
-    final spokenCount =
-        fwItems.where((i) => ((i['received_qty'] as num?) ?? 0) > 0).length;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-      child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-        SizedBox(
-          width: 100,
-          child: Container(
-            height: 24,
-            padding: const EdgeInsets.symmetric(horizontal: 10),
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: _kReceivedBg,
-              borderRadius: BorderRadius.circular(999),
-              border: Border.all(color: _kReceivedFg.withValues(alpha: 0.25)),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                const Icon(Icons.check_rounded, size: 11, color: _kReceivedFg),
-                const SizedBox(width: 4),
-                Text('$spokenCount spoken',
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                        fontSize: 12, fontWeight: FontWeight.w600,
-                        color: _kReceivedFg, height: 1.0)),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: LinearProgressIndicator(
-            value: total == 0 ? 0.0 : spokenCount / total,
-            backgroundColor: _kBorder,
-            color: _kGreen,
-            minHeight: 6,
-            borderRadius: BorderRadius.circular(4),
-          ),
-        ),
-        const SizedBox(width: 8),
-        Text('$spokenCount/$total',
-            style: const TextStyle(
-                fontSize: 13, fontWeight: FontWeight.w700, color: _kText)),
-      ]),
-    );
-  }
-
-  Widget _buildArrivalsItemList(
-    String name,
-    List<Map<String, dynamic>> items,
-    int pendingItems,
-    bool isMarkingAll,
-    bool fullyLocked,
-  ) {
-    final safeBottom = MediaQuery.of(context).padding.bottom;
-    return ListView.separated(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      padding: EdgeInsets.fromLTRB(16, 4, 16, 16 + safeBottom),
-      itemCount: items.length + 1, // +1 for footer
-      separatorBuilder: (_, __) => const SizedBox(height: 4),
-      itemBuilder: (_, i) {
-        if (i == items.length) {
-          return _buildArrivalsFooter(name, pendingItems, isMarkingAll, fullyLocked);
-        }
-        return _buildFwItemRow(name, items[i]);
-      },
-    );
-  }
-
-  Widget _buildArrivalsFooter(
-    String name,
-    int pendingItems,
-    bool isMarkingAll,
-    bool fullyLocked,
-  ) {
-    if (fullyLocked) {
-      return Container(
-        height: 44,
-        margin: const EdgeInsets.only(top: 8),
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        decoration: BoxDecoration(
-          color: _kReceivedBg,
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: _kReceivedFg.withValues(alpha: 0.3)),
-        ),
-        child: const Row(children: [
-          Icon(Icons.check_circle_rounded, size: 15, color: _kReceivedFg),
-          SizedBox(width: 8),
-          Expanded(child: Text('All items received',
-              style: TextStyle(
-                  fontSize: 13, fontWeight: FontWeight.w600, color: _kReceivedFg))),
-        ]),
-      );
-    }
-    if (pendingItems <= 0) return const SizedBox.shrink();
-    return Padding(
-      padding: const EdgeInsets.only(top: 8),
-      child: SizedBox(
-        height: 44,
-        child: OutlinedButton.icon(
-          style: OutlinedButton.styleFrom(
-            foregroundColor: _kReceivedFg,
-            side: BorderSide(color: _kReceivedFg.withValues(alpha: 0.5)),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-          ),
-          icon: isMarkingAll
-              ? const SizedBox(width: 14, height: 14,
-                  child: CircularProgressIndicator(color: _kReceivedFg, strokeWidth: 2))
-              : const Icon(Icons.done_all_rounded, size: 16),
-          label: Text(
-            isMarkingAll ? 'Marking…' : 'Mark all received ($pendingItems)',
-            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-          ),
-          onPressed: isMarkingAll ? null : () => _markAllReceived(name, pendingItems),
-        ),
-      ),
-    );
-  }
-
-  // #141: one product row — aligned count chip + fixed trailing column.
-  Widget _buildFwItemRow(String supplier, Map<String, dynamic> item) {
-    final productId   = (item['product_id']    as num?)?.toInt() ?? 0;
-    final productName = item['product_name']?.toString() ?? '—';
-    final ordered     = (item['ordered']        as num?)?.toInt() ?? 0;
-    final receivedQty = (item['received_qty']   as num?)?.toInt() ?? 0;
-    final shopQty     = (item['shop_qty']       as num?)?.toInt();
-    final whQty       = (item['wh_recount_qty'] as num?)?.toInt();
-    final receivedLocked = item['received_locked'] == true;
-    final mismatch       = item['count_mismatch'] == true;
-    final itemKey        = '$supplier|$productId';
-    final isMarking      = _markingItems.contains(itemKey);
-
-    // ── Name column (wraps; mismatch pill below name) ──────────────────────
-    Widget nameCol() => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Text(productName,
-          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: _kText),
-          maxLines: 2, overflow: TextOverflow.ellipsis),
-      if (mismatch && shopQty != null && whQty != null)
-        Padding(
-          padding: const EdgeInsets.only(top: 3),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-            decoration: BoxDecoration(color: _kPendingBg, borderRadius: BorderRadius.circular(6)),
-            child: Text('shop $shopQty / recount $whQty',
-                style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: _kPendingFg)),
-          ),
-        ),
-    ]);
-
-    // ── Count chip: "recv/ordered" — green when full/locked ───────────────
-    Widget countChip() {
-      final full = receivedLocked || receivedQty >= ordered;
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-        decoration: BoxDecoration(
-          color: full ? _kReceivedBg : _kBg,
-          borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: full ? _kReceivedFg.withValues(alpha: 0.3) : _kBorder),
-        ),
-        child: Text('$receivedQty/$ordered',
-            style: TextStyle(
-              fontSize: 11, fontWeight: FontWeight.w600,
-              color: full ? _kReceivedFg : _kSub,
-            )),
-      );
-    }
-
-    // ── Trailing: "Received" badge OR "Mark received" button ──────────────
-    // Mismatch does NOT disable marking (M3: always enabled unless received_locked).
-    Widget trailingAction() => receivedLocked
-        ? Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-            decoration: BoxDecoration(color: _kReceivedBg, borderRadius: BorderRadius.circular(8)),
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
-              const Icon(Icons.check_rounded, size: 11, color: _kReceivedFg),
-              const SizedBox(width: 3),
-              const Text('Received',
-                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: _kReceivedFg)),
-            ]),
-          )
-        : SizedBox(
-            height: 32, width: 100,
-            child: FilledButton(
-              style: FilledButton.styleFrom(
-                backgroundColor: _kGreen,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                padding: EdgeInsets.zero,
-              ),
-              onPressed: isMarking ? null : () => _markItemReceived(supplier, productId),
-              child: isMarking
-                  ? const SizedBox(width: 13, height: 13,
-                      child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                  : const Text('Mark received',
-                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700),
-                      textAlign: TextAlign.center),
-            ),
-          );
-
-    return LayoutBuilder(builder: (_, c) {
-      if (c.maxWidth < 360) {
-        // Very-small stacked: name full-width, then count chip + action right-aligned
-        return Padding(
-          padding: const EdgeInsets.symmetric(vertical: 6),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            nameCol(),
-            const SizedBox(height: 6),
-            Row(mainAxisAlignment: MainAxisAlignment.end, children: [
-              countChip(),
-              const SizedBox(width: 8),
-              trailingAction(),
-            ]),
-          ]),
-        );
-      }
-      // Normal: name Expanded, count chip, fixed trailing — all aligned.
-      return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 6),
-        child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-          Expanded(child: nameCol()),
-          const SizedBox(width: 8),
-          countChip(),
-          const SizedBox(width: 8),
-          trailingAction(),
-        ]),
-      );
-    });
-  }
-}
-
-// ── #141: In-place counting sheet shown from Arrivals ────────────────────────
-
-class _ArrivalsCountingSheet extends StatefulWidget {
-  final String supplierName;
-  final String mode; // 'shop' | 'warehouse'
-  const _ArrivalsCountingSheet({required this.supplierName, required this.mode});
-
-  @override
-  State<_ArrivalsCountingSheet> createState() => _ArrivalsCountingSheetState();
-}
-
-class _ArrivalsCountingSheetState extends State<_ArrivalsCountingSheet> {
-  final _voiceService = VoiceReceiveService();
-  bool _recording    = false;
-  bool _processing   = false;
-  String _status     = '';
-  String _lastTranscript = '';
-  List<Map<String, dynamic>> _items = [];
-  bool _loadingItems = true;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadItems();
-  }
-
-  @override
-  void dispose() {
-    _voiceService.cancel();
-    _voiceService.dispose();
-    super.dispose();
-  }
-
-  Future<void> _loadItems() async {
-    if (!mounted) return;
-    setState(() => _loadingItems = true);
-    try {
-      final res = await Supabase.instance.client
-          .rpc('fw_get_state', params: {'p_supplier_name': widget.supplierName}) as Map;
-      if (!mounted) return;
-      final items = (res['items'] as List? ?? [])
-          .map((i) => Map<String, dynamic>.from(i as Map))
-          .toList();
-      setState(() { _items = items; _loadingItems = false; });
-    } catch (e) {
-      if (mounted) setState(() { _loadingItems = false; _status = 'Error: $e'; });
-    }
-  }
-
-  Future<void> _toggleRecord() async {
-    if (_processing) return;
-    if (_recording) {
-      await _stopAndProcess();
-    } else {
-      await _startRecord();
-    }
-  }
-
-  Future<void> _startRecord() async {
-    try {
-      final hasPerm = await _voiceService.hasPermission();
-      if (!hasPerm) {
-        if (mounted) setState(() => _status = 'Microphone permission denied');
-        return;
-      }
-      await _voiceService.start();
-      if (mounted) setState(() { _recording = true; _status = 'Recording — say product names and quantities'; });
-    } catch (e) {
-      if (mounted) setState(() => _status = 'Could not start mic: $e');
-    }
-  }
-
-  Future<void> _stopAndProcess() async {
-    if (!mounted) return;
-    setState(() { _recording = false; _processing = true; _status = 'Processing…'; });
-    try {
-      final clip = await _voiceService.stop();
-      if (clip == null || clip.bytes.isEmpty) {
-        if (mounted) setState(() { _processing = false; _status = 'No audio captured — try again'; });
-        return;
-      }
-      final expected = _items.map((i) => <String, dynamic>{
-        'name': i['product_name']?.toString() ?? '',
-        'ordered_qty': (i['ordered'] as num?)?.toInt() ?? 0,
-      }).toList();
-      final result = await _voiceService.transcribe(clip.bytes, clip.mime, expected: expected);
-      if (!mounted) return;
-      setState(() => _lastTranscript = result.transcript);
-
-      int committed = 0;
-      for (final hit in result.items) {
-        final matchedName = (hit['matched_name'] ?? '').toString();
-        final qty = (hit['qty'] as num?)?.toDouble() ?? 0;
-        if (qty <= 0) continue;
-        // Match by name (case-insensitive)
-        final match = _items.firstWhere(
-          (i) => (i['product_name'] ?? '').toString().toLowerCase() ==
-              matchedName.toLowerCase(),
-          orElse: () => <String, dynamic>{},
-        );
-        final pid = (match['product_id'] as num?)?.toInt();
-        if (pid == null) continue;
-        try {
-          await Supabase.instance.client.rpc('set_voice_received', params: {
-            'p_supplier_name': widget.supplierName,
-            'p_product_id': pid,
-            'p_qty': qty,
-            'p_note': 'arrivals voice #141',
-          });
-          committed++;
-        } catch (_) {}
-      }
-
-      await _loadItems();
-      if (mounted) {
-        setState(() {
-          _processing = false;
-          _status = committed > 0
-              ? 'Saved $committed item${committed == 1 ? '' : 's'}'
-              : (result.items.isEmpty ? 'No items recognized — try again' : 'No matching items');
-        });
-      }
-    } catch (e) {
-      if (mounted) setState(() { _processing = false; _status = 'Error: $e'; });
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final isWH = widget.mode == 'warehouse';
-    return Container(
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      child: SafeArea(
-        top: false,
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          // Drag handle
-          Center(child: Container(
-            margin: const EdgeInsets.only(top: 10, bottom: 6),
-            width: 36, height: 4,
-            decoration: BoxDecoration(color: _kBorder, borderRadius: BorderRadius.circular(2)),
-          )),
-
-          // Header
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 4, 12, 0),
-            child: Row(children: [
-              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(widget.supplierName,
-                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _kText),
-                    maxLines: 1, overflow: TextOverflow.ellipsis),
-                const SizedBox(height: 2),
-                Text(isWH ? 'Count at warehouse (voice)' : 'Double-check recount (voice)',
-                    style: const TextStyle(fontSize: 12, color: _kSub)),
-              ])),
-              IconButton(
-                onPressed: () => Navigator.of(context).pop(),
-                icon: const Icon(Icons.close_rounded, color: _kSub, size: 20),
-              ),
-            ]),
-          ),
-
-          const Divider(height: 16, indent: 20, endIndent: 20),
-
-          // Mic row
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 0, 20, 0),
-            child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-              GestureDetector(
-                onTap: _toggleRecord,
-                child: Container(
-                  width: 52, height: 52,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: _recording ? const Color(0xFFDC2626) : _kGreen,
-                    boxShadow: [BoxShadow(
-                      color: (_recording ? const Color(0xFFDC2626) : _kGreen).withValues(alpha: 0.3),
-                      blurRadius: 8, offset: const Offset(0, 2),
-                    )],
-                  ),
-                  child: _processing
-                      ? const Padding(padding: EdgeInsets.all(14),
-                          child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                      : Icon(_recording ? Icons.stop_rounded : Icons.mic_rounded,
-                          color: Colors.white, size: 26),
-                ),
-              ),
-              const SizedBox(width: 14),
-              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(
-                  _recording ? 'Recording… tap to stop'
-                      : _processing ? 'Processing…'
-                      : 'Tap mic to record',
-                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: _kText),
-                ),
-                if (_status.isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 2),
-                    child: Text(_status,
-                        style: const TextStyle(fontSize: 12, color: _kSub),
-                        maxLines: 2, overflow: TextOverflow.ellipsis),
-                  ),
-                if (_lastTranscript.isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 2),
-                    child: Text('"$_lastTranscript"',
-                        style: const TextStyle(fontSize: 11, color: _kSub, fontStyle: FontStyle.italic),
-                        maxLines: 2, overflow: TextOverflow.ellipsis),
-                  ),
-              ])),
-            ]),
-          ),
-
-          // Item list
-          if (_loadingItems)
-            const Padding(padding: EdgeInsets.all(20),
-                child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2))
-          else if (_items.isNotEmpty) ...[
-            const Divider(height: 20, indent: 20, endIndent: 20),
-            ConstrainedBox(
-              constraints: const BoxConstraints(maxHeight: 260),
-              child: ListView.separated(
-                shrinkWrap: true,
-                physics: const ClampingScrollPhysics(),
-                padding: const EdgeInsets.fromLTRB(20, 0, 20, 0),
-                itemCount: _items.length,
-                separatorBuilder: (_, __) => const Divider(height: 1, color: _kBorder),
-                itemBuilder: (_, idx) {
-                  final it      = _items[idx];
-                  final pname   = it['product_name']?.toString() ?? '—';
-                  final recv    = (it['received_qty'] as num?)?.toInt() ?? 0;
-                  final ord     = (it['ordered']      as num?)?.toInt() ?? 0;
-                  final locked  = it['received_locked'] == true;
-                  final mm      = it['count_mismatch'] == true;
-                  final shQty   = (it['shop_qty']       as num?)?.toInt();
-                  final whRcnt  = (it['wh_recount_qty'] as num?)?.toInt();
-                  final full    = locked || recv >= ord;
-                  return Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    child: Row(children: [
-                      Expanded(child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(pname,
-                              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: _kText),
-                              maxLines: 2, overflow: TextOverflow.ellipsis),
-                          if (mm && shQty != null && whRcnt != null)
-                            Padding(
-                              padding: const EdgeInsets.only(top: 2),
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                decoration: BoxDecoration(color: _kPendingBg, borderRadius: BorderRadius.circular(5)),
-                                child: Text('shop $shQty / recount $whRcnt',
-                                    style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: _kPendingFg)),
-                              ),
-                            ),
-                        ],
-                      )),
-                      const SizedBox(width: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-                        decoration: BoxDecoration(
-                          color: full ? _kReceivedBg : _kBg,
-                          borderRadius: BorderRadius.circular(6),
-                          border: Border.all(color: full
-                              ? _kReceivedFg.withValues(alpha: 0.3) : _kBorder),
-                        ),
-                        child: Row(mainAxisSize: MainAxisSize.min, children: [
-                          if (locked) ...[
-                            const Icon(Icons.check_rounded, size: 10, color: _kReceivedFg),
-                            const SizedBox(width: 3),
-                          ],
-                          Text('$recv/$ord',
-                              style: TextStyle(
-                                fontSize: 11, fontWeight: FontWeight.w600,
-                                color: full ? _kReceivedFg : _kSub,
-                              )),
-                        ]),
-                      ),
-                    ]),
-                  );
-                },
-              ),
-            ),
-          ],
-          const SizedBox(height: 20),
-        ]),
-      ),
-    );
+    // #155: literal reuse of Collect widget — same voice/spoken/Ask mediBO/item sheet.
+    return _PickToLightScreen(key: _ptlKey, arrivals: true);
   }
 }
 

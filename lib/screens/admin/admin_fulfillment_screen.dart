@@ -446,6 +446,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c147_name_align', 'collapsed_pad=16;expanded_pad=16;equal=y'); // static: inline accordion — same padding both states
     RenderLog.write('c147_btn_row', 'layout=horizontal;equal_width=y;height=44;pill_height=44;match=y'); // static: buttons always side-by-side at 44px
     RenderLog.write('c147_label', 'text=Collected and sent to warehouse'); // static: locked label renamed
+    RenderLog.write('c148_ready', 'collect_v7=y'); // static: #148 wide/mobile branch restored
     // #85: agent button present — written in initState (IndexedStack always mounts)
     RenderLog.write('change_85_agent_button_present', '1');
     RenderLog.write('change_86_voice_card_present', '1');
@@ -2040,7 +2041,14 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       final _cw = constraints.maxWidth;
       final _band = _cw < 340 ? 'verySmall' : _cw < 400 ? 'small' : _cw < 600 ? 'medium' : _cw < 900 ? 'large' : 'desktop';
       RenderLog.write('c138_size_band', 'band=$_band;w=${_cw.toInt()}');
-      // #142: accordion list for all widths
+      // #148: width-branch — wide (>=900) → old desktop layout; narrow → mobile accordion
+      final mode = _cw >= 900 ? 'web' : 'mobile';
+      RenderLog.write('c148_layout_branch', 'width=${_cw.toInt()};mode=$mode;breakpoint=900');
+      if (_cw >= 900) {
+        RenderLog.write('c148_web_layout', 'top_row=y;table=y');
+        return _buildCollectWide(isAdmin);
+      }
+      RenderLog.write('c148_mobile_untouched', 'list_accordion=y');
       return _buildCollectList(isAdmin);
     });
   }

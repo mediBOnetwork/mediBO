@@ -5223,6 +5223,68 @@ class _BagLabelsInlineState extends State<_BagLabelsInline> {
   }
 }
 
+// ── #154: top-level pill builder — shared by Collect AND Arrivals ─────────────
+// Identical to _PickToLightScreenState._buildWidePill; extracted so Arrivals
+// can render the same two-pill row without referencing Collect's state.
+Widget _widePill({
+  required IconData icon,
+  required String label,
+  required bool active,
+  required Color activeColor,
+  required bool disabled,
+  required bool spinning,
+  required VoidCallback onTap,
+}) {
+  return IgnorePointer(
+    ignoring: disabled,
+    child: Opacity(
+      opacity: disabled ? 0.40 : 1.0,
+      child: GestureDetector(
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          decoration: BoxDecoration(
+            color: active ? activeColor : Colors.white,
+            borderRadius: BorderRadius.circular(22.0),
+            border: Border.all(
+              color: active ? activeColor : _kBorder,
+              width: 1,
+            ),
+            boxShadow: active
+                ? [BoxShadow(
+                    color: activeColor.withValues(alpha: 0.30),
+                    blurRadius: 10, spreadRadius: 1)]
+                : [],
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.max,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              spinning
+                  ? SizedBox(width: 14, height: 14,
+                      child: CircularProgressIndicator(
+                        color: active ? Colors.white : activeColor,
+                        strokeWidth: 2,
+                      ))
+                  : Icon(icon, size: 16,
+                      color: active ? Colors.white : activeColor),
+              const SizedBox(width: 6),
+              Flexible(
+                child: Text(label,
+                    style: TextStyle(
+                      fontSize: 13, fontWeight: FontWeight.w600,
+                      color: active ? Colors.white : _kText,
+                    ),
+                    overflow: TextOverflow.ellipsis, maxLines: 1),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
 // ── #153: SHARED ACCORDION SHELL — used by Collect AND Arrivals ───────────────
 // Both tabs instantiate this widget; only expandedContent differs.
 
@@ -5460,6 +5522,7 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen>
       RenderLog.write('c140_arrivals_source', 'rpc=fw_list_arrivals;count=${suppliers.length}');
       RenderLog.write('arrivals_area_rendered', '${suppliers.length}');
       RenderLog.write('c153_ready', 'arrivals_v4=y');
+      RenderLog.write('c154_ready', 'arrivals_v5=y');
       RenderLog.write('c153_arrivals_source', 'src=fw_list_arrivals');
       RenderLog.write('c153_shared_widget', 'collect=y;arrivals=y;same_widget=y');
       RenderLog.write('c153_arrivals_layout', 'matches_collect=y;footer=receiving');
@@ -5784,33 +5847,20 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen>
     final pendingItems = totalItems - receivedItems;
     final isMarkingAll = _markingAll.contains(name);
     final isLoading    = _fwLoading.contains(name) && fwItems.isEmpty;
+    final isAdmin      = UserState.of(context).isAdmin;
+
+    RenderLog.write('c154_arrivals_toprow',
+        'count_items=y;ask_medibo=y;single_voice_btn=removed');
+    RenderLog.write('c154_progress_match', 'label=spoken;matches_collect=y');
+    RenderLog.write('c154_footer_only_diff',
+        'arrivals_extra=mark_received+mark_all');
 
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      // Primary action button
-      if (mode != null && !fullyLocked)
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
-          child: SizedBox(
-            height: 44,
-            child: FilledButton.icon(
-              style: FilledButton.styleFrom(
-                backgroundColor: _kGreen,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-              ),
-              icon: Icon(mode == 'shop' ? Icons.find_replace_rounded : Icons.mic_none_rounded,
-                  size: 17, color: Colors.white),
-              label: Text(
-                mode == 'shop' ? 'Double-check' : 'Count item (voice)',
-                style: const TextStyle(
-                    fontSize: 13, fontWeight: FontWeight.w600, color: Colors.white),
-              ),
-              onPressed: () => _openCountingSheet(name, mode),
-            ),
-          ),
-        ),
-      // Progress bar
+      // #154: same two-pill voice bar as Collect (Count items + Ask mediBO)
+      _buildArrivalsVoiceBar(name, mode, isAdmin),
+      // #154: "N spoken" + progress — identical label/style as Collect
       if (totalItems > 0 && !fullyLocked)
-        _buildArrivalsProgressRow(receivedItems, totalItems),
+        _buildArrivalsSpokenRow(fwItems, totalItems),
       const SizedBox(height: 8),
       // Items / loading / states
       if (isLoading)
@@ -5838,26 +5888,88 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen>
     ]);
   }
 
-  Widget _buildArrivalsProgressRow(int received, int total) {
+  // #154: two-pill voice bar — identical visual to Collect's _buildNarrowVoiceBar.
+  // "Count items" opens in-place counting sheet (#141, routes by mode).
+  // "Ask mediBO" pill present for visual parity; Arrivals has no agent state.
+  Widget _buildArrivalsVoiceBar(String name, String? mode, bool isAdmin) {
+    const h = 44.0;
+    final countDisabled = mode == null;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+      child: Row(children: [
+        Expanded(
+          child: SizedBox(
+            height: h,
+            child: _widePill(
+              icon: Icons.mic_none_rounded,
+              label: 'Count items',
+              active: false,
+              activeColor: _kWrongFg,
+              disabled: countDisabled,
+              spinning: false,
+              onTap: countDisabled ? () {} : () => _openCountingSheet(name, mode!),
+            ),
+          ),
+        ),
+        if (isAdmin) ...[
+          const SizedBox(width: 12),
+          Expanded(
+            child: SizedBox(
+              height: h,
+              child: _widePill(
+                icon: Icons.record_voice_over_rounded,
+                label: 'Ask mediBO',
+                active: false,
+                activeColor: _PickToLightScreenState._kAgentAccent,
+                disabled: true, // agent not wired in Arrivals
+                spinning: false,
+                onTap: () {},
+              ),
+            ),
+          ),
+        ],
+      ]),
+    );
+  }
+
+  // #154: "N spoken" + progress row — same label/style as Collect's _buildNarrowProgressRow.
+  Widget _buildArrivalsSpokenRow(List<Map<String, dynamic>> fwItems, int total) {
+    // "spoken" = items with received_qty > 0 (mirrors Collect's _spokenCount getter)
+    final spokenCount =
+        fwItems.where((i) => ((i['received_qty'] as num?) ?? 0) > 0).length;
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
       child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-        Container(
-          constraints: const BoxConstraints(maxWidth: 110),
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-          decoration: BoxDecoration(
-            color: _kReceivedBg,
-            borderRadius: BorderRadius.circular(20),
+        SizedBox(
+          width: 100,
+          child: Container(
+            height: 24,
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: _kReceivedBg,
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(color: _kReceivedFg.withValues(alpha: 0.25)),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                const Icon(Icons.check_rounded, size: 11, color: _kReceivedFg),
+                const SizedBox(width: 4),
+                Text('$spokenCount spoken',
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                        fontSize: 12, fontWeight: FontWeight.w600,
+                        color: _kReceivedFg, height: 1.0)),
+              ],
+            ),
           ),
-          child: Text('$received received',
-              style: const TextStyle(
-                  fontSize: 11, fontWeight: FontWeight.w600, color: _kReceivedFg),
-              maxLines: 1, overflow: TextOverflow.clip),
         ),
         const SizedBox(width: 8),
         Expanded(
           child: LinearProgressIndicator(
-            value: total == 0 ? 0.0 : received / total,
+            value: total == 0 ? 0.0 : spokenCount / total,
             backgroundColor: _kBorder,
             color: _kGreen,
             minHeight: 6,
@@ -5865,7 +5977,7 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen>
           ),
         ),
         const SizedBox(width: 8),
-        Text('$received/$total',
+        Text('$spokenCount/$total',
             style: const TextStyle(
                 fontSize: 13, fontWeight: FontWeight.w700, color: _kText)),
       ]),

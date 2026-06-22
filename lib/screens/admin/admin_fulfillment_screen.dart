@@ -429,6 +429,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c137_ready', 'two_case_flow=y'); // static: #137 two-case workflow wired
     RenderLog.write('c138_ready', 'rw_responsive=y'); // static: #138 fully responsive layout
     RenderLog.write('c139_ready', 'arrivals_v2=y'); // static: #139 new mode-driven Arrivals
+    RenderLog.write('c140_ready', 'arrivals_autosync=y'); // static: #140 fw_list_arrivals + auto-refresh
     // #85: agent button present — written in initState (IndexedStack always mounts)
     RenderLog.write('change_85_agent_button_present', '1');
     RenderLog.write('change_86_voice_card_present', '1');
@@ -4953,14 +4954,13 @@ class _ArrivalsScreen extends StatefulWidget {
   State<_ArrivalsScreen> createState() => _ArrivalsScreenState();
 }
 
-class _ArrivalsScreenState extends State<_ArrivalsScreen> {
+class _ArrivalsScreenState extends State<_ArrivalsScreen>
+    with WidgetsBindingObserver {
   List<Map<String, dynamic>> _suppliers = [];
   bool _loading = true;
   String? _error;
   final Set<String> _marking = {};
-  bool _arrivalsLive = false;
   bool _redesignLogged = false;
-  bool _arrivalsHintDismissed = false;
 
   // #137: fw_get_state per supplier
   final Map<String, Map<String, dynamic>> _fwStates = {};
@@ -4975,12 +4975,29 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _load();
     _subscribeRealtime();
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && mounted) {
+      RenderLog.write('c140_refresh_fired', 'trigger=app_resume');
+      _load(silent: true);
+    }
+  }
+
+  // Called by parent when Arrivals tab becomes visible.
+  void refresh() {
+    if (!mounted) return;
+    RenderLog.write('c140_refresh_fired', 'trigger=tab_focus');
+    _load(silent: true);
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _debounce?.cancel();
     _pollTimer?.cancel();
     _channel?.unsubscribe();
@@ -4989,32 +5006,37 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen> {
   }
 
   void _subscribeRealtime() {
+    void onDbChange(_) {
+      _debounce?.cancel();
+      _debounce = Timer(const Duration(milliseconds: 500), () {
+        if (mounted) {
+          RenderLog.write('c140_autorefresh', 'trigger=realtime');
+          _load(silent: true);
+        }
+      });
+    }
     try {
       final ch = Supabase.instance.client
-          .channel('arrivals_order_items')
+          .channel('arrivals_c140')
           .onPostgresChanges(
             event: PostgresChangeEvent.all,
             schema: 'public',
             table: 'order_items',
-            callback: (_) {
-              _debounce?.cancel();
-              _debounce = Timer(const Duration(milliseconds: 500), () {
-                if (mounted) {
-                  RenderLog.write('change_88_arrivals_autorefreshed', '1');
-                  _load(silent: true);
-                }
-              });
-            },
+            callback: onDbChange,
+          )
+          .onPostgresChanges(
+            event: PostgresChangeEvent.all,
+            schema: 'public',
+            table: 'supplier_count_mode',
+            callback: onDbChange,
           )
           .subscribe((status, [error]) {
             if (!mounted) return;
             final live = status == RealtimeSubscribeStatus.subscribed;
-            setState(() => _arrivalsLive = live);
             if (live) {
-              RenderLog.write('change_88_arrivals_realtime_subscribed', '1');
+              RenderLog.write('c140_autorefresh', 'realtime=subscribed');
               _pollTimer?.cancel();
             } else {
-              // fallback poll every 15s when realtime is not live
               _pollTimer?.cancel();
               _pollTimer = Timer.periodic(const Duration(seconds: 15), (_) {
                 if (mounted) _load(silent: true);
@@ -5023,7 +5045,6 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen> {
           });
       _channel = ch;
     } catch (_) {
-      // realtime unavailable — fall back to poll
       _pollTimer = Timer.periodic(const Duration(seconds: 15), (_) {
         if (mounted) _load(silent: true);
       });
@@ -5034,9 +5055,17 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen> {
     if (!silent) setState(() { _loading = true; _error = null; });
     try {
       final res = await Supabase.instance.client
-          .rpc('get_supplier_arrival_status') as List;
+          .rpc('fw_list_arrivals') as Map;
       if (!mounted) return;
-      final suppliers = res.map((r) => Map<String, dynamic>.from(r as Map)).toList();
+      final rawList = (res['suppliers'] as List? ?? []);
+      final suppliers = rawList.map((r) {
+        final m = Map<String, dynamic>.from(r as Map);
+        // Normalise: new RPC uses 'supplier'; keep 'supplier_name' for card compat.
+        m['supplier_name'] = m['supplier'] ?? m['supplier_name'];
+        m['fully_arrived'] = m['supplier_fully_locked'] == true;
+        m['in_transit'] = (m['pending_products'] as num?)?.toInt() ?? 0;
+        return m;
+      }).toList();
       suppliers.sort((a, b) {
         final aFull = (a['fully_arrived'] as bool?) == true;
         final bFull = (b['fully_arrived'] as bool?) == true;
@@ -5045,8 +5074,9 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen> {
             .compareTo((b['supplier_name'] ?? '').toString());
       });
       setState(() { _suppliers = suppliers; _loading = false; _error = null; });
+      RenderLog.write('c140_arrivals_source', 'rpc=fw_list_arrivals;count=${suppliers.length}');
       RenderLog.write('arrivals_area_rendered', '${suppliers.length}');
-      // #137: load fw_get_state for each supplier (non-blocking, updates cards as they resolve)
+      // Load fw_get_state for items detail (non-blocking)
       for (final s in suppliers) {
         final name = s['supplier_name']?.toString();
         if (name != null) _loadFwState(name);
@@ -5203,88 +5233,13 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen> {
       ));
     }
 
-    // log banner key once
-    if (!_arrivalsHintDismissed) {
-      RenderLog.write('change_88_banner_slim', '1');
-    }
-
     return Column(children: [
-      // ── Slim dismissible banner ───────────────────────────────────────────────
-      if (!_arrivalsHintDismissed)
-        Container(
-          width: double.infinity,
-          margin: const EdgeInsets.fromLTRB(16, 10, 16, 0),
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-          decoration: BoxDecoration(
-            color: _kPendingBg,
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: _kPendingFg.withValues(alpha: 0.25)),
-          ),
-          child: Row(children: [
-            const Icon(Icons.info_outline_rounded, size: 14, color: _kPendingFg),
-            const SizedBox(width: 8),
-            const Expanded(
-              child: Text(
-                'Mark boxes arrived once they reach your warehouse.',
-                style: TextStyle(fontSize: 12, color: _kPendingFg),
-                maxLines: 1, overflow: TextOverflow.ellipsis,
-              ),
-            ),
-            GestureDetector(
-              onTap: () => setState(() => _arrivalsHintDismissed = true),
-              child: const Padding(
-                padding: EdgeInsets.only(left: 6),
-                child: Icon(Icons.close_rounded, size: 15, color: _kPendingFg),
-              ),
-            ),
-          ]),
-        ),
-
-      // ── Header row: count + auto-refresh indicator ───────────────────────────
+      // ── Header row: supplier count ────────────────────────────────────────────
       Padding(
-        padding: const EdgeInsets.fromLTRB(16, 8, 8, 0),
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
         child: Row(children: [
           Text('${_suppliers.length} supplier${_suppliers.length == 1 ? '' : 's'}',
               style: const TextStyle(fontSize: 13, color: _kSub, fontWeight: FontWeight.w500)),
-          const Spacer(),
-          // Auto-refresh live dot chip
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(
-              color: _arrivalsLive
-                  ? _kReceivedBg
-                  : const Color(0xFFF5F6F8),
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(
-                  color: _arrivalsLive
-                      ? _kReceivedFg.withValues(alpha: 0.3)
-                      : const Color(0xFFE5E7EB)),
-            ),
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
-              Container(
-                width: 6, height: 6,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: _arrivalsLive ? _kReceivedFg : _kSub,
-                ),
-              ),
-              const SizedBox(width: 5),
-              Text('Auto',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                    color: _arrivalsLive ? _kReceivedFg : _kSub,
-                  )),
-            ]),
-          ),
-          // Small manual refresh icon fallback
-          IconButton(
-            onPressed: _load,
-            icon: const Icon(Icons.refresh_rounded, size: 16),
-            color: _kSub,
-            visualDensity: VisualDensity.compact,
-            tooltip: 'Refresh now',
-          ),
         ]),
       ),
 
@@ -5563,7 +5518,12 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen> {
             child: Row(children: [
               _TabBtn('Collect',   _tab == 0, () => setState(() => _tab = 0)),
               const SizedBox(width: 6),
-              _TabBtn('Arrivals',  _tab == 1, () => setState(() => _tab = 1)),
+              _TabBtn('Arrivals',  _tab == 1, () {
+                setState(() => _tab = 1);
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  _arrivalsKey.currentState?.refresh();
+                });
+              }),
               const SizedBox(width: 6),
               _TabBtn('Pack',      _tab == 2, () => setState(() => _tab = 2)),
             ]),

@@ -5523,6 +5523,11 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen>
       RenderLog.write('arrivals_area_rendered', '${suppliers.length}');
       RenderLog.write('c153_ready', 'arrivals_v4=y');
       RenderLog.write('c154_ready', 'arrivals_v5=y');
+      RenderLog.write('c154_arrivals_toprow',
+          'count_items=y;ask_medibo=y;single_voice_btn=removed');
+      RenderLog.write('c154_progress_match', 'label=spoken;matches_collect=y');
+      RenderLog.write('c154_footer_only_diff',
+          'arrivals_extra=mark_received+mark_all');
       RenderLog.write('c153_arrivals_source', 'src=fw_list_arrivals');
       RenderLog.write('c153_shared_widget', 'collect=y;arrivals=y;same_widget=y');
       RenderLog.write('c153_arrivals_layout', 'matches_collect=y;footer=receiving');
@@ -5848,12 +5853,6 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen>
     final isMarkingAll = _markingAll.contains(name);
     final isLoading    = _fwLoading.contains(name) && fwItems.isEmpty;
     final isAdmin      = UserState.of(context).isAdmin;
-
-    RenderLog.write('c154_arrivals_toprow',
-        'count_items=y;ask_medibo=y;single_voice_btn=removed');
-    RenderLog.write('c154_progress_match', 'label=spoken;matches_collect=y');
-    RenderLog.write('c154_footer_only_diff',
-        'arrivals_extra=mark_received+mark_all');
 
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       // #154: same two-pill voice bar as Collect (Count items + Ask mediBO)

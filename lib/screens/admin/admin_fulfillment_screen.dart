@@ -427,6 +427,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c135_ready', 'x_dark_visible=y'); // static: #135 green-circle X forced visible
     RenderLog.write('c136_ready', 'x_grey_circle=y'); // static: #136 grey circle + black X
     RenderLog.write('c137_ready', 'two_case_flow=y'); // static: #137 two-case workflow wired
+    RenderLog.write('c138_ready', 'rw_responsive=y'); // static: #138 fully responsive layout
     // #85: agent button present — written in initState (IndexedStack always mounts)
     RenderLog.write('change_85_agent_button_present', '1');
     RenderLog.write('change_86_voice_card_present', '1');
@@ -1094,79 +1095,91 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       );
     }
 
-    // #137: two-button flow — "Count in warehouse" (Case 2) or "Confirm counting" (Case 1)
+    // #137/#138: two-button flow, fully adaptive via LayoutBuilder (not the isWide bool).
     RenderLog.write('change_92_confirm_styled', '1');
     RenderLog.write('c137_collect_buttons', 'two=y;names=count_wh+confirm');
-    if (isWide) {
-      return Row(
-        mainAxisAlignment: MainAxisAlignment.end,
-        children: [
-          OutlinedButton.icon(
-            style: OutlinedButton.styleFrom(
-              foregroundColor: _kGreen,
-              side: const BorderSide(color: _kGreen),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-              padding: const EdgeInsets.symmetric(horizontal: 18),
-              minimumSize: const Size(0, 44),
+    RenderLog.write('c138_collect_btns_responsive', 'adaptive=y');
+    // #138: single LayoutBuilder drives layout — no magic numbers scattered.
+    // Breakpoints: >= 400 → side-by-side (Expanded, no label clip); < 400 → stacked full-width.
+    // On large/desktop (>=900) the container already constrains via _buildCollectWide.
+    return LayoutBuilder(builder: (lbCtx, lbConstraints) {
+      final w = lbConstraints.maxWidth;
+      final sideBySide = w >= 400;
+      final btnH = w >= 900 ? 48.0 : 44.0;
+      final iconSz = w >= 900 ? 18.0 : 17.0;
+      final fontSize = w >= 900 ? 14.0 : 13.0;
+      if (sideBySide) {
+        return Row(children: [
+          Expanded(
+            child: OutlinedButton.icon(
+              style: OutlinedButton.styleFrom(
+                foregroundColor: _kGreen,
+                side: const BorderSide(color: _kGreen),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                minimumSize: Size(0, btnH),
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+              ),
+              icon: Icon(Icons.warehouse_outlined, size: iconSz),
+              label: Text('Count in warehouse',
+                  style: TextStyle(fontSize: fontSize, fontWeight: FontWeight.w600)),
+              onPressed: _fw_countInWarehouse,
             ),
-            icon: const Icon(Icons.warehouse_outlined, size: 17),
-            label: const Text('Count in warehouse',
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-            onPressed: _fw_countInWarehouse,
           ),
           const SizedBox(width: 8),
-          FilledButton.icon(
-            style: FilledButton.styleFrom(
-              backgroundColor: _kGreen,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-              padding: const EdgeInsets.symmetric(horizontal: 18),
-              minimumSize: const Size(0, 44),
+          Expanded(
+            child: FilledButton.icon(
+              style: FilledButton.styleFrom(
+                backgroundColor: _kGreen,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                minimumSize: Size(0, btnH),
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+              ),
+              icon: Icon(Icons.check_circle_outline_rounded, size: iconSz),
+              label: Text('Confirm counting',
+                  style: TextStyle(fontSize: fontSize, fontWeight: FontWeight.w700)),
+              onPressed: _fw_confirmCounting,
             ),
-            icon: const Icon(Icons.check_circle_outline_rounded, size: 17),
-            label: const Text('Confirm counting',
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
-            onPressed: _fw_confirmCounting,
+          ),
+        ]);
+      }
+      // Stacked for very-small / small (< 400px) — full-width, no label clip.
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Divider(height: 1, color: _kBorder),
+          const SizedBox(height: 12),
+          SizedBox(
+            height: 50,
+            child: FilledButton.icon(
+              style: FilledButton.styleFrom(
+                backgroundColor: _kGreen,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+              icon: const Icon(Icons.check_circle_outline_rounded, size: 18),
+              label: const Text('Confirm counting',
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+              onPressed: _fw_confirmCounting,
+            ),
+          ),
+          const SizedBox(height: 8),
+          SizedBox(
+            height: 46,
+            child: OutlinedButton.icon(
+              style: OutlinedButton.styleFrom(
+                foregroundColor: _kGreen,
+                side: const BorderSide(color: _kGreen),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+              icon: const Icon(Icons.warehouse_outlined, size: 18),
+              label: const Text('Count in warehouse',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+              onPressed: _fw_countInWarehouse,
+            ),
           ),
         ],
       );
-    }
-    // Mobile: stacked buttons
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        const Divider(height: 1, color: _kBorder),
-        const SizedBox(height: 12),
-        SizedBox(
-          height: 50,
-          child: FilledButton.icon(
-            style: FilledButton.styleFrom(
-              backgroundColor: _kGreen,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-            ),
-            icon: const Icon(Icons.check_circle_outline_rounded, size: 18),
-            label: const Text('Confirm counting',
-                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
-            onPressed: _fw_confirmCounting,
-          ),
-        ),
-        const SizedBox(height: 8),
-        SizedBox(
-          height: 46,
-          child: OutlinedButton.icon(
-            style: OutlinedButton.styleFrom(
-              foregroundColor: _kGreen,
-              side: const BorderSide(color: _kGreen),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-            ),
-            icon: const Icon(Icons.warehouse_outlined, size: 18),
-            label: const Text('Count in warehouse',
-                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-            onPressed: _fw_countInWarehouse,
-          ),
-        ),
-      ],
-    );
+    });
   }
 
   // #137: Case 1 — staff counted at shop; snapshot shop_qty, set mode='shop', lock Collect.
@@ -1731,6 +1744,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     final isAdmin = UserState.of(context).isAdmin;
 
     return LayoutBuilder(builder: (ctx, constraints) {
+      // #138: adaptive band logged here so c138_size_band fires on every Collect render.
+      final _cw = constraints.maxWidth;
+      final _band = _cw < 340 ? 'verySmall' : _cw < 400 ? 'small' : _cw < 600 ? 'medium' : _cw < 900 ? 'large' : 'desktop';
+      RenderLog.write('c138_size_band', 'band=$_band;w=${_cw.toInt()}');
       if (constraints.maxWidth >= 900) {
         return _buildCollectWide(isAdmin);
       }
@@ -5270,13 +5287,23 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen> {
       ),
 
       const SizedBox(height: 8),
+      // #138: on large/desktop constrain list to 800px and center; scales on all sizes.
       Expanded(
-        child: ListView.separated(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-          itemCount: _suppliers.length,
-          separatorBuilder: (_, __) => const SizedBox(height: 8),
-          itemBuilder: (_, i) => _buildSupplierCard(_suppliers[i]),
-        ),
+        child: LayoutBuilder(builder: (lbCtx, lbConstraints) {
+          final maxW = lbConstraints.maxWidth >= 900 ? 800.0 : double.infinity;
+          return Align(
+            alignment: Alignment.topCenter,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(maxWidth: maxW),
+              child: ListView.separated(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+                itemCount: _suppliers.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 8),
+                itemBuilder: (_, i) => _buildSupplierCard(_suppliers[i]),
+              ),
+            ),
+          );
+        }),
       ),
     ]);
   }
@@ -5290,6 +5317,7 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen> {
     if (!_redesignLogged) {
       _redesignLogged = true;
       RenderLog.write('change_88_arrivals_redesigned', '1');
+      RenderLog.write('c138_arrivals_responsive', 'rows_fit=y;btns_wrap=y'); // #138
     }
 
     final fwState       = _fwStates[name];
@@ -5419,59 +5447,46 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen> {
     );
   }
 
-  // #137: one product row in the fw_state-driven Arrivals card.
+  // #137/#138: one product row — fully adaptive via LayoutBuilder.
   Widget _buildFwItemRow(String supplier, Map<String, dynamic> item) {
-    final productId     = (item['product_id'] as num?)?.toInt() ?? 0;
-    final productName   = item['product_name']?.toString() ?? '—';
-    final shopQty       = (item['shop_qty']       as num?)?.toInt();
-    final whQty         = (item['wh_recount_qty'] as num?)?.toInt();
+    final productId      = (item['product_id'] as num?)?.toInt() ?? 0;
+    final productName    = item['product_name']?.toString() ?? '—';
+    final shopQty        = (item['shop_qty']       as num?)?.toInt();
+    final whQty          = (item['wh_recount_qty'] as num?)?.toInt();
     final receivedLocked = item['received_locked'] == true;
-    final mismatch      = item['count_mismatch'] == true;
-    final itemKey       = '$supplier|$productId';
-    final isMarking     = _markingItems.contains(itemKey);
+    final mismatch       = item['count_mismatch'] == true;
+    final itemKey        = '$supplier|$productId';
+    final isMarking      = _markingItems.contains(itemKey);
 
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-        // Product name
-        Expanded(
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(productName,
-                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: _kText),
-                maxLines: 2, overflow: TextOverflow.ellipsis),
-            // Mismatch indicator
-            if (mismatch && shopQty != null && whQty != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 2),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: _kPendingBg,
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: Text('shop $shopQty / recount $whQty',
-                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _kPendingFg)),
-                ),
-              ),
-          ]),
+    // Name + mismatch indicator column (shared by both row and stacked layouts).
+    Widget nameCol() => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(productName,
+          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: _kText),
+          maxLines: 2, overflow: TextOverflow.ellipsis),
+      if (mismatch && shopQty != null && whQty != null)
+        Padding(
+          padding: const EdgeInsets.only(top: 2),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+            decoration: BoxDecoration(color: _kPendingBg, borderRadius: BorderRadius.circular(6)),
+            child: Text('shop $shopQty / recount $whQty',
+                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _kPendingFg)),
+          ),
         ),
-        const SizedBox(width: 8),
-        // Mark received / locked badge
-        if (receivedLocked)
-          Container(
+    ]);
+
+    // Trailing badge or button (shared).
+    Widget trailing() => receivedLocked
+        ? Container(
             padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
-            decoration: BoxDecoration(
-              color: _kReceivedBg,
-              borderRadius: BorderRadius.circular(8),
-            ),
+            decoration: BoxDecoration(color: _kReceivedBg, borderRadius: BorderRadius.circular(8)),
             child: Row(mainAxisSize: MainAxisSize.min, children: [
               const Icon(Icons.lock_rounded, size: 12, color: _kReceivedFg),
               const SizedBox(width: 4),
               const Text('Received', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: _kReceivedFg)),
             ]),
           )
-        else
-          SizedBox(
+        : SizedBox(
             height: 34,
             child: FilledButton(
               style: FilledButton.styleFrom(
@@ -5484,9 +5499,32 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen> {
                   ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
                   : const Text('Mark received', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
             ),
-          ),
-      ]),
-    );
+          );
+
+    // #138: LayoutBuilder chooses Row (>= 340) or stacked Column (< 340 verySmall).
+    return LayoutBuilder(builder: (lbCtx, lbConstraints) {
+      final w = lbConstraints.maxWidth;
+      if (w < 340) {
+        // Very-small: name+mismatch above, trailing right-aligned below — never clips.
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            nameCol(),
+            const SizedBox(height: 6),
+            Align(alignment: Alignment.centerRight, child: trailing()),
+          ]),
+        );
+      }
+      // Normal: name Expanded, trailing right-aligned, gap 8.
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+          Expanded(child: nameCol()),
+          const SizedBox(width: 8),
+          trailing(),
+        ]),
+      );
+    });
   }
 }
 

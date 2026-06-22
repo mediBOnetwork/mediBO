@@ -426,6 +426,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c134_name_fallback', 'applied=y'); // static: #134 unknown item label in build
     RenderLog.write('c135_ready', 'x_dark_visible=y'); // static: #135 green-circle X forced visible
     RenderLog.write('c136_ready', 'x_grey_circle=y'); // static: #136 grey circle + black X
+    RenderLog.write('c137_ready', 'two_case_flow=y'); // static: #137 two-case workflow wired
     // #85: agent button present — written in initState (IndexedStack always mounts)
     RenderLog.write('change_85_agent_button_present', '1');
     RenderLog.write('change_86_voice_card_present', '1');
@@ -955,13 +956,17 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     final supplier = _selectedSupplier;
     if (supplier == null) return;
     try {
-      await Supabase.instance.client.rpc('set_voice_received', params: {
+      final res = await Supabase.instance.client.rpc('set_voice_received', params: {
         'p_supplier_name': supplier,
         'p_product_id': productId,
         'p_qty': qty,
         'p_note': 'voice: $rawSegment',
-      });
+      }) as Map?;
       if (!mounted) return;
+      if (res != null && res['error'] == 'received_locked') {
+        _showSnack('Already received — locked');
+        return;
+      }
       RenderLog.write('84_committed', '$productName:set${qty.toInt()}');
       setState(() { _tally[productId] = qty; });
       await _reloadItemsFromDB();
@@ -1034,7 +1039,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     if (locked) {
       RenderLog.write('change_91_locked', '1');
       if (isWide) {
-        // Web: compact right-aligned locked chip
         return Row(
           mainAxisAlignment: MainAxisAlignment.end,
           children: [
@@ -1050,7 +1054,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                 child: Row(mainAxisSize: MainAxisSize.min, children: [
                   const Icon(Icons.lock_rounded, size: 14, color: _kReceivedFg),
                   const SizedBox(width: 6),
-                  const Text('Count confirmed — locked',
+                  const Text('Sent to Arrivals',
                       style: TextStyle(
                           fontSize: 12.5, fontWeight: FontWeight.w600, color: _kReceivedFg)),
                   if (isAdmin) ...[
@@ -1064,7 +1068,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           ],
         );
       }
-      // Mobile: slim full-width green strip
       return GestureDetector(
         onLongPress: isAdmin ? _showUnlockDialog : null,
         child: Container(
@@ -1079,7 +1082,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             const Icon(Icons.lock_rounded, size: 15, color: _kReceivedFg),
             const SizedBox(width: 8),
             const Expanded(
-              child: Text('Count confirmed — locked',
+              child: Text('Sent to Arrivals',
                   style: TextStyle(
                       fontSize: 13, fontWeight: FontWeight.w600, color: _kReceivedFg)),
             ),
@@ -1091,31 +1094,43 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       );
     }
 
-    // Unlocked — show Confirm button
+    // #137: two-button flow — "Count in warehouse" (Case 2) or "Confirm counting" (Case 1)
     RenderLog.write('change_92_confirm_styled', '1');
+    RenderLog.write('c137_collect_buttons', 'two=y;names=count_wh+confirm');
     if (isWide) {
-      // Web: right-aligned compact button, NOT a full-width slab
       return Row(
         mainAxisAlignment: MainAxisAlignment.end,
         children: [
-          SizedBox(
-            height: 44,
-            child: FilledButton.icon(
-              style: FilledButton.styleFrom(
-                backgroundColor: _kGreen,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                padding: const EdgeInsets.symmetric(horizontal: 28),
-              ),
-              icon: const Icon(Icons.check_circle_outline_rounded, size: 17),
-              label: const Text('Confirm count',
-                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
-              onPressed: _showConfirmLockDialog,
+          OutlinedButton.icon(
+            style: OutlinedButton.styleFrom(
+              foregroundColor: _kGreen,
+              side: const BorderSide(color: _kGreen),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              padding: const EdgeInsets.symmetric(horizontal: 18),
+              minimumSize: const Size(0, 44),
             ),
+            icon: const Icon(Icons.warehouse_outlined, size: 17),
+            label: const Text('Count in warehouse',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+            onPressed: _fw_countInWarehouse,
+          ),
+          const SizedBox(width: 8),
+          FilledButton.icon(
+            style: FilledButton.styleFrom(
+              backgroundColor: _kGreen,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              padding: const EdgeInsets.symmetric(horizontal: 18),
+              minimumSize: const Size(0, 44),
+            ),
+            icon: const Icon(Icons.check_circle_outline_rounded, size: 17),
+            label: const Text('Confirm counting',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+            onPressed: _fw_confirmCounting,
           ),
         ],
       );
     }
-    // Mobile: full-width, refined height + top divider
+    // Mobile: stacked buttons
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1130,32 +1145,45 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
             ),
             icon: const Icon(Icons.check_circle_outline_rounded, size: 18),
-            label: const Text('Confirm count',
+            label: const Text('Confirm counting',
                 style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
-            onPressed: _showConfirmLockDialog,
+            onPressed: _fw_confirmCounting,
+          ),
+        ),
+        const SizedBox(height: 8),
+        SizedBox(
+          height: 46,
+          child: OutlinedButton.icon(
+            style: OutlinedButton.styleFrom(
+              foregroundColor: _kGreen,
+              side: const BorderSide(color: _kGreen),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            icon: const Icon(Icons.warehouse_outlined, size: 18),
+            label: const Text('Count in warehouse',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+            onPressed: _fw_countInWarehouse,
           ),
         ),
       ],
     );
   }
 
-  Future<void> _showConfirmLockDialog() async {
+  // #137: Case 1 — staff counted at shop; snapshot shop_qty, set mode='shop', lock Collect.
+  Future<void> _fw_confirmCounting() async {
     final supplier = _selectedSupplier;
     if (supplier == null) return;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Confirm this count?'),
-        content: Text(
-            'After confirming, you can\'t change quantities or mark items for $supplier anymore.'),
+        title: const Text('Confirm counting?'),
+        content: Text('This locks the Collect count for $supplier and sends it to Arrivals for warehouse double-check.'),
         actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: _kGreen),
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Confirm & lock'),
+            child: const Text('Confirm & send'),
           ),
         ],
       ),
@@ -1163,17 +1191,59 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     if (confirmed != true || !mounted) return;
     try {
       final res = await Supabase.instance.client
-          .rpc('lock_supplier_collect', params: {'p_supplier_name': supplier}) as Map;
-      if (res['status'] != 'ok') throw Exception(res.toString());
+          .rpc('fw_confirm_counting', params: {'p_supplier_name': supplier}) as Map;
+      if (res['error'] != null) throw Exception(res['error'].toString());
       await _reloadItemsFromDB();
-      RenderLog.write('change_91_locked', '1');
+      RenderLog.write('c137_collect_action', 'action=confirm;supplier=$supplier');
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Couldn\'t lock. Please try again.')),
+          SnackBar(content: Text('Error: ${e.toString().substring(0, e.toString().length.clamp(0, 80))}')),
         );
       }
     }
+  }
+
+  // #137: Case 2 — skip shop count; set mode='warehouse', lock Collect for warehouse counting.
+  Future<void> _fw_countInWarehouse() async {
+    final supplier = _selectedSupplier;
+    if (supplier == null) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Count in warehouse?'),
+        content: Text('Items from $supplier will be counted at the warehouse instead. This locks the Collect tab for this supplier.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: _kGreen),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Confirm'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      final res = await Supabase.instance.client
+          .rpc('fw_count_in_warehouse', params: {'p_supplier_name': supplier}) as Map;
+      if (res['error'] != null) throw Exception(res['error'].toString());
+      await _reloadItemsFromDB();
+      RenderLog.write('c137_collect_action', 'action=warehouse;supplier=$supplier');
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: ${e.toString().substring(0, e.toString().length.clamp(0, 80))}')),
+        );
+      }
+    }
+  }
+
+  // #137: called by _AdminFulfillmentScreenState to pre-select a supplier from Arrivals.
+  void selectSupplierForVoice(String name) {
+    if (!mounted) return;
+    setState(() => _selectedSupplier = name);
+    _loadBox(name);
   }
 
   Future<void> _showUnlockDialog() async {
@@ -4858,7 +4928,8 @@ class _BagLabelsInlineState extends State<_BagLabelsInline> {
 // ── ARRIVALS SCREEN ───────────────────────────────────────────────────────────
 
 class _ArrivalsScreen extends StatefulWidget {
-  const _ArrivalsScreen({super.key});
+  final void Function(String supplierName)? onVoiceCount;
+  const _ArrivalsScreen({super.key, this.onVoiceCount});
 
   @override
   State<_ArrivalsScreen> createState() => _ArrivalsScreenState();
@@ -4872,6 +4943,11 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen> {
   bool _arrivalsLive = false;
   bool _redesignLogged = false;
   bool _arrivalsHintDismissed = false;
+
+  // #137: fw_get_state per supplier
+  final Map<String, Map<String, dynamic>> _fwStates = {};
+  final Set<String> _fwLoading = {};
+  final Set<String> _markingItems = {}; // "supplier|product_id"
 
   // realtime + debounce
   RealtimeChannel? _channel;
@@ -4943,7 +5019,6 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen> {
           .rpc('get_supplier_arrival_status') as List;
       if (!mounted) return;
       final suppliers = res.map((r) => Map<String, dynamic>.from(r as Map)).toList();
-      // in_transit > 0 first (needs action), fully-arrived below; alpha within each group
       suppliers.sort((a, b) {
         final aFull = (a['fully_arrived'] as bool?) == true;
         final bFull = (b['fully_arrived'] as bool?) == true;
@@ -4953,9 +5028,58 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen> {
       });
       setState(() { _suppliers = suppliers; _loading = false; _error = null; });
       RenderLog.write('arrivals_area_rendered', '${suppliers.length}');
+      // #137: load fw_get_state for each supplier (non-blocking, updates cards as they resolve)
+      for (final s in suppliers) {
+        final name = s['supplier_name']?.toString();
+        if (name != null) _loadFwState(name);
+      }
     } catch (e) {
       if (!mounted) return;
       if (!silent) setState(() { _loading = false; _error = e.toString(); });
+    }
+  }
+
+  // #137: fetch fw_get_state for one supplier; updates _fwStates on success.
+  Future<void> _loadFwState(String supplier) async {
+    if (_fwLoading.contains(supplier)) return;
+    setState(() => _fwLoading.add(supplier));
+    try {
+      final res = await Supabase.instance.client
+          .rpc('fw_get_state', params: {'p_supplier_name': supplier}) as Map;
+      if (!mounted) return;
+      final state = Map<String, dynamic>.from(res);
+      final mode = state['mode']?.toString();
+      setState(() => _fwStates[supplier] = state);
+      RenderLog.write('c137_arrivals_mode', 'supplier=$supplier;mode=${mode ?? 'null'}');
+    } catch (_) {
+      // ignore; card falls back to old UI
+    } finally {
+      if (mounted) setState(() => _fwLoading.remove(supplier));
+    }
+  }
+
+  // #137: per-product Mark received.
+  Future<void> _markItemReceived(String supplier, int productId) async {
+    final key = '$supplier|$productId';
+    if (_markingItems.contains(key)) return;
+    setState(() => _markingItems.add(key));
+    try {
+      final res = await Supabase.instance.client
+          .rpc('fw_mark_received', params: {
+            'p_supplier_name': supplier,
+            'p_product_id': productId,
+          }) as Map;
+      if (!mounted) return;
+      if (res['error'] != null) {
+        _showSnack('Error: ${res['error']}');
+        return;
+      }
+      RenderLog.write('c137_mark_received', 'supplier=$supplier;product_id=$productId;locked=y');
+      await _loadFwState(supplier);
+    } catch (e) {
+      if (mounted) _showSnack('Error: $e');
+    } finally {
+      if (mounted) setState(() => _markingItems.remove(key));
     }
   }
 
@@ -5157,41 +5281,45 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen> {
     ]);
   }
 
-  // ── Supplier card (Part C) ───────────────────────────────────────────────────
+  // ── Supplier card — #137: fw_get_state-driven when mode is set ─────────────
   Widget _buildSupplierCard(Map<String, dynamic> supplier) {
     final name         = supplier['supplier_name']?.toString() ?? '—';
-    final collected    = (supplier['collected']    as num?)?.toInt() ?? 0;
-    final arrived      = (supplier['arrived']      as num?)?.toInt() ?? 0;
     final inTransit    = (supplier['in_transit']   as num?)?.toInt() ?? 0;
     final fullyArrived = (supplier['fully_arrived'] as bool?) == true;
-    final isMarking    = _marking.contains(name);
 
-    // Log redesign key once
     if (!_redesignLogged) {
       _redesignLogged = true;
       RenderLog.write('change_88_arrivals_redesigned', '1');
     }
 
+    final fwState       = _fwStates[name];
+    final mode          = fwState?['mode']?.toString();
+    final fullyLocked   = fwState?['supplier_fully_locked'] == true;
+    final fwItems       = fwState != null
+        ? (fwState['items'] as List? ?? []).map((i) => Map<String, dynamic>.from(i as Map)).toList()
+        : <Map<String, dynamic>>[];
+
+    // Use fw_state-driven card when mode is available; fall back to legacy for null/unset mode
+    final useFwUI = mode != null;
+
+    final borderColor = fullyLocked || fullyArrived
+        ? _kReceivedFg.withValues(alpha: 0.20)
+        : inTransit > 0 || useFwUI
+            ? _kPendingFg.withValues(alpha: 0.20)
+            : const Color(0xFFE5E7EB);
+
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: fullyArrived
-              ? _kReceivedFg.withValues(alpha: 0.20)
-              : inTransit > 0
-                  ? _kPendingFg.withValues(alpha: 0.20)
-                  : const Color(0xFFE5E7EB),
-        ),
-        boxShadow: [
-          BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 8, offset: const Offset(0, 2)),
-        ],
+        border: Border.all(color: borderColor),
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 8, offset: const Offset(0, 2))],
       ),
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
 
-          // Row 1: supplier name + ONE status pill
+          // Header row: name + status pill
           Row(children: [
             Expanded(
               child: Text(name,
@@ -5199,76 +5327,165 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen> {
                   maxLines: 1, overflow: TextOverflow.ellipsis),
             ),
             const SizedBox(width: 8),
-            // ONE status pill — amber if on the way, green if fully arrived
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
               decoration: BoxDecoration(
-                color: fullyArrived ? _kReceivedBg : _kPendingBg,
+                color: (fullyLocked || fullyArrived) ? _kReceivedBg : _kPendingBg,
                 borderRadius: BorderRadius.circular(20),
               ),
               child: Text(
-                fullyArrived ? 'All arrived' : '$inTransit on the way',
+                fullyLocked ? 'All received' : (fullyArrived ? 'All arrived' : (useFwUI ? (mode == 'shop' ? 'Shop counted' : 'Count at WH') : '$inTransit on the way')),
                 style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                  color: fullyArrived ? _kReceivedFg : _kPendingFg,
+                  fontSize: 12, fontWeight: FontWeight.w700,
+                  color: (fullyLocked || fullyArrived) ? _kReceivedFg : _kPendingFg,
                 ),
               ),
             ),
           ]),
 
-          // Row 2: progress bar + caption (only if collected > 0)
-          if (collected > 0) ...[
-            const SizedBox(height: 10),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(4),
-              child: LinearProgressIndicator(
-                value: collected > 0 ? arrived / collected : 0,
-                minHeight: 6,
-                backgroundColor: const Color(0xFFE5E7EB),
-                valueColor: const AlwaysStoppedAnimation<Color>(_kGreen),
+          // ── #137 fw_state-driven UI ──────────────────────────────────────────
+          if (useFwUI) ...[
+            const SizedBox(height: 12),
+
+            // Fully locked: just a done message
+            if (fullyLocked)
+              Row(children: [
+                const Icon(Icons.check_circle_rounded, size: 16, color: _kReceivedFg),
+                const SizedBox(width: 6),
+                const Text('All items received', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _kReceivedFg)),
+              ])
+            else ...[
+              // Top action button: Double-check (shop) or Count item (warehouse)
+              SizedBox(
+                width: double.infinity, height: 44,
+                child: OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: _kGreen,
+                    side: const BorderSide(color: _kGreen),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                  icon: Icon(mode == 'shop' ? Icons.find_replace_rounded : Icons.mic_rounded, size: 17),
+                  label: Text(
+                    mode == 'shop' ? 'Double-check (recount)' : 'Count item (voice)',
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                  ),
+                  onPressed: () {
+                    widget.onVoiceCount?.call(name);
+                  },
+                ),
               ),
-            ),
-            const SizedBox(height: 5),
-            Text(
-              '$arrived of $collected at warehouse',
-              style: const TextStyle(fontSize: 12, color: _kSub),
-            ),
+
+              // Per-item rows
+              if (fwItems.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                const Divider(height: 1, color: _kBorder),
+                const SizedBox(height: 8),
+                ...fwItems.map((item) => _buildFwItemRow(name, item)),
+              ],
+            ],
+          ]
+          // ── Legacy UI (mode==null / not yet fw_ confirmed) ──────────────────
+          else ...[
+            const SizedBox(height: 12),
+            if (fullyArrived)
+              Row(children: [
+                const Icon(Icons.check_circle_rounded, size: 16, color: _kReceivedFg),
+                const SizedBox(width: 6),
+                const Text('All arrived — ready to pack',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _kReceivedFg)),
+              ])
+            else
+              SizedBox(
+                width: double.infinity, height: 46,
+                child: FilledButton.icon(
+                  onPressed: _marking.contains(name) ? null : () => _markArrived(name, inTransit),
+                  icon: _marking.contains(name)
+                      ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                      : const Icon(Icons.warehouse_outlined, size: 18),
+                  label: Text(
+                    _marking.contains(name) ? 'Marking…' : 'Mark $inTransit arrived at warehouse',
+                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+                  ),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: _kGreen,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    elevation: 3,
+                  ),
+                ),
+              ),
           ],
-
-          // Row 3: action — button or confirmation row
-          const SizedBox(height: 12),
-          if (fullyArrived)
-            Row(children: [
-              Icon(Icons.check_circle_rounded, size: 16, color: _kReceivedFg),
-              const SizedBox(width: 6),
-              const Text('All arrived — ready to pack',
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _kReceivedFg)),
-            ])
-          else
-            SizedBox(
-              width: double.infinity, height: 46,
-              child: FilledButton.icon(
-                onPressed: isMarking ? null : () => _markArrived(name, inTransit),
-                icon: isMarking
-                    ? const SizedBox(width: 16, height: 16,
-                        child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                    : const Icon(Icons.warehouse_outlined, size: 18),
-                label: Text(
-                  isMarking ? 'Marking…' : 'Mark $inTransit arrived at warehouse',
-                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
-                ),
-                style: FilledButton.styleFrom(
-                  backgroundColor: _kGreen,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                  shadowColor: _kGreen.withValues(alpha: 0.30),
-                  elevation: 3,
-                ),
-              ),
-            ),
-
         ]),
       ),
+    );
+  }
+
+  // #137: one product row in the fw_state-driven Arrivals card.
+  Widget _buildFwItemRow(String supplier, Map<String, dynamic> item) {
+    final productId     = (item['product_id'] as num?)?.toInt() ?? 0;
+    final productName   = item['product_name']?.toString() ?? '—';
+    final shopQty       = (item['shop_qty']       as num?)?.toInt();
+    final whQty         = (item['wh_recount_qty'] as num?)?.toInt();
+    final receivedLocked = item['received_locked'] == true;
+    final mismatch      = item['count_mismatch'] == true;
+    final itemKey       = '$supplier|$productId';
+    final isMarking     = _markingItems.contains(itemKey);
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+        // Product name
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(productName,
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: _kText),
+                maxLines: 2, overflow: TextOverflow.ellipsis),
+            // Mismatch indicator
+            if (mismatch && shopQty != null && whQty != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: _kPendingBg,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text('shop $shopQty / recount $whQty',
+                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _kPendingFg)),
+                ),
+              ),
+          ]),
+        ),
+        const SizedBox(width: 8),
+        // Mark received / locked badge
+        if (receivedLocked)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+            decoration: BoxDecoration(
+              color: _kReceivedBg,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              const Icon(Icons.lock_rounded, size: 12, color: _kReceivedFg),
+              const SizedBox(width: 4),
+              const Text('Received', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: _kReceivedFg)),
+            ]),
+          )
+        else
+          SizedBox(
+            height: 34,
+            child: FilledButton(
+              style: FilledButton.styleFrom(
+                backgroundColor: _kGreen,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+              ),
+              onPressed: isMarking ? null : () => _markItemReceived(supplier, productId),
+              child: isMarking
+                  ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                  : const Text('Mark received', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+            ),
+          ),
+      ]),
     );
   }
 }
@@ -5298,6 +5515,14 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen> {
   }
 
   void _onFocus() {}
+
+  // #137: switch to Collect tab and pre-select supplier so staff can use the voice feature.
+  void _openVoiceInCollect(String supplier) {
+    setState(() => _tab = 0);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _collectKey.currentState?.selectSupplierForVoice(supplier);
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -5331,7 +5556,7 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen> {
           index: _tab,
           children: [
             _PickToLightScreen(key: _collectKey),
-            _ArrivalsScreen(key: _arrivalsKey),
+            _ArrivalsScreen(key: _arrivalsKey, onVoiceCount: _openVoiceInCollect),
             _PackScreen(key: _packKey),
           ],
         ),

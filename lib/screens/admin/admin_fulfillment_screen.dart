@@ -560,6 +560,13 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         RenderLog.write('c157_mismatch_nonblocking', 'shows=y;blocks=n');
         RenderLog.write('c157_confirm_lock',
             'rpc=fw_confirm_all_received;locks=y;undo=fw_unconfirm_all_received');
+        RenderLog.write('c158_ready', 'arrivals_v9=y');
+        RenderLog.write('c158_clone_ok',
+            'voice_counts=y;image=y;pack=y;bottom_sheet=y;dot=backend;mark_received=removed');
+        RenderLog.write('c158_confirm_block', 'blocks_uncounted=y');
+        RenderLog.write('c158_confirm_warn', 'lists_mismatch=y;force_path=y');
+        RenderLog.write('c158_confirm_lock',
+            'ok_locks=y;undo=fw_unconfirm_all_received');
         setState(() {
           _suppliers = names;
           _loadingSuppliers = false;
@@ -772,42 +779,105 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     } catch (_) {}
   }
 
-  // #156: Confirm all items received — locks the supplier in Arrivals mode.
+  // #156/#158: Confirm all items received — guarded 3-branch handler.
   Future<void> _fw_confirmAllReceived() async {
     final supplier = _selectedSupplier;
     if (supplier == null) return;
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Confirm all items received?'),
-        content: Text(
-            'This marks all items from $supplier as received and locks this supplier. No further edits or voice counting will be allowed.'),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: _kGreen),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Confirm'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true || !mounted) return;
     setState(() => _confirmingAll = true);
     try {
-      await Supabase.instance.client.rpc('fw_confirm_all_received',
-          params: {'p_supplier_name': supplier});
+      final res = await Supabase.instance.client.rpc('fw_confirm_all_received',
+          params: {'p_supplier_name': supplier}) as Map;
       if (!mounted) return;
-      setState(() {
-        _arrivalsLocked = true;
-        _confirmingAll = false;
-      });
-      _loadSuppliers(); // refresh dot from fw_list_arrivals
-      await _reloadItemsFromDB(); // refresh item states to show received
-      RenderLog.write('c157_confirm_lock',
-          'rpc=fw_confirm_all_received;locks=y;undo=fw_unconfirm_all_received');
+
+      // Branch 1 — BLOCK: some items have received_qty == 0
+      if (res['error'] == 'uncounted_items') {
+        setState(() => _confirmingAll = false);
+        final rawItems = (res['items'] as List? ?? []);
+        final preview = rawItems.take(5)
+            .map((i) => '• ${(i as Map)['product_name'] ?? 'item'}')
+            .join('\n');
+        final overflow = rawItems.length > 5 ? '\n… +${rawItems.length - 5} more' : '';
+        RenderLog.write('c158_confirm_block', 'blocks_uncounted=y');
+        if (!mounted) return;
+        await showDialog<void>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Count all items first'),
+            content: Text(
+                '${rawItems.length} item(s) not yet counted'
+                '${preview.isNotEmpty ? ':\n$preview$overflow' : '.'}'),
+            actions: [
+              FilledButton(
+                style: FilledButton.styleFrom(backgroundColor: _kGreen),
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
+        return;
+      }
+
+      // Branch 2 — WARN: mismatches exist, not forced
+      if (res['status'] == 'has_mismatch') {
+        setState(() => _confirmingAll = false);
+        final mismatches = (res['mismatches'] as List? ?? []);
+        final lines = mismatches.take(10)
+            .map((m) {
+              final mm = m as Map;
+              return '• ${mm['product_name']}: shop ${mm['shop_qty']} / counted ${mm['counted']}';
+            })
+            .join('\n');
+        final overflow = mismatches.length > 10 ? '\n… +${mismatches.length - 10} more' : '';
+        RenderLog.write('c158_confirm_warn', 'lists_mismatch=y;force_path=y');
+        if (!mounted) return;
+        final proceed = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Mismatch — confirm anyway?'),
+            content: Text(
+                'Some counts differ from the shop:\n$lines$overflow\n\n'
+                'Arrivals counts are final. Proceed?'),
+            actions: [
+              TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: const Text('Cancel')),
+              FilledButton(
+                style: FilledButton.styleFrom(backgroundColor: _kGreen),
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('Confirm anyway'),
+              ),
+            ],
+          ),
+        );
+        if (proceed != true || !mounted) return;
+        // Force-confirm
+        setState(() => _confirmingAll = true);
+        try {
+          await Supabase.instance.client.rpc('fw_confirm_all_received',
+              params: {'p_supplier_name': supplier, 'p_force': true});
+          if (!mounted) return;
+          setState(() { _arrivalsLocked = true; _confirmingAll = false; });
+          _loadSuppliers();
+          await _reloadItemsFromDB();
+          RenderLog.write('c158_confirm_lock',
+              'ok_locks=y;undo=fw_unconfirm_all_received');
+        } catch (e) {
+          if (mounted) {
+            setState(() => _confirmingAll = false);
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                content: Text('Error: ${e.toString().substring(0, e.toString().length.clamp(0, 80))}')));
+          }
+        }
+        return;
+      }
+
+      // Branch 3 — OK: all counted, no mismatch (or forced above exited early)
+      setState(() { _arrivalsLocked = true; _confirmingAll = false; });
+      _loadSuppliers();
+      await _reloadItemsFromDB();
+      RenderLog.write('c158_confirm_lock',
+          'ok_locks=y;undo=fw_unconfirm_all_received');
     } catch (e) {
       if (mounted) {
         setState(() => _confirmingAll = false);

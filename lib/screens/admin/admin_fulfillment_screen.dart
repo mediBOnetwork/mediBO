@@ -548,14 +548,18 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         RenderLog.write('arrivals_area_rendered', '${names.length}');
         RenderLog.write('c155_ready', 'arrivals_v6=y');
         RenderLog.write('c156_ready', 'arrivals_v7=y');
-        RenderLog.write('c156_dot',
-            'source=fw_list_arrivals_dot;states=green_lightyellow_yellow');
-        RenderLog.write('c156_no_mark',
+        RenderLog.write('c157_ready', 'arrivals_v8=y');
+        RenderLog.write('c157_dot',
+            'source=fw_list_arrivals_dot;states=3');
+        RenderLog.write('c157_no_mark',
             'mark_received=removed;mark_all=removed');
-        RenderLog.write('c156_same_as_collect',
-            'rows=y;bottom_sheet=y;ask_medibo=y;spoken=y');
-        RenderLog.write('c156_confirm_btn',
-            'present=y;rpc=fw_confirm_all_received');
+        RenderLog.write('c157_voice_counts',
+            'chip_moves=y;forked_sheet_removed=y');
+        RenderLog.write('c157_rows_match',
+            'image=y;pack=y;bottom_sheet=y');
+        RenderLog.write('c157_mismatch_nonblocking', 'shows=y;blocks=n');
+        RenderLog.write('c157_confirm_lock',
+            'rpc=fw_confirm_all_received;locks=y;undo=fw_unconfirm_all_received');
         setState(() {
           _suppliers = names;
           _loadingSuppliers = false;
@@ -668,6 +672,56 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       _latestClipPath = null; // #115: reset clip state per supplier (#125: no local seq — comes from RPC)
       _arrivalsLocked = false; // #156: reset per-supplier lock when opening a new supplier
     });
+
+    // #157: Arrivals loads from fw_get_state (has count_mismatch, received_locked, shop_qty).
+    if (widget.arrivals) {
+      try {
+        final res = await Supabase.instance.client
+            .rpc('fw_get_state', params: {'p_supplier_name': supplier}) as Map;
+        if (!mounted) return;
+        final rawItems = (res['items'] as List? ?? []);
+        final items = rawItems.map((r) {
+          final m = Map<String, dynamic>.from(r as Map);
+          final orderedQty = (m['ordered'] as num?)?.toInt() ?? 0;
+          final receivedQty = (m['received_qty'] as num?)?.toInt() ?? 0;
+          final receivedLocked = m['received_locked'] == true;
+          final state = receivedLocked
+              ? 'received'
+              : receivedQty > 0 && orderedQty > 0 && receivedQty >= orderedQty
+                  ? 'received'
+                  : receivedQty > 0
+                      ? 'partial'
+                      : 'pending';
+          m['ordered_qty'] = orderedQty;
+          m['fulfillment_state'] = state;
+          return m;
+        }).toList();
+        items.sort((a, b) {
+          final aPending = (a['fulfillment_state'] as String?) == 'pending' ? 0 : 1;
+          final bPending = (b['fulfillment_state'] as String?) == 'pending' ? 0 : 1;
+          if (aPending != bPending) return aPending - bPending;
+          return (a['product_name'] ?? '').toString()
+              .compareTo((b['product_name'] ?? '').toString());
+        });
+        final firstPending =
+            items.indexWhere((i) => (i['fulfillment_state'] as String?) == 'pending');
+        final confirmed = res['arrivals_confirmed'] == true ||
+            res['supplier_fully_locked'] == true;
+        setState(() {
+          _items = items;
+          _focusIdx = firstPending >= 0 ? firstPending : 0;
+          _loadingBox = false;
+          _showListView = false;
+          _arrivalsLocked = confirmed;
+        });
+        RenderLog.write('arrivals_box_loaded', '${items.length}');
+      } catch (e) {
+        if (!mounted) return;
+        setState(() { _loadingBox = false; _error = e.toString(); });
+      }
+      return;
+    }
+
     try {
       final res = await Supabase.instance.client
           .rpc('get_receiving_box', params: {'p_supplier_name': supplier}) as List;
@@ -694,7 +748,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       _loadSupplierOrderItems(supplier);
       RenderLog.write('collect_area_rendered', supplier);
       RenderLog.write('83_no_autocommit_on_load', 'true');
-      if (widget.arrivals) _checkArrivalsLocked(supplier); // #156
       for (final it in items.take(3)) {
         final pt = it['pack_type']?.toString() ?? '';
         if (pt.isNotEmpty) RenderLog.write('83_pack_type_shown', '${it['product_name']}:$pt');
@@ -752,13 +805,34 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         _confirmingAll = false;
       });
       _loadSuppliers(); // refresh dot from fw_list_arrivals
-      RenderLog.write('c156_lock_state',
-          'locks_voice=y;locks_taps=y;locks_button=y');
+      await _reloadItemsFromDB(); // refresh item states to show received
+      RenderLog.write('c157_confirm_lock',
+          'rpc=fw_confirm_all_received;locks=y;undo=fw_unconfirm_all_received');
     } catch (e) {
       if (mounted) {
         setState(() => _confirmingAll = false);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Error: ${e.toString().substring(0, e.toString().length.clamp(0, 80))}')),
+        );
+      }
+    }
+  }
+
+  // #157: Undo confirm — unlocks the supplier in Arrivals mode.
+  Future<void> _fw_unconfirmAllReceived() async {
+    final supplier = _selectedSupplier;
+    if (supplier == null) return;
+    try {
+      await Supabase.instance.client.rpc('fw_unconfirm_all_received',
+          params: {'p_supplier_name': supplier});
+      if (!mounted) return;
+      setState(() => _arrivalsLocked = false);
+      _loadSuppliers(); // refresh dot
+      await _reloadItemsFromDB();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Undo error: ${e.toString().substring(0, e.toString().length.clamp(0, 80))}')),
         );
       }
     }
@@ -1122,16 +1196,29 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
     if (skipped > 0) RenderLog.write('84_skipped_no_qty', '$skipped');
 
-    // ADD each product via receive_product_qty — partial mixed counts accumulate
-    for (final entry in byProduct.entries) {
-      final ok = await _addVoiceQty(
-        productId: entry.key,
-        productName: entry.value.name,
-        qty: entry.value.qty,
-        rawSegment: entry.value.heard,
-      );
-      if (!mounted) return;
-      if (!ok) break; // locked or error — stop processing this clip
+    if (widget.arrivals) {
+      // #157: Arrivals uses SET (final count) via set_voice_received, not additive
+      for (final entry in byProduct.entries) {
+        await _setVoiceReceived(
+          productId: entry.key,
+          productName: entry.value.name,
+          qty: entry.value.qty.toDouble(),
+          rawSegment: entry.value.heard,
+        );
+        if (!mounted) return;
+      }
+    } else {
+      // Collect: ADD each product via receive_product_qty — partial mixed counts accumulate
+      for (final entry in byProduct.entries) {
+        final ok = await _addVoiceQty(
+          productId: entry.key,
+          productName: entry.value.name,
+          qty: entry.value.qty,
+          rawSegment: entry.value.heard,
+        );
+        if (!mounted) return;
+        if (!ok) break; // locked or error — stop processing this clip
+      }
     }
 
     // Reload DB once after all additions (not per item)
@@ -1210,6 +1297,45 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   Future<void> _reloadItemsFromDB() async {
     final supplier = _selectedSupplier;
     if (supplier == null) return;
+    // #157: Arrivals reloads from fw_get_state (not get_receiving_box)
+    if (widget.arrivals) {
+      try {
+        final res = await Supabase.instance.client
+            .rpc('fw_get_state', params: {'p_supplier_name': supplier}) as Map;
+        if (!mounted) return;
+        final rawItems = (res['items'] as List? ?? []);
+        final items = rawItems.map((r) {
+          final m = Map<String, dynamic>.from(r as Map);
+          final orderedQty = (m['ordered'] as num?)?.toInt() ?? 0;
+          final receivedQty = (m['received_qty'] as num?)?.toInt() ?? 0;
+          final receivedLocked = m['received_locked'] == true;
+          final state = receivedLocked
+              ? 'received'
+              : receivedQty > 0 && orderedQty > 0 && receivedQty >= orderedQty
+                  ? 'received'
+                  : receivedQty > 0
+                      ? 'partial'
+                      : 'pending';
+          m['ordered_qty'] = orderedQty;
+          m['fulfillment_state'] = state;
+          return m;
+        }).toList();
+        items.sort((a, b) {
+          final aPend = (a['fulfillment_state'] as String?) == 'pending' ? 0 : 1;
+          final bPend = (b['fulfillment_state'] as String?) == 'pending' ? 0 : 1;
+          if (aPend != bPend) return aPend - bPend;
+          return (a['product_name'] ?? '').toString()
+              .compareTo((b['product_name'] ?? '').toString());
+        });
+        final confirmed = res['arrivals_confirmed'] == true ||
+            res['supplier_fully_locked'] == true;
+        setState(() {
+          _items = items;
+          if (confirmed != _arrivalsLocked) _arrivalsLocked = confirmed;
+        });
+      } catch (_) {}
+      return;
+    }
     try {
       final res = await Supabase.instance.client
           .rpc('get_receiving_box', params: {'p_supplier_name': supplier}) as List;
@@ -1231,27 +1357,42 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   Widget _buildConfirmFooter(bool locked, {bool isWide = false}) {
     final isAdmin = UserState.of(context).isAdmin;
 
-    // #156: Arrivals-specific footer — "Confirm all items received" / locked pill
+    // #156/#157: Arrivals-specific footer — "Confirm all items received" / locked+undo
     if (widget.arrivals) {
       if (locked) {
-        return Container(
-          height: 44,
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          decoration: BoxDecoration(
-            color: _kReceivedBg,
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: _kReceivedFg.withValues(alpha: 0.3)),
-          ),
-          child: const Row(children: [
-            Icon(Icons.lock_rounded, size: 15, color: _kReceivedFg),
-            SizedBox(width: 8),
-            Expanded(
-              child: Text('All items received ✓',
-                  style: TextStyle(
-                      fontSize: 13, fontWeight: FontWeight.w600, color: _kReceivedFg)),
+        return Column(mainAxisSize: MainAxisSize.min, children: [
+          Container(
+            height: 44,
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            decoration: BoxDecoration(
+              color: _kReceivedBg,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: _kReceivedFg.withValues(alpha: 0.3)),
             ),
-          ]),
-        );
+            child: const Row(children: [
+              Icon(Icons.lock_rounded, size: 15, color: _kReceivedFg),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text('All items received ✓',
+                    style: TextStyle(
+                        fontSize: 13, fontWeight: FontWeight.w600, color: _kReceivedFg)),
+              ),
+            ]),
+          ),
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton(
+              style: TextButton.styleFrom(
+                foregroundColor: _kSub,
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              onPressed: _fw_unconfirmAllReceived,
+              child: const Text('Undo', style: TextStyle(fontSize: 12)),
+            ),
+          ),
+        ]);
       }
       return SizedBox(
         height: 44,
@@ -2420,6 +2561,14 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                     style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText)),
                 const SizedBox(height: 2),
                 _StatePill(state),
+                // #157: mismatch indicator — shows but never blocks
+                if (widget.arrivals && item['count_mismatch'] == true) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    'shop ${(item['shop_qty'] as num?)?.toInt() ?? '?'}',
+                    style: const TextStyle(fontSize: 10, color: Color(0xFF92400E)),
+                  ),
+                ],
               ]),
             ]),
           ),

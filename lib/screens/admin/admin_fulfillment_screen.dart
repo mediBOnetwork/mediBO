@@ -3813,7 +3813,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
             children: [
               Expanded(child: _th('Product')),
               const SizedBox(width: _kNameToBadgeMinGap),
-              SizedBox(width: _kBadgeClusterMaxW, child: _th('Qty sequence')),
+              SizedBox(width: _kBadgeClusterMaxW, child: _thQty('Qty sequence')),
               const SizedBox(width: _kBadgeToTotalGap),
               SizedBox(width: _kTotalColW, child: _thRight('Total')),
             ],
@@ -3891,6 +3891,13 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
 
   Widget _th(String text) => Padding(
     padding: const EdgeInsets.fromLTRB(10, 6, 4, 6),
+    child: Text(text,
+        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _kSub)),
+  );
+
+  // #111: zero left padding so "Qty sequence" header aligns with badge Wrap (which has no h-padding)
+  Widget _thQty(String text) => Padding(
+    padding: const EdgeInsets.fromLTRB(0, 6, 4, 6),
     child: Text(text,
         style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _kSub)),
   );

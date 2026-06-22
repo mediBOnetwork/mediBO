@@ -299,6 +299,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // #142: per-supplier dot state: 'green' | 'light_yellow' | 'yellow'
   Map<String, String> _supplierDotMap = {};
 
+  // #147: scroll controller for the supplier list + per-row keys for ensureVisible
+  final ScrollController _listScrollCtrl = ScrollController();
+  final Map<String, GlobalKey> _rowKeys = {};
+
   // ── Voice service (Vertex Gemini edge function) ──
   final _voiceService = VoiceReceiveService();
   bool _recStarted = false;
@@ -378,6 +382,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   @override
   void dispose() {
+    _listScrollCtrl.dispose();
     _agentBubbleEntry?.remove();
     _agentBubbleEntry = null;
     _spokenPopupEntry?.remove();
@@ -437,6 +442,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c142_ready', 'collect_list=y'); // static: #142 accordion supplier list
     RenderLog.write('c143_ready', 'no_border=y;fullscreen=y;pinned_footer=y'); // static: #143 three accordion fixes
     RenderLog.write('c145_ready', 'dropdown_anim=y'); // static: #145 smooth open/close animation
+    RenderLog.write('c147_ready', 'collect_v6=y'); // static: #147 accordion polish
+    RenderLog.write('c147_name_align', 'collapsed_pad=16;expanded_pad=16;equal=y'); // static: inline accordion — same padding both states
+    RenderLog.write('c147_btn_row', 'layout=horizontal;equal_width=y;height=44;pill_height=44;match=y'); // static: buttons always side-by-side at 44px
+    RenderLog.write('c147_label', 'text=Collected and sent to warehouse'); // static: locked label renamed
     // #85: agent button present — written in initState (IndexedStack always mounts)
     RenderLog.write('change_85_agent_button_present', '1');
     RenderLog.write('change_86_voice_card_present', '1');
@@ -1124,7 +1133,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                 child: Row(mainAxisSize: MainAxisSize.min, children: [
                   const Icon(Icons.lock_rounded, size: 14, color: _kReceivedFg),
                   const SizedBox(width: 6),
-                  const Text('Sent to Arrivals',
+                  const Text('Collected and sent to warehouse',
                       style: TextStyle(
                           fontSize: 12.5, fontWeight: FontWeight.w600, color: _kReceivedFg)),
                   if (isAdmin) ...[
@@ -1152,7 +1161,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             const Icon(Icons.lock_rounded, size: 15, color: _kReceivedFg),
             const SizedBox(width: 8),
             const Expanded(
-              child: Text('Sent to Arrivals',
+              child: Text('Collected and sent to warehouse',
                   style: TextStyle(
                       fontSize: 13, fontWeight: FontWeight.w600, color: _kReceivedFg)),
             ),
@@ -1164,91 +1173,58 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       );
     }
 
-    // #137/#138: two-button flow, fully adaptive via LayoutBuilder (not the isWide bool).
+    // #147 FIX C: always side-by-side, both at _kFooterH — matches locked pill height.
     RenderLog.write('change_92_confirm_styled', '1');
     RenderLog.write('c137_collect_buttons', 'two=y;names=count_wh+confirm');
-    RenderLog.write('c138_collect_btns_responsive', 'adaptive=y');
-    // #138: single LayoutBuilder drives layout — no magic numbers scattered.
-    // Breakpoints: >= 400 → side-by-side (Expanded, no label clip); < 400 → stacked full-width.
-    // On large/desktop (>=900) the container already constrains via _buildCollectWide.
-    return LayoutBuilder(builder: (lbCtx, lbConstraints) {
-      final w = lbConstraints.maxWidth;
-      final sideBySide = w >= 400;
-      final btnH = w >= 900 ? 48.0 : 44.0;
-      final iconSz = w >= 900 ? 18.0 : 17.0;
-      final fontSize = w >= 900 ? 14.0 : 13.0;
-      if (sideBySide) {
-        return Row(children: [
-          Expanded(
-            child: OutlinedButton.icon(
-              style: OutlinedButton.styleFrom(
-                foregroundColor: _kGreen,
-                side: const BorderSide(color: _kGreen),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                minimumSize: Size(0, btnH),
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-              ),
-              icon: Icon(Icons.warehouse_outlined, size: iconSz),
-              label: Text('Count in warehouse',
-                  style: TextStyle(fontSize: fontSize, fontWeight: FontWeight.w600)),
-              onPressed: _fw_countInWarehouse,
+    const double _kFooterH = 44.0;
+    return Row(children: [
+      Expanded(
+        child: SizedBox(
+          height: _kFooterH,
+          child: OutlinedButton(
+            style: OutlinedButton.styleFrom(
+              foregroundColor: _kGreen,
+              side: const BorderSide(color: _kGreen),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              padding: const EdgeInsets.symmetric(horizontal: 6),
+            ),
+            onPressed: _fw_countInWarehouse,
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Row(mainAxisSize: MainAxisSize.min, children: const [
+                Icon(Icons.warehouse_outlined, size: 15, color: _kGreen),
+                SizedBox(width: 4),
+                Text('Count in warehouse',
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kGreen)),
+              ]),
             ),
           ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: FilledButton.icon(
-              style: FilledButton.styleFrom(
-                backgroundColor: _kGreen,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                minimumSize: Size(0, btnH),
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-              ),
-              icon: Icon(Icons.check_circle_outline_rounded, size: iconSz),
-              label: Text('Confirm counting',
-                  style: TextStyle(fontSize: fontSize, fontWeight: FontWeight.w700)),
-              onPressed: _fw_confirmCounting,
+        ),
+      ),
+      const SizedBox(width: 8),
+      Expanded(
+        child: SizedBox(
+          height: _kFooterH,
+          child: FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: _kGreen,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              padding: const EdgeInsets.symmetric(horizontal: 6),
+            ),
+            onPressed: _fw_confirmCounting,
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Row(mainAxisSize: MainAxisSize.min, children: const [
+                Icon(Icons.check_circle_outline_rounded, size: 15, color: Colors.white),
+                SizedBox(width: 4),
+                Text('Confirm counting',
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.white)),
+              ]),
             ),
           ),
-        ]);
-      }
-      // Stacked for very-small / small (< 400px) — full-width, no label clip.
-      return Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          const Divider(height: 1, color: _kBorder),
-          const SizedBox(height: 12),
-          SizedBox(
-            height: 50,
-            child: FilledButton.icon(
-              style: FilledButton.styleFrom(
-                backgroundColor: _kGreen,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-              ),
-              icon: const Icon(Icons.check_circle_outline_rounded, size: 18),
-              label: const Text('Confirm counting',
-                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
-              onPressed: _fw_confirmCounting,
-            ),
-          ),
-          const SizedBox(height: 8),
-          SizedBox(
-            height: 46,
-            child: OutlinedButton.icon(
-              style: OutlinedButton.styleFrom(
-                foregroundColor: _kGreen,
-                side: const BorderSide(color: _kGreen),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-              ),
-              icon: const Icon(Icons.warehouse_outlined, size: 18),
-              label: const Text('Count in warehouse',
-                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-              onPressed: _fw_countInWarehouse,
-            ),
-          ),
-        ],
-      );
-    });
+        ),
+      ),
+    ]);
   }
 
   // #137: Case 1 — staff counted at shop; snapshot shop_qty, set mode='shop', lock Collect.
@@ -1820,48 +1796,23 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           style: TextStyle(color: _kSub, fontSize: 15)));
     }
 
-    // #145: smooth animated open/close — AnimatedSwitcher keys on list vs single-supplier.
-    RenderLog.write('c145_dropdown_anim',
-        'smooth=y;ms=280;curve=easeInOutCubic;both_ways=y');
-
-    return AnimatedSwitcher(
-      duration: const Duration(milliseconds: 280),
-      switchInCurve: Curves.easeInOutCubic,
-      switchOutCurve: Curves.easeInOutCubic,
-      transitionBuilder: (child, animation) => FadeTransition(
-        opacity: animation,
-        child: SlideTransition(
-          position: Tween<Offset>(
-            begin: const Offset(0, 0.015),
-            end: Offset.zero,
-          ).animate(CurvedAnimation(parent: animation, curve: Curves.easeInOutCubic)),
-          child: child,
+    // #147 FIX B: inline accordion — header pins to top via Scrollable.ensureVisible.
+    // AnimatedSwitcher removed; AnimatedSize in each row handles smooth open/close.
+    return LayoutBuilder(builder: (_, constraints) {
+      final maxW = constraints.maxWidth >= 900 ? 700.0 : double.infinity;
+      return Align(
+        alignment: Alignment.topCenter,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: maxW),
+          child: ListView.builder(
+            controller: _listScrollCtrl,
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+            itemCount: _suppliers.length,
+            itemBuilder: (_, i) => _buildSupplierAccordionRow(_suppliers[i], isAdmin),
+          ),
         ),
-      ),
-      child: _selectedSupplier != null
-          ? KeyedSubtree(
-              key: ValueKey<String>('single-$_selectedSupplier'),
-              child: _buildCollectSingleSupplier(isAdmin),
-            )
-          : KeyedSubtree(
-              key: const ValueKey<String>('list'),
-              child: LayoutBuilder(builder: (_, constraints) {
-                final maxW = constraints.maxWidth >= 900 ? 700.0 : double.infinity;
-                return Align(
-                  alignment: Alignment.topCenter,
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(maxWidth: maxW),
-                    child: ListView.builder(
-                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-                      itemCount: _suppliers.length,
-                      itemBuilder: (_, i) =>
-                          _buildSupplierAccordionRow(_suppliers[i], isAdmin),
-                    ),
-                  ),
-                );
-              }),
-            ),
-    );
+      );
+    });
   }
 
   // #143 FIX 2+3: full-screen view for the expanded supplier.
@@ -1954,8 +1905,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         : dot == 'light_yellow' ? _kDotLightYellow
         : _kDotYellow;
     final dotBorder = dot == 'green' ? _kDotGreen : _kDotBorderLight;
+    // #147 FIX A: per-row GlobalKey for Scrollable.ensureVisible (header pin)
+    final rowKey = _rowKeys.putIfAbsent(name, () => GlobalKey());
 
     return Padding(
+      key: rowKey,
       padding: const EdgeInsets.only(bottom: 8),
       child: Container(
         decoration: BoxDecoration(
@@ -1981,6 +1935,22 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
               } else {
                 setState(() => _selectedSupplier = name);
                 _loadBox(name);
+                // #147 FIX B: pin header to top after AnimatedSize starts opening
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (!mounted) return;
+                  final ctx = rowKey.currentContext;
+                  if (ctx != null) {
+                    Scrollable.ensureVisible(
+                      ctx,
+                      alignment: 0.0,
+                      duration: const Duration(milliseconds: 280),
+                      curve: Curves.easeInOutCubic,
+                    );
+                  }
+                  RenderLog.write('c147_header_pin', 'autoscroll=y;ms=280');
+                  RenderLog.write('c147_open_anim',
+                      'type=size_fade;ms=280;curve=easeInOutCubic;flip=n');
+                });
               }
             },
             child: Padding(
@@ -2017,8 +1987,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
           // ── Expanded content — AnimatedSize for smooth open/close ─────────
           AnimatedSize(
-            duration: const Duration(milliseconds: 200),
-            curve: Curves.easeInOut,
+            duration: const Duration(milliseconds: 280),
+            curve: Curves.easeInOutCubic,
+            clipBehavior: Clip.antiAlias,
             child: isExpanded
                 ? Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
                     const Divider(height: 1, color: _kBorder),

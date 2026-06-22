@@ -302,6 +302,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // #142: per-supplier dot state: 'green' | 'light_yellow' | 'yellow'
   Map<String, String> _supplierDotMap = {};
 
+  // #117: per-supplier count mode from fw_list_arrivals ('shop'|'warehouse'|null)
+  Map<String, String?> _supplierModeMap = {};
+
   // #156: arrivals lock state
   bool _arrivalsLocked = false;
   bool _confirmingAll = false;
@@ -382,6 +385,13 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // #91: true when get_receiving_box returns collect_locked=true on any row
   bool get _boxLocked =>
       _items.isNotEmpty && _items.any((r) => r['collect_locked'] == true);
+
+  // #117: mode-aware text for the locked Collect footer pill
+  String get _collectLockedText {
+    if (_supplierMode == 'warehouse') return 'Collected & sent to warehouse for counting';
+    if (_supplierMode == 'shop') return 'Counted and sent to warehouse';
+    return 'Collected and sent to warehouse';
+  }
 
   // #97: derived from saved data — survives refresh; counts rows with received_qty>0
   int get _spokenCount =>
@@ -544,6 +554,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         if (!mounted) return;
         final rawList = (res['suppliers'] as List? ?? []);
         final dotMap = <String, String>{};
+        final modeMap = <String, String?>{};
         final names = <String>[];
         for (final r in rawList) {
           final m = r as Map;
@@ -551,8 +562,16 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           if (name.isEmpty) continue;
           if (!names.contains(name)) names.add(name);
           dotMap[name] = m['dot']?.toString() ?? 'yellow';
+          final mv = m['mode']?.toString();
+          modeMap[name] = (mv != null && mv.isNotEmpty) ? mv : null;
         }
         names.sort();
+        // #117 badge counts render-log
+        final cCount = modeMap.values.where((v) => v == 'shop').length;
+        final crCount = modeMap.values.where((v) => v != 'shop').length;
+        RenderLog.write('c117_arrivals_badge_rendered', 'true');
+        RenderLog.write('c117_badge_counts', 'C=$cCount,CR=$crCount');
+        RenderLog.write('c117_dot_flush_right', 'true');
         RenderLog.write('c140_arrivals_source',
             'rpc=fw_list_arrivals;count=${names.length}');
         RenderLog.write('arrivals_area_rendered', '${names.length}');
@@ -588,6 +607,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           _suppliers = names;
           _loadingSuppliers = false;
           _supplierDotMap = {..._supplierDotMap, ...dotMap};
+          _supplierModeMap = {..._supplierModeMap, ...modeMap};
           _arrivalsLocked = false;
         });
       } catch (e) {
@@ -1556,8 +1576,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                 child: Row(mainAxisSize: MainAxisSize.min, children: [
                   const Icon(Icons.lock_rounded, size: 14, color: _kReceivedFg),
                   const SizedBox(width: 6),
-                  const Text('Collected and sent to warehouse',
-                      style: TextStyle(
+                  Text(_collectLockedText,
+                      style: const TextStyle(
                           fontSize: 12.5, fontWeight: FontWeight.w600, color: _kReceivedFg)),
                   if (isAdmin) ...[
                     const SizedBox(width: 6),
@@ -1583,9 +1603,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           child: Row(children: [
             const Icon(Icons.lock_rounded, size: 15, color: _kReceivedFg),
             const SizedBox(width: 8),
-            const Expanded(
-              child: Text('Collected and sent to warehouse',
-                  style: TextStyle(
+            Expanded(
+              child: Text(_collectLockedText,
+                  style: const TextStyle(
                       fontSize: 13, fontWeight: FontWeight.w600, color: _kReceivedFg)),
             ),
             if (isAdmin)
@@ -1674,9 +1694,16 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       final res = await Supabase.instance.client
           .rpc('fw_confirm_counting', params: {'p_supplier_name': supplier}) as Map;
       if (res['error'] != null) throw Exception(res['error'].toString());
+      if (mounted) setState(() => _supplierMode = 'shop');
       await _reloadItemsFromDB();
       RenderLog.write('c137_collect_action', 'action=confirm;supplier=$supplier');
+      RenderLog.write('c117_collect_confirm_text_mode', 'shop');
       _loadSupplierDots();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Counted and sent to warehouse')),
+        );
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1710,9 +1737,16 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       final res = await Supabase.instance.client
           .rpc('fw_count_in_warehouse', params: {'p_supplier_name': supplier}) as Map;
       if (res['error'] != null) throw Exception(res['error'].toString());
+      if (mounted) setState(() => _supplierMode = 'warehouse');
       await _reloadItemsFromDB();
       RenderLog.write('c137_collect_action', 'action=warehouse;supplier=$supplier');
+      RenderLog.write('c117_collect_confirm_text_mode', 'warehouse');
       _loadSupplierDots();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Collected & sent to warehouse for counting')),
+        );
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -2405,6 +2439,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       // #116: expanded view is handled by _buildExpandedSupplierCard in _buildCollectList
       // The accordion shell only handles collapsed display and tap-to-open.
       expandedContent: const SizedBox.shrink(),
+      mode: widget.arrivals ? _supplierModeMap[name] : null,
     );
   }
 
@@ -5793,6 +5828,7 @@ class _SupplierAccordionShell extends StatelessWidget {
   final GlobalKey rowKey;
   final VoidCallback onTap;
   final Widget expandedContent; // AnimatedSize handles show/hide
+  final String? mode;         // #117: arrivals mode ('shop'|'warehouse'|null)
 
   const _SupplierAccordionShell({
     required this.name,
@@ -5802,6 +5838,7 @@ class _SupplierAccordionShell extends StatelessWidget {
     required this.rowKey,
     required this.onTap,
     required this.expandedContent,
+    this.mode,
   });
 
   static const _kDotGreen       = Color(0xFF1B7A43);
@@ -5839,6 +5876,13 @@ class _SupplierAccordionShell extends StatelessWidget {
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
               child: Row(children: [
+                Icon(
+                  isExpanded
+                      ? Icons.keyboard_arrow_up_rounded
+                      : Icons.keyboard_arrow_down_rounded,
+                  size: 18, color: _kSub,
+                ),
+                const SizedBox(width: 8),
                 Expanded(
                   child: Text(name,
                       style: TextStyle(
@@ -5848,6 +5892,10 @@ class _SupplierAccordionShell extends StatelessWidget {
                       maxLines: 2, overflow: TextOverflow.ellipsis),
                 ),
                 const SizedBox(width: 12),
+                if (mode != null) ...[
+                  CountBadge(mode: mode),
+                  const SizedBox(width: 8),
+                ],
                 Container(
                   width: 12, height: 12,
                   decoration: BoxDecoration(
@@ -5855,13 +5903,6 @@ class _SupplierAccordionShell extends StatelessWidget {
                     color: dotFill,
                     border: Border.all(color: dotBorder, width: 1.5),
                   ),
-                ),
-                const SizedBox(width: 8),
-                Icon(
-                  isExpanded
-                      ? Icons.keyboard_arrow_up_rounded
-                      : Icons.keyboard_arrow_down_rounded,
-                  size: 18, color: _kSub,
                 ),
               ]),
             ),
@@ -5874,6 +5915,38 @@ class _SupplierAccordionShell extends StatelessWidget {
             child: isExpanded ? expandedContent : const SizedBox.shrink(),
           ),
         ]),
+      ),
+    );
+  }
+}
+
+// ── #117: Count badge — fixed-width chip shown on Arrivals accordion rows ─────
+
+class CountBadge extends StatelessWidget {
+  const CountBadge({super.key, required this.mode});
+  final String? mode;
+  @override
+  Widget build(BuildContext context) {
+    final bool counted = mode == 'shop';
+    final String label = counted ? 'C' : 'CR';
+    final Color color = counted
+        ? const Color(0xFF1B7A43)
+        : const Color(0xFFD32F2F);
+    return SizedBox(
+      width: 38,
+      height: 24,
+      child: Container(
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: color,
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Text(label, style: const TextStyle(
+          color: Colors.white,
+          fontWeight: FontWeight.w700,
+          fontSize: 12,
+          height: 1.0,
+        )),
       ),
     );
   }

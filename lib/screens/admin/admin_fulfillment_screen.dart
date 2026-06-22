@@ -424,6 +424,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c112_ready', 'sentinel=$_kC112Sentinel;close_shared=y;source_logged=y;branch_logged=y'); // static: #112 both defects fixed
     RenderLog.write('c134_ready', 'x_visible=y;no_blank_rows=y'); // static: #134 X recolor + name fallback
     RenderLog.write('c134_name_fallback', 'applied=y'); // static: #134 unknown item label in build
+    RenderLog.write('c135_ready', 'x_dark_visible=y'); // static: #135 green-circle X forced visible
     // #85: agent button present — written in initState (IndexedStack always mounts)
     RenderLog.write('change_85_agent_button_present', '1');
     RenderLog.write('change_86_voice_card_present', '1');
@@ -3530,7 +3531,10 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
           RenderLog.write('c110_close_btn', 'present=y');
           RenderLog.write('c111_close_btn_built', 'visible=y;color=dark');
           RenderLog.write('c112_close_btn_shared', 'state=$hState'); // #112: shared-header proof
-          RenderLog.write('c134_close_btn_color', 'visible=y;color=dark'); // #134: theme-immune dark icon
+          RenderLog.write('c134_close_btn_color', 'visible=y;color=dark'); // #134
+          // #135: green-circle + white icon — fully theme-immune, always visible on white header.
+          // color_hex=0xFF1B7A43 (brand green background, white icon on top).
+          RenderLog.write('c135_close_btn', 'rendered=y;color_hex=0xFF1B7A43;size=22');
           return Padding(
             padding: const EdgeInsets.fromLTRB(14, 10, 4, 6),
             child: Row(
@@ -3539,23 +3543,33 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
                 const Text('Counted items',
                     style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _kText)),
                 const Spacer(),
-                // #134: GestureDetector avoids IconButton theme override (white-on-white fix).
-                // SizedBox guarantees 44×44 tap target; explicit _kText color is never theme-overridden.
-                Tooltip(
-                  message: 'Close',
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onTap: () {
-                      RenderLog.write('c110_close_tap', 'dismiss=y');
-                      RenderLog.write('c111_close_tap', 'dismiss=y');
-                      RenderLog.write('c112_close_tap', 'dismiss=y');
-                      widget.onDismiss();
-                    },
-                    child: const SizedBox(
-                      width: 44,
-                      height: 44,
-                      child: Center(
-                        child: Icon(Icons.close_rounded, size: 22, color: _kText),
+                // #135: explicit green circle + white icon; no IconTheme / M3 can override
+                // the Container color or the Icon color inside it (white-on-green contrast = max).
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () {
+                    RenderLog.write('c110_close_tap', 'dismiss=y');
+                    RenderLog.write('c111_close_tap', 'dismiss=y');
+                    RenderLog.write('c112_close_tap', 'dismiss=y');
+                    widget.onDismiss();
+                  },
+                  child: SizedBox(
+                    width: 44,
+                    height: 44,
+                    child: Center(
+                      child: Container(
+                        width: 28,
+                        height: 28,
+                        decoration: const BoxDecoration(
+                          color: Color(0xFF1B7A43), // brand green — no token
+                          shape: BoxShape.circle,
+                        ),
+                        alignment: Alignment.center,
+                        child: const Icon(
+                          Icons.close_rounded,
+                          size: 16,
+                          color: Colors.white, // white-on-green: guaranteed contrast
+                        ),
                       ),
                     ),
                   ),

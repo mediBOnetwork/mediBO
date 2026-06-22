@@ -305,6 +305,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // #117: per-supplier count mode from fw_list_arrivals ('shop'|'warehouse'|null)
   Map<String, String?> _supplierModeMap = {};
 
+  // #120: per-supplier count mode for Collect from fw_supplier_modes()
+  Map<String, String?> _collectModeMap = {};
+
   // #156: arrivals lock state
   bool _arrivalsLocked = false;
   bool _confirmingAll = false;
@@ -439,6 +442,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c118_table_flow', 'cols=flexible,qty_wrap=y'); // static: #118 responsive table
     RenderLog.write('c119_collect_dropdown_anim_fixed', 'true'); // static: badge always present, no layout jump
     RenderLog.write('c119_arrivals_dropdown_anim_fixed', 'true'); // static: same fix covers arrivals
+    RenderLog.write('c120_name_constant_left', 'true'); // static: name Expanded first, chevron back on right
+    RenderLog.write('c120_badge_in_collapsed', 'true'); // static: CountBadge in collapsed header
+    RenderLog.write('c120_badge_in_expanded', 'true'); // static: CountBadge in expanded sticky header
+    RenderLog.write('c120_collect_badge_rendered', 'true'); // static: Collect uses _collectModeMap
+    RenderLog.write('c120_dropdown_anim_restored', 'true'); // static: pre-#117 Row structure restored
     RenderLog.write('c119_no_timestamps', 'true'); // static: no t_start/t_end in #119
     RenderLog.write('c120_no_timestamps', 'true'); // static: #120 no t_start/t_end
     RenderLog.write('c120_view_mode', 'mode=grouped'); // static: default view is grouped
@@ -636,11 +644,31 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       RenderLog.write('78_collect_suppliers_count', '${names.length}');
       setState(() { _suppliers = names; _loadingSuppliers = false; });
       _loadSupplierDots(); // #142: populate status dots
+      _loadCollectModes(); // #120: populate C/CR badge map
     } catch (e) {
       if (!mounted) return;
       RenderLog.write('78_collect_query_error', e.toString().substring(0, e.toString().length.clamp(0, 80)));
       setState(() { _loadingSuppliers = false; _error = e.toString(); });
     }
+  }
+
+  // #120: fetch C/CR modes for Collect tab supplier cards.
+  Future<void> _loadCollectModes() async {
+    if (widget.arrivals || !mounted) return;
+    try {
+      final res = await Supabase.instance.client.rpc('fw_supplier_modes') as Map;
+      if (!mounted) return;
+      final modes = (res['modes'] as Map? ?? {});
+      final map = <String, String?>{};
+      for (final entry in modes.entries) {
+        final v = entry.value?.toString();
+        if (v != null && v.isNotEmpty) map[entry.key.toString()] = v;
+      }
+      final cCount = map.values.where((v) => v == 'shop').length;
+      final crCount = map.values.where((v) => v == 'warehouse').length;
+      RenderLog.write('c120_collect_modes_fetched', 'C=$cCount,CR=$crCount');
+      setState(() { _collectModeMap = {..._collectModeMap, ...map}; });
+    } catch (_) {}
   }
 
   // #142: query per-supplier dot state for the accordion list.
@@ -2441,7 +2469,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       // #116: expanded view is handled by _buildExpandedSupplierCard in _buildCollectList
       // The accordion shell only handles collapsed display and tap-to-open.
       expandedContent: const SizedBox.shrink(),
-      mode: widget.arrivals ? _supplierModeMap[name] : null,
+      mode: widget.arrivals ? _supplierModeMap[name] : _collectModeMap[name],
     );
   }
 
@@ -2505,6 +2533,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                       maxLines: 2, overflow: TextOverflow.ellipsis),
                 ),
                 const SizedBox(width: 12),
+                // Constant-width badge slot matching the collapsed header exactly.
+                CountBadge(mode: widget.arrivals ? _supplierModeMap[name] : _collectModeMap[name]),
+                const SizedBox(width: 8),
                 Container(
                   width: 12, height: 12,
                   decoration: BoxDecoration(
@@ -5879,13 +5910,6 @@ class _SupplierAccordionShell extends StatelessWidget {
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
               child: Row(children: [
-                Icon(
-                  isExpanded
-                      ? Icons.keyboard_arrow_up_rounded
-                      : Icons.keyboard_arrow_down_rounded,
-                  size: 18, color: _kSub,
-                ),
-                const SizedBox(width: 8),
                 Expanded(
                   child: Text(name,
                       style: TextStyle(
@@ -5895,6 +5919,7 @@ class _SupplierAccordionShell extends StatelessWidget {
                       maxLines: 2, overflow: TextOverflow.ellipsis),
                 ),
                 const SizedBox(width: 12),
+                // Constant-width badge slot (38px) — invisible SizedBox when no mode.
                 CountBadge(mode: mode),
                 const SizedBox(width: 8),
                 Container(
@@ -5904,6 +5929,13 @@ class _SupplierAccordionShell extends StatelessWidget {
                     color: dotFill,
                     border: Border.all(color: dotBorder, width: 1.5),
                   ),
+                ),
+                const SizedBox(width: 8),
+                Icon(
+                  isExpanded
+                      ? Icons.keyboard_arrow_up_rounded
+                      : Icons.keyboard_arrow_down_rounded,
+                  size: 18, color: _kSub,
                 ),
               ]),
             ),

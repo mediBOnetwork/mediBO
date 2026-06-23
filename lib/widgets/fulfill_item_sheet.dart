@@ -28,9 +28,10 @@ enum _ItemSheetState {
   disputeActive,
   wrongItem,
   notComing,
+  fallback,
 }
 
-// ── Main entry points (called by _PickToLightScreenState) ─────────────────────
+// ── Main entry points ─────────────────────────────────────────────────────────
 
 /// Show the unified item action sheet. On desktop (≥900px) uses Dialog; on
 /// mobile uses ModalBottomSheet. Both render the same [FulfillItemSheet] body.
@@ -70,6 +71,7 @@ Future<void> showFulfillItemSheet({
     );
   }
 
+  // Mobile — content-height bottom sheet (B6: Column+mainAxisSize.min, no ConstrainedBox)
   return showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
@@ -77,22 +79,23 @@ Future<void> showFulfillItemSheet({
         borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
     backgroundColor: _kCard,
     builder: (ctx) {
-      final mq = MediaQuery.of(ctx);
-      final maxH = mq.size.height * 0.90;
-      final bottomPad = mq.viewInsets.bottom + mq.viewPadding.bottom;
-      return ConstrainedBox(
-        constraints: BoxConstraints(maxHeight: maxH),
-        child: SingleChildScrollView(
-          padding: EdgeInsets.only(bottom: bottomPad),
-          child: FulfillItemSheet(
-            item: item,
-            supplierName: supplierName,
-            recording: recording,
-            existingDispute: existingDispute,
-            onRecord: onRecord,
-            onDisputeCreated: onDisputeCreated,
-            onViewDispute: onViewDispute,
-          ),
+      final bottomPad = MediaQuery.of(ctx).viewInsets.bottom
+          + MediaQuery.of(ctx).viewPadding.bottom;
+      return Padding(
+        padding: EdgeInsets.only(bottom: bottomPad),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            FulfillItemSheet(
+              item: item,
+              supplierName: supplierName,
+              recording: recording,
+              existingDispute: existingDispute,
+              onRecord: onRecord,
+              onDisputeCreated: onDisputeCreated,
+              onViewDispute: onViewDispute,
+            ),
+          ],
         ),
       );
     },
@@ -126,7 +129,6 @@ class FulfillItemSheet extends StatefulWidget {
 }
 
 class _FulfillItemSheetState extends State<FulfillItemSheet> {
-  // Local state — updated in-place without closing the popup
   late String _localFsState;
   late int _localRecQty;
   late Map<String, dynamic>? _dispute;
@@ -140,10 +142,34 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
   @override
   void initState() {
     super.initState();
-    _localFsState = widget.item['fulfillment_state']?.toString() ?? 'pending';
+
+    // B1/A4: accept both 'ordered_qty' (old) and 'ordered' (new RPC shape)
     final ordQty = _ordQty;
+
+    // A4: derive fulfillment_state when absent (new RPC shape has received_locked)
+    final rawFs = widget.item['fulfillment_state']?.toString();
+    if (rawFs != null && rawFs.isNotEmpty) {
+      _localFsState = rawFs;
+    } else {
+      final recLocked = widget.item['received_locked'];
+      final recQty    = (widget.item['received_qty'] as num?)?.toInt() ?? 0;
+      if (recLocked == true || recLocked == 'true') {
+        _localFsState = 'received';
+      } else if (recQty > 0 && ordQty > 0 && recQty < ordQty) {
+        _localFsState = 'short';
+      } else if (recQty > 0) {
+        _localFsState = 'received';
+      } else {
+        _localFsState = 'pending';
+      }
+    }
+
     _localRecQty = (widget.item['received_qty'] as num?)?.toInt() ?? 0;
-    _shortDraft = _localRecQty.clamp(1, ordQty.clamp(1, ordQty));
+
+    // B1: guard clamp crash when ordQty == 0 (A3-i)
+    final safeOrd = ordQty > 0 ? ordQty : 1;
+    _shortDraft = _localRecQty.clamp(1, safeOrd);
+
     _dispute = widget.existingDispute;
     _logOpen();
   }
@@ -151,28 +177,38 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
   @override
   void didUpdateWidget(FulfillItemSheet old) {
     super.didUpdateWidget(old);
-    // Sync dispute if parent pushes a new one in
     if (widget.existingDispute != null && _dispute == null) {
       _dispute = widget.existingDispute;
     }
   }
 
   void _logOpen() {
-    final itemId = widget.item['order_item_id']?.toString() ?? '';
-    final state = _deriveState().name;
-    RenderLog.write('c162_sheet_opened', 'state=$state;order_item_id=$itemId');
-    RenderLog.write('c162_state_rendered', state);
+    final itemId   = widget.item['order_item_id']?.toString() ?? '';
+    final oiidOk   = itemId.isNotEmpty;
+    final state    = _deriveState();
+    final stateStr = state == _ItemSheetState.fallback ? 'FALLBACK' : state.name.toUpperCase();
+
+    RenderLog.write('c163_sheet_state', stateStr);
+    RenderLog.write('c163_oiid_present', '$oiidOk');
+
+    // Legacy c162 keys kept for backwards compat
+    RenderLog.write('c162_sheet_opened', 'state=$stateStr;order_item_id=$itemId');
+    RenderLog.write('c162_state_rendered', stateStr);
   }
 
   // ── Derived properties ─────────────────────────────────────────────────────
 
-  int get _ordQty => (widget.item['ordered_qty'] as num?)?.toInt() ?? 0;
-  String get _name => widget.item['product_name']?.toString() ?? '—';
-  String get _unit => widget.item['pack_type']?.toString() ?? '';
+  // B1/A4: accept both field name variants
+  int get _ordQty {
+    final v = widget.item['ordered_qty'] ?? widget.item['ordered'];
+    return (v as num?)?.toInt() ?? 0;
+  }
+  String get _name     => widget.item['product_name']?.toString() ?? '—';
+  String get _unit     => widget.item['pack_type']?.toString() ?? '';
   String? get _imageUrl => widget.item['image_url']?.toString();
-  String? get _itemId => widget.item['order_item_id']?.toString();
+  String? get _itemId  => widget.item['order_item_id']?.toString();
 
-  int get _shortQty => _ordQty - _localRecQty;
+  int get _shortQty => (_ordQty - _localRecQty).clamp(0, _ordQty.clamp(0, 999999));
 
   _ItemSheetState _deriveState() {
     if (_dispute != null) {
@@ -183,11 +219,12 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
       }
     }
     switch (_localFsState) {
-      case 'received':  return _ItemSheetState.receivedFull;
-      case 'short':     return _ItemSheetState.shortfall;
-      case 'wrong':     return _ItemSheetState.wrongItem;
+      case 'received': return _ItemSheetState.receivedFull;
+      case 'short':    return _ItemSheetState.shortfall;
+      case 'wrong':    return _ItemSheetState.wrongItem;
       case 'not_coming': return _ItemSheetState.notComing;
-      default:          return _ItemSheetState.pending;
+      case 'pending':  return _ItemSheetState.pending;
+      default:         return _ItemSheetState.fallback;
     }
   }
 
@@ -204,12 +241,17 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
         _showStepper = false;
       }
     });
-    RenderLog.write('c162_state_rendered', _deriveState().name);
+    final stateStr = _deriveState().name.toUpperCase();
+    RenderLog.write('c163_sheet_state', stateStr);
+    RenderLog.write('c162_state_rendered', stateStr);
   }
 
   Future<void> _sendReminder() async {
     final id = _itemId;
-    if (id == null) return;
+    if (id == null || id.isEmpty) {
+      RenderLog.write('c163_missing_oiid', 'true');
+      return;
+    }
     setState(() { _reminderSending = true; _reminderError = null; });
     try {
       final res = await Supabase.instance.client
@@ -225,14 +267,11 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
           'product_name':  _name,
           'short_qty':     resMap['short_qty'],
         };
-        setState(() {
-          _dispute = newDispute;
-          _reminderSending = false;
-        });
+        setState(() { _dispute = newDispute; _reminderSending = false; });
         widget.onDisputeCreated(id, newDispute);
         RenderLog.write('c162_reminder_sent',
-            'order_item_id=$id;dispute_id=${newDispute['dispute_id']};short_qty=${resMap['short_qty']}');
-        RenderLog.write('c162_state_rendered', _deriveState().name);
+            'order_item_id=$id;dispute_id=${newDispute['dispute_id']}');
+        RenderLog.write('c163_sheet_state', 'DISPUTE_ACTIVE');
       } else {
         final errMsg = resMap['error']?.toString() ?? 'Unknown error';
         setState(() { _reminderError = errMsg; _reminderSending = false; });
@@ -242,7 +281,8 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
       if (!mounted) return;
       final errMsg = e.toString();
       setState(() { _reminderError = errMsg; _reminderSending = false; });
-      RenderLog.write('c162_reminder_error', 'message=${errMsg.substring(0, errMsg.length.clamp(0, 100))}');
+      RenderLog.write('c162_reminder_error',
+          'message=${errMsg.substring(0, errMsg.length.clamp(0, 100))}');
     }
   }
 
@@ -250,11 +290,12 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final sheetState = _deriveState();
-    final dispute = _dispute;
+    final sheetState  = _deriveState();
+    final dispute     = _dispute;
     final disputeStatus = dispute?['status']?.toString() ?? '';
     final disputeToken  = dispute?['token']?.toString() ?? '';
-    final disputeId     = dispute?['dispute_id']?.toString() ?? '';
+    final oiidPresent   = (_itemId ?? '').isNotEmpty;
+    final bodyRows      = _bodyRowCount(sheetState, oiidPresent, disputeToken);
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 20, 16, 32),
@@ -262,7 +303,7 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // ── Header ────────────────────────────────────────────────────────
+          // ── Header ───────────────────────────────────────────────────────
           Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
             _ImageTile(_imageUrl, size: 52),
             const SizedBox(width: 12),
@@ -286,8 +327,7 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
           const Divider(height: 1, color: _kBorder),
           const SizedBox(height: 16),
 
-          // ── Body — one state per vertical stack ────────────────────────────
-
+          // ── PENDING ───────────────────────────────────────────────────────
           if (sheetState == _ItemSheetState.pending) ...[
             _ActionRow(
               label: 'Got all ($_ordQty)',
@@ -310,7 +350,8 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
               onTap: () => setState(() {
                 _showStepper = !_showStepper;
                 if (_showStepper) {
-                  _shortDraft = (_ordQty - 1).clamp(1, _ordQty);
+                  final safeOrd = _ordQty > 0 ? _ordQty : 1;
+                  _shortDraft = (safeOrd - 1).clamp(1, safeOrd);
                 }
               }),
             ),
@@ -318,14 +359,13 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
               const SizedBox(height: 12),
               _StepperBlock(
                 value: _shortDraft,
-                max: _ordQty,
+                max: _ordQty > 0 ? _ordQty : 1,
                 confirming: _confirmingShort,
                 onChanged: (v) => setState(() => _shortDraft = v),
                 onConfirm: widget.recording ? null : () async {
                   setState(() => _confirmingShort = true);
                   await _doRecord('short', qty: _shortDraft);
                   if (mounted) setState(() => _confirmingShort = false);
-                  // Popup stays open — now shows SHORTFALL state
                 },
               ),
             ],
@@ -355,44 +395,7 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
             ),
           ]
 
-          else if (sheetState == _ItemSheetState.shortfall) ...[
-            _StatusLine(
-              'Received $_localRecQty / $_ordQty — $_shortQty short',
-              _kShortFg,
-            ),
-            const SizedBox(height: 12),
-            if (_itemId != null) ...[
-              if (_reminderError != null)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: Text('Error: $_reminderError',
-                      style: const TextStyle(fontSize: 12, color: _kWrongFg)),
-                ),
-              _ActionRow(
-                label: _reminderSending
-                    ? 'Sending…'
-                    : 'Send reminder to supplier (missing $_shortQty${_unit.isNotEmpty ? ' $_unit' : ''})',
-                color: _kPurple,
-                icon: Icons.notifications_active_rounded,
-                filled: true,
-                loading: _reminderSending,
-                onTap: _reminderSending ? null : _sendReminder,
-              ),
-              const SizedBox(height: 8),
-            ],
-            _ActionRow(
-              label: 'Reset to pending',
-              color: _kSub,
-              icon: Icons.undo_rounded,
-              filled: false,
-              loading: false,
-              onTap: widget.recording ? null : () async {
-                await _doRecord('pending');
-                if (mounted) Navigator.of(context).pop();
-              },
-            ),
-          ]
-
+          // ── RECEIVED FULL (B2) ────────────────────────────────────────────
           else if (sheetState == _ItemSheetState.receivedFull) ...[
             _StatusLine('Received $_localRecQty / $_ordQty', _kReceivedFg),
             const SizedBox(height: 12),
@@ -407,10 +410,67 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
                 if (mounted) Navigator.of(context).pop();
               },
             ),
+            // c163 arrivals row count proof
+            Builder(builder: (_) {
+              RenderLog.write('c163_arrivals_sheet_rows', '$bodyRows');
+              return const SizedBox.shrink();
+            }),
           ]
 
+          // ── SHORTFALL (B3) ────────────────────────────────────────────────
+          else if (sheetState == _ItemSheetState.shortfall) ...[
+            _StatusLine(
+              'Received $_localRecQty / $_ordQty — $_shortQty short',
+              _kShortFg,
+            ),
+            const SizedBox(height: 12),
+            if (_reminderError != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text('Error: $_reminderError',
+                    style: const TextStyle(fontSize: 12, color: _kWrongFg)),
+              ),
+            if (oiidPresent) ...[
+              _ActionRow(
+                label: _reminderSending
+                    ? 'Sending…'
+                    : 'Send reminder to supplier (missing $_shortQty${_unit.isNotEmpty ? ' $_unit' : ''})',
+                color: _kPurple,
+                icon: Icons.notifications_active_rounded,
+                filled: true,
+                loading: _reminderSending,
+                onTap: _reminderSending ? null : _sendReminder,
+              ),
+            ] else ...[
+              _ActionRow(
+                label: 'Send reminder — missing line id',
+                color: _kSub,
+                icon: Icons.notifications_active_rounded,
+                filled: false,
+                loading: false,
+                onTap: null,
+              ),
+            ],
+            const SizedBox(height: 8),
+            _ActionRow(
+              label: 'Reset to pending',
+              color: _kSub,
+              icon: Icons.undo_rounded,
+              filled: false,
+              loading: false,
+              onTap: widget.recording ? null : () async {
+                await _doRecord('pending');
+                if (mounted) Navigator.of(context).pop();
+              },
+            ),
+            Builder(builder: (_) {
+              RenderLog.write('c163_arrivals_sheet_rows', '$bodyRows');
+              return const SizedBox.shrink();
+            }),
+          ]
+
+          // ── DISPUTE ACTIVE (B4) ───────────────────────────────────────────
           else if (sheetState == _ItemSheetState.disputeActive) ...[
-            // Dispute status banner
             Container(
               width: double.infinity,
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -432,14 +492,12 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
                 style: const TextStyle(fontSize: 13, color: _kPurple),
               ),
             ),
-            // Dispute link
             if (disputeToken.isNotEmpty) ...[
               const SizedBox(height: 10),
               Row(children: [
                 Expanded(
                   child: Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                     decoration: BoxDecoration(
                       color: const Color(0xFFF9FAFB),
                       borderRadius: BorderRadius.circular(6),
@@ -460,8 +518,7 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
                   tooltip: 'Copy link',
                   onPressed: () {
                     Clipboard.setData(ClipboardData(
-                        text:
-                            'https://www.medibo.in/dispute?token=$disputeToken'));
+                        text: 'https://www.medibo.in/dispute?token=$disputeToken'));
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(
                           content: Text('Link copied'),
@@ -496,13 +553,18 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
                 },
               ),
             ],
+            Builder(builder: (_) {
+              RenderLog.write('c163_arrivals_sheet_rows', '$bodyRows');
+              return const SizedBox.shrink();
+            }),
           ]
 
-          else ...[
-            // wrong / not_coming
+          // ── WRONG / NOT_COMING ────────────────────────────────────────────
+          else if (sheetState == _ItemSheetState.wrongItem ||
+                   sheetState == _ItemSheetState.notComing) ...[
             _StatusLine(
-              _localFsState == 'wrong' ? 'Wrong item' : 'Not coming',
-              _localFsState == 'wrong' ? _kWrongFg : _kNotComingFg,
+              sheetState == _ItemSheetState.wrongItem ? 'Wrong item' : 'Not coming',
+              sheetState == _ItemSheetState.wrongItem ? _kWrongFg : _kNotComingFg,
             ),
             const SizedBox(height: 12),
             _ActionRow(
@@ -516,10 +578,52 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
                 if (mounted) Navigator.of(context).pop();
               },
             ),
+            Builder(builder: (_) {
+              RenderLog.write('c163_arrivals_sheet_rows', '$bodyRows');
+              return const SizedBox.shrink();
+            }),
+          ]
+
+          // ── FALLBACK (B5) — guaranteed non-empty ─────────────────────────
+          else ...[
+            _StatusLine('Status: $_localFsState', _kSub),
+            const SizedBox(height: 8),
+            Text(
+              'received: $_localRecQty / $_ordQty  locked: ${widget.item['received_locked']}',
+              style: const TextStyle(fontSize: 12, color: _kSub),
+            ),
+            const SizedBox(height: 12),
+            _ActionRow(
+              label: 'Close',
+              color: _kSub,
+              icon: Icons.close_rounded,
+              filled: false,
+              loading: false,
+              onTap: () => Navigator.of(context).pop(),
+            ),
+            Builder(builder: (_) {
+              RenderLog.write('c163_fallback_rendered',
+                  'status=$_localFsState;received_qty=$_localRecQty;ordered=$_ordQty;received_locked=${widget.item['received_locked']}');
+              RenderLog.write('c163_arrivals_sheet_rows', '$bodyRows');
+              return const SizedBox.shrink();
+            }),
           ],
         ],
       ),
     );
+  }
+
+  // Count the number of meaningful body rows for this state (used in render-log)
+  int _bodyRowCount(_ItemSheetState state, bool oiidPresent, String token) {
+    switch (state) {
+      case _ItemSheetState.pending:       return 4; // Got all / Short / Wrong / Not coming
+      case _ItemSheetState.receivedFull:  return 2; // Status line + Reset
+      case _ItemSheetState.shortfall:     return oiidPresent ? 3 : 3; // Status + Reminder/disabled + Reset
+      case _ItemSheetState.disputeActive: return token.isNotEmpty ? 3 : 2; // Banner + link? + View
+      case _ItemSheetState.wrongItem:
+      case _ItemSheetState.notComing:     return 2; // Status + Reset
+      case _ItemSheetState.fallback:      return 2; // Status + Close
+    }
   }
 }
 
@@ -575,6 +679,8 @@ class _StatusBadge extends StatelessWidget {
         bg = const Color(0xFFFEE2E2); fg = _kWrongFg; label = 'wrong'; break;
       case _ItemSheetState.notComing:
         bg = const Color(0xFFEFEEE9); fg = _kNotComingFg; label = 'not coming'; break;
+      case _ItemSheetState.fallback:
+        bg = const Color(0xFFF3F4F6); fg = _kSub; label = fsState; break;
       default:
         bg = const Color(0xFFFEF3C7); fg = const Color(0xFF92400E); label = 'pending';
     }

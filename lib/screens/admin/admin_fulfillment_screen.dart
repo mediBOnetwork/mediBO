@@ -2608,13 +2608,17 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // ── #142: Supplier list + accordion ─────────────────────────────────────────
 
   Widget _buildCollectList(bool isAdmin) {
-    // #183: instrument shared-reveal reuse for both Collect and Arrivals
+    // #183/#184: instrument shared-reveal reuse + row layout for both tabs
     if (widget.arrivals) {
       RenderLog.write('c183_arrivals_anim',
           'change:183,uses_shared_reveal:true,duration_ms:280,curve:easeInOutCubic,chevron_animated:true');
+      RenderLog.write('c184_arrivals_row',
+          'change:184,item_box_full_width:true,badge_on_status_line:true');
     } else {
       RenderLog.write('c183_collect_anim',
           'change:183,uses_shared_reveal:true,duration_ms:280,curve:easeInOutCubic,chevron_animated:true');
+      RenderLog.write('c184_collect_row',
+          'change:184,item_box_full_width:true,badge_on_status_line:true');
     }
     RenderLog.write('c142_supplier_list',
         'dropdown_removed=y;count=${_suppliers.length}');
@@ -2692,10 +2696,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           ),
         )
       else
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: _buildNarrowItemList(showFooter: false, shrinkWrap: true),
-        ),
+        // #184: no extra horizontal padding — items flush with card body edges
+        _buildNarrowItemList(showFooter: false, shrinkWrap: true),
       if (!_loadingBox && _items.isNotEmpty) ...[
         const Divider(height: 1, color: _kBorder),
         Padding(
@@ -3232,7 +3234,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     return ListView.separated(
       shrinkWrap: shrinkWrap,
       physics: shrinkWrap ? const NeverScrollableScrollPhysics() : null,
-      padding: EdgeInsets.fromLTRB(16, 8, 16, 24 + safeBottom),
+      // #184: horizontal=0 when shrinkWrap (inline expand); keep 16 for standalone scroll
+      padding: shrinkWrap
+          ? EdgeInsets.fromLTRB(0, 8, 0, 24 + safeBottom)
+          : EdgeInsets.fromLTRB(16, 8, 16, 24 + safeBottom),
       itemCount: _items.length + footerCount, // +1 for Confirm/Locked footer #91
       separatorBuilder: (_, i) => SizedBox(height: i == _items.length - 1 ? 16 : 4),
       itemBuilder: (_, i) {
@@ -3282,11 +3287,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
               Text(packType.isNotEmpty ? packType : '—',
                   style: const TextStyle(fontSize: 11, color: _kSub),
                   maxLines: 1, overflow: TextOverflow.ellipsis),
-              // #132A: dispute badge below name (visually separate from C/CR/P)
-              if (openDispute != null) ...[
-                const SizedBox(height: 4),
-                DisputeBadge(status: openDispute['status']?.toString() ?? ''),
-              ],
+              // #184: DisputeBadge moved to status line (right column)
             ]),
           ),
           const SizedBox(width: 8),
@@ -3294,7 +3295,14 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             Text('$recQty/$denominator',
                 style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText)),
             const SizedBox(height: 2),
-            _StatePill(state),
+            // #184: secondary badge left of status chip on bottom line
+            Row(mainAxisSize: MainAxisSize.min, children: [
+              if (openDispute != null) ...[
+                DisputeBadge(status: openDispute['status']?.toString() ?? ''),
+                const SizedBox(width: 6),
+              ],
+              _StatePill(state),
+            ]),
             if (widget.arrivals && item['count_mismatch'] == true) ...[
               const SizedBox(height: 2),
               Text(
@@ -3427,9 +3435,13 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     if (widget.arrivals) {
       RenderLog.write('c183_arrivals_anim',
           'change:183,uses_shared_reveal:true,duration_ms:280,curve:easeInOutCubic,chevron_animated:true');
+      RenderLog.write('c184_arrivals_row',
+          'change:184,item_box_full_width:true,badge_on_status_line:true');
     } else {
       RenderLog.write('c183_collect_anim',
           'change:183,uses_shared_reveal:true,duration_ms:280,curve:easeInOutCubic,chevron_animated:true');
+      RenderLog.write('c184_collect_row',
+          'change:184,item_box_full_width:true,badge_on_status_line:true');
     }
     RenderLog.write('change_100_banner_removed', '1');
     RenderLog.write('change_90_layout', 'wide');

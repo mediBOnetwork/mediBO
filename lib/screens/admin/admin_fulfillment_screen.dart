@@ -443,6 +443,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c162_old_popups_removed', 'true');
     RenderLog.write('c167_helpers_loaded', 'true');
     RenderLog.write('c168_bugs_fixed', '11');
+    RenderLog.write('c169_labels_renamed', '10');
+    RenderLog.write('c169_stage_values_intact', 'true');
+    RenderLog.write('c169_tab_labels', 'Supplier Shop,Warehouse');
     RenderLog.write('c168_helper_shapes', 'collect:ordQty=ordered_qty,state=explicit,locked=collect_locked;arrivals:ordQty=ordered,state=derived,locked=received_locked');
   }
 
@@ -1028,7 +1031,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             title: const Text('Mismatch — confirm anyway?'),
             content: Text(
                 'Some counts differ from the shop:\n$lines$overflow\n\n'
-                'Arrivals counts are final. Proceed?'),
+                'Warehouse counts are final. Proceed?'),
             actions: [
               TextButton(
                   onPressed: () => Navigator.pop(ctx, false),
@@ -1860,7 +1863,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       if (errVal == 'already_confirmed_in_arrivals') {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Undo from Arrivals first')),
+            const SnackBar(content: Text('Undo from Warehouse first')),
           );
         }
         return;
@@ -1881,7 +1884,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       if (mounted) {
         final msg = e.toString();
         final text = msg.contains('already_confirmed_in_arrivals')
-            ? 'Undo from Arrivals first'
+            ? 'Undo from Warehouse first'
             : 'Undo error: ${msg.substring(0, msg.length.clamp(0, 80))}';
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
       }
@@ -1897,7 +1900,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Confirm counting?'),
-        content: Text('This locks the Collect count for $supplier and sends it to Arrivals for warehouse double-check.'),
+        content: Text('This locks the Supplier Shop count for $supplier and sends it to Warehouse for double-check.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           FilledButton(
@@ -1946,7 +1949,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Count in warehouse?'),
-        content: Text('Items from $supplier will be counted at the warehouse instead. This locks the Collect tab for this supplier.'),
+        content: Text('Items from $supplier will be counted at the warehouse instead. This locks the Supplier Shop tab for this supplier.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           FilledButton(
@@ -4282,7 +4285,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
               const Icon(Icons.local_shipping_outlined, size: 14, color: _kPendingFg),
               const SizedBox(width: 8),
               const Flexible(child: Text(
-                'Collected — not yet at warehouse.\nGo to Arrivals tab to mark this box arrived.',
+                'Counted — not yet at warehouse.\nGo to Warehouse tab to mark this box arrived.',
                 style: TextStyle(fontSize: 12, color: _kPendingFg),
               )),
             ]),
@@ -5852,8 +5855,8 @@ class _PackScreenState extends State<_PackScreen> {
                 const SizedBox(width: 8),
                 Expanded(child: Text(
                   status == 'in_transit'
-                      ? 'Waiting on arrival — mark box arrived in the Arrivals tab'
-                      : 'Still collecting — count stock in the Collect tab first',
+                      ? 'Waiting — mark box arrived in the Warehouse tab'
+                      : 'Still counting — count stock in the Supplier Shop tab first',
                   style: const TextStyle(fontSize: 12, color: _kSub),
                 )),
               ]),
@@ -6450,9 +6453,9 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen> {
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: Row(children: [
-              _TabBtn('Collect',   _tab == 0, () => setState(() => _tab = 0)),
+              _TabBtn('Supplier Shop', _tab == 0, () => setState(() => _tab = 0)),
               const SizedBox(width: 6),
-              _TabBtn('Arrivals',  _tab == 1, () {
+              _TabBtn('Warehouse', _tab == 1, () {
                 setState(() => _tab = 1);
                 WidgetsBinding.instance.addPostFrameCallback((_) {
                   _arrivalsKey.currentState?.refresh();

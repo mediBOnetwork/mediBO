@@ -377,16 +377,43 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   Map<String, dynamic>? get _currentItem =>
       (_items.isNotEmpty && _focusIdx < _items.length) ? _items[_focusIdx] : null;
 
-  bool get _currentIsPending =>
-      (_currentItem?['fulfillment_state'] as String?) == 'pending';
+  bool get _currentIsPending {
+    final cur = _currentItem;
+    return cur != null && stateOf(cur) == 'pending';
+  }
 
   int get _pendingCount =>
-      _items.where((i) => (i['fulfillment_state'] as String?) == 'pending').length;
+      _items.where((i) => stateOf(i) == 'pending').length;
 
   bool get _allDone => _items.isNotEmpty && _pendingCount == 0;
 
   // #133: removed at_warehouse/received_qty filter — show ALL items from RPC
   List<Map<String, dynamic>> _visibleItems() => _items;
+
+  // ── C167 shared helpers ──────────────────────────────────────────────────────
+  // RC1: ordered key is 'ordered' from fw_get_state; 'ordered_qty' from get_receiving_box
+  static int ordQtyOf(Map<String, dynamic> item) =>
+      ((item['ordered_qty'] ?? item['ordered']) as num?)?.toInt() ?? 1;
+  static int recQtyOf(Map<String, dynamic> item) =>
+      ((item['received_qty'] as num?) ?? 0).toInt();
+  // RC2: derive fulfillment_state — prefer explicit key (Collect path), else derive
+  // from received_locked + received_qty (fw_get_state Arrivals path, no state key)
+  static String stateOf(Map<String, dynamic> item) {
+    final explicit = item['fulfillment_state']?.toString();
+    if (explicit != null && explicit.isNotEmpty) return explicit;
+    final locked = item['received_locked'];
+    if (locked == true || locked == 'true') return 'received';
+    final ord = ordQtyOf(item);
+    final rec = recQtyOf(item);
+    if (rec >= ord && ord > 0) return 'received';
+    if (rec > 0) return 'short';
+    return 'pending';
+  }
+  // RC3: mode is top-level in fw_get_state response, never per-item
+  static String? supplierModeOf(Map<String, dynamic> stateRes) =>
+      stateRes['mode']?.toString();
+  static String? oiidOf(Map<String, dynamic> item) =>
+      item['order_item_id']?.toString();
 
   // #91: true when get_receiving_box returns collect_locked=true on any row
   bool get _boxLocked =>
@@ -399,9 +426,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     return 'Collected and sent to warehouse';
   }
 
-  // #97: derived from saved data — survives refresh; counts rows with received_qty>0
-  int get _spokenCount =>
-      _items.where((r) => ((r['received_qty'] as num?) ?? 0) > 0).length;
+  // B8: session-only voice clip counter — reset on box open, increment per clip
+  int _sessionVoiceCount = 0;
+  int get _spokenCount => _sessionVoiceCount;
 
   // ── Lifecycle ───────────────────────────────────────────────────────────────
 
@@ -413,6 +440,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     _initVoice();
     RenderLog.write('fulfillment_pick_to_light', 'screen_mounted');
     RenderLog.write('c162_old_popups_removed', 'true');
+    RenderLog.write('c167_helpers_loaded', 'true');
   }
 
   @override
@@ -821,21 +849,16 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             .map((r) => Map<String, dynamic>.from(r as Map))
             .toList();
         stateItems.sort((a, b) {
-          final aPending = (a['fulfillment_state'] as String?) == 'pending' ? 0 : 1;
-          final bPending = (b['fulfillment_state'] as String?) == 'pending' ? 0 : 1;
+          final aPending = stateOf(a) == 'pending' ? 0 : 1;
+          final bPending = stateOf(b) == 'pending' ? 0 : 1;
           if (aPending != bPending) return aPending - bPending;
           return (a['product_name'] ?? '').toString()
               .compareTo((b['product_name'] ?? '').toString());
         });
-        final firstPending =
-            stateItems.indexWhere((i) => (i['fulfillment_state'] as String?) == 'pending');
+        final firstPending = stateItems.indexWhere((i) => stateOf(i) == 'pending');
         final confirmed = stateRes['arrivals_confirmed'] == true ||
             stateRes['supplier_fully_locked'] == true;
-        String? parsedMode;
-        for (final r in stateItems) {
-          final v = r['mode']?.toString();
-          if (v != null && v.isNotEmpty) { parsedMode = v; break; }
-        }
+        final parsedMode = supplierModeOf(stateRes); // B5: top-level, not per-item
         setState(() {
           _items = stateItems;
           _focusIdx = firstPending >= 0 ? firstPending : 0;
@@ -843,6 +866,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           _showListView = false;
           _arrivalsLocked = confirmed;
           _supplierMode = parsedMode;
+          _sessionVoiceCount = 0; // B8: reset on box open
         });
         RenderLog.write('c127_arrivals_filter_removed', 'true');
         RenderLog.write('c127_arrivals_items_rendered', '${stateItems.length}');
@@ -906,9 +930,19 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // #156: Check if this supplier's arrivals are confirmed/locked via fw_get_state.
   Future<void> _checkArrivalsLocked(String supplier) async {
     try {
-      final res = await Supabase.instance.client
-          .rpc('fw_get_state', params: {'p_supplier_name': supplier, 'p_stage': 'arrivals'}) as Map;
+      final dynamic _rawLock = await Supabase.instance.client
+          .rpc('fw_get_state', params: {'p_supplier_name': supplier, 'p_stage': 'arrivals'});
       if (!mounted) return;
+      Map<String, dynamic> res;
+      if (_rawLock is Map) {
+        res = Map<String, dynamic>.from(_rawLock);
+      } else if (_rawLock is List && _rawLock.isNotEmpty && _rawLock[0] is Map) {
+        final first = _rawLock[0] as Map;
+        final inner = first['fw_get_state'];
+        res = inner is Map ? Map<String, dynamic>.from(inner) : Map<String, dynamic>.from(first);
+      } else {
+        res = {};
+      }
       final confirmed = res['arrivals_confirmed'] == true ||
           res['supplier_fully_locked'] == true;
       if (confirmed != _arrivalsLocked) {
@@ -1089,7 +1123,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   Future<void> _record(String state, {int? qty}) async {
     final item = _currentItem;
     if (item == null) return;
-    final itemId = item['order_item_id'] as String;
+    final itemId = oiidOf(item);
+    if (itemId == null) return;
     setState(() => _recording = true);
     try {
       final res = await Supabase.instance.client.rpc('set_item_receiving', params: {
@@ -1119,13 +1154,12 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   void _advance() {
     final nextPending = _items.indexWhere(
-        (i) => (i['fulfillment_state'] as String?) == 'pending', _focusIdx + 1);
+        (i) => stateOf(i) == 'pending', _focusIdx + 1);
     setState(() {
       if (nextPending >= 0) {
         _focusIdx = nextPending;
       } else {
-        final firstPending = _items.indexWhere(
-            (i) => (i['fulfillment_state'] as String?) == 'pending');
+        final firstPending = _items.indexWhere((i) => stateOf(i) == 'pending');
         if (firstPending >= 0) _focusIdx = firstPending;
       }
     });
@@ -1331,6 +1365,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         return;
       }
       await _commitVoiceItems(items);
+      if (mounted) setState(() => _sessionVoiceCount++); // B8: count session clips only
     } catch (e) {
       if (!mounted) return;
       setState(() { _voiceError = e.toString(); });
@@ -1357,7 +1392,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         if (name == null || !seenNames.add(name)) continue;
         final entry = <String, dynamic>{
           'name': name,
-          'ordered_qty': (row['ordered_qty'] as num?)?.toInt() ?? 1,
+          'ordered_qty': ordQtyOf(row),
         };
         final pt = row['pack_type']?.toString();
         if (pt != null && pt.isNotEmpty) entry['unit'] = pt;
@@ -1541,19 +1576,15 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             .map((r) => Map<String, dynamic>.from(r as Map))
             .toList();
         stateItems.sort((a, b) {
-          final aPend = (a['fulfillment_state'] as String?) == 'pending' ? 0 : 1;
-          final bPend = (b['fulfillment_state'] as String?) == 'pending' ? 0 : 1;
+          final aPend = stateOf(a) == 'pending' ? 0 : 1;
+          final bPend = stateOf(b) == 'pending' ? 0 : 1;
           if (aPend != bPend) return aPend - bPend;
           return (a['product_name'] ?? '').toString()
               .compareTo((b['product_name'] ?? '').toString());
         });
         final confirmed = stateRes['arrivals_confirmed'] == true ||
             stateRes['supplier_fully_locked'] == true;
-        String? reloadedMode;
-        for (final r in stateItems) {
-          final v = r['mode']?.toString();
-          if (v != null && v.isNotEmpty) { reloadedMode = v; break; }
-        }
+        final reloadedMode = supplierModeOf(stateRes); // B6: top-level, not per-item
         setState(() {
           _items = stateItems;
           if (confirmed != _arrivalsLocked) _arrivalsLocked = confirmed;
@@ -2233,9 +2264,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
               final productRows = _items.where(
                   (i) => (i['product_id'] as num?)?.toInt() == c.productId).toList();
               final totalOrdered = productRows.fold<num>(
-                  0, (sum, r) => sum + ((r['ordered_qty'] as num?) ?? 0));
+                  0, (sum, r) => sum + ordQtyOf(r));
               final totalReceived = productRows.fold<num>(
-                  0, (sum, r) => sum + ((r['received_qty'] as num?) ?? 0));
+                  0, (sum, r) => sum + recQtyOf(r));
               return GestureDetector(
                 onTap: () => Navigator.pop(ctx, c),
                 child: Container(
@@ -2273,9 +2304,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     final productRows = _items.where(
         (i) => (i['product_id'] as num?)?.toInt() == productId).toList();
     final totalOrdered = productRows.fold<num>(
-        0, (sum, r) => sum + ((r['ordered_qty'] as num?) ?? 0));
+        0, (sum, r) => sum + ordQtyOf(r));
     final totalReceived = productRows.fold<num>(
-        0, (sum, r) => sum + ((r['received_qty'] as num?) ?? 0));
+        0, (sum, r) => sum + recQtyOf(r));
     final remaining = (totalOrdered - totalReceived).toInt().clamp(1, 999);
 
     int draft = remaining.clamp(1, 99);
@@ -2982,9 +3013,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // #113: extracted so PinnedFooterList can pass items as List<Widget>
   // #116: arrivals shop mode shows recQty/recQty (counted/counted), not recQty/ordQty
   Widget _buildItemTile(Map<String, dynamic> item) {
-    final state    = item['fulfillment_state']?.toString() ?? 'pending';
+    final state    = stateOf(item); // B2: derive — fw_get_state has no fulfillment_state
     final name     = item['product_name']?.toString() ?? '—';
-    final ordQty   = (item['ordered_qty'] as num?)?.toInt() ?? 0;
+    final ordQty   = ordQtyOf(item); // B1: dual-key ordered_qty ?? ordered
     final recQty   = (item['received_qty'] as num?)?.toInt() ?? 0;
     final packType = item['pack_type']?.toString() ?? '';
     final imageUrl = item['image_url']?.toString();
@@ -3014,7 +3045,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                   style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
                   maxLines: 1, overflow: TextOverflow.ellipsis),
               const SizedBox(height: 1),
-              Text(packType.isNotEmpty ? packType : '$recQty/$denominator',
+              Text('$recQty/$denominator${packType.isNotEmpty ? ' $packType' : ''}',
                   style: const TextStyle(fontSize: 11, color: _kSub),
                   maxLines: 1, overflow: TextOverflow.ellipsis),
               // #132A: dispute badge below name (visually separate from C/CR/P)
@@ -4151,10 +4182,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   Widget _buildDoneState() {
     final total     = _items.length;
-    final received  = _items.where((i) => (i['fulfillment_state'] as String?) == 'received').length;
-    final short     = _items.where((i) => (i['fulfillment_state'] as String?) == 'short').length;
-    final wrong     = _items.where((i) => (i['fulfillment_state'] as String?) == 'wrong').length;
-    final notComing = _items.where((i) => (i['fulfillment_state'] as String?) == 'not_coming').length;
+    final received  = _items.where((i) => stateOf(i) == 'received').length;
+    final short     = _items.where((i) => stateOf(i) == 'short').length;
+    final wrong     = _items.where((i) => stateOf(i) == 'wrong').length;
+    final notComing = _items.where((i) => stateOf(i) == 'not_coming').length;
 
     return Center(
       child: Padding(

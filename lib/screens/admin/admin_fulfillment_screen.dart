@@ -800,7 +800,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         // #160: shape-tolerant parse — fw_get_state returns jsonb object; guard against
         // PostgREST wrapping it in [{fw_get_state: value}] on older versions.
         final dynamic _rawState = await Supabase.instance.client
-            .rpc('fw_get_state', params: {'p_supplier_name': supplier, 'p_mode': 'arrivals'});
+            .rpc('fw_get_state', params: {'p_supplier_name': supplier, 'p_stage': 'arrivals'});
         if (!mounted) return;
         Map<String, dynamic> stateRes;
         if (_rawState is Map) {
@@ -851,11 +851,14 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         RenderLog.write('c136_arrivals_raw_count', '${stateItems.length}');
         RenderLog.write('c136_arrivals_shown_count', '${stateItems.length}');
         RenderLog.write('c160_loadbox_ok', 'stage=arrivals;count=${stateItems.length}');
+        RenderLog.write('c161_loadbox_ok', 'stage=arrivals;count=${stateItems.length}');
+        RenderLog.write('c161_arrivals_count', '${stateItems.length}');
       } catch (e) {
         if (!mounted) return;
         final errMsg = e.toString();
         setState(() { _loadingBox = false; _error = errMsg; });
         RenderLog.write('c160_loadbox_error', errMsg.substring(0, errMsg.length.clamp(0, 120)));
+        RenderLog.write('c161_loadbox_error', errMsg.substring(0, errMsg.length.clamp(0, 120)));
       }
       return;
     }
@@ -902,7 +905,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   Future<void> _checkArrivalsLocked(String supplier) async {
     try {
       final res = await Supabase.instance.client
-          .rpc('fw_get_state', params: {'p_supplier_name': supplier, 'p_mode': 'arrivals'}) as Map;
+          .rpc('fw_get_state', params: {'p_supplier_name': supplier, 'p_stage': 'arrivals'}) as Map;
       if (!mounted) return;
       final confirmed = res['arrivals_confirmed'] == true ||
           res['supplier_fully_locked'] == true;
@@ -1517,7 +1520,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     if (widget.arrivals) {
       try {
         final dynamic _rawReload = await Supabase.instance.client
-            .rpc('fw_get_state', params: {'p_supplier_name': supplier, 'p_mode': 'arrivals'});
+            .rpc('fw_get_state', params: {'p_supplier_name': supplier, 'p_stage': 'arrivals'});
         if (!mounted) return;
         Map<String, dynamic> stateRes;
         if (_rawReload is Map) {

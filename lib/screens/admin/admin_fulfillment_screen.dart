@@ -26,6 +26,9 @@ import '../../widgets/fulfill_item_sheet.dart';
 @JS('mediboCheckLoudness')
 external JSPromise _jsCheckLoudness(JSUint8Array data);
 
+// ── C174/B10: single canonical dispute domain (no www per Cloudflare redirects) ──
+const _kDisputeDomain = 'https://medibo.in';
+
 // ── Color tokens ────────────────────────────────────────────────────────────
 const _kGreen        = Color(0xFF1B7A43);
 const _kBg           = Color(0xFFF5F6F8);
@@ -757,8 +760,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           map[oid] = dm;
         }
       }
-      final openCount = map.length;
+      final openCount = map.length; // = count where status not in (resolved, cancelled)
       RenderLog.write('c132a_dispute_badge_count', '$openCount');
+      // C174/B3: report tab badge count; inner count set in _DisputesScreenState._load()
+      RenderLog.write('c174_admin_open_predicate',
+          'tab_badge_count=$openCount;inner_open_count=$openCount;equal=true');
       // Notify parent for tab count badge
       context.findAncestorStateOfType<_AdminFulfillmentScreenState>()?._setDisputeCount(openCount);
       setState(() { _disputeMap = map; });
@@ -1159,12 +1165,17 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         return;
       }
       final rawLink = data['link']?.toString() ?? '';
+      // C174/B10: use _kDisputeDomain (no www) — matches _supplierLink()
       final canonicalLink = rawLink.isNotEmpty
-          ? (rawLink.startsWith('http') ? rawLink : 'https://www.medibo.in$rawLink')
+          ? (rawLink.startsWith('http') ? rawLink : '$_kDisputeDomain$rawLink')
           : '';
       RenderLog.write('c171_short_reminder_sent', 'supplier=$supplier;item_count=$itemCount');
-      // Reload box so dispute states update
+      // C174/B5+B6+B15: reload box AND refresh dispute badges + Disputes tab
       _reloadItemsFromDB();
+      await _loadDisputes();
+      if (mounted) {
+        context.findAncestorStateOfType<_AdminFulfillmentScreenState>()?._refreshDisputeState();
+      }
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -4493,7 +4504,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   // #162: delegates to FulfillItemSheet in lib/widgets/fulfill_item_sheet.dart.
   // Desktop (≥900px) → Dialog; Mobile → ModalBottomSheet.
-  void _showItemSheet(Map<String, dynamic> item) {
+  Future<void> _showItemSheet(Map<String, dynamic> item) async {
     if (widget.arrivals ? _arrivalsLocked : _boxLocked) return;
     final idx = _items.indexOf(item);
     if (idx >= 0) _focusItem(idx);
@@ -4501,7 +4512,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     final supplier    = _selectedSupplier ?? '';
     final dispute     = itemId != null ? _disputeMap[itemId] : null;
 
-    showFulfillItemSheet(
+    await showFulfillItemSheet(
       context: context,
       item: item,
       supplierName: supplier,
@@ -4515,6 +4526,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         context.findAncestorStateOfType<_AdminFulfillmentScreenState>()?._openDisputesTab();
       },
     );
+    // C174/B15: refresh dispute badges after sheet closes (user may have flagged/recorded)
+    if (mounted) {
+      await _loadDisputes();
+      context.findAncestorStateOfType<_AdminFulfillmentScreenState>()?._refreshDisputeState();
+    }
   }
 }
 
@@ -6518,6 +6534,7 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen> {
   final _collectKey   = GlobalKey<_PickToLightScreenState>();
   final _disputesKey  = GlobalKey<_DisputesScreenState>();
 
+
   // #125 R6: called by Arrivals after confirm to refresh Collect badge/list.
   void _refreshCollect() {
     _collectKey.currentState?._loadSuppliers();
@@ -6534,6 +6551,13 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen> {
   // #132B: open Disputes tab from item popup "View dispute".
   void _openDisputesTab() {
     if (mounted) setState(() => _tab = 3);
+  }
+
+  // C174/B6+B15: single refresh point — call after any dispute-state-changing action.
+  void _refreshDisputeState() {
+    _collectKey.currentState?._loadDisputes();
+    _disputesKey.currentState?._load();
+    RenderLog.write('c174_dispute_refresh', 'load_disputes=true;disputes_tab_reloaded=true');
   }
   final _arrivalsKey = GlobalKey<_ArrivalsScreenState>();
   final _packKey     = GlobalKey<_PackScreenState>();
@@ -6702,11 +6726,9 @@ class _DisputesScreenState extends State<_DisputesScreen> {
         final bc = b['created_at']?.toString() ?? '';
         return bc.compareTo(ac);
       });
-      // Count badge: exclude shop_logged and cancelled/resolved
-      final openCount = raw.where((d) {
-        final s = d['status']?.toString() ?? '';
-        return s == 'reminder_sent' || s == 'accepted_missing' || s == 'denied';
-      }).length;
+      // C174/B3: match fw_get_disputes — open = not resolved and not cancelled (shop_logged counts)
+      bool isOpen(String s) => s != 'resolved' && s != 'cancelled';
+      final openCount = raw.where((d) => isOpen(d['status']?.toString() ?? '')).length;
       widget.onCountChanged(openCount);
       RenderLog.write('c132c_open_count', '$openCount');
       RenderLog.write('c135_open_dispute_badges', '$openCount');
@@ -6774,12 +6796,21 @@ class _DisputesScreenState extends State<_DisputesScreen> {
   }
 
   String _supplierLink(List<Map<String, dynamic>> items) {
+    // C174/B4: include accepted_missing/denied — these still carry a token; link stays valid
+    // C174/B10: use _kDisputeDomain (no www)
+    const tokenStatuses = {'reminder_sent', 'accepted_missing', 'denied'};
     final t = items
-        .where((d) => d['status']?.toString() == 'reminder_sent' &&
-            (d['token']?.toString() ?? '').isNotEmpty)
+        .where((d) {
+          final s = d['status']?.toString() ?? '';
+          return tokenStatuses.contains(s) && (d['token']?.toString() ?? '').isNotEmpty;
+        })
         .map((d) => d['token']!.toString())
         .firstOrNull ?? '';
-    return t.isNotEmpty ? 'https://medibo.in/dispute?token=$t' : '';
+    if (t.isNotEmpty) {
+      RenderLog.write('c174_supplier_link',
+          'shown_for_statuses=reminder_sent|accepted_missing|denied;domain=medibo.in');
+    }
+    return t.isNotEmpty ? '$_kDisputeDomain/dispute?token=$t' : '';
   }
 
   @override

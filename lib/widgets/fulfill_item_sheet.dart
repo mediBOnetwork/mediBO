@@ -136,8 +136,6 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
   bool _showStepper = false;
   late int _shortDraft;
   bool _confirmingShort = false;
-  bool _reminderSending = false;
-  String? _reminderError;
 
   // C173: wrong-item inline capture
   bool _flaggingWrong = false;
@@ -224,7 +222,8 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
   _ItemSheetState _deriveState() {
     if (_dispute != null) {
       final dStatus = _dispute!['status']?.toString() ?? '';
-      if (dStatus == 'reminder_sent' || dStatus == 'responded' ||
+      // B13/C174: only valid contract statuses trigger disputeActive; 'responded' removed
+      if (dStatus == 'reminder_sent' || dStatus == 'shop_logged' ||
           dStatus == 'accepted_missing' || dStatus == 'denied') {
         return _ItemSheetState.disputeActive;
       }
@@ -255,51 +254,6 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
     final stateStr = _deriveState().name.toUpperCase();
     RenderLog.write('c163_sheet_state', stateStr);
     RenderLog.write('c162_state_rendered', stateStr);
-  }
-
-  Future<void> _sendReminder() async {
-    final id = _itemId;
-    if (id == null || id.isEmpty) {
-      RenderLog.write('c163_missing_oiid', 'true');
-      return;
-    }
-    setState(() { _reminderSending = true; _reminderError = null; });
-    try {
-      final res = await Supabase.instance.client
-          .rpc('fw_send_missing_reminder', params: {'p_order_item_id': id});
-      if (!mounted) return;
-      final resMap = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
-      if (resMap['status'] == 'ok') {
-        final rawLink = resMap['link']?.toString() ?? '';
-        final canonicalLink = rawLink.isNotEmpty
-            ? (rawLink.startsWith('http') ? rawLink : 'https://medibo.in$rawLink')
-            : '';
-        final newDispute = <String, dynamic>{
-          'dispute_id':      resMap['dispute_id']?.toString() ?? '',
-          'token':           resMap['token']?.toString() ?? '',
-          'canonical_link':  canonicalLink,
-          'status':          'reminder_sent',
-          'order_item_id':   id,
-          'product_name':    _name,
-          'short_qty':       resMap['short_qty'],
-        };
-        setState(() { _dispute = newDispute; _reminderSending = false; });
-        widget.onDisputeCreated(id, newDispute);
-        RenderLog.write('c162_reminder_sent',
-            'order_item_id=$id;dispute_id=${newDispute['dispute_id']}');
-        RenderLog.write('c163_sheet_state', 'DISPUTE_ACTIVE');
-      } else {
-        final errMsg = resMap['error']?.toString() ?? 'Unknown error';
-        setState(() { _reminderError = errMsg; _reminderSending = false; });
-        RenderLog.write('c162_reminder_error', 'message=$errMsg');
-      }
-    } catch (e) {
-      if (!mounted) return;
-      final errMsg = e.toString();
-      setState(() { _reminderError = errMsg; _reminderSending = false; });
-      RenderLog.write('c162_reminder_error',
-          'message=${errMsg.substring(0, errMsg.length.clamp(0, 100))}');
-    }
   }
 
   // ── C173: flag wrong item ─────────────────────────────────────────────────
@@ -406,6 +360,14 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
           const SizedBox(height: 14),
           const Divider(height: 1, color: _kBorder),
           const SizedBox(height: 16),
+
+          // ── C174 render-log instrumentation ──────────────────────────────
+          Builder(builder: (_) {
+            RenderLog.write('c174_item_sheet_states',
+                'state=${sheetState.name};body_row_count=$bodyRows');
+            RenderLog.write('c174_no_dead_reminder', 'true');
+            return const SizedBox.shrink();
+          }),
 
           // ── PENDING ───────────────────────────────────────────────────────
           if (sheetState == _ItemSheetState.pending) ...[
@@ -627,14 +589,15 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
                 border: Border.all(color: _kPurpleBorder),
               ),
               child: Text(
+                // B11/C174: removed phantom 'responded' case (not a valid contract status)
                 disputeStatus == 'reminder_sent'
                     ? 'Reminder sent to supplier — awaiting reply'
-                    : disputeStatus == 'accepted_missing'
-                        ? 'Supplier accepted — awaiting missing stock'
-                        : disputeStatus == 'denied'
-                            ? 'Supplier denied — re-sourcing + flagged disputed'
-                            : disputeStatus == 'responded'
-                                ? 'Supplier has responded'
+                    : disputeStatus == 'shop_logged'
+                        ? 'Flagged — send supplier reminder to notify them'
+                        : disputeStatus == 'accepted_missing'
+                            ? 'Supplier accepted — awaiting missing stock'
+                            : disputeStatus == 'denied'
+                                ? 'Supplier denied — re-sourcing + flagged disputed'
                                 : 'Dispute: $disputeStatus',
                 style: const TextStyle(fontSize: 13, color: _kPurple),
               ),
@@ -764,7 +727,7 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
     switch (state) {
       case _ItemSheetState.pending:       return 4; // Got all / Short / Wrong / Not coming
       case _ItemSheetState.receivedFull:  return 2; // Status line + Reset
-      case _ItemSheetState.shortfall:     return oiidPresent ? 3 : 3; // Status + Reminder/disabled + Reset
+      case _ItemSheetState.shortfall:     return 2; // B2/C174: info-box + Reset = 2 rows
       case _ItemSheetState.disputeActive: return token.isNotEmpty ? 3 : 2; // Banner + link? + View
       case _ItemSheetState.wrongItem:
       case _ItemSheetState.notComing:     return 2; // Status + Reset

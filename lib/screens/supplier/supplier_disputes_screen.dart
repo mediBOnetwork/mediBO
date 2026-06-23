@@ -19,6 +19,7 @@ class SupplierDisputesScreen extends StatefulWidget {
 
 class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
   bool _loading = true;
+  String? _error; // C174/B14: real error state shown with retry
   List<Map<String, dynamic>> _disputes = [];
   final Set<String> _responding = {};
 
@@ -30,7 +31,7 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
 
   Future<void> _load() async {
     if (!mounted) return;
-    setState(() => _loading = true);
+    setState(() { _loading = true; _error = null; }); // C174/B14: clear error on each load
     try {
       final sid = widget.viewAsSupplierId;
       final params = sid != null ? <String, dynamic>{'p_supplier_id': sid} : <String, dynamic>{};
@@ -44,7 +45,10 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
       setState(() { _disputes = raw; _loading = false; });
     } catch (e) {
       if (!mounted) return;
-      setState(() => _loading = false);
+      // C174/B14: surface real error state so user can distinguish from empty list
+      final msg = e.toString().substring(0, e.toString().length.clamp(0, 120));
+      setState(() { _loading = false; _error = msg; });
+      RenderLog.write('c174_portal_error', 'code=$msg');
     }
   }
 
@@ -52,11 +56,38 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
     if (_responding.contains(disputeId)) return;
     setState(() => _responding.add(disputeId));
     try {
-      await Supabase.instance.client.rpc('supplier_respond_dispute',
+      final res = await Supabase.instance.client.rpc('supplier_respond_dispute',
           params: {'p_dispute_id': disputeId, 'p_response': response});
       if (!mounted) return;
-      setState(() => _responding.remove(disputeId));
+      final data = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+      final errCode = data['error']?.toString();
+      if (errCode != null) {
+        // C174/B12: structured error codes
+        if (errCode == 'already_responded') {
+          await _load(); // silent reload — row was stale
+        } else if (errCode == 'bad_response') {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("That option isn't valid for this dispute")),
+          );
+        } else {
+          // not_your_dispute | invalid | unknown
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('This dispute is no longer available')),
+          );
+          await _load();
+        }
+        // C174/B7: remove responding flag after _load completes (or after error)
+        if (mounted) setState(() => _responding.remove(disputeId));
+        RenderLog.write('c174_portal_respond',
+            'responding_cleared_after_load=true;error_code_parsed=true');
+        return;
+      }
+      // Success path: C174/B7 — reload first, THEN clear responding flag
       await _load();
+      if (!mounted) return;
+      setState(() => _responding.remove(disputeId)); // B7: after _load, not before
+      RenderLog.write('c174_portal_respond',
+          'responding_cleared_after_load=true;error_code_parsed=true');
     } catch (e) {
       if (!mounted) return;
       setState(() => _responding.remove(disputeId));
@@ -68,8 +99,31 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
 
   @override
   Widget build(BuildContext context) {
+    RenderLog.write('c174_portal_load', 'has_error_state=${_error != null}');
     if (_loading) {
       return const Center(child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2));
+    }
+    // C174/B14: show real error state — never show "No reminders" when a load failed
+    if (_error != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            const Icon(Icons.wifi_off_rounded, size: 48, color: _kSub),
+            const SizedBox(height: 12),
+            const Text('Unable to load disputes.',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _kSub)),
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              onPressed: _load,
+              style: FilledButton.styleFrom(backgroundColor: _kGreen,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
+              icon: const Icon(Icons.refresh_rounded, size: 16),
+              label: const Text('Retry'),
+            ),
+          ]),
+        ),
+      );
     }
     if (_disputes.isEmpty) {
       return Center(

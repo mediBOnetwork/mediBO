@@ -48,8 +48,10 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
           .rpc('get_dispute_form', params: {'p_token': widget.token});
       if (!mounted) return;
       final data = Map<String, dynamic>.from(result as Map);
-      if (data['error'] != null) {
-        setState(() { _error = data['error'] as String; _loading = false; });
+      // E1/C174/B9: safe cast — never use `as String` on untrusted RPC payloads
+      final loadErr = data['error']?.toString();
+      if (loadErr != null) {
+        setState(() { _error = loadErr; _loading = false; });
         return;
       }
       final rawItems = (data['items'] as List? ?? [])
@@ -93,7 +95,7 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
       if (!mounted) return;
       final data = result is Map ? Map<String, dynamic>.from(result) : <String, dynamic>{};
       if (data['error'] != null) {
-        final err = data['error'] as String;
+        final err = data['error']?.toString() ?? 'unknown'; // B9/C174: safe toString
         setState(() => _submitting[disputeId] = false);
         if (err == 'already_responded') {
           await _load();
@@ -138,11 +140,12 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
     }
   }
 
+  // E2/C174/B8: only show banner when every item has a real supplier response
   bool get _allResponded =>
       _items.isNotEmpty &&
       _items.every((item) {
         final status = item['status']?.toString() ?? '';
-        return status != 'reminder_sent' && status != 'shop_logged';
+        return status == 'accepted_missing' || status == 'denied';
       });
 
   @override
@@ -209,6 +212,9 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
   }
 
   Widget _buildPage() {
+    // C174/B8+B9 render-log instrumentation
+    RenderLog.write('c174_form_load',
+        'all_responded_predicate=accepted_missing||denied;error_cast=safe');
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(16, 20, 16, 48),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [

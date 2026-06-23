@@ -384,11 +384,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   bool get _allDone => _items.isNotEmpty && _pendingCount == 0;
 
-  // #116: Arrivals shop-mode filter — only items with received_qty>0
-  List<Map<String, dynamic>> _visibleItems() {
-    if (!widget.arrivals || _supplierMode != 'shop') return _items;
-    return _items.where((it) => ((it['received_qty'] as num?)?.toInt() ?? 0) > 0).toList();
-  }
+  // #133: removed at_warehouse/received_qty filter — show ALL items from RPC
+  List<Map<String, dynamic>> _visibleItems() => _items;
 
   // #91: true when get_receiving_box returns collect_locked=true on any row
   bool get _boxLocked =>
@@ -2557,12 +2554,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c116_footer_gap_fixed', 'true');
     RenderLog.write('c118_footer_bottom_gap', '24');
     if (widget.arrivals) {
-      if (_supplierMode == 'shop') {
-        RenderLog.write('c116_arrivals_shop_filter_applied', 'true');
-        RenderLog.write('c116_arrivals_filtered_count', '${visibleItems.length}');
-      } else if (_supplierMode == 'warehouse') {
-        RenderLog.write('c116_arrivals_warehouse_all_shown', 'true');
-      }
+      RenderLog.write('c133_arrivals_filter_removed', 'true');
+      RenderLog.write('c133_arrivals_item_count', '${visibleItems.length}');
     }
 
     return Container(

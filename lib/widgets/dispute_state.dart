@@ -6,7 +6,7 @@ DisputeState disputeStateOf(Map<String, dynamic> d) {
   final kind = d['kind']?.toString() ?? 'short';
   final status = d['status']?.toString() ?? '';
   final rebuyStarted = d['rebuy_started'] as bool? ?? false;
-  if (status == 'resolved') return DisputeState.resolved;
+  if (status == 'resolved' || status == 'cancelled') return DisputeState.resolved;
   if (kind == 'short' && status == 'denied' && !rebuyStarted) return DisputeState.needsYou;
   if (status == 'reminder_sent' || status == 'shop_logged') return DisputeState.waiting;
   if (kind == 'short' && status == 'accepted_missing') return DisputeState.resourcing;

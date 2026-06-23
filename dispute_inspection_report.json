@@ -1,0 +1,179 @@
+{
+  "report": "DISPUTE FRONTEND 360° INSPECTION",
+  "generated": "2026-06-23",
+  "change_context": "#180",
+  "total_bugs": 14,
+  "summary_by_severity": {
+    "P0": 1,
+    "P1": 7,
+    "P2": 6,
+    "P3": 0
+  },
+  "bugs": [
+    {
+      "id": "B1",
+      "severity": "P1",
+      "title": "_supplierLink() excludes shop_logged token — Send link hidden for newly-flagged wrong-item rows",
+      "file": "lib/screens/admin/admin_fulfillment_screen.dart",
+      "line": 6854,
+      "field_rpc_arg": "tokenStatuses = {'reminder_sent', 'accepted_missing', 'denied'}",
+      "current_behaviour": "A wrong-item dispute created via the sheet starts with status='shop_logged'. _supplierLink() only matches reminder_sent|accepted_missing|denied, so canonicalLink is empty and the Send link row is hidden.",
+      "why_wrong": "Backend contract states all statuses carry a token. shop_logged is a valid pre-reminder state and the token is present. Admin must be able to send the link before or during the reminder.",
+      "correct_behaviour": "Add 'shop_logged' to tokenStatuses."
+    },
+    {
+      "id": "B2",
+      "severity": "P1",
+      "title": "_supplierCounts() counts cancelled disputes as unresolved — red badge inflated",
+      "file": "lib/screens/admin/admin_fulfillment_screen.dart",
+      "line": 6872,
+      "field_rpc_arg": "items.where((d) => disputeStateOf(d) != DisputeState.resolved).length",
+      "current_behaviour": "disputeStateOf() has no branch for 'cancelled'; it falls through to DisputeState.waiting (dispute_state.dart:15). A cancelled dispute is counted as unresolved, inflating the red badge.",
+      "why_wrong": "Backend contract lists cancelled as a terminal status equivalent to resolved. _load() correctly excludes cancelled from openCount (line 6750) but _supplierCounts() does not mirror this.",
+      "correct_behaviour": "Exclude cancelled from unresolved count — either add a cancelled arm to disputeStateOf() returning resolved, or check d['status'] != 'cancelled' explicitly."
+    },
+    {
+      "id": "B3",
+      "severity": "P1",
+      "title": "_resolve() always passes p_outcome:'resolved', never agree_supplier or re_source for non-needsYou states",
+      "file": "lib/screens/admin/admin_fulfillment_screen.dart",
+      "line": 6825,
+      "field_rpc_arg": "fw_resolve_dispute(p_outcome: 'resolved')",
+      "current_behaviour": "For waiting, resourcing, and exchange states the Resolve button shows a plain confirm dialog and always calls fw_resolve_dispute with p_outcome='resolved'.",
+      "why_wrong": "agree_supplier and re_source are distinct outcomes with downstream business meaning. An admin resolving a resourcing row almost certainly wants to record re_source, not generic resolved. The outcome is permanently mis-recorded.",
+      "correct_behaviour": "The dialog should offer outcome options or default to a context-sensitive outcome (e.g. re_source for resourcing/exchange states)."
+    },
+    {
+      "id": "B4",
+      "severity": "P0",
+      "title": "GlobalKey sendKey created inside build() method — new key every rebuild — popover never opens",
+      "file": "lib/screens/admin/admin_fulfillment_screen.dart",
+      "line": 7106,
+      "field_rpc_arg": "final sendKey = GlobalKey(); inside _buildOpenSupplierCard()",
+      "current_behaviour": "Each setState call recreates the key. anchorKey.currentContext?.findRenderObject() always returns null. _DisputeContactPopover.show() hits the null guard at line 7326 and returns silently. The popover never opens.",
+      "why_wrong": "GlobalKey instances must be stable — created once in State, not recreated in build().",
+      "correct_behaviour": "Declare 'final GlobalKey _sendLinkKey = GlobalKey()' as a field on _DisputesScreenState and pass it to _buildOpenSupplierCard."
+    },
+    {
+      "id": "B5",
+      "severity": "P2",
+      "title": "Header right-side cluster shifts width when red badge appears/disappears — not pixel-identical open vs closed",
+      "file": "lib/screens/admin/admin_fulfillment_screen.dart",
+      "line": 6914,
+      "field_rpc_arg": "if (!allResolved) [ _countBadge(unresolved, red:true), SizedBox(4) ]",
+      "current_behaviour": "When the red badge is hidden (allResolved), the cluster shrinks by 32px (28+4). The name Expanded reflows but the trailing cluster width is not pinned — the header visually jumps when transitioning between resolved and unresolved states.",
+      "why_wrong": "Spec requires constant-position header pixel-identical open vs closed. Supplier Shop uses a fixed-width badge slot regardless of mode.",
+      "correct_behaviour": "Reserve a fixed-width SizedBox(width:32) for the red badge slot even when hidden, so the cluster total width is always constant."
+    },
+    {
+      "id": "B6",
+      "severity": "P2",
+      "title": "Send-link _onTap silently does nothing when _normalizeForWa returns empty — no feedback to admin",
+      "file": "lib/screens/admin/admin_fulfillment_screen.dart",
+      "line": 7427,
+      "field_rpc_arg": "if (intl.isEmpty) return;",
+      "current_behaviour": "If a contact value is a display name or email accidentally stored in the whatsapp[] array, _normalizeForWa strips all non-digits to '' and _onTap returns silently with no snackbar or feedback.",
+      "why_wrong": "Silent failures on non-numeric contacts give admin zero indication something went wrong.",
+      "correct_behaviour": "Show a snackbar ('No valid phone number for this contact') when intl.isEmpty instead of silently returning."
+    },
+    {
+      "id": "B7",
+      "severity": "P1",
+      "title": "fulfill_item_sheet._deriveState() does not cover resolved or cancelled dispute status — shows re-action buttons on a closed dispute",
+      "file": "lib/widgets/fulfill_item_sheet.dart",
+      "line": 226,
+      "field_rpc_arg": "dStatus == 'reminder_sent' || dStatus == 'shop_logged' || dStatus == 'accepted_missing' || dStatus == 'denied'",
+      "current_behaviour": "When existingDispute has status='resolved' or 'cancelled', _deriveState() does not match and falls through to switch(_localFsState). If the item is recorded as 'short', the sheet shows the Shortfall state with Reset/action buttons.",
+      "why_wrong": "A resolved or cancelled dispute should show a read-only Resolved banner, not action buttons that imply the dispute can be re-opened.",
+      "correct_behaviour": "Add 'resolved' and 'cancelled' to the disputeActive guard, or add a dedicated disputeResolved state that renders a read-only resolved banner."
+    },
+    {
+      "id": "B8",
+      "severity": "P1",
+      "title": "supplier_disputes_screen canRespond only accepts reminder_sent — supplier cannot respond when status is shop_logged",
+      "file": "lib/screens/supplier/supplier_disputes_screen.dart",
+      "line": 196,
+      "field_rpc_arg": "canRespond = status == 'reminder_sent'",
+      "current_behaviour": "The public dispute form page accepts reminder_sent OR shop_logged. The supplier authed portal only accepts reminder_sent. A wrong-item dispute created via the sheet (status shop_logged) shows disabled buttons in the supplier portal.",
+      "why_wrong": "The two surfaces are inconsistent. Backend supplier_respond_dispute is callable when status is shop_logged. Supplier portal silently blocks a valid action.",
+      "correct_behaviour": "Match the public page: canRespond = status == 'reminder_sent' || status == 'shop_logged'."
+    },
+    {
+      "id": "B9",
+      "severity": "P2",
+      "title": "Send-link popover has no Copy link fallback — dead-end when supplier has no contacts",
+      "file": "lib/screens/admin/admin_fulfillment_screen.dart",
+      "line": 7505,
+      "field_rpc_arg": "if (!hasAny) → 'No contacts saved for this supplier.' (no further action)",
+      "current_behaviour": "When all four contact lists (whatsapp, contact, phone, other) are empty, the popover shows 'No contacts saved' with no further action. The canonical link is available but not accessible.",
+      "why_wrong": "Admin has no way to share the link without dismissing and finding another method. The link is already passed into the popover.",
+      "correct_behaviour": "Add a 'Copy link' button to the empty-state footer that copies widget.link to clipboard."
+    },
+    {
+      "id": "B10",
+      "severity": "P1",
+      "title": "_DisputesScreenState._load() catch block is silent — network failure shows false 'No open disputes' success state",
+      "file": "lib/screens/admin/admin_fulfillment_screen.dart",
+      "line": 6763,
+      "field_rpc_arg": "catch (e) { setState(() => _loading = false); }",
+      "current_behaviour": "If fw_get_disputes throws (network outage, auth expiry), _disputes stays [], _loading becomes false, and build() renders the empty-state success view with a checkmark and 'No open disputes.'",
+      "why_wrong": "Admin sees a false-positive success state during an outage. There is no indication of an error and no meaningful retry path.",
+      "correct_behaviour": "Add an _error field; when caught, show an error banner with a Retry button rather than the empty-state success view."
+    },
+    {
+      "id": "B11",
+      "severity": "P2",
+      "title": "Tab badge deduplicates by order_item_id; inner list counts raw rows — counts diverge when one item has multiple disputes",
+      "file": "lib/screens/admin/admin_fulfillment_screen.dart",
+      "line_tab_badge": 768,
+      "line_inner_count": 6751,
+      "field_rpc_arg": "tab: map.length (keyed by order_item_id) vs inner: raw.where(isOpen).length",
+      "current_behaviour": "The render-log hardcodes 'inner_open_count=$openCount;equal=true' but the two counts use different deduplication logic and will diverge when one order_item_id has multiple active disputes.",
+      "why_wrong": "Tab badge shows e.g. '4' but inner list shows 7 cards — confusing to the admin.",
+      "correct_behaviour": "Both counts should use the same predicate (raw row count by status, not deduped by order_item_id)."
+    },
+    {
+      "id": "B12",
+      "severity": "P2",
+      "title": "Wrong-item admin card shows product name in 'Ordered' field instead of ordered quantity",
+      "file": "lib/screens/admin/admin_fulfillment_screen.dart",
+      "line": 7215,
+      "field_rpc_arg": "_kvRow('Ordered', product) — product is the product NAME string",
+      "current_behaviour": "The admin item card for wrong_item kind shows: Ordered | Metformin 500mg (product name, not qty). The 'Ordered' label implies a quantity.",
+      "why_wrong": "Misleading label — looks like a data bug to the admin reviewing disputes.",
+      "correct_behaviour": "Change label to 'Ordered item' (or 'Expected') and 'Sent instead', and optionally add a separate _kvRow('Qty ordered', '$ordered')."
+    },
+    {
+      "id": "B13",
+      "severity": "P2",
+      "title": "No way to hide resolved items inside an open supplier dropdown — resolved rows crowd the list",
+      "file": "lib/screens/admin/admin_fulfillment_screen.dart",
+      "line": 7295,
+      "field_rpc_arg": "case DisputeState.resolved: return const SizedBox.shrink()",
+      "current_behaviour": "Resolved items are silently rendered in the item list with no action buttons. fw_get_disputes returns both open and resolved rows. There is no filter chip or toggle to hide resolved rows (removed in #170 without replacement). A supplier with 1 open + 4 resolved items shows 5 full cards.",
+      "why_wrong": "Admin must scroll through resolved noise to reach the actionable item. UX clutter with no way to dismiss.",
+      "correct_behaviour": "Add a per-supplier 'Show resolved (N)' toggle at the bottom of the item list, or auto-collapse resolved items."
+    },
+    {
+      "id": "B14",
+      "severity": "P1",
+      "title": "_DisputeContactPopover._entry is static and never cleared on widget dispose — orphaned overlay persists after tab switch",
+      "file": "lib/screens/admin/admin_fulfillment_screen.dart",
+      "line": 7314,
+      "field_rpc_arg": "static OverlayEntry? _entry",
+      "current_behaviour": "If the user navigates away from the Disputes tab while the popover is open, _entry is not cleared. No dispose() on _DisputesScreenState removes it. The orphaned overlay entry persists over the new tab's content.",
+      "why_wrong": "Overlay entries must be removed on widget disposal or route change. The popover can cover unrelated UI after tab switch.",
+      "correct_behaviour": "Override dispose() on _DisputesScreenState to call: _DisputeContactPopover._entry?.remove(); _DisputeContactPopover._entry = null;"
+    }
+  ],
+  "top_fixes_priority_order": [
+    "B4 — Move sendKey from build() to State field; Send link is currently 100% broken",
+    "B1 — Add shop_logged to tokenStatuses in _supplierLink()",
+    "B14 — Add dispose() to _DisputesScreenState clearing the static _entry",
+    "B7 — Cover resolved/cancelled in fulfill_item_sheet._deriveState()",
+    "B3 — Add outcome choice to the Resolve dialog for non-needsYou states",
+    "B8 — Accept shop_logged in supplier portal canRespond",
+    "B10 — Add _error field + error UI in _DisputesScreenState._load() catch block",
+    "B2 — Exclude cancelled from _supplierCounts() unresolved count"
+  ]
+}

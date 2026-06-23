@@ -26,6 +26,7 @@ enum _ItemSheetState {
   shortfall,
   receivedFull,
   disputeActive,
+  disputeResolved,
   wrongItem,
   notComing,
   fallback,
@@ -222,6 +223,9 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
   _ItemSheetState _deriveState() {
     if (_dispute != null) {
       final dStatus = _dispute!['status']?.toString() ?? '';
+      if (dStatus == 'resolved' || dStatus == 'cancelled') {
+        return _ItemSheetState.disputeResolved;
+      }
       // B13/C174: only valid contract statuses trigger disputeActive; 'responded' removed
       if (dStatus == 'reminder_sent' || dStatus == 'shop_logged' ||
           dStatus == 'accepted_missing' || dStatus == 'denied') {
@@ -655,6 +659,27 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
           ]
 
           // ── WRONG / NOT_COMING ────────────────────────────────────────────
+          else if (sheetState == _ItemSheetState.disputeResolved) ...[
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF3F4F6),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: _kBorder),
+              ),
+              child: Row(children: [
+                const Icon(Icons.check_circle_outline_rounded, size: 16, color: _kSub),
+                const SizedBox(width: 8),
+                const Expanded(
+                  child: Text('Dispute resolved — no further action needed.',
+                      style: TextStyle(fontSize: 13, color: _kSub)),
+                ),
+              ]),
+            ),
+          ]
+
+          // ── WRONG / NOT_COMING ────────────────────────────────────────────
           else if (sheetState == _ItemSheetState.wrongItem ||
                    sheetState == _ItemSheetState.notComing) ...[
             _StatusLine(
@@ -715,6 +740,7 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
       case _ItemSheetState.receivedFull:  return 2; // Status line + Reset
       case _ItemSheetState.shortfall:     return 2; // B2/C174: info-box + Reset = 2 rows
       case _ItemSheetState.disputeActive: return token.isNotEmpty ? 3 : 2; // Banner + link? + View
+      case _ItemSheetState.disputeResolved: return 1;
       case _ItemSheetState.wrongItem:
       case _ItemSheetState.notComing:     return 2; // Status + Reset
       case _ItemSheetState.fallback:      return 2; // Status + Close
@@ -770,6 +796,8 @@ class _StatusBadge extends StatelessWidget {
         bg = const Color(0xFFFAECE7); fg = _kShortFg; label = 'short'; break;
       case _ItemSheetState.disputeActive:
         bg = _kPurpleBg; fg = _kPurple; label = 'dispute'; break;
+      case _ItemSheetState.disputeResolved:
+        bg = const Color(0xFFF3F4F6); fg = _kSub; label = 'resolved'; break;
       case _ItemSheetState.wrongItem:
         bg = const Color(0xFFFEE2E2); fg = _kWrongFg; label = 'wrong'; break;
       case _ItemSheetState.notComing:

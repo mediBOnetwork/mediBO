@@ -193,7 +193,7 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
     final status      = d['status']?.toString() ?? '';
     final isResponding = _responding.contains(disputeId);
     // Portal: supplier can only respond when reminder has been explicitly sent
-    final canRespond  = status == 'reminder_sent';
+    final canRespond  = status == 'reminder_sent' || status == 'shop_logged';
 
     RenderLog.write('c178_supplier_respond',
         'dispute_id=$disputeId;kind=$kind;status=$status;rendering=true');

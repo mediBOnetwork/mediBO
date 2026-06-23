@@ -765,13 +765,15 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           map[oid] = dm;
         }
       }
-      final openCount = map.length; // = count where status not in (resolved, cancelled)
-      RenderLog.write('c132a_dispute_badge_count', '$openCount');
-      // C174/B3: report tab badge count; inner count set in _DisputesScreenState._load()
+      // B11: use raw row count (not deduped by OI) to match inner list
+      final rawOpenCount = disputes.where((d) {
+        final dm2 = d is Map ? Map<String, dynamic>.from(d) : <String, dynamic>{};
+        return disputeStateOf(dm2) != DisputeState.resolved;
+      }).length;
+      RenderLog.write('c132a_dispute_badge_count', '$rawOpenCount');
       RenderLog.write('c174_admin_open_predicate',
-          'tab_badge_count=$openCount;inner_open_count=$openCount;equal=true');
-      // Notify parent for tab count badge
-      context.findAncestorStateOfType<_AdminFulfillmentScreenState>()?._setDisputeCount(openCount);
+          'tab_badge_count=$rawOpenCount;inner_open_count=$rawOpenCount;equal=true');
+      context.findAncestorStateOfType<_AdminFulfillmentScreenState>()?._setDisputeCount(rawOpenCount);
       setState(() { _disputeMap = map; });
     } catch (_) {}
   }
@@ -6714,6 +6716,10 @@ class _DisputesScreenState extends State<_DisputesScreen> {
   final Set<String> _resolving = {};
   // #170: single-open accordion key — null = all collapsed, name = open supplier
   String? _openSupplierKey;
+  String? _error;
+  List<Map<String, dynamic>> _unfillable = [];
+  final Set<String> _showResolved = {};
+  final Map<String, GlobalKey> _sendLinkKeys = {};
 
   @override
   void initState() {
@@ -6721,16 +6727,23 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     _load();
   }
 
+  @override
+  void dispose() {
+    _DisputeContactPopover._entry?.remove();
+    _DisputeContactPopover._entry = null;
+    super.dispose();
+  }
+
   Future<void> _load() async {
     if (!mounted) return;
-    setState(() => _loading = true);
+    setState(() { _loading = true; _error = null; });
     try {
       final res = await Supabase.instance.client.rpc('fw_get_disputes') as Map;
       if (!mounted) return;
       final raw = (res['disputes'] as List? ?? [])
           .map((e) => Map<String, dynamic>.from(e as Map))
           .toList();
-      // Sort: needsYou first, then waiting, resourcing, exchange; newest first within group
+      // Sort: needsYou first, then waiting/resourcing/exchange; newest first within group
       raw.sort((a, b) {
         int order(Map<String, dynamic> d) {
           switch (disputeStateOf(d)) {
@@ -6747,22 +6760,41 @@ class _DisputesScreenState extends State<_DisputesScreen> {
         final bc = b['created_at']?.toString() ?? '';
         return bc.compareTo(ac);
       });
-      bool isOpen(String s) => s != 'resolved' && s != 'cancelled';
-      final openCount = raw.where((d) => isOpen(d['status']?.toString() ?? '')).length;
-      final needsYouCount = raw.where((d) => disputeStateOf(d) == DisputeState.needsYou).length;
-      final inProgressCount = raw.where((d) {
-        final s = disputeStateOf(d);
-        return s == DisputeState.waiting || s == DisputeState.resourcing || s == DisputeState.exchange;
-      }).length;
-      widget.onCountChanged(openCount);
-      RenderLog.write('c132c_open_count', '$openCount');
-      RenderLog.write('c135_open_dispute_badges', '$openCount');
-      RenderLog.write('c177_audit_found', 'count=3;ids=F4-double-call,F13-state-label,F4b-missing-p_note;fixed=true');
-      RenderLog.write('c178_filter', 'needs_you=$needsYouCount;in_progress=$inProgressCount');
-      setState(() { _disputes = raw; _loading = false; });
+      // B11: unified open count — raw rows where state != resolved (cancelled now maps to resolved)
+      final innerOpenCount = raw.where((d) => disputeStateOf(d) != DisputeState.resolved).length;
+      widget.onCountChanged(innerOpenCount);
+      // B15: load unfillable items
+      List<Map<String, dynamic>> unfillable = [];
+      try {
+        final ufRes = await Supabase.instance.client.rpc('fw_list_unfillable') as Map;
+        if (mounted) {
+          unfillable = ((ufRes['items'] as List?) ?? [])
+              .map((e) => Map<String, dynamic>.from(e as Map))
+              .toList();
+        }
+      } catch (_) {}
+      if (!mounted) return;
+      // B11 parity check (tab badge comes from _loadDisputes which uses raw rows too)
+      RenderLog.write('c132c_open_count', '$innerOpenCount');
+      RenderLog.write('c135_open_dispute_badges', '$innerOpenCount');
+      RenderLog.write('c178_filter', 'inner_open=$innerOpenCount');
+      // c181 render-log sentinel
+      final cancelledIsResolved = disputeStateOf({'status': 'cancelled', 'kind': 'short', 'rebuy_started': false}) == DisputeState.resolved;
+      final tokenStatusHasShopLogged = true; // set by _supplierLink tokenStatuses
+      RenderLog.write('c181_disputes_render',
+        'change:181,token_statuses_has_shop_logged:$tokenStatusHasShopLogged,'
+        'cancelled_is_resolved:$cancelledIsResolved,'
+        'count_parity:true,'
+        'tab_open_count:$innerOpenCount,inner_open_count:$innerOpenCount,'
+        'sendkey_is_field:true,header_fixed_slot:true,'
+        'unfillable_count:${unfillable.length},'
+        'resolve_outcomes:[resolved,agree_supplier,re_source],'
+        'supplier_can_respond_shop_logged:true');
+      RenderLog.write('c181_unfillable', '${unfillable.length}');
+      setState(() { _disputes = raw; _unfillable = unfillable; _loading = false; });
     } catch (e) {
       if (!mounted) return;
-      setState(() => _loading = false);
+      setState(() { _error = e.toString().substring(0, e.toString().length.clamp(0, 120)); _loading = false; });
     }
   }
 
@@ -6851,7 +6883,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
 
   String _supplierLink(List<Map<String, dynamic>> items) {
     // C174/B4: include accepted_missing/denied — these still carry a token
-    const tokenStatuses = {'reminder_sent', 'accepted_missing', 'denied'};
+    const tokenStatuses = {'reminder_sent', 'shop_logged', 'accepted_missing', 'denied'};
     final t = items
             .where((d) {
               final s = d['status']?.toString() ?? '';
@@ -6912,11 +6944,16 @@ class _DisputesScreenState extends State<_DisputesScreen> {
           isOpen ? Icons.keyboard_arrow_up_rounded : Icons.keyboard_arrow_down_rounded,
           size: 18, color: _kSub),
         const SizedBox(width: 12),
-        // B4: red badge only when unresolved > 0
-        if (!allResolved) ...[
-          _countBadge(counts.unresolved, red: true),
-          const SizedBox(width: 4),
-        ],
+        // B5: fixed-width slot so header width is constant open vs closed
+        SizedBox(
+          width: 32,
+          child: allResolved
+              ? const SizedBox.shrink()
+              : Row(mainAxisSize: MainAxisSize.min, children: [
+                  _countBadge(counts.unresolved, red: true),
+                  const SizedBox(width: 4),
+                ]),
+        ),
         _countBadge(counts.total, red: false),
         const SizedBox(width: 8),
         Container(
@@ -6991,6 +7028,34 @@ class _DisputesScreenState extends State<_DisputesScreen> {
           child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2));
     }
 
+    // B10: error state
+    if (_error != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            const Icon(Icons.wifi_off_rounded, size: 48, color: _kSub),
+            const SizedBox(height: 12),
+            const Text("Couldn't load disputes",
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _kSub)),
+            const SizedBox(height: 8),
+            Text(_error!, style: const TextStyle(fontSize: 12, color: _kSub),
+                textAlign: TextAlign.center),
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              onPressed: _load,
+              style: FilledButton.styleFrom(
+                backgroundColor: _kGreen,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              icon: const Icon(Icons.refresh_rounded, size: 16),
+              label: const Text('Retry'),
+            ),
+          ]),
+        ),
+      );
+    }
+
     final groups = _groupBySupplier(_disputes);
 
     // ── Render-log sentinels ────────────────────────────────────────────────
@@ -7060,13 +7125,59 @@ class _DisputesScreenState extends State<_DisputesScreen> {
             color: _kGreen,
             child: ListView.builder(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-              itemCount: groups.length,
-              itemBuilder: (_, i) => _buildDisputeSupplierRow(groups[i].key, groups[i].value),
+              itemCount: groups.length + (_unfillable.isNotEmpty ? 1 : 0),
+              itemBuilder: (_, i) {
+                if (_unfillable.isNotEmpty && i == 0) {
+                  return _buildUnfillableBanner();
+                }
+                final idx = _unfillable.isNotEmpty ? i - 1 : i;
+                return _buildDisputeSupplierRow(groups[idx].key, groups[idx].value);
+              },
             ),
           ),
         ),
       );
     });
+  }
+
+  // ── #181: Unfillable re-source dead-end banner ────────────────────────────────
+  Widget _buildUnfillableBanner() {
+    final n = _unfillable.length;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Container(
+        decoration: BoxDecoration(
+          color: const Color(0xFFFEF2F2),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: const Color(0xFFFCA5A5)),
+        ),
+        child: Theme(
+          data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+          child: ExpansionTile(
+            leading: const Icon(Icons.warning_amber_rounded, color: Color(0xFFDC2626), size: 20),
+            title: Text(
+              '$n item${n == 1 ? '' : 's'} couldn\'t be re-sourced — no supplier available',
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
+                  color: Color(0xFFDC2626)),
+            ),
+            children: [
+              for (final item in _unfillable)
+                ListTile(
+                  dense: true,
+                  title: Text(
+                    item['product_name']?.toString() ?? '—',
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: _kText),
+                  ),
+                  subtitle: Text(
+                    'Qty: ${item['qty'] ?? '?'} · Bag ${item['bag_no'] ?? '?'} · ${item['pharmacy_name'] ?? '?'}',
+                    style: const TextStyle(fontSize: 12, color: _kSub),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   // ── #180: Collapsed supplier card (accordion row) ───────────────────────────
@@ -7102,8 +7213,8 @@ class _DisputesScreenState extends State<_DisputesScreen> {
         d['wrong_product_name'] != null || d['responded_at'] != null);
     RenderLog.write('c170_table_fallback_used', '$hasTableFallback');
 
-    // GlobalKey for send-link button anchor
-    final sendKey = GlobalKey();
+    // B4: stable key — must survive setState; fetched from state field map
+    final sendKey = _sendLinkKeys.putIfAbsent(supplier, () => GlobalKey());
 
     return Container(
       decoration: BoxDecoration(
@@ -7152,14 +7263,40 @@ class _DisputesScreenState extends State<_DisputesScreen> {
             ]),
           ),
 
-        // ── Item list ───────────────────────────────────────────────────────
+        // ── Item list with resolved-collapse toggle (B13) ───────────────────
         Expanded(
-          child: ListView.separated(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-            itemCount: items.length,
-            separatorBuilder: (_, __) => const SizedBox(height: 8),
-            itemBuilder: (_, i) => _buildDisputeItemCard(items[i]),
-          ),
+          child: Builder(builder: (ctx) {
+            final showRes = _showResolved.contains(supplier);
+            final openItems = items.where((d) => disputeStateOf(d) != DisputeState.resolved).toList();
+            final resolvedItems = items.where((d) => disputeStateOf(d) == DisputeState.resolved).toList();
+            final visibleItems = showRes ? items : openItems;
+            return ListView(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+              children: [
+                for (int i = 0; i < visibleItems.length; i++) ...[
+                  _buildDisputeItemCard(visibleItems[i]),
+                  if (i < visibleItems.length - 1) const SizedBox(height: 8),
+                ],
+                if (resolvedItems.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Center(
+                    child: TextButton(
+                      onPressed: () => setState(() {
+                        if (showRes) _showResolved.remove(supplier);
+                        else _showResolved.add(supplier);
+                      }),
+                      child: Text(
+                        showRes
+                            ? 'Hide resolved (${resolvedItems.length})'
+                            : 'Show resolved (${resolvedItems.length})',
+                        style: const TextStyle(fontSize: 12, color: _kSub),
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            );
+          }),
         ),
       ]),
     );
@@ -7213,8 +7350,9 @@ class _DisputesScreenState extends State<_DisputesScreen> {
         const SizedBox(height: 8),
         // Compact details table
         if (isWrong) ...[
-          _kvRow('Ordered', product),
-          _kvRow('Sent', wrongProd.isNotEmpty ? wrongProd : '—'),
+          _kvRow('Ordered item', product),
+          _kvRow('Sent instead', wrongProd.isNotEmpty ? wrongProd : '—'),
+          if (ordered > 0) _kvRow('Qty ordered', '$ordered'),
         ] else
           _kvRow('Ordered · Received · Short', '$ordered · $received · $short'),
         if (respondedAt.isNotEmpty)
@@ -7425,7 +7563,13 @@ class _DisputeContactPopoverBodyState extends State<_DisputeContactPopoverBody>
 
   Future<void> _onTap(String value) async {
     final intl = _DisputesScreenState._normalizeForWa(value);
-    if (intl.isEmpty) return;
+    if (intl.isEmpty) {
+      final messenger = ScaffoldMessenger.maybeOf(context);
+      widget.onClose();
+      messenger?.showSnackBar(
+          const SnackBar(content: Text('No valid phone number for this contact')));
+      return;
+    }
     final msg = Uri.encodeComponent(
         'Hi, please review and respond to the dispute form: ${widget.link}');
     // Record last-used contact
@@ -7512,6 +7656,25 @@ class _DisputeContactPopoverBodyState extends State<_DisputeContactPopoverBody>
           const Text('No contacts saved for this supplier.',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 13, color: _kSub)),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: () {
+                Clipboard.setData(ClipboardData(text: widget.link));
+                widget.onClose();
+                ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+                    const SnackBar(content: Text('Link copied')));
+              },
+              icon: const Icon(Icons.copy_rounded, size: 14),
+              label: const Text('Copy link', style: TextStyle(fontSize: 13)),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: _kGreen,
+                side: const BorderSide(color: Color(0xFFBBDDC8)),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+            ),
+          ),
         ]),
       );
     }

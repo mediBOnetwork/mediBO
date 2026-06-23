@@ -6715,6 +6715,8 @@ class _DisputesScreenState extends State<_DisputesScreen> {
   List<Map<String, dynamic>> _disputes = [];
   final Set<String> _resolving = {};
   _DisputeFilter _filter = _DisputeFilter.needsYou;
+  final Set<String> _expandedSuppliers = {};
+  final Set<String> _expandedRows = {};
 
   @override
   void initState() {
@@ -6772,6 +6774,12 @@ class _DisputesScreenState extends State<_DisputesScreen> {
       RenderLog.write('c135_open_dispute_badges', '$openCount');
       RenderLog.write('c177_audit_found', 'count=3;ids=F4-double-call,F13-state-label,F4b-missing-p_note;fixed=true');
       RenderLog.write('c178_filter', 'needs_you=$needsYouCount;in_progress=$inProgressCount');
+      // Auto-expand suppliers with needsYou disputes
+      for (final d in raw) {
+        if (disputeStateOf(d) == DisputeState.needsYou) {
+          _expandedSuppliers.add(d['supplier']?.toString() ?? '—');
+        }
+      }
       setState(() {
         _disputes = raw;
         _loading = false;
@@ -6918,18 +6926,24 @@ class _DisputesScreenState extends State<_DisputesScreen> {
       Expanded(
         child: displayList.isEmpty
             ? _buildEmpty()
-            : RefreshIndicator(
-                onRefresh: _load,
-                color: _kGreen,
-                child: ListView.builder(
-                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
-                  itemCount: _groupBySupplier(displayList).length,
-                  itemBuilder: (ctx, i) {
-                    final groups = _groupBySupplier(displayList);
-                    return _buildSupplierGroup(
-                        groups[i].key, groups[i].value);
-                  },
-                ),
+            : LayoutBuilder(
+                builder: (ctx, constraints) {
+                  final isWeb = constraints.maxWidth >= 768;
+                  final groups = _groupBySupplier(displayList);
+                  RenderLog.write('c179_layout',
+                      'mode=${isWeb ? "web" : "mobile"};width=${constraints.maxWidth.toInt()}');
+                  return RefreshIndicator(
+                    onRefresh: _load,
+                    color: _kGreen,
+                    child: ListView.builder(
+                      padding: const EdgeInsets.fromLTRB(0, 8, 0, 32),
+                      itemCount: groups.length,
+                      itemBuilder: (ctx, i) => isWeb
+                          ? _buildWebSection(groups[i].key, groups[i].value)
+                          : _buildMobileSection(groups[i].key, groups[i].value),
+                    ),
+                  );
+                },
               ),
       ),
     ]);
@@ -7033,76 +7047,589 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     );
   }
 
-  Widget _buildSupplierGroup(
-      String supplier, List<Map<String, dynamic>> items) {
+  // ── Shared supplier section header ──────────────────────────────────────────
+
+  Widget _buildSupplierHeader(String supplier, List<Map<String, dynamic>> items) {
+    final isExpanded = _expandedSuppliers.contains(supplier);
+    final int needsYouN = items.where((d) => disputeStateOf(d) == DisputeState.needsYou).length;
+    final int inProgressN = items.where((d) {
+      final s = disputeStateOf(d);
+      return s == DisputeState.waiting || s == DisputeState.resourcing || s == DisputeState.exchange;
+    }).length;
     final canonicalLink = _supplierLink(items);
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Padding(
-        padding: const EdgeInsets.only(bottom: 8, top: 4),
+    return InkWell(
+      onTap: () => setState(() {
+        if (isExpanded) {
+          _expandedSuppliers.remove(supplier);
+        } else {
+          _expandedSuppliers.add(supplier);
+        }
+      }),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF9FAFB),
+          border: Border(bottom: BorderSide(color: _kBorder, width: 0.8)),
+        ),
         child: Row(children: [
+          Icon(
+            isExpanded ? Icons.keyboard_arrow_down_rounded : Icons.keyboard_arrow_right_rounded,
+            size: 20, color: _kSub,
+          ),
+          const SizedBox(width: 8),
           Expanded(
             child: Text(supplier,
-                style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w700,
-                    color: _kText),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis),
+                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _kText),
+                maxLines: 1, overflow: TextOverflow.ellipsis),
           ),
+          if (needsYouN > 0) ...[
+            const SizedBox(width: 6),
+            _miniCount('🔴', needsYouN),
+          ],
+          if (inProgressN > 0) ...[
+            const SizedBox(width: 4),
+            _miniCount('🟡', inProgressN),
+          ],
           if (canonicalLink.isNotEmpty) ...[
             const SizedBox(width: 8),
-            OutlinedButton.icon(
-              onPressed: () => _copyLink(canonicalLink),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: const Color(0xFF7C3AED),
-                side: const BorderSide(color: Color(0xFFDDD6FE)),
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 10, vertical: 6),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8)),
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            InkWell(
+              onTap: () => _copyLink(canonicalLink),
+              borderRadius: BorderRadius.circular(6),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  border: Border.all(color: const Color(0xFFDDD6FE)),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(Icons.copy_rounded, size: 12, color: Color(0xFF7C3AED)),
+                  SizedBox(width: 4),
+                  Text('Copy link',
+                      style: TextStyle(
+                          fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF7C3AED))),
+                ]),
               ),
-              icon: const Icon(Icons.copy_rounded, size: 14),
-              label: const Text('Copy supplier link',
-                  style: TextStyle(
-                      fontSize: 12, fontWeight: FontWeight.w600)),
             ),
           ],
         ]),
       ),
-      for (final d in items) ...[
-        _buildDisputeCard(d),
-        const SizedBox(height: 12),
-      ],
-      const SizedBox(height: 4),
+    );
+  }
+
+  Widget _miniCount(String emoji, int count) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+    decoration: BoxDecoration(
+      color: const Color(0xFFF3F4F6),
+      borderRadius: BorderRadius.circular(10),
+    ),
+    child: Text('$emoji$count',
+        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _kText)),
+  );
+
+  Widget _kindTagCompact(String kind) {
+    final isWrong = kind == 'wrong_item';
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+      decoration: BoxDecoration(
+        color: isWrong ? const Color(0xFFEEF2FF) : const Color(0xFFF1F5F9),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(
+        isWrong ? 'Wrong' : 'Short',
+        style: TextStyle(
+          fontSize: 10, fontWeight: FontWeight.w600,
+          color: isWrong ? const Color(0xFF4338CA) : const Color(0xFF475569),
+        ),
+      ),
+    );
+  }
+
+  Widget _statusDotRow(DisputeView view) {
+    final isResolved = view.state == DisputeState.resolved;
+    return Row(mainAxisSize: MainAxisSize.min, children: [
+      if (isResolved)
+        const Icon(Icons.check_circle_rounded, size: 11, color: Color(0xFF6B7280))
+      else
+        Container(
+          width: 8, height: 8,
+          decoration: BoxDecoration(color: view.dot, shape: BoxShape.circle),
+        ),
+      const SizedBox(width: 5),
+      Text(
+        _shortStateLabel(view.state),
+        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: view.dot),
+      ),
     ]);
   }
 
-  Widget _buildDisputeCard(Map<String, dynamic> d) {
-    final disputeId = d['dispute_id']?.toString() ?? '';
-    final token = d['token']?.toString() ?? '';
-    final itemLink =
-        token.isNotEmpty ? '$_kDisputeDomain/dispute?token=$token' : '';
-    final isResolving = _resolving.contains(disputeId);
-    final dState = disputeStateOf(d);
+  String _shortStateLabel(DisputeState state) {
+    switch (state) {
+      case DisputeState.needsYou: return 'Needs you';
+      case DisputeState.waiting: return 'Waiting';
+      case DisputeState.resourcing: return 'Re-sourcing';
+      case DisputeState.exchange: return 'Exchange';
+      case DisputeState.resolved: return 'Resolved';
+    }
+  }
 
-    return DisputeCard(
-      dispute: d,
-      isProcessing: isResolving,
-      onCopyLink:
-          (dState == DisputeState.waiting && itemLink.isNotEmpty)
-              ? () => _copyLink(itemLink)
-              : null,
-      onResolve: (dState != DisputeState.needsYou &&
-              dState != DisputeState.resolved)
-          ? () => _resolve(disputeId, d)
-          : null,
-      onAgreeSupplier: dState == DisputeState.needsYou
-          ? () => _resolveWith(disputeId, 'agree_supplier')
-          : null,
-      onReSource: dState == DisputeState.needsYou
-          ? () => _resolveWith(disputeId, 're_source')
-          : null,
+  Widget _buildRowDetail(Map<String, dynamic> d) {
+    final kind = d['kind']?.toString() ?? 'short';
+    final isWrong = kind == 'wrong_item';
+    final product = d['product_name']?.toString() ?? '—';
+    final wrongProduct = d['wrong_product_name']?.toString() ?? '';
+    final response = d['supplier_response']?.toString() ?? '';
+    final respondedAt = d['responded_at']?.toString() ?? '';
+    final createdAt = d['created_at']?.toString() ?? '';
+    return Container(
+      padding: const EdgeInsets.fromLTRB(24, 8, 16, 12),
+      color: const Color(0xFFF9FAFB),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if (isWrong) ...[
+          Text(
+            'Ordered: $product · Sent: ${wrongProduct.isNotEmpty ? wrongProduct : "—"}',
+            style: const TextStyle(fontSize: 12, color: _kSub),
+          ),
+          const SizedBox(height: 3),
+        ],
+        if (response.isNotEmpty) ...[
+          Text('Supplier reply: $response',
+              style: const TextStyle(fontSize: 12, color: _kSub)),
+          const SizedBox(height: 3),
+        ],
+        Text(
+          respondedAt.isNotEmpty
+              ? 'Replied: ${respondedAt.length >= 10 ? respondedAt.substring(0, 10) : respondedAt}'
+              : createdAt.isNotEmpty
+                  ? 'Raised: ${createdAt.length >= 10 ? createdAt.substring(0, 10) : createdAt}'
+                  : '',
+          style: const TextStyle(fontSize: 11, color: _kSub),
+        ),
+      ]),
+    );
+  }
+
+  // ── Web table layout ─────────────────────────────────────────────────────────
+
+  Widget _buildWebSection(String supplier, List<Map<String, dynamic>> items) {
+    final isExpanded = _expandedSuppliers.contains(supplier);
+    final needsYouN = items.where((d) => disputeStateOf(d) == DisputeState.needsYou).length;
+    final inProgressN = items.where((d) {
+      final s = disputeStateOf(d);
+      return s == DisputeState.waiting || s == DisputeState.resourcing || s == DisputeState.exchange;
+    }).length;
+    RenderLog.write('c179_supplier_section',
+        'supplier=$supplier;needs_you=$needsYouN;in_progress=$inProgressN;expanded=$isExpanded');
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      _buildSupplierHeader(supplier, items),
+      if (isExpanded) ...[
+        _buildWebTableHeader(),
+        for (final d in items) ...[
+          _buildWebTableRow(d),
+          if (_expandedRows.contains(d['dispute_id']?.toString() ?? ''))
+            _buildRowDetail(d),
+        ],
+      ],
+    ]);
+  }
+
+  Widget _buildWebTableHeader() {
+    const style = TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kSub);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF9FAFB),
+        border: Border(
+          bottom: BorderSide(color: _kBorder, width: 0.8),
+          top: BorderSide(color: _kBorder, width: 0.5),
+        ),
+      ),
+      child: const Row(children: [
+        SizedBox(width: 56, child: Text('Kind', style: style)),
+        SizedBox(width: 8),
+        Expanded(child: Text('Product', style: style)),
+        SizedBox(width: 8),
+        SizedBox(width: 80, child: Text('O · R · S', style: style, textAlign: TextAlign.right)),
+        SizedBox(width: 8),
+        SizedBox(width: 128, child: Text('Status', style: style)),
+        SizedBox(width: 8),
+        SizedBox(width: 196, child: Text('Action', style: style)),
+      ]),
+    );
+  }
+
+  Widget _buildWebTableRow(Map<String, dynamic> d) {
+    final disputeId = d['dispute_id']?.toString() ?? '';
+    final kind = d['kind']?.toString() ?? 'short';
+    final isWrong = kind == 'wrong_item';
+    final product = d['product_name']?.toString() ?? '—';
+    final ordered = (d['ordered'] as num?)?.toInt() ?? 0;
+    final received = (d['received'] as num?)?.toInt() ?? 0;
+    final short = (d['short'] as num?)?.toInt() ?? 0;
+    final view = DisputeView.of(d);
+    final isResolving = _resolving.contains(disputeId);
+    final isExpRow = _expandedRows.contains(disputeId);
+    final token = d['token']?.toString() ?? '';
+    final itemLink = token.isNotEmpty ? '$_kDisputeDomain/dispute?token=$token' : '';
+
+    RenderLog.write('c179_row', 'dispute_id=$disputeId;kind=$kind;state=${view.state.name}');
+
+    return InkWell(
+      onTap: () => setState(() {
+        if (isExpRow) {
+          _expandedRows.remove(disputeId);
+        } else {
+          _expandedRows.add(disputeId);
+        }
+      }),
+      hoverColor: _kGreen.withValues(alpha: 0.03),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          border: Border(bottom: BorderSide(color: _kBorder, width: 0.5)),
+        ),
+        child: Row(children: [
+          SizedBox(width: 56, child: _kindTagCompact(kind)),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Tooltip(
+              message: product,
+              child: Text(product,
+                  style: const TextStyle(fontSize: 13, color: _kText),
+                  maxLines: 1, overflow: TextOverflow.ellipsis),
+            ),
+          ),
+          const SizedBox(width: 8),
+          SizedBox(
+            width: 80,
+            child: Text(
+              isWrong ? '—' : '$ordered·$received·$short',
+              style: const TextStyle(fontSize: 12, color: _kSub),
+              textAlign: TextAlign.right,
+            ),
+          ),
+          const SizedBox(width: 8),
+          SizedBox(width: 128, child: _statusDotRow(view)),
+          const SizedBox(width: 8),
+          SizedBox(
+            width: 196,
+            child: _webRowActions(d, view, disputeId, isResolving, itemLink),
+          ),
+        ]),
+      ),
+    );
+  }
+
+  Widget _webRowActions(Map<String, dynamic> d, DisputeView view,
+      String disputeId, bool isResolving, String itemLink) {
+    const spinner = SizedBox(
+        width: 12, height: 12,
+        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white));
+    const spinnerDark = SizedBox(
+        width: 12, height: 12,
+        child: CircularProgressIndicator(strokeWidth: 2));
+    switch (view.state) {
+      case DisputeState.needsYou:
+        return Row(children: [
+          Expanded(
+            child: OutlinedButton(
+              onPressed: isResolving ? null : () => _resolveWith(disputeId, 'agree_supplier'),
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                side: const BorderSide(color: _kBorder),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              child: isResolving
+                  ? spinnerDark
+                  : const Text('Agree',
+                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+            ),
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: FilledButton(
+              onPressed: isResolving ? null : () => _resolveWith(disputeId, 're_source'),
+              style: FilledButton.styleFrom(
+                backgroundColor: _kGreen,
+                disabledBackgroundColor: _kGreen.withValues(alpha: 0.4),
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              child: isResolving
+                  ? spinner
+                  : const Text('Re-source',
+                      style: TextStyle(
+                          fontSize: 12, fontWeight: FontWeight.w600, color: Colors.white)),
+            ),
+          ),
+        ]);
+
+      case DisputeState.waiting:
+        return Row(children: [
+          if (itemLink.isNotEmpty) ...[
+            InkWell(
+              onTap: () => _copyLink(itemLink),
+              borderRadius: BorderRadius.circular(6),
+              child: const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                child: Icon(Icons.link_rounded, size: 16, color: Color(0xFF7C3AED)),
+              ),
+            ),
+            const SizedBox(width: 4),
+          ],
+          Expanded(
+            child: OutlinedButton(
+              onPressed: isResolving ? null : () => _resolve(disputeId, d),
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                side: const BorderSide(color: _kBorder),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              child: isResolving
+                  ? spinnerDark
+                  : const Text('Resolve',
+                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+            ),
+          ),
+        ]);
+
+      case DisputeState.resourcing:
+      case DisputeState.exchange:
+        return SizedBox(
+          width: double.infinity,
+          child: FilledButton(
+            onPressed: isResolving ? null : () => _resolve(disputeId, d),
+            style: FilledButton.styleFrom(
+              backgroundColor: _kGreen,
+              disabledBackgroundColor: _kGreen.withValues(alpha: 0.4),
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            child: isResolving
+                ? spinner
+                : const Text('Resolve',
+                    style: TextStyle(
+                        fontSize: 12, fontWeight: FontWeight.w600, color: Colors.white)),
+          ),
+        );
+
+      case DisputeState.resolved:
+        return const SizedBox.shrink();
+    }
+  }
+
+  // ── Mobile strip layout ──────────────────────────────────────────────────────
+
+  Widget _buildMobileSection(String supplier, List<Map<String, dynamic>> items) {
+    final isExpanded = _expandedSuppliers.contains(supplier);
+    final needsYouN = items.where((d) => disputeStateOf(d) == DisputeState.needsYou).length;
+    final inProgressN = items.where((d) {
+      final s = disputeStateOf(d);
+      return s == DisputeState.waiting || s == DisputeState.resourcing || s == DisputeState.exchange;
+    }).length;
+    RenderLog.write('c179_supplier_section',
+        'supplier=$supplier;needs_you=$needsYouN;in_progress=$inProgressN;expanded=$isExpanded');
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      _buildSupplierHeader(supplier, items),
+      if (isExpanded)
+        for (final d in items) ...[
+          _buildMobileStrip(d),
+          if (_expandedRows.contains(d['dispute_id']?.toString() ?? ''))
+            _buildRowDetail(d),
+        ],
+    ]);
+  }
+
+  Widget _buildMobileStrip(Map<String, dynamic> d) {
+    final disputeId = d['dispute_id']?.toString() ?? '';
+    final kind = d['kind']?.toString() ?? 'short';
+    final isWrong = kind == 'wrong_item';
+    final product = d['product_name']?.toString() ?? '—';
+    final ordered = (d['ordered'] as num?)?.toInt() ?? 0;
+    final received = (d['received'] as num?)?.toInt() ?? 0;
+    final short = (d['short'] as num?)?.toInt() ?? 0;
+    final view = DisputeView.of(d);
+    final isResolving = _resolving.contains(disputeId);
+    final isExpRow = _expandedRows.contains(disputeId);
+    final token = d['token']?.toString() ?? '';
+    final itemLink = token.isNotEmpty ? '$_kDisputeDomain/dispute?token=$token' : '';
+
+    RenderLog.write('c179_row', 'dispute_id=$disputeId;kind=$kind;state=${view.state.name}');
+
+    return InkWell(
+      onTap: () => setState(() {
+        if (isExpRow) {
+          _expandedRows.remove(disputeId);
+        } else {
+          _expandedRows.add(disputeId);
+        }
+      }),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          border: Border(bottom: BorderSide(color: _kBorder, width: 0.5)),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+            Expanded(
+              child: Text(product,
+                  style: const TextStyle(
+                      fontSize: 14, fontWeight: FontWeight.w600, color: _kText)),
+            ),
+            const SizedBox(width: 8),
+            _kindTagCompact(kind),
+          ]),
+          const SizedBox(height: 6),
+          Row(children: [
+            Expanded(child: _statusDotRow(view)),
+            Text(
+              isWrong ? 'Wrong item' : '$ordered·$received·$short',
+              style: const TextStyle(fontSize: 11, color: _kSub),
+            ),
+          ]),
+          const SizedBox(height: 8),
+          _mobileStripAction(d, view, disputeId, isResolving, itemLink),
+        ]),
+      ),
+    );
+  }
+
+  Widget _mobileStripAction(Map<String, dynamic> d, DisputeView view,
+      String disputeId, bool isResolving, String itemLink) {
+    switch (view.state) {
+      case DisputeState.needsYou:
+        return OutlinedButton.icon(
+          onPressed: isResolving ? null : () {
+            if (!mounted) return;
+            _showDecideSheet(context, d, disputeId);
+          },
+          style: OutlinedButton.styleFrom(
+            foregroundColor: const Color(0xFFC0392B),
+            side: const BorderSide(color: Color(0xFFDC2626)),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ),
+          icon: const Icon(Icons.chevron_right_rounded, size: 16),
+          label: const Text('Decide',
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+        );
+
+      case DisputeState.waiting:
+        return Row(mainAxisSize: MainAxisSize.min, children: [
+          OutlinedButton(
+            onPressed: isResolving ? null : () => _resolve(disputeId, d),
+            style: OutlinedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              side: const BorderSide(color: _kBorder),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            child: isResolving
+                ? const SizedBox(
+                    width: 12, height: 12,
+                    child: CircularProgressIndicator(strokeWidth: 2))
+                : const Text('Resolve',
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+          ),
+          if (itemLink.isNotEmpty) ...[
+            const SizedBox(width: 8),
+            InkWell(
+              onTap: () => _copyLink(itemLink),
+              borderRadius: BorderRadius.circular(6),
+              child: const Padding(
+                padding: EdgeInsets.all(6),
+                child: Icon(Icons.link_rounded, size: 16, color: Color(0xFF7C3AED)),
+              ),
+            ),
+          ],
+        ]);
+
+      case DisputeState.resourcing:
+      case DisputeState.exchange:
+        return OutlinedButton(
+          onPressed: isResolving ? null : () => _resolve(disputeId, d),
+          style: OutlinedButton.styleFrom(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            side: const BorderSide(color: _kBorder),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ),
+          child: isResolving
+              ? const SizedBox(
+                  width: 12, height: 12,
+                  child: CircularProgressIndicator(strokeWidth: 2))
+              : const Text('Resolve',
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+        );
+
+      case DisputeState.resolved:
+        return const SizedBox.shrink();
+    }
+  }
+
+  void _showDecideSheet(BuildContext ctx, Map<String, dynamic> d, String disputeId) {
+    showModalBottomSheet(
+      context: ctx,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (sheetCtx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 20, 16, 16),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            const Text('Supplier says they supplied this',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 8),
+            const Text('How do you want to resolve?',
+                style: TextStyle(fontSize: 13, color: _kSub)),
+            const SizedBox(height: 20),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton(
+                onPressed: () {
+                  Navigator.pop(sheetCtx);
+                  _resolveWith(disputeId, 'agree_supplier');
+                },
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  side: const BorderSide(color: _kBorder),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+                child: const Text('Agree with supplier',
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+              ),
+            ),
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton(
+                onPressed: () {
+                  Navigator.pop(sheetCtx);
+                  _resolveWith(disputeId, 're_source');
+                },
+                style: FilledButton.styleFrom(
+                  backgroundColor: _kGreen,
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+                child: const Text('Side with warehouse — re-source',
+                    style: TextStyle(
+                        fontSize: 14, fontWeight: FontWeight.w600, color: Colors.white)),
+              ),
+            ),
+            const SizedBox(height: 10),
+            TextButton(
+              onPressed: () => Navigator.pop(sheetCtx),
+              child: const Text('Cancel'),
+            ),
+          ]),
+        ),
+      ),
     );
   }
 }

@@ -317,6 +317,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   bool _arrivalsLocked = false;
   bool _confirmingAll = false;
   bool _submittingCollect = false; // #125: Z1 guard — disables both Collect submit buttons mid-flight
+  bool _sendingShortReminder = false; // C171
 
   // #116: supplier count mode from fw_get_state ('shop'|'warehouse'|null)
   String? _supplierMode;
@@ -387,6 +388,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   bool get _allDone => _items.isNotEmpty && _pendingCount == 0;
 
+  // C171: count items where supplier delivered short of ordered qty
+  int get _shortCount =>
+      _items.where((i) => ordQtyOf(i) - recQtyOf(i) > 0).length;
+
   // #133: removed at_warehouse/received_qty filter — show ALL items from RPC
   List<Map<String, dynamic>> _visibleItems() => _items;
 
@@ -448,6 +453,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c169_tab_labels', 'Supplier Shop,Warehouse');
     RenderLog.write('c168_helper_shapes', 'collect:ordQty=ordered_qty,state=explicit,locked=collect_locked;arrivals:ordQty=ordered,state=derived,locked=received_locked');
     RenderLog.write('c170_bugs_done', 'dispute_form_flat_list+3arg_submit+supplier_grouped_admin');
+    RenderLog.write('c171_popup_per_item_send_removed', 'true');
   }
 
   @override
@@ -1116,6 +1122,72 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     }
   }
 
+  // C171: one supplier-level short reminder covering ALL short lines.
+  Future<void> _fw_sendSupplierShortReminder() async {
+    final supplier = _selectedSupplier;
+    if (supplier == null || supplier.isEmpty) return;
+    if (_sendingShortReminder) return;
+    setState(() => _sendingShortReminder = true);
+    try {
+      final res = await Supabase.instance.client.rpc(
+        'fw_send_supplier_short_reminder',
+        params: {'p_supplier_name': supplier},
+      );
+      if (!mounted) return;
+      final data = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+      setState(() => _sendingShortReminder = false);
+      if (data['error'] != null) {
+        final err = data['error'].toString();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $err'), backgroundColor: const Color(0xFFDC2626)),
+        );
+        RenderLog.write('c171_short_reminder_error', 'error=$err');
+        return;
+      }
+      final itemCount = (data['item_count'] as num?)?.toInt() ?? 0;
+      if (itemCount == 0 || data['note']?.toString() == 'no_short_items') {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No short items to report')),
+        );
+        RenderLog.write('c171_short_reminder_none', 'true');
+        return;
+      }
+      final rawLink = data['link']?.toString() ?? '';
+      final canonicalLink = rawLink.isNotEmpty
+          ? (rawLink.startsWith('http') ? rawLink : 'https://www.medibo.in$rawLink')
+          : '';
+      RenderLog.write('c171_short_reminder_sent', 'supplier=$supplier;item_count=$itemCount');
+      // Reload box so dispute states update
+      _reloadItemsFromDB();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Reminder sent for $itemCount short item(s)'),
+          duration: const Duration(seconds: 6),
+          action: canonicalLink.isNotEmpty
+              ? SnackBarAction(
+                  label: 'Copy link',
+                  onPressed: () {
+                    Clipboard.setData(ClipboardData(text: canonicalLink));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Link copied'), duration: Duration(seconds: 2)),
+                    );
+                  },
+                )
+              : null,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _sendingShortReminder = false);
+      final msg = e.toString().substring(0, e.toString().length.clamp(0, 80));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: $msg'), backgroundColor: const Color(0xFFDC2626)),
+      );
+      RenderLog.write('c171_short_reminder_error', 'exception=$msg');
+    }
+  }
+
   Future<void> _loadSupplierOrderItems(String supplier) async {
     try {
       final res = await Supabase.instance.client
@@ -1715,32 +1787,42 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           ),
         ]);
       }
-      return SizedBox(
-        height: 44,
-        child: FilledButton(
-          style: FilledButton.styleFrom(
-            backgroundColor: _kGreen,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      // C171: short reminder + confirm all items received
+      final sc = _shortCount;
+      RenderLog.write('c171_short_btn_visible',
+          'supplier=${_selectedSupplier ?? ''};short_count=$sc;visible=${sc > 0}');
+      return Column(mainAxisSize: MainAxisSize.min, children: [
+        if (sc > 0) ...[
+          _buildShortReminderBtn(),
+          const SizedBox(height: 8),
+        ],
+        SizedBox(
+          height: 44,
+          child: FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: _kGreen,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            onPressed: _confirmingAll ? null : _fw_confirmAllReceived,
+            child: _confirmingAll
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(
+                        color: Colors.white, strokeWidth: 2))
+                : const Row(mainAxisSize: MainAxisSize.min, children: [
+                    Icon(Icons.check_circle_outline_rounded,
+                        size: 15, color: Colors.white),
+                    SizedBox(width: 4),
+                    Text('Confirm all items received',
+                        style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            color: Colors.white)),
+                  ]),
           ),
-          onPressed: _confirmingAll ? null : _fw_confirmAllReceived,
-          child: _confirmingAll
-              ? const SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(
-                      color: Colors.white, strokeWidth: 2))
-              : const Row(mainAxisSize: MainAxisSize.min, children: [
-                  Icon(Icons.check_circle_outline_rounded,
-                      size: 15, color: Colors.white),
-                  SizedBox(width: 4),
-                  Text('Confirm all items received',
-                      style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w700,
-                          color: Colors.white)),
-                ]),
         ),
-      );
+      ]);
     }
 
     if (locked) {
@@ -1801,8 +1883,12 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     // #147 FIX C: always side-by-side, both at _kFooterH — matches locked pill height.
     RenderLog.write('change_92_confirm_styled', '1');
     RenderLog.write('c137_collect_buttons', 'two=y;names=count_wh+confirm');
+    // C171: short reminder button above collect footer buttons
+    final sc171 = _shortCount;
+    RenderLog.write('c171_short_btn_visible',
+        'supplier=${_selectedSupplier ?? ''};short_count=$sc171;visible=${sc171 > 0}');
     const double _kFooterH = 44.0;
-    return Row(children: [
+    final collectRow = Row(children: [
       Expanded(
         child: SizedBox(
           height: _kFooterH,
@@ -1850,6 +1936,34 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         ),
       ),
     ]);
+    return Column(mainAxisSize: MainAxisSize.min, children: [
+      if (sc171 > 0) ...[
+        _buildShortReminderBtn(),
+        const SizedBox(height: 8),
+      ],
+      collectRow,
+    ]);
+  }
+
+  Widget _buildShortReminderBtn() {
+    return SizedBox(
+      height: 44,
+      width: double.infinity,
+      child: OutlinedButton.icon(
+        onPressed: _sendingShortReminder ? null : _fw_sendSupplierShortReminder,
+        style: OutlinedButton.styleFrom(
+          foregroundColor: const Color(0xFF7C3AED),
+          side: const BorderSide(color: Color(0xFFDDD6FE)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ),
+        icon: _sendingShortReminder
+            ? const SizedBox(width: 14, height: 14,
+                child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF7C3AED)))
+            : const Icon(Icons.notifications_active_rounded, size: 15),
+        label: const Text('Send short reminder',
+            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+      ),
+    );
   }
 
   // #121: Undo Collect submission — clears mode, badge returns to P, supplier leaves Arrivals.

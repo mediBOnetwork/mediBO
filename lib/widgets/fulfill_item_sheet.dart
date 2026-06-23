@@ -426,40 +426,32 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
             }),
           ]
 
-          // ── SHORTFALL (B3) ────────────────────────────────────────────────
+          // ── SHORTFALL (B3) — C171: per-item send removed; passive guidance shown ──
           else if (sheetState == _ItemSheetState.shortfall) ...[
             _StatusLine(
               'Received $_localRecQty / $_ordQty — $_shortQty short',
               _kShortFg,
             ),
             const SizedBox(height: 12),
-            if (_reminderError != null)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Text('Error: $_reminderError',
-                    style: const TextStyle(fontSize: 12, color: _kWrongFg)),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFF7ED),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFFFCD34D)),
               ),
-            if (oiidPresent) ...[
-              _ActionRow(
-                label: _reminderSending
-                    ? 'Sending…'
-                    : 'Send reminder to supplier (missing $_shortQty${_unit.isNotEmpty ? ' $_unit' : ''})',
-                color: _kPurple,
-                icon: Icons.notifications_active_rounded,
-                filled: true,
-                loading: _reminderSending,
-                onTap: _reminderSending ? null : _sendReminder,
-              ),
-            ] else ...[
-              _ActionRow(
-                label: 'Send reminder — missing line id',
-                color: _kSub,
-                icon: Icons.notifications_active_rounded,
-                filled: false,
-                loading: false,
-                onTap: null,
-              ),
-            ],
+              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Icon(Icons.info_outline_rounded, size: 15, color: Color(0xFFD97706)),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Short by $_shortQty. Use \'Send short reminder\' on this supplier to notify.',
+                    style: const TextStyle(fontSize: 13, color: Color(0xFF92400E)),
+                  ),
+                ),
+              ]),
+            ),
             const SizedBox(height: 8),
             _ActionRow(
               label: 'Reset to pending',

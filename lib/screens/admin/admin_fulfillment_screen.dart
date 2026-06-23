@@ -392,6 +392,12 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   int get _shortCount =>
       _items.where((i) => ordQtyOf(i) - recQtyOf(i) > 0).length;
 
+  // C173: count wrong-item disputes flagged for this supplier (shop_logged or reminder_sent, kind=wrong_item)
+  int get _wrongFlaggedCount =>
+      _disputeMap.values
+          .where((d) => d['kind']?.toString() == 'wrong_item')
+          .length;
+
   // #133: removed at_warehouse/received_qty filter — show ALL items from RPC
   List<Map<String, dynamic>> _visibleItems() => _items;
 
@@ -1792,7 +1798,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       RenderLog.write('c171_short_btn_visible',
           'supplier=${_selectedSupplier ?? ''};short_count=$sc;visible=${sc > 0}');
       return Column(mainAxisSize: MainAxisSize.min, children: [
-        if (sc > 0) ...[
+        if (sc > 0 || _wrongFlaggedCount > 0) ...[
           _buildShortReminderBtn(),
           const SizedBox(height: 8),
         ],
@@ -1937,7 +1943,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       ),
     ]);
     return Column(mainAxisSize: MainAxisSize.min, children: [
-      if (sc171 > 0) ...[
+      if (sc171 > 0 || _wrongFlaggedCount > 0) ...[
         _buildShortReminderBtn(),
         const SizedBox(height: 8),
       ],
@@ -1960,7 +1966,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             ? const SizedBox(width: 14, height: 14,
                 child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF7C3AED)))
             : const Icon(Icons.notifications_active_rounded, size: 15),
-        label: const Text('Send short reminder',
+        label: const Text('Send supplier reminder',
             style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
       ),
     );
@@ -6847,17 +6853,40 @@ class _DisputesScreenState extends State<_DisputesScreen> {
   }
 
   Widget _buildCard(Map<String, dynamic> d) {
-    final disputeId   = d['dispute_id']?.toString() ?? '';
-    final product     = d['product_name']?.toString() ?? '—';
-    final ordered     = (d['ordered'] as num?)?.toInt() ?? 0;
-    final received    = (d['received'] as num?)?.toInt() ?? 0;
-    final short       = (d['short'] as num?)?.toInt() ?? 0;
-    final mode        = d['mode']?.toString() ?? '';
-    final status      = d['status']?.toString() ?? '';
-    final response    = d['response']?.toString();
-    final createdAt   = d['created_at']?.toString() ?? '';
-    final respondedAt = d['responded_at']?.toString();
-    final isResolving = _resolving.contains(disputeId);
+    final disputeId      = d['dispute_id']?.toString() ?? '';
+    final product        = d['product_name']?.toString() ?? '—';
+    final wrongProduct   = d['wrong_product_name']?.toString();
+    final kind           = d['kind']?.toString() ?? 'short';
+    final ordered        = (d['ordered'] as num?)?.toInt() ?? 0;
+    final received       = (d['received'] as num?)?.toInt() ?? 0;
+    final short          = (d['short'] as num?)?.toInt() ?? 0;
+    final mode           = d['mode']?.toString() ?? '';
+    final status         = d['status']?.toString() ?? '';
+    final response       = d['response']?.toString();
+    final createdAt      = d['created_at']?.toString() ?? '';
+    final respondedAt    = d['responded_at']?.toString();
+    final isResolving    = _resolving.contains(disputeId);
+    final isWrongItem    = kind == 'wrong_item';
+
+    // C173: kind badge widget
+    final kindBadge = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: isWrongItem ? const Color(0xFFEDE9FE) : const Color(0xFFFFF3CD),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(
+        isWrongItem ? 'Wrong item' : 'Short',
+        style: TextStyle(
+          fontSize: 10,
+          fontWeight: FontWeight.w700,
+          color: isWrongItem ? const Color(0xFF5B21B6) : const Color(0xFF92400E),
+        ),
+      ),
+    );
+
+    // Render-log once per card render
+    RenderLog.write('c173_admin_kind_badge', 'true');
 
     return Container(
       decoration: BoxDecoration(
@@ -6877,6 +6906,8 @@ class _DisputesScreenState extends State<_DisputesScreen> {
                   maxLines: 1, overflow: TextOverflow.ellipsis),
             ),
             const SizedBox(width: 8),
+            kindBadge,
+            const SizedBox(width: 6),
             DisputeBadge(status: status),
             if (mode.isNotEmpty) ...[
               const SizedBox(width: 6),
@@ -6890,12 +6921,22 @@ class _DisputesScreenState extends State<_DisputesScreen> {
             ],
           ]),
           const SizedBox(height: 6),
-          Text('Ordered $ordered · Received $received · Short $short',
-              style: const TextStyle(fontSize: 12, color: _kSub)),
+          if (isWrongItem) ...[
+            Text('Ordered: $product', style: const TextStyle(fontSize: 12, color: _kSub)),
+            const SizedBox(height: 2),
+            Text('Sent: ${wrongProduct?.isNotEmpty == true ? wrongProduct! : '—'}',
+                style: const TextStyle(fontSize: 12, color: _kText)),
+          ] else ...[
+            Text('Ordered $ordered · Received $received · Short $short',
+                style: const TextStyle(fontSize: 12, color: _kSub)),
+          ],
           if (response != null && response.isNotEmpty) ...[
             const SizedBox(height: 4),
-            Text('Supplier: ${response == 'missing' ? 'Accepted (qty missing)' : 'Denied (claims correct qty)'}',
-                style: const TextStyle(fontSize: 12, color: _kText)),
+            Text(
+              isWrongItem
+                  ? (response == 'correct_coming' ? 'Supplier: Sending correct item' : 'Supplier: Out of stock — will re-source')
+                  : 'Supplier: ${response == 'missing' ? 'Accepted (qty missing)' : 'Denied (claims correct qty)'}',
+              style: const TextStyle(fontSize: 12, color: _kText)),
           ],
           if (respondedAt != null && respondedAt.isNotEmpty) ...[
             const SizedBox(height: 2),

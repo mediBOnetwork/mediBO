@@ -139,6 +139,11 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
   bool _reminderSending = false;
   String? _reminderError;
 
+  // C173: wrong-item inline capture
+  bool _flaggingWrong = false;
+  bool _flaggingWrongLoading = false;
+  final TextEditingController _wrongNameCtrl = TextEditingController();
+
   @override
   void initState() {
     super.initState();
@@ -172,6 +177,12 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
 
     _dispute = widget.existingDispute;
     _logOpen();
+  }
+
+  @override
+  void dispose() {
+    _wrongNameCtrl.dispose();
+    super.dispose();
   }
 
   @override
@@ -291,6 +302,66 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
     }
   }
 
+  // ── C173: flag wrong item ─────────────────────────────────────────────────
+
+  Future<void> _fw_flagWrongItem() async {
+    final id = _itemId;
+    if (id == null || id.isEmpty) return;
+    final wrongName = _wrongNameCtrl.text.trim();
+    setState(() => _flaggingWrongLoading = true);
+    try {
+      await _doRecord('wrong');
+      final res = await Supabase.instance.client.rpc(
+        'fw_flag_wrong_item',
+        params: {
+          'p_order_item_id': id,
+          'p_wrong_product_name': wrongName.isNotEmpty ? wrongName : null,
+        },
+      );
+      if (!mounted) return;
+      final data = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+      setState(() => _flaggingWrongLoading = false);
+      if (data['status'] == 'ok') {
+        final newDispute = <String, dynamic>{
+          'dispute_id': data['dispute_id']?.toString() ?? '',
+          'kind': 'wrong_item',
+          'status': 'shop_logged',
+          'order_item_id': id,
+          'product_name': _name,
+          'wrong_product_name': wrongName.isNotEmpty ? wrongName : null,
+        };
+        widget.onDisputeCreated(id, newDispute);
+        RenderLog.write('c173_wrong_flagged', 'order_item_id=$id');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Marked wrong item — include it when you send the supplier reminder'),
+              duration: Duration(seconds: 4),
+            ),
+          );
+          Navigator.of(context).pop();
+        }
+      } else {
+        final err = data['error']?.toString() ?? 'unknown';
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Error: $err'), backgroundColor: const Color(0xFFDC2626)),
+          );
+          setState(() { _flaggingWrong = false; _flaggingWrongLoading = false; });
+        }
+        RenderLog.write('c173_wrong_flag_error', 'order_item_id=$id;error=$err');
+      }
+    } catch (e) {
+      if (!mounted) return;
+      final msg = e.toString().substring(0, e.toString().length.clamp(0, 80));
+      setState(() { _flaggingWrong = false; _flaggingWrongLoading = false; });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: $msg'), backgroundColor: const Color(0xFFDC2626)),
+      );
+      RenderLog.write('c173_wrong_flag_error', 'order_item_id=$id;exception=$msg');
+    }
+  }
+
   // ── Build ──────────────────────────────────────────────────────────────────
 
   @override
@@ -379,17 +450,92 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
               ),
             ],
             const SizedBox(height: 8),
-            _ActionRow(
-              label: 'Wrong item',
-              color: _kWrongFg,
-              icon: Icons.close_rounded,
-              filled: false,
-              loading: false,
-              onTap: widget.recording ? null : () async {
-                await _doRecord('wrong');
-                if (mounted) Navigator.of(context).pop();
-              },
-            ),
+            if (!_flaggingWrong) ...[
+              _ActionRow(
+                label: 'Wrong item',
+                color: _kWrongFg,
+                icon: Icons.close_rounded,
+                filled: false,
+                loading: false,
+                onTap: widget.recording ? null : () => setState(() { _flaggingWrong = true; _wrongNameCtrl.clear(); }),
+              ),
+            ] else ...[
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFF2F2),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: const Color(0xFFFECACA)),
+                ),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                  const Text('What did they send instead? (optional)',
+                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _kWrongFg)),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: _wrongNameCtrl,
+                    autofocus: true,
+                    decoration: const InputDecoration(
+                      hintText: 'e.g. Paracetamol 500mg instead',
+                      hintStyle: TextStyle(fontSize: 13, color: _kSub),
+                      isDense: true,
+                      contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                      filled: true,
+                      fillColor: Color(0xFFFFF8F8),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.all(Radius.circular(8)),
+                        borderSide: BorderSide(color: Color(0xFFFECACA)),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.all(Radius.circular(8)),
+                        borderSide: BorderSide(color: Color(0xFFFECACA)),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.all(Radius.circular(8)),
+                        borderSide: BorderSide(color: _kWrongFg, width: 1.5),
+                      ),
+                    ),
+                    style: const TextStyle(fontSize: 13),
+                    textCapitalization: TextCapitalization.sentences,
+                    onSubmitted: (_) => _flaggingWrongLoading ? null : _fw_flagWrongItem(),
+                  ),
+                  const SizedBox(height: 10),
+                  Row(children: [
+                    Expanded(
+                      child: SizedBox(
+                        height: 40,
+                        child: FilledButton(
+                          onPressed: _flaggingWrongLoading ? null : _fw_flagWrongItem,
+                          style: FilledButton.styleFrom(
+                            backgroundColor: _kWrongFg,
+                            disabledBackgroundColor: _kWrongFg.withValues(alpha: 0.4),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                          ),
+                          child: _flaggingWrongLoading
+                              ? const SizedBox(width: 14, height: 14,
+                                  child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                              : const Text('Confirm', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: SizedBox(
+                        height: 40,
+                        child: OutlinedButton(
+                          onPressed: _flaggingWrongLoading ? null : () => setState(() { _flaggingWrong = false; _wrongNameCtrl.clear(); }),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: _kSub,
+                            side: const BorderSide(color: _kBorder),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                          ),
+                          child: const Text('Cancel', style: TextStyle(fontSize: 13)),
+                        ),
+                      ),
+                    ),
+                  ]),
+                ]),
+              ),
+            ],
             const SizedBox(height: 8),
             _ActionRow(
               label: 'Not coming',

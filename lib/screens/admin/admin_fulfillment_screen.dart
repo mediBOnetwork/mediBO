@@ -2633,41 +2633,15 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           style: TextStyle(color: _kSub, fontSize: 15)));
     }
 
-    // #147: inline accordion — header pins to top via Scrollable.ensureVisible.
-    // #151: footer moved INSIDE the dropdown scroll (not pinned); simple ListView restored.
-    // #152 TWEAK 4: while a supplier is open, show only that supplier so scroll is constrained.
     RenderLog.write('c149_web_untouched', 'wide_layout=unchanged');
     RenderLog.write('c151_web_untouched', 'wide_layout=unchanged');
     RenderLog.write('c152_web_untouched', 'wide_layout=unchanged');
 
-    final isOpen = _selectedSupplier != null;
     final displayList = _suppliers;
-    if (isOpen) {
-      RenderLog.write('c152_item_only_scroll', 'only_open_supplier=y');
-      RenderLog.write('c152_gap_on_open', 'open_gap=16;closed_gap=8');
-    }
 
+    // #183: always render the full ListView — in-place animated expand via _sharedSmoothReveal.
     return LayoutBuilder(builder: (_, constraints) {
       final maxW = constraints.maxWidth >= 900 ? 700.0 : double.infinity;
-
-      // #116: when a supplier is open, show the full-height card with sticky header.
-      // Outer scroll is gone — content scrolls inside the card via PinnedFooterList.
-      if (isOpen) {
-        return Align(
-          alignment: Alignment.topCenter,
-          child: ConstrainedBox(
-            constraints: BoxConstraints(maxWidth: maxW),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-              child: SizedBox(
-                height: constraints.maxHeight - 12, // fill viewport minus top gap
-                child: _buildExpandedSupplierCard(_selectedSupplier!, isAdmin),
-              ),
-            ),
-          ),
-        );
-      }
-
       return Align(
         alignment: Alignment.topCenter,
         child: ConstrainedBox(
@@ -2681,6 +2655,56 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         ),
       );
     });
+  }
+
+  // #183: Expanded body used as expandedContent in the accordion shell (no Expanded widget).
+  Widget _buildExpandedSupplierBody(String name, bool isAdmin) {
+    final locked = widget.arrivals ? _arrivalsLocked : _boxLocked;
+    final visibleItems = _visibleItems();
+    if (widget.arrivals) {
+      RenderLog.write('c133_arrivals_filter_removed', 'true');
+      RenderLog.write('c133_arrivals_item_count', '${visibleItems.length}');
+    }
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      const Divider(height: 1, color: _kBorder),
+      _buildNarrowVoiceBar(isAdmin),
+      if (_items.isNotEmpty) _buildNarrowProgressRow(),
+      const SizedBox(height: 8),
+      if (_loadingBox)
+        const Center(
+          child: Padding(
+            padding: EdgeInsets.all(24),
+            child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2),
+          ),
+        )
+      else if (_error != null)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+          child: Text('Error loading items: $_error',
+              style: const TextStyle(color: Color(0xFFDC2626), fontSize: 13)),
+        )
+      else if (visibleItems.isEmpty)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+          child: Text(
+            _items.isEmpty ? 'No items in this box' : 'No counted items',
+            style: const TextStyle(color: _kSub, fontSize: 14),
+          ),
+        )
+      else
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: _buildNarrowItemList(showFooter: false, shrinkWrap: true),
+        ),
+      if (!_loadingBox && _items.isNotEmpty) ...[
+        const Divider(height: 1, color: _kBorder),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+          child: _buildConfirmFooter(locked),
+        ),
+      ] else
+        const SizedBox(height: 8),
+    ]);
   }
 
   // #143 FIX 2+3: full-screen view for the expanded supplier.
@@ -2828,9 +2852,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           });
         }
       },
-      // #116: expanded view is handled by _buildExpandedSupplierCard in _buildCollectList
-      // The accordion shell only handles collapsed display and tap-to-open.
-      expandedContent: const SizedBox.shrink(),
+      // #183: in-place animated expand — body reveals via _sharedSmoothReveal in shell.
+      expandedContent: isExpanded ? _buildExpandedSupplierBody(name, isAdmin) : const SizedBox.shrink(),
       mode: widget.arrivals ? _supplierModeMap[name] : _collectModeMap[name],
       showPending: !widget.arrivals,
     );

@@ -41,7 +41,7 @@ Future<void> showFulfillItemSheet({
   required String supplierName,
   required bool recording,
   required Map<String, dynamic>? existingDispute,
-  required Future<void> Function(String state, {int? qty}) onRecord,
+  required Future<void> Function(String state, {int? qty, String? note}) onRecord,
   required void Function(String itemId, Map<String, dynamic> dispute) onDisputeCreated,
   required void Function() onViewDispute,
 }) {
@@ -109,7 +109,7 @@ class FulfillItemSheet extends StatefulWidget {
   final String supplierName;
   final bool recording;
   final Map<String, dynamic>? existingDispute;
-  final Future<void> Function(String state, {int? qty}) onRecord;
+  final Future<void> Function(String state, {int? qty, String? note}) onRecord;
   final void Function(String itemId, Map<String, dynamic> dispute) onDisputeCreated;
   final void Function() onViewDispute;
 
@@ -240,8 +240,8 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
 
   // ── Backend calls ──────────────────────────────────────────────────────────
 
-  Future<void> _doRecord(String state, {int? qty}) async {
-    await widget.onRecord(state, qty: qty);
+  Future<void> _doRecord(String state, {int? qty, String? note}) async {
+    await widget.onRecord(state, qty: qty, note: note);
     if (!mounted) return;
     setState(() {
       _localFsState = state;
@@ -264,46 +264,31 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
     final wrongName = _wrongNameCtrl.text.trim();
     setState(() => _flaggingWrongLoading = true);
     try {
-      await _doRecord('wrong');
-      final res = await Supabase.instance.client.rpc(
-        'fw_flag_wrong_item',
-        params: {
-          'p_order_item_id': id,
-          'p_wrong_product_name': wrongName.isNotEmpty ? wrongName : null,
-        },
-      );
+      // F4/C177: set_item_receiving('wrong', p_note:...) ALONE creates the dispute.
+      // fw_flag_wrong_item is deprecated — do NOT call it.
+      await _doRecord('wrong', note: wrongName.isNotEmpty ? wrongName : null);
       if (!mounted) return;
-      final data = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
       setState(() => _flaggingWrongLoading = false);
-      if (data['status'] == 'ok') {
-        final newDispute = <String, dynamic>{
-          'dispute_id': data['dispute_id']?.toString() ?? '',
-          'kind': 'wrong_item',
-          'status': 'shop_logged',
-          'order_item_id': id,
-          'product_name': _name,
-          'wrong_product_name': wrongName.isNotEmpty ? wrongName : null,
-        };
-        widget.onDisputeCreated(id, newDispute);
-        RenderLog.write('c173_wrong_flagged', 'order_item_id=$id');
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Marked wrong item — include it when you send the supplier reminder'),
-              duration: Duration(seconds: 4),
-            ),
-          );
-          Navigator.of(context).pop();
-        }
-      } else {
-        final err = data['error']?.toString() ?? 'unknown';
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Error: $err'), backgroundColor: const Color(0xFFDC2626)),
-          );
-          setState(() { _flaggingWrong = false; _flaggingWrongLoading = false; });
-        }
-        RenderLog.write('c173_wrong_flag_error', 'order_item_id=$id;error=$err');
+      // Optimistic dispute for immediate sheet state; refreshed from DB on sheet close.
+      final newDispute = <String, dynamic>{
+        'dispute_id': '',
+        'kind': 'wrong_item',
+        'status': 'shop_logged',
+        'order_item_id': id,
+        'product_name': _name,
+        'wrong_product_name': wrongName.isNotEmpty ? wrongName : null,
+      };
+      widget.onDisputeCreated(id, newDispute);
+      RenderLog.write('c173_wrong_flagged', 'order_item_id=$id');
+      RenderLog.write('c177_action', 'action=wrong_item;rpc=set_item_receiving;ok=true');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Marked wrong item — include it when you send the supplier reminder'),
+            duration: Duration(seconds: 4),
+          ),
+        );
+        Navigator.of(context).pop();
       }
     } catch (e) {
       if (!mounted) return;
@@ -313,6 +298,7 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
         SnackBar(content: Text('Error: $msg'), backgroundColor: const Color(0xFFDC2626)),
       );
       RenderLog.write('c173_wrong_flag_error', 'order_item_id=$id;exception=$msg');
+      RenderLog.write('c177_action', 'action=wrong_item;rpc=set_item_receiving;ok=false');
     }
   }
 

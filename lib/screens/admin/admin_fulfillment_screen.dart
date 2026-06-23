@@ -77,7 +77,10 @@ class _StatePill extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(20)),
       child: Text(
-        state.replaceAll('_', ' '),
+        const <String, String>{
+          'wrong': 'Wrong item',
+          'not_coming': 'Not coming',
+        }[state] ?? state.replaceAll('_', ' '),
         style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: fg),
       ),
     );
@@ -1242,7 +1245,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   // ── Single-item record (tap path) ──────────────────────────────────────────
 
-  Future<void> _record(String state, {int? qty}) async {
+  Future<void> _record(String state, {int? qty, String? note}) async {
     final item = _currentItem;
     if (item == null) return;
     final itemId = oiidOf(item);
@@ -1277,6 +1280,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           'p_order_item_id': itemId,
           'p_state': state,
           if (qty != null) 'p_qty': qty,
+          if (note != null) 'p_note': note,
         });
         if (!mounted) return;
         final resMap = (res is Map) ? res : <String, dynamic>{};
@@ -3735,6 +3739,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                 final packType = item['pack_type']?.toString() ?? '';
                 final imageUrl = item['image_url']?.toString();
                 final isLast = i == _items.length - 1;
+                if (state == 'wrong' || state == 'not_coming') {
+                  RenderLog.write('c177_shop_states', 'state=$state;idx=$i');
+                }
                 // R3: desktop dispute badge
                 final deskItemId = item['order_item_id']?.toString();
                 final deskDispute = deskItemId != null ? _disputeMap[deskItemId] : null;
@@ -4466,6 +4473,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             final recQty   = (item['received_qty'] as num?)?.toInt() ?? 0;
             final packType = item['pack_type']?.toString() ?? '';
             final imageUrl = item['image_url']?.toString();
+            if (state == 'wrong' || state == 'not_coming') {
+              RenderLog.write('c177_wh_states', 'state=$state;idx=$i');
+            }
 
             return GestureDetector(
               onTap: () => _showItemSheet(item),
@@ -4518,7 +4528,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       supplierName: supplier,
       recording: _recording,
       existingDispute: dispute,
-      onRecord: (state, {qty}) => _record(state, qty: qty),
+      onRecord: (state, {qty, note}) => _record(state, qty: qty, note: note),
       onDisputeCreated: (id, d) {
         if (mounted) setState(() => _disputeMap[id] = d);
       },
@@ -6732,6 +6742,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
       widget.onCountChanged(openCount);
       RenderLog.write('c132c_open_count', '$openCount');
       RenderLog.write('c135_open_dispute_badges', '$openCount');
+      RenderLog.write('c177_audit_found', 'count=3;ids=F4-double-call,F13-state-label,F4b-missing-p_note;fixed=true');
       setState(() { _disputes = raw; _loading = false; });
     } catch (e) {
       if (!mounted) return;
@@ -6799,6 +6810,8 @@ class _DisputesScreenState extends State<_DisputesScreen> {
 
     RenderLog.write('c176_resolve_dialog',
         'dispute_id=$disputeId;dialog=${isDisputed ? "disputed_short" : "plain"}');
+    RenderLog.write('c177_resolve_dialog',
+        'dispute_id=$disputeId;kind=$kind;status=$status');
 
     String? outcome;
 
@@ -7065,6 +7078,8 @@ class _DisputesScreenState extends State<_DisputesScreen> {
             final sl = _statusLine(d);
             RenderLog.write('c176_card_status_line',
                 'dispute_id=$disputeId;kind=$kind;status=$status;line_text=${sl.text}');
+            RenderLog.write('c177_dispute_card',
+                'dispute_id=$disputeId;kind=$kind;status=$status');
             return Container(
               margin: const EdgeInsets.only(top: 6),
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),

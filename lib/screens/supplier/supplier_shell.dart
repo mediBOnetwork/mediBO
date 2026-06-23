@@ -81,7 +81,10 @@ class _SupplierShellState extends State<SupplierShell> {
         onPendingCount: _onPendingCount,
       ),
       SupplierOrdersScreen(viewAsSupplierId: viewAsSupplierId),
-      SupplierDisputesScreen(viewAsSupplierId: viewAsSupplierId),
+      SupplierDisputesScreen(
+        viewAsSupplierId: viewAsSupplierId,
+        viewAsSupplierName: widget.viewAsSupplierName,
+      ),
     ];
 
     final showBanner = _pendingInquiryCount > 0 && !_bannerDismissed && _index != 2;

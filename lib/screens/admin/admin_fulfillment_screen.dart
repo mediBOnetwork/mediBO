@@ -390,19 +390,20 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // #133: removed at_warehouse/received_qty filter — show ALL items from RPC
   List<Map<String, dynamic>> _visibleItems() => _items;
 
-  // ── C167 shared helpers ──────────────────────────────────────────────────────
-  // RC1: ordered key is 'ordered' from fw_get_state; 'ordered_qty' from get_receiving_box
+  // ── C167/C168 shared helpers — shape-tolerant for BOTH RPCs ─────────────────
+  // Collect: ordered_qty(numeric), fulfillment_state(text), collect_locked(bool)
+  // Arrivals: ordered(=quantity), no fulfillment_state, received_locked(bool)
   static int ordQtyOf(Map<String, dynamic> item) =>
       ((item['ordered_qty'] ?? item['ordered']) as num?)?.toInt() ?? 1;
   static int recQtyOf(Map<String, dynamic> item) =>
       ((item['received_qty'] as num?) ?? 0).toInt();
-  // RC2: derive fulfillment_state — prefer explicit key (Collect path), else derive
-  // from received_locked + received_qty (fw_get_state Arrivals path, no state key)
+  static bool lockedOf(Map<String, dynamic> item) =>
+      item['collect_locked'] == true || item['received_locked'] == true;
+  // Collect has explicit fulfillment_state; Arrivals derives from received_locked+qty
   static String stateOf(Map<String, dynamic> item) {
     final explicit = item['fulfillment_state']?.toString();
     if (explicit != null && explicit.isNotEmpty) return explicit;
-    final locked = item['received_locked'];
-    if (locked == true || locked == 'true') return 'received';
+    if (lockedOf(item)) return 'received';
     final ord = ordQtyOf(item);
     final rec = recQtyOf(item);
     if (rec >= ord && ord > 0) return 'received';
@@ -441,6 +442,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('fulfillment_pick_to_light', 'screen_mounted');
     RenderLog.write('c162_old_popups_removed', 'true');
     RenderLog.write('c167_helpers_loaded', 'true');
+    RenderLog.write('c168_bugs_fixed', '11');
+    RenderLog.write('c168_helper_shapes', 'collect:ordQty=ordered_qty,state=explicit,locked=collect_locked;arrivals:ordQty=ordered,state=derived,locked=received_locked');
   }
 
   @override
@@ -895,24 +898,40 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       if (!mounted) return;
       final items = res.map((r) => Map<String, dynamic>.from(r as Map)).toList();
       items.sort((a, b) {
-        final aPending = (a['fulfillment_state'] as String?) == 'pending' ? 0 : 1;
-        final bPending = (b['fulfillment_state'] as String?) == 'pending' ? 0 : 1;
+        final aPending = stateOf(a) == 'pending' ? 0 : 1;
+        final bPending = stateOf(b) == 'pending' ? 0 : 1;
         if (aPending != bPending) return aPending - bPending;
         final bagA = (a['bag_no'] as num?)?.toInt() ?? 0;
         final bagB = (b['bag_no'] as num?)?.toInt() ?? 0;
         if (bagA != bagB) return bagA - bagB;
         return (a['product_name'] ?? '').toString().compareTo((b['product_name'] ?? '').toString());
       });
-      final firstPending = items.indexWhere(
-          (i) => (i['fulfillment_state'] as String?) == 'pending');
+      final firstPending = items.indexWhere((i) => stateOf(i) == 'pending');
+      // B7: fetch a fresh mode so _supplierMode is never stale mid-session
+      String? freshMode = _collectModeMap[supplier];
+      try {
+        final modeRes = await Supabase.instance.client.rpc('fw_supplier_modes') as Map;
+        if (mounted) {
+          final modes = (modeRes['modes'] as Map? ?? {});
+          for (final e in modes.entries) {
+            final v = e.value?.toString();
+            _collectModeMap[e.key.toString()] = (v != null && v.isNotEmpty) ? v : null;
+          }
+          freshMode = _collectModeMap[supplier];
+        }
+      } catch (_) {}
+      if (!mounted) return;
       setState(() {
         _items = items;
         _focusIdx = firstPending >= 0 ? firstPending : 0;
         _loadingBox = false;
         _showListView = false;
-        _supplierMode = _collectModeMap[supplier]; // #127 BUG2: sync footer with badge
+        _supplierMode = freshMode;
+        _sessionVoiceCount = 0; // B1/c168: reset per Collect box-open
       });
       RenderLog.write('c127_collect_footer_from_mode', 'true');
+      RenderLog.write('c168_collect_spoken_open', '0');
+      RenderLog.write('c168_collect_mode', '${_supplierMode ?? 'null'}');
       RenderLog.write('fulfillment_ptl_loaded_${items.length}', supplier);
       _loadSupplierOrderItems(supplier);
       RenderLog.write('collect_area_rendered', supplier);
@@ -1106,11 +1125,21 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       if (!mounted) return;
       if (res == null) { setState(() => _supplierOrderItems = []); return; }
       final raw = res['items'] as List? ?? [];
-      setState(() {
-        _supplierOrderItems = raw
-            .map((e) => Map<String, dynamic>.from(e as Map))
-            .toList();
-      });
+      // B10: validate each blob entry; skip malformed (no product_name) and log count
+      int badEntries = 0;
+      final validated = <Map<String, dynamic>>[];
+      for (final e in raw) {
+        if (e is! Map) { badEntries++; continue; }
+        final entry = Map<String, dynamic>.from(e);
+        if (entry['product_name'] == null) { badEntries++; continue; }
+        // Normalise qty key so ordQtyOf() works regardless of blob key name
+        if (entry['ordered_qty'] == null && entry['ordered'] == null && entry['quantity'] != null) {
+          entry['ordered_qty'] = entry['quantity'];
+        }
+        validated.add(entry);
+      }
+      if (badEntries > 0) RenderLog.write('c168_blob_badentry', '$badEntries');
+      setState(() { _supplierOrderItems = validated; });
       RenderLog.write('77_supplier_order_items', '${_supplierOrderItems.length}');
       RenderLog.write('78_collect_items_loaded', '${_supplierOrderItems.length}');
     } catch (_) {
@@ -1127,21 +1156,46 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     if (itemId == null) return;
     setState(() => _recording = true);
     try {
-      final res = await Supabase.instance.client.rpc('set_item_receiving', params: {
-        'p_order_item_id': itemId,
-        'p_state': state,
-        if (qty != null) 'p_qty': qty,
-      });
-      if (!mounted) return;
-      final resMap = (res is Map) ? res : <String, dynamic>{};
-      final returnedState = resMap['state']?.toString() ?? state;
-      final returnedQty = resMap['received_qty'];
-      setState(() {
-        _items[_focusIdx]['fulfillment_state'] = returnedState;
-        if (returnedQty != null) _items[_focusIdx]['received_qty'] = returnedQty;
-        _recording = false;
-      });
-      RenderLog.write('fulfillment_set_state_ok', '$itemId:$returnedState');
+      // B2/c168: Collect 'received'/'short' → receive_product_qty (correct lock check,
+      // correct Collect write path). 'wrong'/'not_coming' and all Arrivals → set_item_receiving.
+      if (!widget.arrivals && (state == 'received' || state == 'short')) {
+        final productId = (item['product_id'] as num?)?.toInt();
+        final supplier = _selectedSupplier ?? '';
+        if (productId == null) throw Exception('missing product_id');
+        final ordQty = ordQtyOf(item);
+        final curRec = recQtyOf(item);
+        final addQty = state == 'received'
+            ? (ordQty - curRec).clamp(1, ordQty).toDouble()
+            : (qty != null ? qty.toDouble() : 1.0);
+        final res = await Supabase.instance.client.rpc('receive_product_qty', params: {
+          'p_supplier_name': supplier,
+          'p_product_id': productId,
+          'p_add_qty': addQty,
+          'p_note': 'tap:$state',
+        }) as Map;
+        if (!mounted) return;
+        if (res['error'] != null) throw Exception(res['error'].toString());
+        RenderLog.write('c168_collect_tap_rpc', 'receive_product_qty');
+        await _reloadItemsFromDB();
+        if (mounted) setState(() => _recording = false);
+      } else {
+        // Arrivals tap, or Collect wrong/not_coming (no Collect-specific RPC)
+        final res = await Supabase.instance.client.rpc('set_item_receiving', params: {
+          'p_order_item_id': itemId,
+          'p_state': state,
+          if (qty != null) 'p_qty': qty,
+        });
+        if (!mounted) return;
+        final resMap = (res is Map) ? res : <String, dynamic>{};
+        final returnedState = resMap['state']?.toString() ?? state;
+        final returnedQty = resMap['received_qty'];
+        setState(() {
+          _items[_focusIdx]['fulfillment_state'] = returnedState;
+          if (returnedQty != null) _items[_focusIdx]['received_qty'] = returnedQty;
+          _recording = false;
+        });
+        RenderLog.write('fulfillment_set_state_ok', '$itemId:$returnedState');
+      }
       _advance();
     } catch (e) {
       if (!mounted) return;
@@ -1365,7 +1419,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         return;
       }
       await _commitVoiceItems(items);
-      if (mounted) setState(() => _sessionVoiceCount++); // B8: count session clips only
+      if (mounted) {
+        setState(() => _sessionVoiceCount++); // B8: count session clips only
+        _advanceIfReceived(); // B4: auto-advance after voice commit
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() { _voiceError = e.toString(); });
@@ -1383,7 +1440,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       for (final row in _supplierOrderItems) {
         final name = row['product_name']?.toString();
         if (name == null) continue;
-        expected.add({'name': name, 'ordered_qty': (row['quantity'] as num?)?.toInt() ?? 1});
+        expected.add({'name': name, 'ordered_qty': ordQtyOf(row)}); // B8: shape-tolerant
       }
     } else {
       final seenNames = <String>{};
@@ -1603,16 +1660,20 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       if (!mounted) return;
       final items = res.map((r) => Map<String, dynamic>.from(r as Map)).toList();
       items.sort((a, b) {
-        final aPend = (a['fulfillment_state'] as String?) == 'pending' ? 0 : 1;
-        final bPend = (b['fulfillment_state'] as String?) == 'pending' ? 0 : 1;
+        final aPend = stateOf(a) == 'pending' ? 0 : 1;
+        final bPend = stateOf(b) == 'pending' ? 0 : 1;
         if (aPend != bPend) return aPend - bPend;
         return (a['product_name'] ?? '').toString().compareTo((b['product_name'] ?? '').toString());
       });
       setState(() {
         _items = items;
-        // #127 BUG2: keep footer mode in sync with badge on reload
-        final newMode = _collectModeMap[supplier];
-        if (newMode != null) _supplierMode = newMode;
+        // B5: always assign (even null) so mode clears correctly after undo
+        _supplierMode = _collectModeMap[supplier];
+        // B9: clamp focus after reload to prevent _currentItem returning null
+        if (_items.isNotEmpty && _focusIdx >= _items.length) {
+          _focusIdx = _items.length - 1;
+          RenderLog.write('c168_focus_clamped', 'true');
+        }
       });
     } catch (_) {}
   }
@@ -1972,13 +2033,13 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   List<Map<String, dynamic>> _buildAgentItems() {
     return _items
-        .where((r) => (r['fulfillment_state'] as String?) != 'cancelled')
+        .where((r) => stateOf(r) != 'cancelled')
         .map((r) => {
               'product_id': (r['product_id'] as num?)?.toInt() ?? 0,
               'name': r['product_name']?.toString() ?? '',
-              'ordered': (r['ordered_qty'] as num?) ?? 0,
-              'received': (r['received_qty'] as num?) ?? 0,
-              'state': r['fulfillment_state']?.toString() ?? 'pending',
+              'ordered': ordQtyOf(r), // B3: shape-tolerant (ordered_qty OR ordered)
+              'received': recQtyOf(r),
+              'state': stateOf(r),    // B3: derive state for Arrivals items
               'pack_type': r['pack_type']?.toString(),
             })
         .toList();
@@ -2240,8 +2301,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   void _advanceIfReceived() {
     final item = _currentItem;
     if (item == null) return;
-    final state = item['fulfillment_state'] as String?;
-    if (state != null && state != 'pending') _advance();
+    if (stateOf(item) != 'pending') _advance(); // B4: use stateOf, not raw key
   }
 
 
@@ -3045,7 +3105,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                   style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
                   maxLines: 1, overflow: TextOverflow.ellipsis),
               const SizedBox(height: 1),
-              Text('$recQty/$denominator${packType.isNotEmpty ? ' $packType' : ''}',
+              Text(packType.isNotEmpty ? packType : '—',
                   style: const TextStyle(fontSize: 11, color: _kSub),
                   maxLines: 1, overflow: TextOverflow.ellipsis),
               // #132A: dispute badge below name (visually separate from C/CR/P)
@@ -3533,10 +3593,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                   );
                 }
                 final item = _items[i];
-                final state   = item['fulfillment_state']?.toString() ?? 'pending';
+                final state   = stateOf(item); // B6: unified helper
                 final name    = item['product_name']?.toString() ?? '—';
-                final ordQty  = (item['ordered_qty'] as num?)?.toInt() ?? 0;
-                final recQty  = (item['received_qty'] as num?)?.toInt() ?? 0;
+                final ordQty  = ordQtyOf(item); // B6: dual-key
+                final recQty  = recQtyOf(item);
                 final packType = item['pack_type']?.toString() ?? '';
                 final imageUrl = item['image_url']?.toString();
                 final isLast = i == _items.length - 1;

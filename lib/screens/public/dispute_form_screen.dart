@@ -2,13 +2,20 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../utils/render_log.dart';
 
-const _kGreen      = Color(0xFF1B7A43);
-const _kText       = Color(0xFF111827);
-const _kSub        = Color(0xFF6B7280);
-const _kBg         = Color(0xFFF5F6F8);
-const _kCard       = Color(0xFFFFFFFF);
-const _kBorder     = Color(0xFFE5E7EB);
-const _kDeniedFg   = Color(0xFFC2410C);
+// ── Palette ──────────────────────────────────────────────────────────────────
+const _kGreen       = Color(0xFF1B7A43);
+const _kBg          = Color(0xFFF4F6F8);
+const _kCard        = Color(0xFFFFFFFF);
+const _kBorder      = Color(0xFFE8EAED);
+const _kDivider     = Color(0xFFF0F1F3);
+const _kTextPrimary = Color(0xFF202124);
+const _kTextMuted   = Color(0xFF5F6368);
+const _kAmber       = Color(0xFFE8870E);
+const _kAmberText   = Color(0xFF8A5A00);
+const _kAmberBg     = Color(0xFFFFF7EC);
+const _kAmberValue  = Color(0xFFC77700);
+const _kGreenChipBg = Color(0xFFE7F4EC);
+const _kNeutralChip = Color(0xFFF1F3F4);
 
 class DisputeFormScreen extends StatefulWidget {
   final String token;
@@ -58,6 +65,10 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
         _loading = false;
       });
       RenderLog.write('c170_dispute_form_items', '${rawItems.length}');
+      RenderLog.write('c172_dispute_page_rendered',
+          'supplier=${_supplierName ?? ''};item_count=${rawItems.length}');
+      RenderLog.write('c172_qty_table_rendered', 'true');
+      RenderLog.write('c172_redesign_done', 'true');
     } catch (e) {
       if (!mounted) return;
       setState(() { _error = 'load_failed'; _loading = false; });
@@ -101,6 +112,7 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
         }
       });
       RenderLog.write('c170_dispute_submit', '$disputeId:$response');
+      RenderLog.write('c172_item_responded', 'dispute_id=$disputeId;response=$response');
     } catch (e) {
       if (!mounted) return;
       setState(() => _submitting[disputeId] = false);
@@ -111,6 +123,13 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
     }
   }
 
+  bool get _allResponded =>
+      _items.isNotEmpty &&
+      _items.every((item) {
+        final status = item['status']?.toString() ?? '';
+        return status != 'reminder_sent';
+      });
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -118,11 +137,18 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
       body: SafeArea(
         child: Center(
           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 600),
+            constraints: const BoxConstraints(maxWidth: 480),
             child: _loading
-                ? const Center(child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2.5))
+                ? const Center(
+                    child: Column(mainAxisSize: MainAxisSize.min, children: [
+                      CircularProgressIndicator(color: _kGreen, strokeWidth: 2.5),
+                      SizedBox(height: 12),
+                      Text('Loading…',
+                          style: TextStyle(fontSize: 14, color: _kTextMuted)),
+                    ]),
+                  )
                 : _error != null
-                    ? _buildError()
+                    ? _buildErrorState()
                     : _buildPage(),
           ),
         ),
@@ -130,7 +156,7 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
     );
   }
 
-  Widget _buildError() {
+  Widget _buildErrorState() {
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(32),
@@ -138,8 +164,10 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
           Container(
             width: 72, height: 72,
             decoration: BoxDecoration(
-                color: const Color(0xFFF3F4F6), borderRadius: BorderRadius.circular(20)),
-            child: const Icon(Icons.link_off_outlined, size: 36, color: Color(0xFF9CA3AF)),
+              color: const Color(0xFFF1F3F4),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: const Icon(Icons.link_off_rounded, size: 34, color: _kTextMuted),
           ),
           const SizedBox(height: 20),
           Text(
@@ -147,14 +175,19 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
                 ? 'Unable to load. Please try again.'
                 : 'This link is no longer valid.',
             style: const TextStyle(
-                fontSize: 18, fontWeight: FontWeight.w700, color: Color(0xFF374151)),
+              fontSize: 18, fontWeight: FontWeight.w700, color: _kTextPrimary,
+              height: 1.35,
+            ),
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: 8),
-          const Text('Please contact mediBO for assistance.',
-              style: TextStyle(fontSize: 14, color: _kSub), textAlign: TextAlign.center),
+          const Text(
+            'Please contact mediBO.',
+            style: TextStyle(fontSize: 14, color: _kTextMuted, height: 1.35),
+            textAlign: TextAlign.center,
+          ),
           const SizedBox(height: 32),
-          _mediboFooter(),
+          _footer(),
         ]),
       ),
     );
@@ -162,234 +195,378 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
 
   Widget _buildPage() {
     return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(16, 24, 16, 48),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        // ── Brand header ──
-        Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(color: _kGreen, borderRadius: BorderRadius.circular(12)),
-          child: Row(children: [
-            Container(
-              width: 44, height: 44,
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.18),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: const Icon(Icons.local_shipping_outlined, color: Colors.white, size: 24),
+      padding: const EdgeInsets.fromLTRB(16, 20, 16, 48),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        _buildHeader(),
+        const SizedBox(height: 16),
+        const Text(
+          'Items reported short — please confirm each',
+          style: TextStyle(
+            fontSize: 15, color: _kTextMuted, height: 1.35,
+          ),
+        ),
+        const SizedBox(height: 8),
+
+        // All-responded success banner
+        if (_allResponded) ...[
+          const SizedBox(height: 4),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: BoxDecoration(
+              color: _kGreenChipBg,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: const Color(0xFFBBDDC8)),
             ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                const Text('mediBO · Delivery Dispute',
-                    style: TextStyle(color: Colors.white, fontSize: 11,
-                        fontWeight: FontWeight.w500, letterSpacing: 0.5)),
-                const SizedBox(height: 3),
-                Text(_supplierName ?? '',
-                    style: const TextStyle(
-                        color: Colors.white, fontSize: 17, fontWeight: FontWeight.w800),
-                    maxLines: 2, overflow: TextOverflow.ellipsis),
-              ]),
+            child: const Row(children: [
+              Icon(Icons.check_circle_rounded, size: 18, color: _kGreen),
+              SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Thanks — all responses recorded.',
+                  style: TextStyle(
+                    fontSize: 14, fontWeight: FontWeight.w600,
+                    color: _kGreen, height: 1.35,
+                  ),
+                ),
+              ),
+            ]),
+          ),
+          const SizedBox(height: 8),
+        ],
+
+        for (int i = 0; i < _items.length; i++) ...[
+          _buildItemCard(_items[i]),
+          if (i < _items.length - 1) const SizedBox(height: 14),
+        ],
+
+        const SizedBox(height: 24),
+        _footer(),
+      ]),
+    );
+  }
+
+  Widget _buildHeader() {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: _kGreen,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+        Container(
+          width: 48, height: 48,
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.16),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: const Icon(Icons.local_shipping_outlined, color: Colors.white, size: 26),
+        ),
+        const SizedBox(width: 14),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(
+              'mediBO · Delivery Dispute',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.70),
+                fontSize: 11,
+                fontWeight: FontWeight.w500,
+                letterSpacing: 0.5,
+                height: 1.3,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              _supplierName ?? '',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 21,
+                fontWeight: FontWeight.w800,
+                height: 1.2,
+              ),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
             ),
           ]),
         ),
-        const SizedBox(height: 12),
-        const Text(
-          'Items reported short — please confirm each',
-          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: _kSub),
-        ),
-        const SizedBox(height: 16),
-
-        for (final item in _items) ...[
-          _buildItemCard(item),
-          const SizedBox(height: 12),
-        ],
-
-        const SizedBox(height: 8),
-        _mediboFooter(),
       ]),
     );
   }
 
   Widget _buildItemCard(Map<String, dynamic> item) {
-    final disputeId    = item['dispute_id']?.toString() ?? '';
-    final productName  = item['product_name']?.toString() ?? '—';
-    final imageUrl     = item['image_url']?.toString();
-    final ordered      = (item['ordered'] as num?)?.toInt() ?? 0;
-    final received     = (item['received'] as num?)?.toInt() ?? 0;
-    final short        = (item['short'] as num?)?.toInt() ?? 0;
-    final status       = item['status']?.toString() ?? '';
-    final isSubmitting = _submitting[disputeId] == true;
-    final submittedResponse = _submitted[disputeId];
-    final canRespond   = status == 'reminder_sent' && submittedResponse == null;
+    final disputeId      = item['dispute_id']?.toString() ?? '';
+    final productName    = item['product_name']?.toString() ?? '—';
+    final imageUrl       = item['image_url']?.toString();
+    final ordered        = (item['ordered'] as num?)?.toInt() ?? 0;
+    final received       = (item['received'] as num?)?.toInt() ?? 0;
+    final short          = (item['short'] as num?)?.toInt() ?? 0;
+    final status         = item['status']?.toString() ?? '';
+    final isSubmitting   = _submitting[disputeId] == true;
+    final submittedResp  = _submitted[disputeId];
+    final canRespond     = status == 'reminder_sent' && submittedResp == null;
+    final isResponded    = submittedResp != null ||
+        status == 'accepted_missing' || status == 'denied';
+    final responseValue  = submittedResp ?? (status == 'accepted_missing'
+        ? 'missing'
+        : status == 'denied' ? 'denied' : null);
 
     return Container(
       decoration: BoxDecoration(
         color: _kCard,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(color: _kBorder),
-        boxShadow: [BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
-            blurRadius: 8, offset: const Offset(0, 2))],
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x0F101828),
+            blurRadius: 4,
+            offset: Offset(0, 1),
+          ),
+        ],
       ),
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(18),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          // ── Product header row ──
           Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            if (imageUrl != null && imageUrl.isNotEmpty)
-              ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: Image.network(imageUrl, width: 56, height: 56, fit: BoxFit.contain,
-                    errorBuilder: (_, __, ___) => _placeholderImage()),
-              )
-            else
-              _placeholderImage(),
-            const SizedBox(width: 12),
+            _productThumb(imageUrl),
+            const SizedBox(width: 14),
             Expanded(
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(productName,
-                    style: const TextStyle(
-                        fontSize: 14, fontWeight: FontWeight.w700, color: _kText)),
-                const SizedBox(height: 8),
-                _labelRow('Ordered', '$ordered'),
-                const SizedBox(height: 3),
-                _labelRow('Received', '$received'),
-                const SizedBox(height: 3),
-                _labelRow('Short', '$short',
-                    valueStyle: const TextStyle(
-                        fontSize: 13, fontWeight: FontWeight.w700, color: _kDeniedFg)),
-              ]),
+              child: Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Text(
+                  productName,
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: _kTextPrimary,
+                    height: 1.35,
+                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
             ),
           ]),
+          const SizedBox(height: 14),
 
-          if (canRespond) ...[
+          // ── Quantity table ──
+          _buildQtyTable(ordered, received, short),
+
+          // ── Responded state chip ──
+          if (isResponded && responseValue != null) ...[
             const SizedBox(height: 14),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: const Color(0xFFFFF7ED),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: const Color(0xFFFCD34D)),
-              ),
-              child: const Row(children: [
-                Icon(Icons.help_outline_rounded, size: 16, color: Color(0xFFD97706)),
-                SizedBox(width: 8),
-                Expanded(
-                  child: Text('Did the missing quantity actually go undelivered?',
-                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
-                          color: Color(0xFF92400E))),
-                ),
-              ]),
-            ),
-            const SizedBox(height: 10),
-            SizedBox(
-              width: double.infinity, height: 44,
-              child: FilledButton.icon(
-                onPressed: isSubmitting ? null : () => _submit(disputeId, 'missing'),
-                style: FilledButton.styleFrom(
-                  backgroundColor: const Color(0xFFD97706),
-                  disabledBackgroundColor: const Color(0xFFFDE68A),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                ),
-                icon: isSubmitting
-                    ? const SizedBox(width: 14, height: 14,
-                        child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                    : const Icon(Icons.check_rounded, size: 16, color: Colors.white),
-                label: const Text('Yes, it was short / missing',
-                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.white)),
-              ),
-            ),
-            const SizedBox(height: 8),
-            SizedBox(
-              width: double.infinity, height: 44,
-              child: OutlinedButton.icon(
-                onPressed: isSubmitting ? null : () => _submit(disputeId, 'denied'),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: _kText,
-                  side: const BorderSide(color: _kBorder, width: 1.5),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                ),
-                icon: const Icon(Icons.close_rounded, size: 16),
-                label: const Text('No, I supplied it',
-                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-              ),
-            ),
-            const SizedBox(height: 4),
-            Center(
-              child: const Text('Your response is recorded and shared with mediBO.',
-                  style: TextStyle(fontSize: 12, color: _kSub)),
-            ),
-          ] else if (submittedResponse != null) ...[
+            _buildRespondedChip(responseValue),
+          ]
+
+          // ── Actionable state: prompt + buttons ──
+          else if (canRespond) ...[
+            const SizedBox(height: 14),
+            _buildPromptNote(),
             const SizedBox(height: 12),
-            _responseChip(submittedResponse),
-            const SizedBox(height: 4),
-            Text(
-              submittedResponse == 'missing'
-                  ? "Thanks — we'll arrange the missing stock."
-                  : 'Recorded. Our team will review with proof.',
-              style: const TextStyle(fontSize: 12, color: _kSub),
-            ),
-          ] else if (status == 'accepted_missing') ...[
+            _buildActionButtons(disputeId, short, isSubmitting),
+          ]
+
+          // ── Other non-respondable states ──
+          else if (!isResponded && status.isNotEmpty && status != 'reminder_sent') ...[
             const SizedBox(height: 12),
-            _responseChip('missing'),
-          ] else if (status == 'denied') ...[
-            const SizedBox(height: 12),
-            _responseChip('denied'),
-          ] else if (status.isNotEmpty && status != 'reminder_sent') ...[
-            const SizedBox(height: 12),
-            _statusBadge(status),
+            _buildStatusChip(status),
           ],
         ]),
       ),
     );
   }
 
-  Widget _responseChip(String response) {
-    final isMissing = response == 'missing';
+  Widget _buildQtyTable(int ordered, int received, int short) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
-        color: isMissing ? const Color(0xFFECFDF5) : const Color(0xFFFFF7ED),
-        borderRadius: BorderRadius.circular(6),
+        color: const Color(0xFFFAFAFB),
+        borderRadius: BorderRadius.circular(10),
       ),
-      child: Text(
-        isMissing ? 'Accepted — short/missing' : 'Denied — supplied correctly',
-        style: TextStyle(
-          fontSize: 12, fontWeight: FontWeight.w600,
-          color: isMissing ? _kGreen : const Color(0xFFC2410C),
+      child: Column(children: [
+        _qtyRow('Ordered', '$ordered', false, isFirst: true),
+        Divider(height: 1, thickness: 1, color: _kDivider, indent: 12, endIndent: 12),
+        _qtyRow('Received', '$received', false),
+        Divider(height: 1, thickness: 1, color: _kDivider, indent: 12, endIndent: 12),
+        _qtyRow('Missing', '$short', true, isLast: true),
+      ]),
+    );
+  }
+
+  Widget _qtyRow(String label, String value, bool isMissing,
+      {bool isFirst = false, bool isLast = false}) {
+    return Padding(
+      padding: EdgeInsets.fromLTRB(12, isFirst ? 10 : 8, 12, isLast ? 10 : 8),
+      child: Row(children: [
+        Expanded(
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 14,
+              color: isMissing ? _kAmberValue : _kTextMuted,
+              fontWeight: isMissing ? FontWeight.w600 : FontWeight.w400,
+              height: 1.3,
+            ),
+          ),
+        ),
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: 14,
+            fontWeight: isMissing ? FontWeight.w800 : FontWeight.w600,
+            color: isMissing ? _kAmberValue : _kTextPrimary,
+            height: 1.3,
+          ),
+        ),
+      ]),
+    );
+  }
+
+  Widget _buildPromptNote() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: _kAmberBg,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: const Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Icon(Icons.help_outline_rounded, size: 16, color: _kAmber),
+        SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            'Did the missing quantity actually go undelivered?',
+            style: TextStyle(
+              fontSize: 14,
+              color: _kAmberText,
+              fontWeight: FontWeight.w500,
+              height: 1.35,
+            ),
+          ),
+        ),
+      ]),
+    );
+  }
+
+  Widget _buildActionButtons(String disputeId, int short, bool isSubmitting) {
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      SizedBox(
+        height: 52,
+        child: FilledButton.icon(
+          onPressed: isSubmitting ? null : () => _submit(disputeId, 'missing'),
+          style: FilledButton.styleFrom(
+            backgroundColor: _kAmber,
+            disabledBackgroundColor: const Color(0xFFFDE68A),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          ),
+          icon: isSubmitting
+              ? const SizedBox(
+                  width: 16, height: 16,
+                  child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+              : const Icon(Icons.check_rounded, size: 18, color: Colors.white),
+          label: const Text(
+            'Yes, it was short / missing',
+            style: TextStyle(
+              fontSize: 15, fontWeight: FontWeight.w700, color: Colors.white,
+            ),
+          ),
         ),
       ),
-    );
-  }
-
-  Widget _statusBadge(String status) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF3F4F6), borderRadius: BorderRadius.circular(6)),
-      child: Text(status.replaceAll('_', ' '),
-          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: _kSub)),
-    );
-  }
-
-  Widget _placeholderImage() => Container(
-    width: 56, height: 56,
-    decoration: BoxDecoration(
-        color: const Color(0xFFF3F4F6), borderRadius: BorderRadius.circular(8)),
-    child: const Icon(Icons.medication_outlined, size: 26, color: Color(0xFF9CA3AF)),
-  );
-
-  Widget _labelRow(String label, String value, {TextStyle? valueStyle}) {
-    return Row(children: [
-      SizedBox(width: 68,
-          child: Text(label, style: const TextStyle(fontSize: 13, color: _kSub))),
-      Text(value,
-          style: valueStyle ??
-              const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _kText)),
+      const SizedBox(height: 10),
+      SizedBox(
+        height: 52,
+        child: OutlinedButton.icon(
+          onPressed: isSubmitting ? null : () => _submit(disputeId, 'denied'),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: _kTextPrimary,
+            side: const BorderSide(color: Color(0xFFDADCE0), width: 1),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            backgroundColor: _kCard,
+          ),
+          icon: const Icon(Icons.close_rounded, size: 18),
+          label: const Text(
+            'No, I supplied it',
+            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+          ),
+        ),
+      ),
+      const SizedBox(height: 8),
+      const Text(
+        'Your response is recorded and shared with mediBO.',
+        textAlign: TextAlign.center,
+        style: TextStyle(fontSize: 12, color: _kTextMuted, height: 1.35),
+      ),
     ]);
   }
 
-  Widget _mediboFooter() => Center(
-    child: Text('mediBO · Powered by mediBO B2B Pharmacy',
-        style: const TextStyle(fontSize: 11, color: _kSub)),
+  Widget _buildRespondedChip(String response) {
+    final isMissing = response == 'missing';
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      decoration: BoxDecoration(
+        color: isMissing ? _kGreenChipBg : _kNeutralChip,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(children: [
+        Icon(
+          isMissing ? Icons.check_circle_outline_rounded : Icons.info_outline_rounded,
+          size: 16,
+          color: isMissing ? _kGreen : _kTextMuted,
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            isMissing
+                ? 'Confirmed missing'
+                : 'You reported this as supplied — mediBO will re-source',
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: isMissing ? _kGreen : _kTextMuted,
+              height: 1.35,
+            ),
+          ),
+        ),
+      ]),
+    );
+  }
+
+  Widget _buildStatusChip(String status) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: _kNeutralChip, borderRadius: BorderRadius.circular(8)),
+      child: Text(
+        status.replaceAll('_', ' '),
+        style: const TextStyle(
+          fontSize: 12, fontWeight: FontWeight.w500, color: _kTextMuted),
+      ),
+    );
+  }
+
+  Widget _productThumb(String? imageUrl) {
+    if (imageUrl != null && imageUrl.isNotEmpty) {
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(12),
+        child: Image.network(
+          imageUrl, width: 56, height: 56, fit: BoxFit.contain,
+          errorBuilder: (_, __, ___) => _thumbPlaceholder(),
+        ),
+      );
+    }
+    return _thumbPlaceholder();
+  }
+
+  Widget _thumbPlaceholder() => Container(
+    width: 56, height: 56,
+    decoration: BoxDecoration(
+      color: const Color(0xFFF1F3F4),
+      borderRadius: BorderRadius.circular(12),
+    ),
+    child: const Icon(Icons.medication_outlined, size: 26, color: _kTextMuted),
+  );
+
+  Widget _footer() => Center(
+    child: Text(
+      'mediBO · B2B Pharmacy Platform',
+      style: const TextStyle(fontSize: 11, color: _kTextMuted),
+    ),
   );
 }

@@ -6868,58 +6868,86 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     return t.isNotEmpty ? '$_kDisputeDomain/dispute?token=$t' : '';
   }
 
-  // ── #170: Badge code from most-urgent dispute status ────────────────────────
-  // Precedence: needsYou > waiting > resourcing > exchange > resolved
-  String _supplierBadgeCode(List<Map<String, dynamic>> items) {
-    for (final d in items) {
-      if (disputeStateOf(d) == DisputeState.needsYou) return _statusToCode(d['status']?.toString() ?? '');
-    }
-    for (final d in items) {
-      final s = disputeStateOf(d);
-      if (s == DisputeState.waiting || s == DisputeState.resourcing || s == DisputeState.exchange) {
-        return _statusToCode(d['status']?.toString() ?? '');
-      }
-    }
-    return 'RV';
+  // ── #180: Supplier counts — (unresolved, total) ──────────────────────────────
+  ({int unresolved, int total}) _supplierCounts(List<Map<String, dynamic>> items) {
+    final unresolved = items.where((d) => disputeStateOf(d) != DisputeState.resolved).length;
+    return (unresolved: unresolved, total: items.length);
   }
 
-  String _statusToCode(String status) {
-    switch (status) {
-      case 'reminder_sent':     return 'RS';
-      case 'accepted_missing':  return 'AM';
-      case 'denied':            return 'DN';
-      case 'shop_logged':       return 'SL';
-      case 'resolved':          return 'RV';
-      default:                  return 'PD';
-    }
-  }
-
-  bool _isActiveSupplier(List<Map<String, dynamic>> items) => items.any((d) {
-    final s = disputeStateOf(d);
-    return s == DisputeState.needsYou || s == DisputeState.waiting ||
-        s == DisputeState.resourcing || s == DisputeState.exchange;
-  });
-
-  // ── #170: Dispute badge — mirrors CountBadge (38×24 px, same style) ─────────
-  Widget _disputeBadgeWidget(String code, bool isActive) {
-    final color = isActive ? _kGreen : _kSub;
+  // ── #180: Fixed-width count badge (mirrors CountBadge style) ─────────────────
+  Widget _countBadge(int count, {required bool red}) {
+    final bg = red ? const Color(0xFFDC2626) : _kGreen;
     return SizedBox(
-      width: 38, height: 24,
+      width: 28, height: 20,
       child: Container(
         alignment: Alignment.center,
-        decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(6)),
-        child: Text(code, style: const TextStyle(
+        decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(5)),
+        child: Text('$count', style: const TextStyle(
           color: Colors.white, fontWeight: FontWeight.w700, fontSize: 12, height: 1.0)),
       ),
     );
   }
 
-  // ── #170: Inline state roll-up chip ──────────────────────────────────────────
-  Widget _stateRollupChip(String label, Color bg, Color fg) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-    decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(10)),
-    child: Text(label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: fg)),
-  );
+  // ── #180: Shared header row — pixel-identical open vs closed ─────────────────
+  Widget _buildDisputeHeader(String supplier, List<Map<String, dynamic>> items,
+      {required bool isOpen}) {
+    final counts = _supplierCounts(items);
+    final allResolved = counts.unresolved == 0;
+    // B3: dot — yellow if any unresolved, green if all resolved
+    final dotColor = allResolved ? _kGreen : const Color(0xFFE8A700);
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      child: Row(children: [
+        Expanded(
+          child: Text(supplier,
+              style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                  color: isOpen ? _kGreen : _kText),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis),
+        ),
+        const SizedBox(width: 8),
+        Icon(
+          isOpen ? Icons.keyboard_arrow_up_rounded : Icons.keyboard_arrow_down_rounded,
+          size: 18, color: _kSub),
+        const SizedBox(width: 12),
+        // B4: red badge only when unresolved > 0
+        if (!allResolved) ...[
+          _countBadge(counts.unresolved, red: true),
+          const SizedBox(width: 4),
+        ],
+        _countBadge(counts.total, red: false),
+        const SizedBox(width: 8),
+        Container(
+          width: 12, height: 12,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: dotColor,
+            border: Border.all(color: dotColor, width: 1.5),
+          ),
+        ),
+      ]),
+    );
+  }
+
+  // ── #180: WhatsApp normalizer ─────────────────────────────────────────────────
+  static String _normalizeForWa(String raw) {
+    final digits = raw.replaceAll(RegExp(r'\D'), '');
+    if (digits.length == 10) return '91$digits';
+    return digits;
+  }
+
+  // ── #180: Show send-link popover anchored to a button ─────────────────────────
+  void _showDisputeSendLink(BuildContext context, GlobalKey anchorKey,
+      String supplier, String link) {
+    _DisputeContactPopover.show(
+      context: context,
+      anchorKey: anchorKey,
+      supplierName: supplier,
+      link: link,
+    );
+  }
 
   // ── #170: Per-item state chip (Needs you / Waiting / Re-sourcing / Exchange) ─
   Widget _disputeStateChip(DisputeView view) {
@@ -6968,18 +6996,17 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     // ── Render-log sentinels ────────────────────────────────────────────────
     RenderLog.write('c170_disputes_built', 'true');
     RenderLog.write('c170_supplier_card_count', '${groups.length}');
-    RenderLog.write('c170_filter_chips_removed', 'true');
-    RenderLog.write('c170_anim_dropdown_only', 'true');
-    RenderLog.write('c170_single_open_invariant', 'true');
+    RenderLog.write('c180_header', 'true');
+    RenderLog.write('c180_header_stable', 'constant_position');
     RenderLog.write('c170_scroll_locked', '${_openSupplierKey != null}');
     RenderLog.write('c170_dropdown_open_key', _openSupplierKey ?? 'null');
-    // Badge map: supplier→code for this load
+    // #180: count badge map: supplier→unresolved/total
     if (groups.isNotEmpty) {
       final badgeEntries = groups.map((g) {
-        final code = _supplierBadgeCode(g.value);
-        return '${g.key.replaceAll(' ', '_')}:$code';
+        final c = _supplierCounts(g.value);
+        return '${g.key.replaceAll(' ', '_')}:${c.unresolved}/${c.total}';
       }).join(',');
-      RenderLog.write('c170_status_badge_map', badgeEntries);
+      RenderLog.write('c180_count_badge_map', badgeEntries);
     }
 
     if (_disputes.isEmpty) {
@@ -7042,17 +7069,8 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     });
   }
 
-  // ── #170: Collapsed supplier card (accordion row) ───────────────────────────
+  // ── #180: Collapsed supplier card (accordion row) ───────────────────────────
   Widget _buildDisputeSupplierRow(String supplier, List<Map<String, dynamic>> items) {
-    final badgeCode = _supplierBadgeCode(items);
-    final isActive = _isActiveSupplier(items);
-    final dotColor = isActive ? _kGreen : _kSub;
-    final needsYouN = items.where((d) => disputeStateOf(d) == DisputeState.needsYou).length;
-    final inProgressN = items.where((d) {
-      final s = disputeStateOf(d);
-      return s == DisputeState.waiting || s == DisputeState.resourcing || s == DisputeState.exchange;
-    }).length;
-
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Container(
@@ -7071,58 +7089,21 @@ class _DisputesScreenState extends State<_DisputesScreen> {
             RenderLog.write('c170_dropdown_open_key', supplier);
             RenderLog.write('c170_scroll_locked', 'true');
           },
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-            child: Row(children: [
-              Expanded(
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(supplier,
-                      style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: _kText),
-                      maxLines: 2, overflow: TextOverflow.ellipsis),
-                  if (needsYouN > 0 || inProgressN > 0) ...[
-                    const SizedBox(height: 5),
-                    Wrap(spacing: 4, children: [
-                      if (needsYouN > 0)
-                        _stateRollupChip(
-                          '$needsYouN need${needsYouN > 1 ? "s" : ""} you',
-                          const Color(0xFFFEE2E2), const Color(0xFFC0392B)),
-                      if (inProgressN > 0)
-                        _stateRollupChip(
-                          '$inProgressN in progress',
-                          const Color(0xFFFEF3C7), const Color(0xFFB26A00)),
-                    ]),
-                  ],
-                ]),
-              ),
-              const SizedBox(width: 8),
-              Icon(Icons.keyboard_arrow_down_rounded, size: 18, color: _kSub),
-              const SizedBox(width: 12),
-              _disputeBadgeWidget(badgeCode, isActive),
-              const SizedBox(width: 8),
-              Container(
-                width: 12, height: 12,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: dotColor,
-                  border: Border.all(color: dotColor, width: 1.5),
-                ),
-              ),
-            ]),
-          ),
+          child: _buildDisputeHeader(supplier, items, isOpen: false),
         ),
       ),
     );
   }
 
-  // ── #170: Expanded supplier card (full-height, sticky header) ───────────────
+  // ── #180: Expanded supplier card (full-height, sticky header) ───────────────
   Widget _buildOpenSupplierCard(String supplier, List<Map<String, dynamic>> items) {
-    final badgeCode = _supplierBadgeCode(items);
-    final isActive = _isActiveSupplier(items);
-    final dotColor = isActive ? _kGreen : _kSub;
     final canonicalLink = _supplierLink(items);
     final hasTableFallback = items.any((d) =>
         d['wrong_product_name'] != null || d['responded_at'] != null);
     RenderLog.write('c170_table_fallback_used', '$hasTableFallback');
+
+    // GlobalKey for send-link button anchor
+    final sendKey = GlobalKey();
 
     return Container(
       decoration: BoxDecoration(
@@ -7134,7 +7115,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
             blurRadius: 6, offset: const Offset(0, 2))],
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        // ── Sticky header: back arrow + name + badge + dot ─────────────────
+        // ── Sticky header: constant-position (no back arrow) ───────────────
         InkWell(
           borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
           onTap: () {
@@ -7142,50 +7123,30 @@ class _DisputesScreenState extends State<_DisputesScreen> {
             RenderLog.write('c170_dropdown_open_key', 'null');
             RenderLog.write('c170_scroll_locked', 'false');
           },
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-            child: Row(children: [
-              const Icon(Icons.keyboard_arrow_left_rounded, size: 20, color: _kSub),
-              const SizedBox(width: 4),
-              Expanded(
-                child: Text(supplier,
-                    style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: _kGreen),
-                    maxLines: 1, overflow: TextOverflow.ellipsis),
-              ),
-              const SizedBox(width: 8),
-              const Icon(Icons.keyboard_arrow_up_rounded, size: 18, color: _kSub),
-              const SizedBox(width: 12),
-              _disputeBadgeWidget(badgeCode, isActive),
-              const SizedBox(width: 8),
-              Container(
-                width: 12, height: 12,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: dotColor,
-                  border: Border.all(color: dotColor, width: 1.5),
-                ),
-              ),
-            ]),
-          ),
+          child: _buildDisputeHeader(supplier, items, isOpen: true),
         ),
         const Divider(height: 1, color: _kBorder),
 
-        // ── Dropdown header button row: Copy link ───────────────────────────
+        // ── Send link button row ────────────────────────────────────────────
         if (canonicalLink.isNotEmpty)
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
             child: Row(children: [
               OutlinedButton.icon(
-                onPressed: () => _copyLink(canonicalLink),
+                key: sendKey,
+                onPressed: () {
+                  RenderLog.write('c180_sendlink_open', supplier);
+                  _showDisputeSendLink(context, sendKey, supplier, canonicalLink);
+                },
                 style: OutlinedButton.styleFrom(
-                  foregroundColor: const Color(0xFF7C3AED),
-                  side: const BorderSide(color: Color(0xFFDDD6FE)),
+                  foregroundColor: _kGreen,
+                  side: const BorderSide(color: Color(0xFFBBDDC8)),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 ),
-                icon: const Icon(Icons.copy_rounded, size: 14),
-                label: const Text('Copy link',
+                icon: const Icon(Icons.send_rounded, size: 14),
+                label: const Text('Send link',
                     style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
               ),
             ]),
@@ -7334,5 +7295,283 @@ class _DisputesScreenState extends State<_DisputesScreen> {
       case DisputeState.resolved:
         return const SizedBox.shrink();
     }
+  }
+}
+
+// ── #180: Dispute send-link popover ────────────────────────────────────────────
+// Local copy of inquiry contact-picker logic, adapted for dispute public link.
+class _DisputeContactPopover extends StatefulWidget {
+  final String supplierName;
+  final String link;
+  final VoidCallback onClose;
+
+  const _DisputeContactPopover({
+    required this.supplierName,
+    required this.link,
+    required this.onClose,
+  });
+
+  static OverlayEntry? _entry;
+
+  static void show({
+    required BuildContext context,
+    required GlobalKey anchorKey,
+    required String supplierName,
+    required String link,
+  }) {
+    _entry?.remove();
+    _entry = null;
+
+    final renderBox = anchorKey.currentContext?.findRenderObject() as RenderBox?;
+    if (renderBox == null) return;
+    final size = renderBox.size;
+    final offset = renderBox.localToGlobal(Offset.zero);
+    final screenH = MediaQuery.of(context).size.height;
+
+    final spaceBelow = screenH - offset.dy - size.height;
+    final openAbove = spaceBelow < 200 && offset.dy > 200;
+
+    _entry = OverlayEntry(builder: (_) => _DisputeContactPopoverBody(
+      supplierName: supplierName,
+      link: link,
+      anchorOffset: offset,
+      anchorSize: size,
+      openAbove: openAbove,
+      onClose: () {
+        _entry?.remove();
+        _entry = null;
+      },
+    ));
+    Overlay.of(context).insert(_entry!);
+  }
+
+  @override
+  State<_DisputeContactPopover> createState() => _DisputeContactPopoverState();
+}
+
+class _DisputeContactPopoverState extends State<_DisputeContactPopover> {
+  @override
+  Widget build(BuildContext context) => const SizedBox.shrink();
+}
+
+// ── Body widget (actual UI) ──────────────────────────────────────────────────
+class _DisputeContactPopoverBody extends StatefulWidget {
+  final String supplierName;
+  final String link;
+  final Offset anchorOffset;
+  final Size anchorSize;
+  final bool openAbove;
+  final VoidCallback onClose;
+
+  const _DisputeContactPopoverBody({
+    required this.supplierName,
+    required this.link,
+    required this.anchorOffset,
+    required this.anchorSize,
+    required this.openAbove,
+    required this.onClose,
+  });
+
+  @override
+  State<_DisputeContactPopoverBody> createState() => _DisputeContactPopoverBodyState();
+}
+
+class _DisputeContactPopoverBodyState extends State<_DisputeContactPopoverBody>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  late final Animation<double> _scale;
+  late final Animation<double> _fade;
+
+  bool _loading = true;
+  Map<String, dynamic> _contacts = {};
+
+  static const _kGreen  = Color(0xFF1B7A43);
+  static const _kText   = Color(0xFF111827);
+  static const _kSub    = Color(0xFF6B7280);
+  static const _kBorder = Color(0xFFE5E7EB);
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 180));
+    _scale = CurvedAnimation(parent: _ctrl, curve: Curves.easeOutBack);
+    _fade  = CurvedAnimation(parent: _ctrl, curve: Curves.easeIn);
+    _ctrl.forward();
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    try {
+      final res = await Supabase.instance.client.rpc(
+        'get_supplier_contacts',
+        params: {'p_supplier_name': widget.supplierName},
+      );
+      if (!mounted) return;
+      setState(() {
+        _contacts = Map<String, dynamic>.from(res as Map? ?? {});
+        _loading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _onTap(String value) async {
+    final intl = _DisputesScreenState._normalizeForWa(value);
+    if (intl.isEmpty) return;
+    final msg = Uri.encodeComponent(
+        'Hi, please review and respond to the dispute form: ${widget.link}');
+    // Record last-used contact
+    Supabase.instance.client.rpc(
+      'set_supplier_last_send_contact',
+      params: {
+        'p_supplier_name': widget.supplierName,
+        'p_value': value,
+      },
+    );
+    RenderLog.write('c180_sendlink_action', 'supplier=${widget.supplierName}');
+    html.window.open('https://wa.me/$intl?text=$msg', '_blank');
+    widget.onClose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final screenW = MediaQuery.of(context).size.width;
+    const popW = 260.0;
+    // Right-align to anchor right edge, but clamp to screen
+    double left = widget.anchorOffset.dx + widget.anchorSize.width - popW;
+    if (left < 8) left = 8;
+    if (left + popW > screenW - 8) left = screenW - popW - 8;
+    final top = widget.openAbove
+        ? widget.anchorOffset.dy - 8
+        : widget.anchorOffset.dy + widget.anchorSize.height + 6;
+
+    return Stack(children: [
+      // Dismiss on outside tap
+      Positioned.fill(
+        child: GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onTap: widget.onClose,
+        ),
+      ),
+      Positioned(
+        left: left,
+        top: widget.openAbove ? null : top,
+        bottom: widget.openAbove
+            ? MediaQuery.of(context).size.height - widget.anchorOffset.dy + 6
+            : null,
+        width: popW,
+        child: FadeTransition(
+          opacity: _fade,
+          child: ScaleTransition(
+            scale: _scale,
+            alignment: widget.openAbove ? Alignment.bottomRight : Alignment.topRight,
+            child: Material(
+              elevation: 8,
+              borderRadius: BorderRadius.circular(12),
+              color: Colors.white,
+              child: _loading
+                  ? const Padding(
+                      padding: EdgeInsets.all(24),
+                      child: Center(
+                        child: SizedBox(
+                          width: 20, height: 20,
+                          child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2),
+                        ),
+                      ),
+                    )
+                  : _buildList(),
+            ),
+          ),
+        ),
+      ),
+    ]);
+  }
+
+  Widget _buildList() {
+    final lastUsed = _contacts['last_used']?.toString() ?? '';
+    final wa      = (_contacts['whatsapp'] as List? ?? []).map((e) => e.toString()).toList();
+    final contact = (_contacts['contact']  as List? ?? []).map((e) => e.toString()).toList();
+    final phone   = (_contacts['phone']    as List? ?? []).map((e) => e.toString()).toList();
+    final other   = (_contacts['other']    as List? ?? []).map((e) => e.toString()).toList();
+
+    final hasAny = wa.isNotEmpty || contact.isNotEmpty || phone.isNotEmpty || other.isNotEmpty;
+    if (!hasAny) {
+      return Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          const Icon(Icons.contact_phone_outlined, color: _kSub, size: 28),
+          const SizedBox(height: 8),
+          const Text('No contacts saved for this supplier.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 13, color: _kSub)),
+        ]),
+      );
+    }
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        if (wa.isNotEmpty) ...[
+          _section('WhatsApp'),
+          for (final v in wa) _row(v, lastUsed: lastUsed),
+        ],
+        if (contact.isNotEmpty) ...[
+          _section('Contact'),
+          for (final v in contact) _row(v, lastUsed: lastUsed),
+        ],
+        if (phone.isNotEmpty) ...[
+          _section('Phone'),
+          for (final v in phone) _row(v, lastUsed: lastUsed),
+        ],
+        if (other.isNotEmpty) ...[
+          _section('Other'),
+          for (final v in other) _row(v, lastUsed: lastUsed),
+        ],
+      ]),
+    );
+  }
+
+  Widget _section(String label) => Padding(
+    padding: const EdgeInsets.fromLTRB(14, 8, 14, 2),
+    child: Text(label,
+        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
+            color: _kSub, letterSpacing: 0.4)),
+  );
+
+  Widget _row(String value, {required String lastUsed}) {
+    final isLast = value == lastUsed;
+    return InkWell(
+      onTap: () => _onTap(value),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: isLast
+            ? BoxDecoration(
+                color: const Color(0xFFE7F4EC),
+                border: Border(
+                    left: BorderSide(color: _kGreen, width: 3)),
+              )
+            : null,
+        child: Row(children: [
+          Expanded(
+            child: Text(value,
+                style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: isLast ? FontWeight.w600 : FontWeight.w400,
+                    color: isLast ? _kGreen : _kText)),
+          ),
+          const SizedBox(width: 8),
+          Icon(Icons.send_rounded, size: 14,
+              color: isLast ? _kGreen : _kSub),
+        ]),
+      ),
+    );
   }
 }

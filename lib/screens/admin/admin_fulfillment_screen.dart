@@ -447,6 +447,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c169_stage_values_intact', 'true');
     RenderLog.write('c169_tab_labels', 'Supplier Shop,Warehouse');
     RenderLog.write('c168_helper_shapes', 'collect:ordQty=ordered_qty,state=explicit,locked=collect_locked;arrivals:ordQty=ordered,state=derived,locked=received_locked');
+    RenderLog.write('c170_bugs_done', 'dispute_form_flat_list+3arg_submit+supplier_grouped_admin');
   }
 
   @override
@@ -6633,11 +6634,32 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     }
   }
 
-  void _copyLink(String token) {
-    Clipboard.setData(ClipboardData(text: 'https://medibo.in/dispute?token=$token'));
+  void _copyLink(String url) {
+    Clipboard.setData(ClipboardData(text: url));
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Link copied'), duration: Duration(seconds: 2)),
     );
+    RenderLog.write('c170_admin_link_canonical', 'copied');
+  }
+
+  List<MapEntry<String, List<Map<String, dynamic>>>> _groupBySupplier() {
+    final order = <String>[];
+    final map = <String, List<Map<String, dynamic>>>{};
+    for (final d in _disputes) {
+      final s = d['supplier']?.toString() ?? '—';
+      if (!map.containsKey(s)) { order.add(s); map[s] = []; }
+      map[s]!.add(d);
+    }
+    return order.map((s) => MapEntry(s, map[s]!)).toList();
+  }
+
+  String _supplierLink(List<Map<String, dynamic>> items) {
+    final t = items
+        .where((d) => d['status']?.toString() == 'reminder_sent' &&
+            (d['token']?.toString() ?? '').isNotEmpty)
+        .map((d) => d['token']!.toString())
+        .firstOrNull ?? '';
+    return t.isNotEmpty ? 'https://medibo.in/dispute?token=$t' : '';
   }
 
   @override
@@ -6661,56 +6683,84 @@ class _DisputesScreenState extends State<_DisputesScreen> {
         ]),
       );
     }
+    final groups = _groupBySupplier();
     return RefreshIndicator(
       onRefresh: _load,
       color: _kGreen,
-      child: ListView.separated(
+      child: ListView.builder(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
-        itemCount: _disputes.length,
-        separatorBuilder: (_, __) => const SizedBox(height: 10),
-        itemBuilder: (ctx, i) => _buildCard(_disputes[i]),
+        itemCount: groups.length,
+        itemBuilder: (ctx, i) => _buildSupplierGroup(groups[i].key, groups[i].value),
       ),
     );
   }
 
+  Widget _buildSupplierGroup(String supplier, List<Map<String, dynamic>> items) {
+    final canonicalLink = _supplierLink(items);
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Padding(
+        padding: const EdgeInsets.only(bottom: 8, top: 4),
+        child: Row(children: [
+          Expanded(
+            child: Text(supplier,
+                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _kText),
+                maxLines: 1, overflow: TextOverflow.ellipsis),
+          ),
+          if (canonicalLink.isNotEmpty) ...[
+            const SizedBox(width: 8),
+            OutlinedButton.icon(
+              onPressed: () => _copyLink(canonicalLink),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: const Color(0xFF7C3AED),
+                side: const BorderSide(color: Color(0xFFDDD6FE)),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              icon: const Icon(Icons.copy_rounded, size: 14),
+              label: const Text('Copy supplier link',
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+            ),
+          ],
+        ]),
+      ),
+      for (final d in items) ...[
+        _buildCard(d),
+        const SizedBox(height: 8),
+      ],
+      const SizedBox(height: 8),
+    ]);
+  }
+
   Widget _buildCard(Map<String, dynamic> d) {
-    final disputeId = d['dispute_id']?.toString() ?? '';
-    final product   = d['product_name']?.toString() ?? '—';
-    final supplier  = d['supplier']?.toString() ?? '—';
-    final ordered   = (d['ordered'] as num?)?.toInt() ?? 0;
-    final received  = (d['received'] as num?)?.toInt() ?? 0;
-    final short     = (d['short'] as num?)?.toInt() ?? 0;
-    final mode      = d['mode']?.toString() ?? '';
-    final status    = d['status']?.toString() ?? '';
-    final response  = d['response']?.toString();
-    final token     = d['token']?.toString() ?? '';
-    final createdAt = d['created_at']?.toString() ?? '';
+    final disputeId   = d['dispute_id']?.toString() ?? '';
+    final product     = d['product_name']?.toString() ?? '—';
+    final ordered     = (d['ordered'] as num?)?.toInt() ?? 0;
+    final received    = (d['received'] as num?)?.toInt() ?? 0;
+    final short       = (d['short'] as num?)?.toInt() ?? 0;
+    final mode        = d['mode']?.toString() ?? '';
+    final status      = d['status']?.toString() ?? '';
+    final response    = d['response']?.toString();
+    final createdAt   = d['created_at']?.toString() ?? '';
     final respondedAt = d['responded_at']?.toString();
     final isResolving = _resolving.contains(disputeId);
-    final canCopyLink = status == 'reminder_sent' && token.isNotEmpty;
 
     return Container(
       decoration: BoxDecoration(
         color: _kCard,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: _kBorder),
-        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 6, offset: const Offset(0, 2))],
+        boxShadow: [BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04), blurRadius: 6, offset: const Offset(0, 2))],
       ),
       child: Padding(
         padding: const EdgeInsets.all(14),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          // ── Row 1: product + supplier ──
           Row(children: [
             Expanded(
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(product,
-                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _kText),
-                    maxLines: 1, overflow: TextOverflow.ellipsis),
-                const SizedBox(height: 2),
-                Text(supplier,
-                    style: const TextStyle(fontSize: 12, color: _kSub),
-                    maxLines: 1, overflow: TextOverflow.ellipsis),
-              ]),
+              child: Text(product,
+                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _kText),
+                  maxLines: 1, overflow: TextOverflow.ellipsis),
             ),
             const SizedBox(width: 8),
             DisputeBadge(status: status),
@@ -6719,15 +6769,13 @@ class _DisputesScreenState extends State<_DisputesScreen> {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                 decoration: BoxDecoration(
-                  color: const Color(0xFFF3F4F6),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Text(mode, style: const TextStyle(fontSize: 10, color: _kSub, fontWeight: FontWeight.w600)),
+                    color: const Color(0xFFF3F4F6), borderRadius: BorderRadius.circular(4)),
+                child: Text(mode,
+                    style: const TextStyle(fontSize: 10, color: _kSub, fontWeight: FontWeight.w600)),
               ),
             ],
           ]),
-          const SizedBox(height: 8),
-          // ── Row 2: qty info ──
+          const SizedBox(height: 6),
           Text('Ordered $ordered · Received $received · Short $short',
               style: const TextStyle(fontSize: 12, color: _kSub)),
           if (response != null && response.isNotEmpty) ...[
@@ -6744,44 +6792,29 @@ class _DisputesScreenState extends State<_DisputesScreen> {
             Text('Raised: ${createdAt.substring(0, 10)}',
                 style: const TextStyle(fontSize: 11, color: _kSub)),
           ],
-          const SizedBox(height: 10),
-          const Divider(height: 1, color: _kBorder),
-          const SizedBox(height: 8),
-          // ── Actions ──
-          Row(children: [
-            if (canCopyLink)
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: () => _copyLink(token),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: const Color(0xFF7C3AED),
-                    side: const BorderSide(color: Color(0xFFDDD6FE)),
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                  ),
-                  icon: const Icon(Icons.copy_rounded, size: 14),
-                  label: const Text('Copy supplier link', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+          if (disputeId.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            const Divider(height: 1, color: _kBorder),
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: isResolving ? null : () => _resolve(disputeId),
+                style: FilledButton.styleFrom(
+                  backgroundColor: _kGreen,
+                  disabledBackgroundColor: _kGreen.withValues(alpha: 0.4),
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                 ),
+                icon: isResolving
+                    ? const SizedBox(width: 12, height: 12,
+                        child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                    : const Icon(Icons.check_rounded, size: 14, color: Colors.white),
+                label: const Text('Resolve',
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.white)),
               ),
-            if (canCopyLink) const SizedBox(width: 8),
-            if (disputeId.isNotEmpty)
-              Expanded(
-                child: FilledButton.icon(
-                  onPressed: isResolving ? null : () => _resolve(disputeId),
-                  style: FilledButton.styleFrom(
-                    backgroundColor: _kGreen,
-                    disabledBackgroundColor: _kGreen.withValues(alpha: 0.4),
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                  ),
-                  icon: isResolving
-                      ? const SizedBox(width: 12, height: 12,
-                          child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                      : const Icon(Icons.check_rounded, size: 14, color: Colors.white),
-                  label: const Text('Resolve', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.white)),
-                ),
-              ),
-          ]),
+            ),
+          ],
         ]),
       ),
     );

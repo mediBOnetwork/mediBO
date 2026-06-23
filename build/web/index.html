@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <meta name="build-commit" content="979306b">
+  <meta name="build-commit" content="2c5f246">
   <!-- CHANGE #58: SW killswitch — unregisters ALL service workers + clears all caches, then reloads ONCE.
        Runs before Flutter loader so even devices with stale SW get fresh bundle next load. -->
   <script>(function(){try{if('serviceWorker'in navigator){navigator.serviceWorker.getRegistrations().then(function(rs){var had=rs&&rs.length>0;return Promise.all((rs||[]).map(function(r){return r.unregister();})).then(function(){return had;});}).then(function(had){if(window.caches&&caches.keys){return caches.keys().then(function(k){return Promise.all(k.map(function(x){return caches.delete(x);}));}).then(function(){return had;});}return had;}).then(function(had){if(had&&!sessionStorage.getItem('sw_killed_58')){sessionStorage.setItem('sw_killed_58','1');location.reload();}}).catch(function(){});}}catch(e){}})();</script>

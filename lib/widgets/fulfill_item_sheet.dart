@@ -259,13 +259,18 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
       if (!mounted) return;
       final resMap = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
       if (resMap['status'] == 'ok') {
+        final rawLink = resMap['link']?.toString() ?? '';
+        final canonicalLink = rawLink.isNotEmpty
+            ? (rawLink.startsWith('http') ? rawLink : 'https://medibo.in$rawLink')
+            : '';
         final newDispute = <String, dynamic>{
-          'dispute_id':    resMap['dispute_id']?.toString() ?? '',
-          'token':         resMap['token']?.toString() ?? '',
-          'status':        'reminder_sent',
-          'order_item_id': id,
-          'product_name':  _name,
-          'short_qty':     resMap['short_qty'],
+          'dispute_id':      resMap['dispute_id']?.toString() ?? '',
+          'token':           resMap['token']?.toString() ?? '',
+          'canonical_link':  canonicalLink,
+          'status':          'reminder_sent',
+          'order_item_id':   id,
+          'product_name':    _name,
+          'short_qty':       resMap['short_qty'],
         };
         setState(() { _dispute = newDispute; _reminderSending = false; });
         widget.onDisputeCreated(id, newDispute);
@@ -294,6 +299,10 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
     final dispute     = _dispute;
     final disputeStatus = dispute?['status']?.toString() ?? '';
     final disputeToken  = dispute?['token']?.toString() ?? '';
+    final canonicalLink = dispute?['canonical_link']?.toString() ?? '';
+    final copyLink = canonicalLink.isNotEmpty
+        ? canonicalLink
+        : (disputeToken.isNotEmpty ? 'https://medibo.in/dispute?token=$disputeToken' : '');
     final oiidPresent   = (_itemId ?? '').isNotEmpty;
     final bodyRows      = _bodyRowCount(sheetState, oiidPresent, disputeToken);
 
@@ -492,7 +501,7 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
                 style: const TextStyle(fontSize: 13, color: _kPurple),
               ),
             ),
-            if (disputeToken.isNotEmpty) ...[
+            if (copyLink.isNotEmpty) ...[
               const SizedBox(height: 10),
               Row(children: [
                 Expanded(
@@ -504,7 +513,7 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
                       border: Border.all(color: _kBorder),
                     ),
                     child: Text(
-                      'https://www.medibo.in/dispute?token=$disputeToken',
+                      copyLink,
                       style: const TextStyle(fontSize: 11, color: _kSub),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
@@ -517,8 +526,7 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
                   icon: const Icon(Icons.copy_rounded, size: 16, color: _kPurple),
                   tooltip: 'Copy link',
                   onPressed: () {
-                    Clipboard.setData(ClipboardData(
-                        text: 'https://www.medibo.in/dispute?token=$disputeToken'));
+                    Clipboard.setData(ClipboardData(text: copyLink));
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(
                           content: Text('Link copied'),

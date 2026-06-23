@@ -20,6 +20,7 @@ import '../../services/voice_receive_service.dart';
 import '../../supabase_config.dart' show SupabaseConfig;
 import 'voice_receive.dart';
 import '../../widgets/pinned_footer_list.dart';
+import '../../widgets/fulfill_item_sheet.dart';
 
 // #93: JS interop — mediboCheckLoudness is defined in web/index.html
 @JS('mediboCheckLoudness')
@@ -411,6 +412,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     _loadSuppliers();
     _initVoice();
     RenderLog.write('fulfillment_pick_to_light', 'screen_mounted');
+    RenderLog.write('c162_old_popups_removed', 'true');
   }
 
   @override
@@ -4274,335 +4276,29 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     ]);
   }
 
-  // #132B: single dynamic popup — all states in one sheet.
+  // #162: delegates to FulfillItemSheet in lib/widgets/fulfill_item_sheet.dart.
+  // Desktop (≥900px) → Dialog; Mobile → ModalBottomSheet.
   void _showItemSheet(Map<String, dynamic> item) {
-    // #159: Arrivals uses _arrivalsLocked; Collect uses _boxLocked (collect_locked field)
     if (widget.arrivals ? _arrivalsLocked : _boxLocked) return;
     final idx = _items.indexOf(item);
     if (idx >= 0) _focusItem(idx);
-    final name     = item['product_name']?.toString() ?? '—';
-    final ordQty   = (item['ordered_qty'] as num?)?.toInt() ?? 0;
-    final unit     = item['pack_type']?.toString() ?? '';
-    final imageUrl = item['image_url']?.toString();
-    final itemId   = item['order_item_id']?.toString();
-    final initRec  = (item['received_qty'] as num?)?.toInt() ?? 0;
+    final itemId      = item['order_item_id']?.toString();
+    final supplier    = _selectedSupplier ?? '';
+    final dispute     = itemId != null ? _disputeMap[itemId] : null;
 
-    // Sheet-local mutable state: [showStepper, shortDraft, reminderSending]
-    final sheetState = <dynamic>[false, initRec.clamp(1, ordQty.clamp(1, ordQty)), false];
-    RenderLog.write('c135_single_popup_mobile', 'true');
-    RenderLog.write('c135_single_popup_desktop', 'true');
-
-    showResponsiveSheet(
+    showFulfillItemSheet(
       context: context,
-      borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-      builder: (_) => StatefulBuilder(
-        builder: (ctx, setS) {
-          final curState = (idx >= 0 && idx < _items.length)
-              ? _items[idx]['fulfillment_state']?.toString() ?? 'pending'
-              : item['fulfillment_state']?.toString() ?? 'pending';
-          final curRec = (idx >= 0 && idx < _items.length)
-              ? ((_items[idx]['received_qty'] as num?)?.toInt() ?? initRec)
-              : initRec;
-          final showStepper = sheetState[0] as bool;
-          final shortDraft  = sheetState[1] as int;
-          final reminderSending = sheetState[2] as bool;
-          // Read dispute live so reminder-send flips to SENT immediately
-          final liveDispute = itemId != null ? _disputeMap[itemId] : null;
-          final isPending   = curState == 'pending';
-          final isReceived  = curState == 'received';
-          final isShort     = curState == 'short';
-          final isWrong     = curState == 'wrong';
-          final isNotComing = curState == 'not_coming';
-          final hasDispute  = liveDispute != null;
-          final disputeStatus = liveDispute?['status']?.toString() ?? '';
-          final disputeToken  = liveDispute?['token']?.toString() ?? '';
-
-          return Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
-            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-              // ── Header: image + name + ordered qty ──────────────────────────
-              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                _FulfilImageTile(imageUrl, size: 48),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text(name,
-                        style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: _kText),
-                        maxLines: 2, overflow: TextOverflow.ellipsis),
-                    const SizedBox(height: 2),
-                    Text('Ordered: $ordQty${unit.isNotEmpty ? ' $unit' : ''}',
-                        style: const TextStyle(fontSize: 12, color: _kSub)),
-                  ]),
-                ),
-                const SizedBox(width: 8),
-                _StatePill(curState),
-              ]),
-              const SizedBox(height: 16),
-              const Divider(height: 1, color: _kBorder),
-              const SizedBox(height: 16),
-
-              // ── Body: state-adaptive ─────────────────────────────────────────
-
-              // STATE: has open dispute → read-only dispute view
-              if (hasDispute) ...[
-                Row(children: [
-                  DisputeBadge(status: disputeStatus),
-                  const SizedBox(width: 8),
-                  Text('$curRec / $ordQty received',
-                      style: const TextStyle(fontSize: 13, color: _kSub)),
-                ]),
-                const SizedBox(height: 10),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFF5F3FF),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: const Color(0xFFDDD6FE)),
-                  ),
-                  child: Text(
-                    disputeStatus == 'reminder_sent'
-                        ? 'Reminder sent to supplier — awaiting reply'
-                        : disputeStatus == 'accepted_missing'
-                            ? 'Supplier accepted — awaiting missing stock'
-                            : disputeStatus == 'denied'
-                                ? 'Supplier denied — re-sourcing + flagged disputed'
-                                : 'Dispute: $disputeStatus',
-                    style: const TextStyle(fontSize: 13, color: Color(0xFF5B21B6)),
-                  ),
-                ),
-                // Supplier link copy block
-                if (disputeToken.isNotEmpty) ...[
-                  const SizedBox(height: 10),
-                  Row(children: [
-                    Expanded(
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFF9FAFB),
-                          borderRadius: BorderRadius.circular(6),
-                          border: Border.all(color: _kBorder),
-                        ),
-                        child: Text(
-                          '${Uri.base.origin}/dispute?token=$disputeToken',
-                          style: const TextStyle(fontSize: 11, color: _kSub),
-                          maxLines: 1, overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    IconButton(
-                      visualDensity: VisualDensity.compact,
-                      icon: const Icon(Icons.copy_rounded, size: 16, color: Color(0xFF7C3AED)),
-                      tooltip: 'Copy link',
-                      onPressed: () {
-                        Clipboard.setData(ClipboardData(
-                            text: '${Uri.base.origin}/dispute?token=$disputeToken'));
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Link copied'),
-                              duration: Duration(seconds: 2)));
-                      },
-                    ),
-                  ]),
-                ],
-                const SizedBox(height: 10),
-                // "View dispute" — switches to Disputes tab
-                GestureDetector(
-                  onTap: () {
-                    Navigator.of(context).pop();
-                    context.findAncestorStateOfType<_AdminFulfillmentScreenState>()?._openDisputesTab();
-                  },
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFEDE9FE),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: const Row(mainAxisSize: MainAxisSize.min, children: [
-                      Icon(Icons.open_in_new_rounded, size: 14, color: Color(0xFF7C3AED)),
-                      SizedBox(width: 6),
-                      Text('View dispute', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF7C3AED))),
-                    ]),
-                  ),
-                ),
-                // "Mark received" only for accepted_missing
-                if (disputeStatus == 'accepted_missing') ...[
-                  const SizedBox(height: 10),
-                  SizedBox(
-                    width: double.infinity,
-                    child: _ActionBtn('Mark received (stock arrived)', _kGreen, Icons.check_rounded,
-                        _recording ? null : () async {
-                          await _record('received', qty: ordQty);
-                          RenderLog.write('82_sheet_commit', '$name:received_after_dispute');
-                          if (mounted) Navigator.of(context).pop();
-                        }),
-                  ),
-                ],
-              ]
-
-              // STATE: pending — 4 action buttons + optional stepper
-              else if (isPending) ...[
-                Row(children: [
-                  Expanded(child: _ActionBtn(
-                    'Got all ($ordQty)', _kGreen, Icons.check_rounded,
-                    _recording ? null : () async {
-                      await _record('received', qty: ordQty);
-                      RenderLog.write('82_sheet_commit', '$name:received');
-                      if (mounted) Navigator.of(context).pop();
-                    },
-                  )),
-                  const SizedBox(width: 8),
-                  Expanded(child: _ActionBtn(
-                    'Short', _kShortFg, Icons.content_cut_rounded,
-                    () => setS(() {
-                      sheetState[0] = !showStepper;
-                      if (!showStepper) sheetState[1] = (ordQty - 1).clamp(1, ordQty);
-                    }),
-                  )),
-                ]),
-                const SizedBox(height: 8),
-                Row(children: [
-                  Expanded(child: _ActionBtn('Wrong item', _kWrongFg, Icons.close_rounded,
-                      _recording ? null : () async {
-                        await _record('wrong');
-                        RenderLog.write('82_sheet_commit', '$name:wrong');
-                        if (mounted) Navigator.of(context).pop();
-                      })),
-                  const SizedBox(width: 8),
-                  Expanded(child: _ActionBtn('Not coming', _kNotComingFg, Icons.block_outlined,
-                      _recording ? null : () async {
-                        await _record('not_coming');
-                        RenderLog.write('82_sheet_commit', '$name:not_coming');
-                        if (mounted) Navigator.of(context).pop();
-                      })),
-                ]),
-                if (showStepper) ...[
-                  const SizedBox(height: 12),
-                  _buildStepperBlock(setS, sheetState, shortDraft, ordQty, name),
-                ],
-              ]
-
-              // STATE: short (no dispute) — stepper + reset + reminder
-              else if (isShort) ...[
-                Text('Short: $curRec / $ordQty',
-                    style: const TextStyle(fontSize: 13, color: _kSub)),
-                const SizedBox(height: 12),
-                _buildStepperBlock(setS, sheetState, curRec, ordQty, name),
-                const SizedBox(height: 12),
-                // R2: missing-item reminder
-                if (itemId != null) ...[
-                  const Divider(height: 1, color: _kBorder),
-                  const SizedBox(height: 12),
-                  SizedBox(
-                    width: double.infinity,
-                    child: FilledButton.icon(
-                      onPressed: reminderSending ? null : () async {
-                        setS(() => sheetState[2] = true);
-                        try {
-                          final res = await Supabase.instance.client
-                              .rpc('fw_send_missing_reminder',
-                                   params: {'p_order_item_id': itemId}) as Map;
-                          if (res['status'] == 'ok') {
-                            final newDispute = <String, dynamic>{
-                              'dispute_id':    res['dispute_id']?.toString() ?? '',
-                              'token':         res['token']?.toString() ?? '',
-                              'status':        'reminder_sent',
-                              'order_item_id': itemId,
-                              'product_name':  name,
-                            };
-                            setState(() { _disputeMap[itemId] = newDispute; });
-                            RenderLog.write('c135_reminder_btn', 'true');
-                          }
-                        } catch (_) {}
-                        if (mounted) setS(() => sheetState[2] = false);
-                      },
-                      style: FilledButton.styleFrom(
-                        backgroundColor: const Color(0xFF7C3AED),
-                        disabledBackgroundColor: const Color(0xFFDDD6FE),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                      ),
-                      icon: reminderSending
-                          ? const SizedBox(width: 14, height: 14,
-                              child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                          : const Icon(Icons.notifications_active_rounded, size: 16, color: Colors.white),
-                      label: Text(
-                        reminderSending ? 'Sending…' : 'Send missing-item reminder to supplier',
-                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.white),
-                      ),
-                    ),
-                  ),
-                ],
-                const SizedBox(height: 6),
-                TextButton.icon(
-                  onPressed: _recording ? null : () async {
-                    await _record('pending');
-                    if (mounted) Navigator.of(context).pop();
-                  },
-                  icon: const Icon(Icons.undo_rounded, size: 15),
-                  label: const Text('Reset to pending'),
-                  style: TextButton.styleFrom(foregroundColor: _kSub),
-                ),
-              ]
-
-              // STATE: received
-              else if (isReceived) ...[
-                Text('Received $curRec / $ordQty',
-                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: _kReceivedFg)),
-                const SizedBox(height: 12),
-                TextButton.icon(
-                  onPressed: _recording ? null : () async {
-                    await _record('pending');
-                    if (mounted) Navigator.of(context).pop();
-                  },
-                  icon: const Icon(Icons.undo_rounded, size: 15),
-                  label: const Text('Reset to pending'),
-                  style: TextButton.styleFrom(foregroundColor: _kSub),
-                ),
-              ]
-
-              // STATE: wrong / not_coming
-              else ...[
-                TextButton.icon(
-                  onPressed: _recording ? null : () async {
-                    await _record('pending');
-                    if (mounted) Navigator.of(context).pop();
-                  },
-                  icon: const Icon(Icons.undo_rounded, size: 15),
-                  label: const Text('Reset to pending'),
-                  style: TextButton.styleFrom(foregroundColor: _kSub),
-                ),
-              ],
-
-            ]),
-          );
-        },
-      ),
-    );
-  }
-
-  Widget _buildStepperBlock(StateSetter setS, List<dynamic> sheetState,
-      int currentVal, int ordQty, String name) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: _kBg, borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: _kBorder),
-      ),
-      child: Column(children: [
-        const Text('How many received?',
-            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: _kText)),
-        const SizedBox(height: 12),
-        _QtyStepper(
-          value: sheetState[1] as int,
-          max: ordQty,
-          onChanged: (v) {
-            setS(() { sheetState[1] = v; });
-            _record('short', qty: v).then((_) {
-              RenderLog.write('82_sheet_commit', '$name:short:$v');
-            });
-          },
-        ),
-      ]),
+      item: item,
+      supplierName: supplier,
+      recording: _recording,
+      existingDispute: dispute,
+      onRecord: (state, {qty}) => _record(state, qty: qty),
+      onDisputeCreated: (id, d) {
+        if (mounted) setState(() => _disputeMap[id] = d);
+      },
+      onViewDispute: () {
+        context.findAncestorStateOfType<_AdminFulfillmentScreenState>()?._openDisputesTab();
+      },
     );
   }
 }

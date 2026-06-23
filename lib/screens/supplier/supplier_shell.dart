@@ -7,6 +7,7 @@ import 'supplier_home_screen.dart';
 import 'supplier_inquiry_screen.dart';
 import 'supplier_orders_screen.dart';
 import 'supplier_add_medicine_screen.dart';
+import 'supplier_disputes_screen.dart';
 
 class SupplierShell extends StatefulWidget {
   // When set, the shell runs in View-As preview mode using admin preview RPCs.
@@ -34,10 +35,11 @@ class _SupplierShellState extends State<SupplierShell> {
   final GlobalKey<SupplierInquiryScreenState> _inquiryKey = GlobalKey();
 
   final List<_NavItem> _navItems = const [
-    _NavItem(icon: Icons.store_outlined,       label: 'Home'),
-    _NavItem(icon: Icons.add_circle_outline,   label: 'Add Medicine'),
+    _NavItem(icon: Icons.store_outlined,           label: 'Home'),
+    _NavItem(icon: Icons.add_circle_outline,       label: 'Add Medicine'),
     _NavItem(icon: Icons.question_answer_outlined, label: 'Inquiry'),
-    _NavItem(icon: Icons.receipt_long_outlined, label: 'Orders'),
+    _NavItem(icon: Icons.receipt_long_outlined,    label: 'Orders'),
+    _NavItem(icon: Icons.flag_outlined,            label: 'Reminders'),
   ];
 
   @override
@@ -79,6 +81,7 @@ class _SupplierShellState extends State<SupplierShell> {
         onPendingCount: _onPendingCount,
       ),
       SupplierOrdersScreen(viewAsSupplierId: viewAsSupplierId),
+      SupplierDisputesScreen(viewAsSupplierId: viewAsSupplierId),
     ];
 
     final showBanner = _pendingInquiryCount > 0 && !_bannerDismissed && _index != 2;

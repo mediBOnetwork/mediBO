@@ -3411,20 +3411,22 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                 final packType = item['pack_type']?.toString() ?? '';
                 final imageUrl = item['image_url']?.toString();
                 final isLast = i == _items.length - 1;
+                // R3: desktop dispute badge
+                final deskItemId = item['order_item_id']?.toString();
+                final deskDispute = deskItemId != null ? _disputeMap[deskItemId] : null;
 
                 return InkWell(
                   onTap: () => _showItemSheet(item),
                   hoverColor: _kGreen.withValues(alpha: 0.04),
                   child: Container(
-                    height: 56,
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                     decoration: BoxDecoration(
                       border: isLast ? null : const Border(
                         bottom: BorderSide(color: _kBorder, width: 0.8),
                       ),
                     ),
                     child: Row(children: [
-                      // col1: thumbnail + name
+                      // col1: thumbnail + name + dispute badge
                       Expanded(flex: 6, child: Row(children: [
                         _FulfilImageTile(imageUrl, size: 36),
                         const SizedBox(width: 10),
@@ -3436,6 +3438,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                               Text(name,
                                   style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _kText),
                                   maxLines: 1, overflow: TextOverflow.ellipsis),
+                              if (deskDispute != null) ...[
+                                const SizedBox(height: 2),
+                                DisputeBadge(status: deskDispute['status']?.toString() ?? ''),
+                              ],
                             ],
                           ),
                         ),
@@ -4183,11 +4189,12 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     final unit     = item['pack_type']?.toString() ?? '';
     final imageUrl = item['image_url']?.toString();
     final itemId   = item['order_item_id']?.toString();
-    final openDispute = itemId != null ? _disputeMap[itemId] : null;
     final initRec  = (item['received_qty'] as num?)?.toInt() ?? 0;
 
-    // Sheet-local mutable state: [showStepper (bool), shortDraft (int)]
-    final sheetState = <dynamic>[false, initRec.clamp(1, ordQty.clamp(1, ordQty))];
+    // Sheet-local mutable state: [showStepper, shortDraft, reminderSending]
+    final sheetState = <dynamic>[false, initRec.clamp(1, ordQty.clamp(1, ordQty)), false];
+    RenderLog.write('c135_single_popup_mobile', 'true');
+    RenderLog.write('c135_single_popup_desktop', 'true');
 
     showResponsiveSheet(
       context: context,
@@ -4202,13 +4209,17 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
               : initRec;
           final showStepper = sheetState[0] as bool;
           final shortDraft  = sheetState[1] as int;
+          final reminderSending = sheetState[2] as bool;
+          // Read dispute live so reminder-send flips to SENT immediately
+          final liveDispute = itemId != null ? _disputeMap[itemId] : null;
           final isPending   = curState == 'pending';
           final isReceived  = curState == 'received';
           final isShort     = curState == 'short';
           final isWrong     = curState == 'wrong';
           final isNotComing = curState == 'not_coming';
-          final hasDispute  = openDispute != null;
-          final disputeStatus = openDispute?['status']?.toString() ?? '';
+          final hasDispute  = liveDispute != null;
+          final disputeStatus = liveDispute?['status']?.toString() ?? '';
+          final disputeToken  = liveDispute?['token']?.toString() ?? '';
 
           return Padding(
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
@@ -4263,6 +4274,40 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                     style: const TextStyle(fontSize: 13, color: Color(0xFF5B21B6)),
                   ),
                 ),
+                // Supplier link copy block
+                if (disputeToken.isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  Row(children: [
+                    Expanded(
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF9FAFB),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: _kBorder),
+                        ),
+                        child: Text(
+                          '${Uri.base.origin}/dispute?token=$disputeToken',
+                          style: const TextStyle(fontSize: 11, color: _kSub),
+                          maxLines: 1, overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    IconButton(
+                      visualDensity: VisualDensity.compact,
+                      icon: const Icon(Icons.copy_rounded, size: 16, color: Color(0xFF7C3AED)),
+                      tooltip: 'Copy link',
+                      onPressed: () {
+                        Clipboard.setData(ClipboardData(
+                            text: '${Uri.base.origin}/dispute?token=$disputeToken'));
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Link copied'),
+                              duration: Duration(seconds: 2)));
+                      },
+                    ),
+                  ]),
+                ],
                 const SizedBox(height: 10),
                 // "View dispute" — switches to Disputes tab
                 GestureDetector(
@@ -4340,13 +4385,58 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                 ],
               ]
 
-              // STATE: short (no dispute) — stepper pre-filled + reset
+              // STATE: short (no dispute) — stepper + reset + reminder
               else if (isShort) ...[
                 Text('Short: $curRec / $ordQty',
                     style: const TextStyle(fontSize: 13, color: _kSub)),
                 const SizedBox(height: 12),
                 _buildStepperBlock(setS, sheetState, curRec, ordQty, name),
-                const SizedBox(height: 10),
+                const SizedBox(height: 12),
+                // R2: missing-item reminder
+                if (itemId != null) ...[
+                  const Divider(height: 1, color: _kBorder),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed: reminderSending ? null : () async {
+                        setS(() => sheetState[2] = true);
+                        try {
+                          final res = await Supabase.instance.client
+                              .rpc('fw_send_missing_reminder',
+                                   params: {'p_order_item_id': itemId}) as Map;
+                          if (res['status'] == 'ok') {
+                            final newDispute = <String, dynamic>{
+                              'dispute_id':    res['dispute_id']?.toString() ?? '',
+                              'token':         res['token']?.toString() ?? '',
+                              'status':        'reminder_sent',
+                              'order_item_id': itemId,
+                              'product_name':  name,
+                            };
+                            setState(() { _disputeMap[itemId] = newDispute; });
+                            RenderLog.write('c135_reminder_btn', 'true');
+                          }
+                        } catch (_) {}
+                        if (mounted) setS(() => sheetState[2] = false);
+                      },
+                      style: FilledButton.styleFrom(
+                        backgroundColor: const Color(0xFF7C3AED),
+                        disabledBackgroundColor: const Color(0xFFDDD6FE),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                      ),
+                      icon: reminderSending
+                          ? const SizedBox(width: 14, height: 14,
+                              child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                          : const Icon(Icons.notifications_active_rounded, size: 16, color: Colors.white),
+                      label: Text(
+                        reminderSending ? 'Sending…' : 'Send missing-item reminder to supplier',
+                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.white),
+                      ),
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 6),
                 TextButton.icon(
                   onPressed: _recording ? null : () async {
                     await _record('pending');
@@ -6612,6 +6702,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
       }).length;
       widget.onCountChanged(openCount);
       RenderLog.write('c132c_open_count', '$openCount');
+      RenderLog.write('c135_open_dispute_badges', '$openCount');
       setState(() { _disputes = raw; _loading = false; });
     } catch (e) {
       if (!mounted) return;

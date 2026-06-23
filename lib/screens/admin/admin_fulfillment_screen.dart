@@ -2608,6 +2608,14 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // ── #142: Supplier list + accordion ─────────────────────────────────────────
 
   Widget _buildCollectList(bool isAdmin) {
+    // #183: instrument shared-reveal reuse for both Collect and Arrivals
+    if (widget.arrivals) {
+      RenderLog.write('c183_arrivals_anim',
+          'change:183,uses_shared_reveal:true,duration_ms:280,curve:easeInOutCubic,chevron_animated:true');
+    } else {
+      RenderLog.write('c183_collect_anim',
+          'change:183,uses_shared_reveal:true,duration_ms:280,curve:easeInOutCubic,chevron_animated:true');
+    }
     RenderLog.write('c142_supplier_list',
         'dropdown_removed=y;count=${_suppliers.length}');
 
@@ -6185,6 +6193,16 @@ class _BagLabelsInlineState extends State<_BagLabelsInline> {
 }
 
 
+// ── #183: Top-level shared reveal — same primitive as _DisputesScreenState._smoothReveal ──
+// Used by _SupplierAccordionShell (Collect + Arrivals) AND DisputesScreen.
+// Duration/Curve must never be edited without updating ALL three call-sites.
+Widget _sharedSmoothReveal(bool expanded, Widget child) => AnimatedSize(
+  duration: const Duration(milliseconds: 280),
+  curve: Curves.easeInOutCubic,
+  clipBehavior: Clip.antiAlias,
+  child: expanded ? child : const SizedBox.shrink(),
+);
+
 // ── #153: SHARED ACCORDION SHELL — used by Collect AND Arrivals ───────────────
 // Both tabs instantiate this widget; only expandedContent differs.
 
@@ -6255,11 +6273,12 @@ class _SupplierAccordionShell extends StatelessWidget {
                       maxLines: 2, overflow: TextOverflow.ellipsis),
                 ),
                 const SizedBox(width: 8),
-                Icon(
-                  isExpanded
-                      ? Icons.keyboard_arrow_up_rounded
-                      : Icons.keyboard_arrow_down_rounded,
-                  size: 18, color: _kSub,
+                // #183: AnimatedRotation — same turns/duration/curve as Disputes chevron
+                AnimatedRotation(
+                  turns: isExpanded ? 0.5 : 0.0,
+                  duration: const Duration(milliseconds: 280),
+                  curve: Curves.easeInOutCubic,
+                  child: const Icon(Icons.keyboard_arrow_down_rounded, size: 18, color: _kSub),
                 ),
                 const SizedBox(width: 12),
                 // Constant-width badge slot (38px) — flush right next to dot.
@@ -6276,13 +6295,8 @@ class _SupplierAccordionShell extends StatelessWidget {
               ]),
             ),
           ),
-          // AnimatedSize — #153 shared; same 280ms/easeInOutCubic/antiAlias as Collect.
-          AnimatedSize(
-            duration: const Duration(milliseconds: 280),
-            curve: Curves.easeInOutCubic,
-            clipBehavior: Clip.antiAlias,
-            child: isExpanded ? expandedContent : const SizedBox.shrink(),
-          ),
+          // #183: uses top-level _sharedSmoothReveal — one code path for Collect, Arrivals, Disputes.
+          _sharedSmoothReveal(isExpanded, expandedContent),
         ]),
       ),
     );
@@ -7130,13 +7144,8 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     });
   }
 
-  // ── #182: Shared smooth reveal — AnimatedSize 280ms easeInOutCubic ──────────
-  Widget _smoothReveal(bool expanded, Widget child) => AnimatedSize(
-    duration: const Duration(milliseconds: 280),
-    curve: Curves.easeInOutCubic,
-    clipBehavior: Clip.antiAlias,
-    child: expanded ? child : const SizedBox.shrink(),
-  );
+  // ── #182/#183: Delegates to top-level _sharedSmoothReveal so all four surfaces share one path ──
+  Widget _smoothReveal(bool expanded, Widget child) => _sharedSmoothReveal(expanded, child);
 
   // ── #181/#182: Unfillable re-source dead-end banner — uses _smoothReveal ────
   Widget _buildUnfillableBanner() {

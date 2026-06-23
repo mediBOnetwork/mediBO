@@ -3400,6 +3400,14 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   // ── Wide layout (>= 900px) — #88: single bar + popup bubble ────────────────
   Widget _buildCollectWide(bool isAdmin) {
+    // #183: instrument shared-reveal reuse (desktop path)
+    if (widget.arrivals) {
+      RenderLog.write('c183_arrivals_anim',
+          'change:183,uses_shared_reveal:true,duration_ms:280,curve:easeInOutCubic,chevron_animated:true');
+    } else {
+      RenderLog.write('c183_collect_anim',
+          'change:183,uses_shared_reveal:true,duration_ms:280,curve:easeInOutCubic,chevron_animated:true');
+    }
     RenderLog.write('change_100_banner_removed', '1');
     RenderLog.write('change_90_layout', 'wide');
     RenderLog.write('change_89_layout', 'wide');

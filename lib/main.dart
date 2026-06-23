@@ -17,6 +17,7 @@ import 'models/cart_model.dart';
 import 'screens/auth/login_screen.dart';
 import 'screens/home_shell.dart';
 import 'screens/public/inquiry_form_screen.dart';
+import 'screens/public/dispute_form_screen.dart';
 import 'screens/about_screen.dart';
 import 'screens/contact_screen.dart';
 import 'screens/legal_pages.dart';
@@ -284,6 +285,7 @@ class _PharmaB2BAppState extends State<PharmaB2BApp> {
             ),
             home: _AppRoot(auth: _auth),
             // Public inquiry form — no auth required, handles /inquiry/<token>
+            // Public dispute form  — no auth required, handles /dispute?token=<token>
             onGenerateRoute: (settings) {
               final name = settings.name ?? '';
               if (name.startsWith('/inquiry/')) {
@@ -292,6 +294,16 @@ class _PharmaB2BAppState extends State<PharmaB2BApp> {
                   return MaterialPageRoute(
                     settings: settings,
                     builder: (_) => InquiryFormScreen(token: token),
+                  );
+                }
+              }
+              if (name.startsWith('/dispute')) {
+                final uri = Uri.tryParse(name) ?? Uri();
+                final token = uri.queryParameters['token'] ?? '';
+                if (token.isNotEmpty) {
+                  return MaterialPageRoute(
+                    settings: settings,
+                    builder: (_) => DisputeFormScreen(token: token),
                   );
                 }
               }

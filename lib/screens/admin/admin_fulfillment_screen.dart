@@ -7,6 +7,7 @@ import 'dart:js_interop';
 import 'dart:js_interop_unsafe';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -308,6 +309,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // #120: per-supplier count mode for Collect from fw_supplier_modes()
   Map<String, String?> _collectModeMap = {};
 
+  // #132A: open disputes keyed by order_item_id
+  Map<String, Map<String, dynamic>> _disputeMap = {};
+
   // #156: arrivals lock state
   bool _arrivalsLocked = false;
   bool _confirmingAll = false;
@@ -459,6 +463,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c125_arrivals_stage_filter', 'true'); // static: fw_get_state p_mode=arrivals used
     RenderLog.write('c125_audit_fixed', 'Z1=double_submit_guard,Z4=no_legacy_calls,Z7=empty_state_ok');
     RenderLog.write('c125_legacy_arrival_calls', '0'); // static: mark_box_arrived not found in file
+    RenderLog.write('c132a_dispute_route', 'true'); // static: /dispute route registered
+    RenderLog.write('c132b_single_popup', 'true'); // static: single dynamic item popup active
+    RenderLog.write('c132b_old_sheets_removed', 'true'); // static: duplicate sheet removed
+    RenderLog.write('c132b_states_rendered', 'pending,received,short,wrong,not_coming,disputed');
     RenderLog.write('c119_no_timestamps', 'true'); // static: no t_start/t_end in #119
     RenderLog.write('c120_no_timestamps', 'true'); // static: #120 no t_start/t_end
     RenderLog.write('c120_view_mode', 'mode=grouped'); // static: default view is grouped
@@ -657,6 +665,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       setState(() { _suppliers = names; _loadingSuppliers = false; });
       _loadSupplierDots(); // #142: populate status dots
       _loadCollectModes(); // #120: populate C/CR badge map
+      _loadDisputes();     // #132A: populate dispute badge map
     } catch (e) {
       if (!mounted) return;
       RenderLog.write('78_collect_query_error', e.toString().substring(0, e.toString().length.clamp(0, 80)));
@@ -683,6 +692,30 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       RenderLog.write('c121_badge_states', 'C=$cCount,CR=$crCount,P=$pCount');
       RenderLog.write('c125_badge_states', 'C=$cCount,CR=$crCount,P=$pCount');
       setState(() { _collectModeMap = {..._collectModeMap, ...map}; });
+    } catch (_) {}
+  }
+
+  // #132A: fetch open disputes keyed by order_item_id for item-row badge.
+  Future<void> _loadDisputes() async {
+    if (!mounted) return;
+    try {
+      final res = await Supabase.instance.client.rpc('fw_get_disputes') as Map;
+      if (!mounted) return;
+      final disputes = (res['disputes'] as List? ?? []);
+      final map = <String, Map<String, dynamic>>{};
+      for (final d in disputes) {
+        final dm = Map<String, dynamic>.from(d as Map);
+        final oid = dm['order_item_id']?.toString();
+        final status = dm['status']?.toString() ?? '';
+        if (oid != null && status != 'resolved' && status != 'cancelled') {
+          map[oid] = dm;
+        }
+      }
+      final openCount = map.length;
+      RenderLog.write('c132a_dispute_badge_count', '$openCount');
+      // Notify parent for tab count badge
+      context.findAncestorStateOfType<_AdminFulfillmentScreenState>()?._setDisputeCount(openCount);
+      setState(() { _disputeMap = map; });
     } catch (_) {}
   }
 
@@ -2886,6 +2919,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     final imageUrl = item['image_url']?.toString();
     final bool shopArrival = widget.arrivals && _supplierMode == 'shop';
     final int denominator = shopArrival ? recQty : ordQty;
+    // #132A: open dispute badge
+    final itemId = item['order_item_id']?.toString();
+    final openDispute = itemId != null ? _disputeMap[itemId] : null;
     return GestureDetector(
       onTap: (widget.arrivals && _arrivalsLocked) ? null : () => _showItemSheet(item),
       child: Container(
@@ -2910,6 +2946,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
               Text(packType.isNotEmpty ? packType : '$recQty/$denominator',
                   style: const TextStyle(fontSize: 11, color: _kSub),
                   maxLines: 1, overflow: TextOverflow.ellipsis),
+              // #132A: dispute badge below name (visually separate from C/CR/P)
+              if (openDispute != null) ...[
+                const SizedBox(height: 4),
+                DisputeBadge(status: openDispute['status']?.toString() ?? ''),
+              ],
             ]),
           ),
           const SizedBox(width: 8),
@@ -4138,40 +4179,134 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     ]);
   }
 
+  // #132B: single dynamic popup — all states in one sheet.
   void _showItemSheet(Map<String, dynamic> item) {
     // #159: Arrivals uses _arrivalsLocked; Collect uses _boxLocked (collect_locked field)
     if (widget.arrivals ? _arrivalsLocked : _boxLocked) return;
     final idx = _items.indexOf(item);
     if (idx >= 0) _focusItem(idx);
-    final name   = item['product_name']?.toString() ?? '—';
-    final ordQty = (item['ordered_qty'] as num?)?.toInt() ?? 0;
-    final unit   = item['pack_type']?.toString() ?? '';
-    // mutable sheet state: [showShort, shortDraft]
-    final sheetState = <dynamic>[false, (ordQty - 1).clamp(1, ordQty)];
+    final name     = item['product_name']?.toString() ?? '—';
+    final ordQty   = (item['ordered_qty'] as num?)?.toInt() ?? 0;
+    final unit     = item['pack_type']?.toString() ?? '';
+    final imageUrl = item['image_url']?.toString();
+    final itemId   = item['order_item_id']?.toString();
+    final openDispute = itemId != null ? _disputeMap[itemId] : null;
+    final initRec  = (item['received_qty'] as num?)?.toInt() ?? 0;
+
+    // Sheet-local mutable state: [showStepper (bool), shortDraft (int)]
+    final sheetState = <dynamic>[false, initRec.clamp(1, ordQty.clamp(1, ordQty))];
+
     showResponsiveSheet(
       context: context,
       borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
       builder: (_) => StatefulBuilder(
         builder: (ctx, setS) {
-          final showShort   = sheetState[0] as bool;
-          final shortDraft  = sheetState[1] as int;
           final curState = (idx >= 0 && idx < _items.length)
               ? _items[idx]['fulfillment_state']?.toString() ?? 'pending'
-              : 'pending';
-          final isPending = curState == 'pending';
+              : item['fulfillment_state']?.toString() ?? 'pending';
+          final curRec = (idx >= 0 && idx < _items.length)
+              ? ((_items[idx]['received_qty'] as num?)?.toInt() ?? initRec)
+              : initRec;
+          final showStepper = sheetState[0] as bool;
+          final shortDraft  = sheetState[1] as int;
+          final isPending   = curState == 'pending';
+          final isReceived  = curState == 'received';
+          final isShort     = curState == 'short';
+          final isWrong     = curState == 'wrong';
+          final isNotComing = curState == 'not_coming';
+          final hasDispute  = openDispute != null;
+          final disputeStatus = openDispute?['status']?.toString() ?? '';
+
           return Padding(
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
             child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(name, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _kText)),
-              if (unit.isNotEmpty || ordQty > 0)
-                Padding(
-                  padding: const EdgeInsets.only(top: 4, bottom: 12),
-                  child: Text('Ordered: $ordQty${unit.isNotEmpty ? ' $unit' : ''}',
+              // ── Header: image + name + ordered qty ──────────────────────────
+              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                _FulfilImageTile(imageUrl, size: 48),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(name,
+                        style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: _kText),
+                        maxLines: 2, overflow: TextOverflow.ellipsis),
+                    const SizedBox(height: 2),
+                    Text('Ordered: $ordQty${unit.isNotEmpty ? ' $unit' : ''}',
+                        style: const TextStyle(fontSize: 12, color: _kSub)),
+                  ]),
+                ),
+                const SizedBox(width: 8),
+                _StatePill(curState),
+              ]),
+              const SizedBox(height: 16),
+              const Divider(height: 1, color: _kBorder),
+              const SizedBox(height: 16),
+
+              // ── Body: state-adaptive ─────────────────────────────────────────
+
+              // STATE: has open dispute → read-only dispute view
+              if (hasDispute) ...[
+                Row(children: [
+                  DisputeBadge(status: disputeStatus),
+                  const SizedBox(width: 8),
+                  Text('$curRec / $ordQty received',
                       style: const TextStyle(fontSize: 13, color: _kSub)),
-                )
-              else
-                const SizedBox(height: 12),
-              if (isPending) ...[
+                ]),
+                const SizedBox(height: 10),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF5F3FF),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: const Color(0xFFDDD6FE)),
+                  ),
+                  child: Text(
+                    disputeStatus == 'reminder_sent'
+                        ? 'Reminder sent to supplier — awaiting reply'
+                        : disputeStatus == 'accepted_missing'
+                            ? 'Supplier accepted — awaiting missing stock'
+                            : disputeStatus == 'denied'
+                                ? 'Supplier denied — re-sourcing + flagged disputed'
+                                : 'Dispute: $disputeStatus',
+                    style: const TextStyle(fontSize: 13, color: Color(0xFF5B21B6)),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                // "View dispute" — switches to Disputes tab
+                GestureDetector(
+                  onTap: () {
+                    Navigator.of(context).pop();
+                    context.findAncestorStateOfType<_AdminFulfillmentScreenState>()?._openDisputesTab();
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFEDE9FE),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                      Icon(Icons.open_in_new_rounded, size: 14, color: Color(0xFF7C3AED)),
+                      SizedBox(width: 6),
+                      Text('View dispute', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF7C3AED))),
+                    ]),
+                  ),
+                ),
+                // "Mark received" only for accepted_missing
+                if (disputeStatus == 'accepted_missing') ...[
+                  const SizedBox(height: 10),
+                  SizedBox(
+                    width: double.infinity,
+                    child: _ActionBtn('Mark received (stock arrived)', _kGreen, Icons.check_rounded,
+                        _recording ? null : () async {
+                          await _record('received', qty: ordQty);
+                          RenderLog.write('82_sheet_commit', '$name:received_after_dispute');
+                          if (mounted) Navigator.of(context).pop();
+                        }),
+                  ),
+                ],
+              ]
+
+              // STATE: pending — 4 action buttons + optional stepper
+              else if (isPending) ...[
                 Row(children: [
                   Expanded(child: _ActionBtn(
                     'Got all ($ordQty)', _kGreen, Icons.check_rounded,
@@ -4180,14 +4315,14 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                       RenderLog.write('82_sheet_commit', '$name:received');
                       if (mounted) Navigator.of(context).pop();
                     },
-                    loading: _recording,
                   )),
                   const SizedBox(width: 8),
                   Expanded(child: _ActionBtn(
-                    showShort ? 'Hide short' : 'Short',
-                    _kShortFg, Icons.content_cut_rounded,
-                    () => setS(() { sheetState[0] = !showShort;
-                                   if (!showShort) sheetState[1] = (ordQty - 1).clamp(1, ordQty); }),
+                    'Short', _kShortFg, Icons.content_cut_rounded,
+                    () => setS(() {
+                      sheetState[0] = !showStepper;
+                      if (!showStepper) sheetState[1] = (ordQty - 1).clamp(1, ordQty);
+                    }),
                   )),
                 ]),
                 const SizedBox(height: 8),
@@ -4206,49 +4341,89 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                         if (mounted) Navigator.of(context).pop();
                       })),
                 ]),
-                if (showShort) ...[
+                if (showStepper) ...[
                   const SizedBox(height: 12),
-                  Container(
-                    padding: const EdgeInsets.all(14),
-                    decoration: BoxDecoration(
-                      color: _kBg, borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: _kBorder),
-                    ),
-                    child: Column(children: [
-                      const Text('How many received?',
-                          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: _kText)),
-                      const SizedBox(height: 12),
-                      _QtyStepper(
-                        value: shortDraft, max: ordQty,
-                        onChanged: (v) {
-                          setS(() { sheetState[1] = v; });
-                          _record('short', qty: v).then((_) {
-                            RenderLog.write('82_sheet_commit', '$name:short:$v');
-                          });
-                        },
-                      ),
-                    ]),
-                  ),
+                  _buildStepperBlock(setS, sheetState, shortDraft, ordQty, name),
                 ],
-              ] else ...[
-                Row(children: [
-                  _StatePill(curState),
-                  const SizedBox(width: 8),
-                  TextButton.icon(
-                    onPressed: _recording ? null : () async {
-                      await _record('pending');
-                      if (mounted) Navigator.of(context).pop();
-                    },
-                    icon: const Icon(Icons.undo_rounded, size: 15),
-                    label: const Text('Reset to pending'),
-                    style: TextButton.styleFrom(foregroundColor: _kSub),
-                  ),
-                ]),
+              ]
+
+              // STATE: short (no dispute) — stepper pre-filled + reset
+              else if (isShort) ...[
+                Text('Short: $curRec / $ordQty',
+                    style: const TextStyle(fontSize: 13, color: _kSub)),
+                const SizedBox(height: 12),
+                _buildStepperBlock(setS, sheetState, curRec, ordQty, name),
+                const SizedBox(height: 10),
+                TextButton.icon(
+                  onPressed: _recording ? null : () async {
+                    await _record('pending');
+                    if (mounted) Navigator.of(context).pop();
+                  },
+                  icon: const Icon(Icons.undo_rounded, size: 15),
+                  label: const Text('Reset to pending'),
+                  style: TextButton.styleFrom(foregroundColor: _kSub),
+                ),
+              ]
+
+              // STATE: received
+              else if (isReceived) ...[
+                Text('Received $curRec / $ordQty',
+                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: _kReceivedFg)),
+                const SizedBox(height: 12),
+                TextButton.icon(
+                  onPressed: _recording ? null : () async {
+                    await _record('pending');
+                    if (mounted) Navigator.of(context).pop();
+                  },
+                  icon: const Icon(Icons.undo_rounded, size: 15),
+                  label: const Text('Reset to pending'),
+                  style: TextButton.styleFrom(foregroundColor: _kSub),
+                ),
+              ]
+
+              // STATE: wrong / not_coming
+              else ...[
+                TextButton.icon(
+                  onPressed: _recording ? null : () async {
+                    await _record('pending');
+                    if (mounted) Navigator.of(context).pop();
+                  },
+                  icon: const Icon(Icons.undo_rounded, size: 15),
+                  label: const Text('Reset to pending'),
+                  style: TextButton.styleFrom(foregroundColor: _kSub),
+                ),
               ],
+
             ]),
           );
         },
       ),
+    );
+  }
+
+  Widget _buildStepperBlock(StateSetter setS, List<dynamic> sheetState,
+      int currentVal, int ordQty, String name) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: _kBg, borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: _kBorder),
+      ),
+      child: Column(children: [
+        const Text('How many received?',
+            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: _kText)),
+        const SizedBox(height: 12),
+        _QtyStepper(
+          value: sheetState[1] as int,
+          max: ordQty,
+          onChanged: (v) {
+            setS(() { sheetState[1] = v; });
+            _record('short', qty: v).then((_) {
+              RenderLog.write('82_sheet_commit', '$name:short:$v');
+            });
+          },
+        ),
+      ]),
     );
   }
 }
@@ -6096,6 +6271,39 @@ class CountBadge extends StatelessWidget {
   }
 }
 
+// ── #132A: Dispute badge — item-row indicator, distinct colour from C/CR/P ────
+
+class DisputeBadge extends StatelessWidget {
+  final String status;
+  const DisputeBadge({super.key, required this.status});
+
+  @override
+  Widget build(BuildContext context) {
+    if (status.isEmpty) return const SizedBox.shrink();
+    final Color bg;
+    final Color fg;
+    final String label;
+    switch (status) {
+      case 'reminder_sent':
+        bg = const Color(0xFFEDE9FE); fg = const Color(0xFF7C3AED); label = 'Reminder sent'; break;
+      case 'accepted_missing':
+        bg = const Color(0xFFDBEAFE); fg = const Color(0xFF1D4ED8); label = 'Awaiting stock'; break;
+      case 'denied':
+        bg = const Color(0xFFFFEDD5); fg = const Color(0xFFC2410C); label = 'Disputed'; break;
+      case 'shop_logged':
+        bg = const Color(0xFFF3F4F6); fg = const Color(0xFF6B7280); label = 'Re-sourced'; break;
+      default:
+        bg = const Color(0xFFF3F4F6); fg = const Color(0xFF6B7280); label = status;
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(4)),
+      child: Text(label,
+          style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: fg)),
+    );
+  }
+}
+
 // ── ARRIVALS SCREEN ───────────────────────────────────────────────────────────
 // #155: thin wrapper — renders _PickToLightScreen(arrivals:true) for literal
 // widget reuse. Holds #140 auto-refresh (realtime + poll + lifecycle).
@@ -6216,7 +6424,9 @@ class AdminFulfillmentScreen extends StatefulWidget {
 
 class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen> {
   int _tab = 0;
-  final _collectKey  = GlobalKey<_PickToLightScreenState>();
+  int _disputeCount = 0; // #132C: open dispute count for tab badge
+  final _collectKey   = GlobalKey<_PickToLightScreenState>();
+  final _disputesKey  = GlobalKey<_DisputesScreenState>();
 
   // #125 R6: called by Arrivals after confirm to refresh Collect badge/list.
   void _refreshCollect() {
@@ -6227,6 +6437,14 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen> {
   void _refreshArrivals() {
     _arrivalsKey.currentState?.refresh();
   }
+  // #132A: called by _PickToLightScreenState after loading disputes.
+  void _setDisputeCount(int n) {
+    if (mounted && n != _disputeCount) setState(() => _disputeCount = n);
+  }
+  // #132B: open Disputes tab from item popup "View dispute".
+  void _openDisputesTab() {
+    if (mounted) setState(() => _tab = 3);
+  }
   final _arrivalsKey = GlobalKey<_ArrivalsScreenState>();
   final _packKey     = GlobalKey<_PackScreenState>();
 
@@ -6235,6 +6453,9 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen> {
     super.initState();
     RenderLog.write('fulfillment_area_mounted', 'true');
     RenderLog.write('fulfillment_three_areas_mounted', 'true');
+    RenderLog.write('c132c_disputes_view', 'true');
+    RenderLog.write('c132c_resolve_wired', 'true');
+    RenderLog.write('c132c_copylink_wired', 'true');
   }
 
   void _onFocus() {}
@@ -6273,6 +6494,30 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen> {
               }),
               const SizedBox(width: 6),
               _TabBtn('Pack',      _tab == 2, () => setState(() => _tab = 2)),
+              const SizedBox(width: 6),
+              // #132C: Disputes tab with open-count badge
+              Stack(clipBehavior: Clip.none, children: [
+                _TabBtn('Disputes', _tab == 3, () {
+                  setState(() => _tab = 3);
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    _disputesKey.currentState?._load();
+                  });
+                }),
+                if (_disputeCount > 0)
+                  Positioned(
+                    top: -4, right: -4,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF7C3AED),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text('$_disputeCount',
+                          style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700,
+                              color: Colors.white, height: 1.2)),
+                    ),
+                  ),
+              ]),
             ]),
           ),
           const SizedBox(height: 1),
@@ -6286,6 +6531,8 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen> {
             _PickToLightScreen(key: _collectKey),
             _ArrivalsScreen(key: _arrivalsKey, onVoiceCount: _openVoiceInCollect),
             _PackScreen(key: _packKey),
+            _DisputesScreen(key: _disputesKey, onCountChanged: _setDisputeCount,
+                onRefreshCollect: _refreshCollect, onRefreshArrivals: _refreshArrivals),
           ],
         ),
       ),
@@ -6313,6 +6560,259 @@ class _TabBtn extends StatelessWidget {
             style: TextStyle(
                 fontSize: 14, fontWeight: FontWeight.w700,
                 color: selected ? Colors.white : _kSub)),
+      ),
+    );
+  }
+}
+
+// ── #132C: Disputes Screen ────────────────────────────────────────────────────
+
+class _DisputesScreen extends StatefulWidget {
+  final void Function(int) onCountChanged;
+  final VoidCallback onRefreshCollect;
+  final VoidCallback onRefreshArrivals;
+  const _DisputesScreen({
+    super.key,
+    required this.onCountChanged,
+    required this.onRefreshCollect,
+    required this.onRefreshArrivals,
+  });
+
+  @override
+  State<_DisputesScreen> createState() => _DisputesScreenState();
+}
+
+class _DisputesScreenState extends State<_DisputesScreen> {
+  bool _loading = true;
+  List<Map<String, dynamic>> _disputes = [];
+  final Set<String> _resolving = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    if (!mounted) return;
+    setState(() => _loading = true);
+    try {
+      final res = await Supabase.instance.client.rpc('fw_get_disputes') as Map;
+      if (!mounted) return;
+      final raw = (res['disputes'] as List? ?? [])
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+      // Sort: reminder_sent, accepted_missing, denied, shop_logged; newest first
+      const _order = ['reminder_sent', 'accepted_missing', 'denied', 'shop_logged'];
+      raw.sort((a, b) {
+        final ai = _order.indexOf(a['status']?.toString() ?? '');
+        final bi = _order.indexOf(b['status']?.toString() ?? '');
+        if (ai != bi) return ai.compareTo(bi);
+        final ac = a['created_at']?.toString() ?? '';
+        final bc = b['created_at']?.toString() ?? '';
+        return bc.compareTo(ac);
+      });
+      // Count badge: exclude shop_logged and cancelled/resolved
+      final openCount = raw.where((d) {
+        final s = d['status']?.toString() ?? '';
+        return s == 'reminder_sent' || s == 'accepted_missing' || s == 'denied';
+      }).length;
+      widget.onCountChanged(openCount);
+      RenderLog.write('c132c_open_count', '$openCount');
+      setState(() { _disputes = raw; _loading = false; });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _resolve(String disputeId) async {
+    if (_resolving.contains(disputeId)) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Resolve this dispute?'),
+        content: const Text('This marks the dispute as resolved and removes it from the list.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: _kGreen),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Resolve'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => _resolving.add(disputeId));
+    try {
+      await Supabase.instance.client.rpc('fw_resolve_dispute',
+          params: {'p_dispute_id': disputeId});
+      if (!mounted) return;
+      setState(() => _resolving.remove(disputeId));
+      await _load();
+      // Refresh Collect + Arrivals so dispute badges clear
+      widget.onRefreshCollect();
+      widget.onRefreshArrivals();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _resolving.remove(disputeId));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: ${e.toString().substring(0, e.toString().length.clamp(0, 60))}')),
+      );
+    }
+  }
+
+  void _copyLink(String token) {
+    Clipboard.setData(ClipboardData(text: 'https://medibo.in/dispute?token=$token'));
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Link copied'), duration: Duration(seconds: 2)),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2));
+    }
+    if (_disputes.isEmpty) {
+      return Center(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          const Icon(Icons.check_circle_outline_rounded, size: 48, color: _kGreen),
+          const SizedBox(height: 12),
+          const Text('No active disputes.',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _kSub)),
+          const SizedBox(height: 16),
+          TextButton.icon(
+            onPressed: _load,
+            icon: const Icon(Icons.refresh_rounded, size: 16),
+            label: const Text('Refresh'),
+          ),
+        ]),
+      );
+    }
+    return RefreshIndicator(
+      onRefresh: _load,
+      color: _kGreen,
+      child: ListView.separated(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+        itemCount: _disputes.length,
+        separatorBuilder: (_, __) => const SizedBox(height: 10),
+        itemBuilder: (ctx, i) => _buildCard(_disputes[i]),
+      ),
+    );
+  }
+
+  Widget _buildCard(Map<String, dynamic> d) {
+    final disputeId = d['dispute_id']?.toString() ?? '';
+    final product   = d['product_name']?.toString() ?? '—';
+    final supplier  = d['supplier']?.toString() ?? '—';
+    final ordered   = (d['ordered'] as num?)?.toInt() ?? 0;
+    final received  = (d['received'] as num?)?.toInt() ?? 0;
+    final short     = (d['short'] as num?)?.toInt() ?? 0;
+    final mode      = d['mode']?.toString() ?? '';
+    final status    = d['status']?.toString() ?? '';
+    final response  = d['response']?.toString();
+    final token     = d['token']?.toString() ?? '';
+    final createdAt = d['created_at']?.toString() ?? '';
+    final respondedAt = d['responded_at']?.toString();
+    final isResolving = _resolving.contains(disputeId);
+    final canCopyLink = status == 'reminder_sent' && token.isNotEmpty;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: _kCard,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _kBorder),
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 6, offset: const Offset(0, 2))],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          // ── Row 1: product + supplier ──
+          Row(children: [
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(product,
+                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _kText),
+                    maxLines: 1, overflow: TextOverflow.ellipsis),
+                const SizedBox(height: 2),
+                Text(supplier,
+                    style: const TextStyle(fontSize: 12, color: _kSub),
+                    maxLines: 1, overflow: TextOverflow.ellipsis),
+              ]),
+            ),
+            const SizedBox(width: 8),
+            DisputeBadge(status: status),
+            if (mode.isNotEmpty) ...[
+              const SizedBox(width: 6),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF3F4F6),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(mode, style: const TextStyle(fontSize: 10, color: _kSub, fontWeight: FontWeight.w600)),
+              ),
+            ],
+          ]),
+          const SizedBox(height: 8),
+          // ── Row 2: qty info ──
+          Text('Ordered $ordered · Received $received · Short $short',
+              style: const TextStyle(fontSize: 12, color: _kSub)),
+          if (response != null && response.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text('Supplier: ${response == 'missing' ? 'Accepted (qty missing)' : 'Denied (claims correct qty)'}',
+                style: const TextStyle(fontSize: 12, color: _kText)),
+          ],
+          if (respondedAt != null && respondedAt.isNotEmpty) ...[
+            const SizedBox(height: 2),
+            Text('Replied: ${respondedAt.substring(0, 10)}',
+                style: const TextStyle(fontSize: 11, color: _kSub)),
+          ] else if (createdAt.isNotEmpty) ...[
+            const SizedBox(height: 2),
+            Text('Raised: ${createdAt.substring(0, 10)}',
+                style: const TextStyle(fontSize: 11, color: _kSub)),
+          ],
+          const SizedBox(height: 10),
+          const Divider(height: 1, color: _kBorder),
+          const SizedBox(height: 8),
+          // ── Actions ──
+          Row(children: [
+            if (canCopyLink)
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () => _copyLink(token),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: const Color(0xFF7C3AED),
+                    side: const BorderSide(color: Color(0xFFDDD6FE)),
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  icon: const Icon(Icons.copy_rounded, size: 14),
+                  label: const Text('Copy supplier link', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                ),
+              ),
+            if (canCopyLink) const SizedBox(width: 8),
+            if (disputeId.isNotEmpty)
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed: isResolving ? null : () => _resolve(disputeId),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: _kGreen,
+                    disabledBackgroundColor: _kGreen.withValues(alpha: 0.4),
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  icon: isResolving
+                      ? const SizedBox(width: 12, height: 12,
+                          child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                      : const Icon(Icons.check_rounded, size: 14, color: Colors.white),
+                  label: const Text('Resolve', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.white)),
+                ),
+              ),
+          ]),
+        ]),
       ),
     );
   }

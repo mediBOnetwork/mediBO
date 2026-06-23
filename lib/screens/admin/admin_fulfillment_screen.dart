@@ -6720,6 +6720,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
   List<Map<String, dynamic>> _unfillable = [];
   final Set<String> _showResolved = {};
   final Map<String, GlobalKey> _sendLinkKeys = {};
+  bool _unfillableExpanded = false;
 
   @override
   void initState() {
@@ -6791,6 +6792,8 @@ class _DisputesScreenState extends State<_DisputesScreen> {
         'resolve_outcomes:[resolved,agree_supplier,re_source],'
         'supplier_can_respond_shop_logged:true');
       RenderLog.write('c181_unfillable', '${unfillable.length}');
+      RenderLog.write('c182_supplier_anim',
+          'change:182,uses_shared_reveal:true,duration_ms:280,curve:easeInOutCubic,chevron_animated:true');
       setState(() { _disputes = raw; _unfillable = unfillable; _loading = false; });
     } catch (e) {
       if (!mounted) return;
@@ -6940,9 +6943,13 @@ class _DisputesScreenState extends State<_DisputesScreen> {
               overflow: TextOverflow.ellipsis),
         ),
         const SizedBox(width: 8),
-        Icon(
-          isOpen ? Icons.keyboard_arrow_up_rounded : Icons.keyboard_arrow_down_rounded,
-          size: 18, color: _kSub),
+        // #182: animated chevron — rotates 180° in sync with body reveal
+        AnimatedRotation(
+          turns: isOpen ? 0.5 : 0.0,
+          duration: const Duration(milliseconds: 280),
+          curve: Curves.easeInOutCubic,
+          child: const Icon(Icons.keyboard_arrow_down_rounded, size: 18, color: _kSub),
+        ),
         const SizedBox(width: 12),
         // B5: fixed-width slot so header width is constant open vs closed
         SizedBox(
@@ -7091,31 +7098,14 @@ class _DisputesScreenState extends State<_DisputesScreen> {
       );
     }
 
+    // #182: always render full ListView — animated in-place expand/collapse
+    RenderLog.write('c170_item_count_open',
+        _openSupplierKey != null
+            ? '${groups.firstWhere((g) => g.key == _openSupplierKey, orElse: () => MapEntry('', [])).value.length}'
+            : '0');
+
     return LayoutBuilder(builder: (_, constraints) {
       final maxW = constraints.maxWidth >= 900 ? 700.0 : double.infinity;
-
-      // ── Open state: full-height single supplier card ────────────────────
-      if (_openSupplierKey != null) {
-        final idx = groups.indexWhere((g) => g.key == _openSupplierKey);
-        final items = idx >= 0 ? groups[idx].value : <Map<String, dynamic>>[];
-        RenderLog.write('c170_item_count_open', '${items.length}');
-        return Align(
-          alignment: Alignment.topCenter,
-          child: ConstrainedBox(
-            constraints: BoxConstraints(maxWidth: maxW),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-              child: SizedBox(
-                height: constraints.maxHeight - 12,
-                child: _buildOpenSupplierCard(_openSupplierKey!, items),
-              ),
-            ),
-          ),
-        );
-      }
-
-      // ── Collapsed state: scrollable list of supplier cards ──────────────
-      RenderLog.write('c170_item_count_open', '0');
       return Align(
         alignment: Alignment.topCenter,
         child: ConstrainedBox(
@@ -7131,7 +7121,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
                   return _buildUnfillableBanner();
                 }
                 final idx = _unfillable.isNotEmpty ? i - 1 : i;
-                return _buildDisputeSupplierRow(groups[idx].key, groups[idx].value);
+                return _buildDisputeSupplierCard(groups[idx].key, groups[idx].value);
               },
             ),
           ),
@@ -7140,7 +7130,15 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     });
   }
 
-  // ── #181: Unfillable re-source dead-end banner ────────────────────────────────
+  // ── #182: Shared smooth reveal — AnimatedSize 280ms easeInOutCubic ──────────
+  Widget _smoothReveal(bool expanded, Widget child) => AnimatedSize(
+    duration: const Duration(milliseconds: 280),
+    curve: Curves.easeInOutCubic,
+    clipBehavior: Clip.antiAlias,
+    child: expanded ? child : const SizedBox.shrink(),
+  );
+
+  // ── #181/#182: Unfillable re-source dead-end banner — uses _smoothReveal ────
   Widget _buildUnfillableBanner() {
     final n = _unfillable.length;
     return Padding(
@@ -7151,37 +7149,70 @@ class _DisputesScreenState extends State<_DisputesScreen> {
           borderRadius: BorderRadius.circular(12),
           border: Border.all(color: const Color(0xFFFCA5A5)),
         ),
-        child: Theme(
-          data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-          child: ExpansionTile(
-            leading: const Icon(Icons.warning_amber_rounded, color: Color(0xFFDC2626), size: 20),
-            title: Text(
-              '$n item${n == 1 ? '' : 's'} couldn\'t be re-sourced — no supplier available',
-              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
-                  color: Color(0xFFDC2626)),
-            ),
-            children: [
-              for (final item in _unfillable)
-                ListTile(
-                  dense: true,
-                  title: Text(
-                    item['product_name']?.toString() ?? '—',
-                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: _kText),
-                  ),
-                  subtitle: Text(
-                    'Qty: ${item['qty'] ?? '?'} · Bag ${item['bag_no'] ?? '?'} · ${item['pharmacy_name'] ?? '?'}',
-                    style: const TextStyle(fontSize: 12, color: _kSub),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          // ── Header ─────────────────────────────────────────────────────
+          InkWell(
+            borderRadius: _unfillableExpanded
+                ? const BorderRadius.vertical(top: Radius.circular(12))
+                : BorderRadius.circular(12),
+            onTap: () => setState(() => _unfillableExpanded = !_unfillableExpanded),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: Row(children: [
+                const Icon(Icons.warning_amber_rounded, color: Color(0xFFDC2626), size: 20),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    '$n item${n == 1 ? '' : 's'} couldn\'t be re-sourced — no supplier available',
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
+                        color: Color(0xFFDC2626)),
                   ),
                 ),
-            ],
+                const SizedBox(width: 8),
+                AnimatedRotation(
+                  turns: _unfillableExpanded ? 0.5 : 0.0,
+                  duration: const Duration(milliseconds: 280),
+                  curve: Curves.easeInOutCubic,
+                  child: const Icon(Icons.keyboard_arrow_down_rounded,
+                      size: 18, color: Color(0xFFDC2626)),
+                ),
+              ]),
+            ),
           ),
-        ),
+          // ── Animated body ───────────────────────────────────────────────
+          _smoothReveal(
+            _unfillableExpanded,
+            Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              const Divider(height: 1, color: Color(0xFFFCA5A5)),
+              for (final item in _unfillable)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(
+                      item['product_name']?.toString() ?? '—',
+                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: _kText),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'Qty: ${item['qty'] ?? '?'} · Bag ${item['bag_no'] ?? '?'} · ${item['pharmacy_name'] ?? '?'}',
+                      style: const TextStyle(fontSize: 12, color: _kSub),
+                    ),
+                  ]),
+                ),
+              const SizedBox(height: 4),
+            ]),
+          ),
+        ]),
       ),
     );
   }
 
-  // ── #180: Collapsed supplier card (accordion row) ───────────────────────────
-  Widget _buildDisputeSupplierRow(String supplier, List<Map<String, dynamic>> items) {
+  // ── #182: Unified supplier card — header always visible, body via _smoothReveal ─
+  Widget _buildDisputeSupplierCard(String supplier, List<Map<String, dynamic>> items) {
+    final isOpen = _openSupplierKey == supplier;
+    final canonicalLink = _supplierLink(items);
+    final sendKey = _sendLinkKeys.putIfAbsent(supplier, () => GlobalKey());
+
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Container(
@@ -7193,112 +7224,89 @@ class _DisputesScreenState extends State<_DisputesScreen> {
               color: Colors.black.withValues(alpha: 0.04),
               blurRadius: 6, offset: const Offset(0, 2))],
         ),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(12),
-          onTap: () {
-            setState(() => _openSupplierKey = supplier);
-            RenderLog.write('c170_dropdown_open_key', supplier);
-            RenderLog.write('c170_scroll_locked', 'true');
-          },
-          child: _buildDisputeHeader(supplier, items, isOpen: false),
-        ),
-      ),
-    );
-  }
-
-  // ── #180: Expanded supplier card (full-height, sticky header) ───────────────
-  Widget _buildOpenSupplierCard(String supplier, List<Map<String, dynamic>> items) {
-    final canonicalLink = _supplierLink(items);
-    final hasTableFallback = items.any((d) =>
-        d['wrong_product_name'] != null || d['responded_at'] != null);
-    RenderLog.write('c170_table_fallback_used', '$hasTableFallback');
-
-    // B4: stable key — must survive setState; fetched from state field map
-    final sendKey = _sendLinkKeys.putIfAbsent(supplier, () => GlobalKey());
-
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: _kBorder),
-        boxShadow: [BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 6, offset: const Offset(0, 2))],
-      ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        // ── Sticky header: constant-position (no back arrow) ───────────────
-        InkWell(
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
-          onTap: () {
-            setState(() => _openSupplierKey = null);
-            RenderLog.write('c170_dropdown_open_key', 'null');
-            RenderLog.write('c170_scroll_locked', 'false');
-          },
-          child: _buildDisputeHeader(supplier, items, isOpen: true),
-        ),
-        const Divider(height: 1, color: _kBorder),
-
-        // ── Send link button row ────────────────────────────────────────────
-        if (canonicalLink.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-            child: Row(children: [
-              OutlinedButton.icon(
-                key: sendKey,
-                onPressed: () {
-                  RenderLog.write('c180_sendlink_open', supplier);
-                  _showDisputeSendLink(context, sendKey, supplier, canonicalLink);
-                },
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: _kGreen,
-                  side: const BorderSide(color: Color(0xFFBBDDC8)),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                ),
-                icon: const Icon(Icons.send_rounded, size: 14),
-                label: const Text('Send link',
-                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-              ),
-            ]),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          // ── Header — always rendered, pixel-identical open/closed (#181 B4/B5) ─
+          InkWell(
+            borderRadius: isOpen
+                ? const BorderRadius.vertical(top: Radius.circular(12))
+                : BorderRadius.circular(12),
+            onTap: () {
+              setState(() => _openSupplierKey = isOpen ? null : supplier);
+              RenderLog.write('c170_dropdown_open_key', isOpen ? 'null' : supplier);
+            },
+            child: _buildDisputeHeader(supplier, items, isOpen: isOpen),
           ),
+          // ── Animated body via shared _smoothReveal ──────────────────────────
+          _smoothReveal(
+            isOpen,
+            Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              const Divider(height: 1, color: _kBorder),
 
-        // ── Item list with resolved-collapse toggle (B13) ───────────────────
-        Expanded(
-          child: Builder(builder: (ctx) {
-            final showRes = _showResolved.contains(supplier);
-            final openItems = items.where((d) => disputeStateOf(d) != DisputeState.resolved).toList();
-            final resolvedItems = items.where((d) => disputeStateOf(d) == DisputeState.resolved).toList();
-            final visibleItems = showRes ? items : openItems;
-            return ListView(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-              children: [
-                for (int i = 0; i < visibleItems.length; i++) ...[
-                  _buildDisputeItemCard(visibleItems[i]),
-                  if (i < visibleItems.length - 1) const SizedBox(height: 8),
-                ],
-                if (resolvedItems.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  Center(
-                    child: TextButton(
-                      onPressed: () => setState(() {
-                        if (showRes) _showResolved.remove(supplier);
-                        else _showResolved.add(supplier);
-                      }),
-                      child: Text(
-                        showRes
-                            ? 'Hide resolved (${resolvedItems.length})'
-                            : 'Show resolved (${resolvedItems.length})',
-                        style: const TextStyle(fontSize: 12, color: _kSub),
+              // Send link button row
+              if (canonicalLink.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                  child: Row(children: [
+                    OutlinedButton.icon(
+                      key: sendKey,
+                      onPressed: () {
+                        RenderLog.write('c180_sendlink_open', supplier);
+                        _showDisputeSendLink(context, sendKey, supplier, canonicalLink);
+                      },
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: _kGreen,
+                        side: const BorderSide(color: Color(0xFFBBDDC8)),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      icon: const Icon(Icons.send_rounded, size: 14),
+                      label: const Text('Send link',
+                          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                    ),
+                  ]),
+                ),
+
+              // Item list with resolved-collapse toggle (#181 B13)
+              Builder(builder: (ctx) {
+                final showRes = _showResolved.contains(supplier);
+                final openItems = items.where((d) => disputeStateOf(d) != DisputeState.resolved).toList();
+                final resolvedItems = items.where((d) => disputeStateOf(d) == DisputeState.resolved).toList();
+                final visibleItems = showRes ? items : openItems;
+                return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                    child: Column(children: [
+                      for (int i = 0; i < visibleItems.length; i++) ...[
+                        _buildDisputeItemCard(visibleItems[i]),
+                        if (i < visibleItems.length - 1) const SizedBox(height: 8),
+                      ],
+                    ]),
+                  ),
+                  if (resolvedItems.isNotEmpty)
+                    Center(
+                      child: Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: TextButton(
+                          onPressed: () => setState(() {
+                            if (showRes) _showResolved.remove(supplier);
+                            else _showResolved.add(supplier);
+                          }),
+                          child: Text(
+                            showRes
+                                ? 'Hide resolved (${resolvedItems.length})'
+                                : 'Show resolved (${resolvedItems.length})',
+                            style: const TextStyle(fontSize: 12, color: _kSub),
+                          ),
+                        ),
                       ),
                     ),
-                  ),
-                ],
-              ],
-            );
-          }),
-        ),
-      ]),
+                ]);
+              }),
+            ]),
+          ),
+        ]),
+      ),
     );
   }
 

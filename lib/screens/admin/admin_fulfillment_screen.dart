@@ -13,6 +13,8 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'dart:convert';
 import '../../utils/render_log.dart';
+import '../../widgets/dispute_state.dart';
+import '../../widgets/dispute_card.dart';
 import '../../utils/responsive.dart';
 import '../../utils/tts.dart';
 import '../../user_state.dart';
@@ -6691,6 +6693,8 @@ class _TabBtn extends StatelessWidget {
 
 // ── #132C: Disputes Screen ────────────────────────────────────────────────────
 
+enum _DisputeFilter { needsYou, inProgress, done }
+
 class _DisputesScreen extends StatefulWidget {
   final void Function(int) onCountChanged;
   final VoidCallback onRefreshCollect;
@@ -6710,6 +6714,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
   bool _loading = true;
   List<Map<String, dynamic>> _disputes = [];
   final Set<String> _resolving = {};
+  _DisputeFilter _filter = _DisputeFilter.needsYou;
 
   @override
   void initState() {
@@ -6726,137 +6731,64 @@ class _DisputesScreenState extends State<_DisputesScreen> {
       final raw = (res['disputes'] as List? ?? [])
           .map((e) => Map<String, dynamic>.from(e as Map))
           .toList();
-      // Sort: reminder_sent, accepted_missing, denied, shop_logged; newest first
-      const _order = ['reminder_sent', 'accepted_missing', 'denied', 'shop_logged'];
+      // Sort: needsYou first, then waiting, resourcing, exchange; newest first within group
       raw.sort((a, b) {
-        final ai = _order.indexOf(a['status']?.toString() ?? '');
-        final bi = _order.indexOf(b['status']?.toString() ?? '');
+        int stateOrder(_DisputeFilter? _) {
+          final s = disputeStateOf(a);
+          switch (s) {
+            case DisputeState.needsYou: return 0;
+            case DisputeState.waiting: return 1;
+            case DisputeState.resourcing: return 2;
+            case DisputeState.exchange: return 3;
+            case DisputeState.resolved: return 4;
+          }
+        }
+        int stateOrderB(_) {
+          final s = disputeStateOf(b);
+          switch (s) {
+            case DisputeState.needsYou: return 0;
+            case DisputeState.waiting: return 1;
+            case DisputeState.resourcing: return 2;
+            case DisputeState.exchange: return 3;
+            case DisputeState.resolved: return 4;
+          }
+        }
+        final ai = stateOrder(null);
+        final bi = stateOrderB(null);
         if (ai != bi) return ai.compareTo(bi);
         final ac = a['created_at']?.toString() ?? '';
         final bc = b['created_at']?.toString() ?? '';
         return bc.compareTo(ac);
       });
-      // C174/B3: match fw_get_disputes — open = not resolved and not cancelled (shop_logged counts)
       bool isOpen(String s) => s != 'resolved' && s != 'cancelled';
       final openCount = raw.where((d) => isOpen(d['status']?.toString() ?? '')).length;
+      final needsYouCount = raw.where((d) => disputeStateOf(d) == DisputeState.needsYou).length;
+      final inProgressCount = raw.where((d) {
+        final s = disputeStateOf(d);
+        return s == DisputeState.waiting || s == DisputeState.resourcing || s == DisputeState.exchange;
+      }).length;
       widget.onCountChanged(openCount);
       RenderLog.write('c132c_open_count', '$openCount');
       RenderLog.write('c135_open_dispute_badges', '$openCount');
       RenderLog.write('c177_audit_found', 'count=3;ids=F4-double-call,F13-state-label,F4b-missing-p_note;fixed=true');
-      setState(() { _disputes = raw; _loading = false; });
+      RenderLog.write('c178_filter', 'needs_you=$needsYouCount;in_progress=$inProgressCount');
+      setState(() {
+        _disputes = raw;
+        _loading = false;
+        // Default: Needs you if count>0, else In progress
+        if (_filter == _DisputeFilter.needsYou && needsYouCount == 0 && inProgressCount > 0) {
+          _filter = _DisputeFilter.inProgress;
+        }
+      });
     } catch (e) {
       if (!mounted) return;
       setState(() => _loading = false);
     }
   }
 
-  // C176/B1: maps dispute → human status line
-  ({String text, Color bg, Color fg}) _statusLine(Map<String, dynamic> d) {
-    final kind           = d['kind']?.toString() ?? 'short';
-    final status         = d['status']?.toString() ?? '';
-    final response       = d['response']?.toString() ?? '';
-    final rebuyStarted   = d['rebuy_started'] as bool? ?? false;
-    final resOutcome     = d['resolution_outcome']?.toString() ?? '';
-
-    if (status == 'resolved') {
-      final label = resOutcome == 'agree_supplier' ? 'Resolved — agreed with supplier'
-          : resOutcome == 're_source' ? 'Resolved — re-sourced'
-          : 'Resolved';
-      return (text: label, bg: const Color(0xFFEFF6FF), fg: const Color(0xFF1E40AF));
-    }
-
-    if (kind == 'wrong_item') {
-      switch (status) {
-        case 'reminder_sent':
-        case 'shop_logged':
-          return (text: 'Awaiting supplier (wrong item)',
-              bg: const Color(0xFFEDE9FE), fg: const Color(0xFF5B21B6));
-        case 'accepted_missing':
-          return (text: 'Sending correct item',
-              bg: const Color(0xFFD1FAE5), fg: const Color(0xFF065F46));
-        case 'denied':
-          return (text: 'Out of stock → re-sourcing',
-              bg: const Color(0xFFFEF3C7), fg: const Color(0xFF92400E));
-      }
-    } else {
-      switch (status) {
-        case 'reminder_sent':
-        case 'shop_logged':
-          return (text: 'Awaiting supplier',
-              bg: const Color(0xFFF3F4F6), fg: _kSub);
-        case 'accepted_missing':
-          return (text: 'Confirmed missing → re-sourcing',
-              bg: const Color(0xFFFEF3C7), fg: const Color(0xFF92400E));
-        case 'denied':
-          if (!rebuyStarted) {
-            return (text: 'DISPUTED — supplier says supplied',
-                bg: const Color(0xFFFEE2E2), fg: const Color(0xFF991B1B));
-          }
-          return (text: 'Denied — re-sourcing',
-              bg: const Color(0xFFFEF3C7), fg: const Color(0xFF92400E));
-      }
-    }
-    return (text: status, bg: const Color(0xFFF3F4F6), fg: _kSub);
-  }
-
-  // C176/C1: smart resolve — disputed-short gets 3-option dialog; others get plain confirm
-  Future<void> _resolve(String disputeId, Map<String, dynamic> d) async {
+  // Direct RPC without dialog (used for inline Agree/Re-source buttons)
+  Future<void> _resolveWith(String disputeId, String outcome) async {
     if (_resolving.contains(disputeId)) return;
-
-    final kind         = d['kind']?.toString() ?? 'short';
-    final status       = d['status']?.toString() ?? '';
-    final rebuyStarted = d['rebuy_started'] as bool? ?? false;
-    final isDisputed   = kind == 'short' && status == 'denied' && !rebuyStarted;
-
-    RenderLog.write('c176_resolve_dialog',
-        'dispute_id=$disputeId;dialog=${isDisputed ? "disputed_short" : "plain"}');
-    RenderLog.write('c177_resolve_dialog',
-        'dispute_id=$disputeId;kind=$kind;status=$status');
-
-    String? outcome;
-
-    if (isDisputed) {
-      outcome = await showDialog<String>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('Supplier says they supplied this'),
-          content: const Text(
-              'The supplier reported delivering the correct quantity. How do you want to resolve?'),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, 'agree_supplier'),
-              child: const Text('Agree with supplier — close'),
-            ),
-            FilledButton(
-              style: FilledButton.styleFrom(backgroundColor: const Color(0xFFDC2626)),
-              onPressed: () => Navigator.pop(ctx, 're_source'),
-              child: const Text('Side with warehouse — re-source'),
-            ),
-          ],
-        ),
-      );
-    } else {
-      final confirmed = await showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('Resolve this dispute?'),
-          content: const Text('This marks the dispute as resolved and removes it from the list.'),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-            FilledButton(
-              style: FilledButton.styleFrom(backgroundColor: _kGreen),
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Resolve'),
-            ),
-          ],
-        ),
-      );
-      if (confirmed == true) outcome = 'resolved';
-    }
-
-    if (outcome == null || !mounted) return;
-
     setState(() => _resolving.add(disputeId));
     try {
       final res = await Supabase.instance.client.rpc('fw_resolve_dispute',
@@ -6868,16 +6800,15 @@ class _DisputesScreenState extends State<_DisputesScreen> {
           SnackBar(content: Text('Error: $err')),
         );
       }
-      RenderLog.write('c176_resolve',
-          'dispute_id=$disputeId;outcome=$outcome;result=${err ?? "ok"}');
+      RenderLog.write('c178_action',
+          'dispute_id=$disputeId;action=$outcome;ok=${err == null || err == "already_resolved"}');
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(
             'Error: ${e.toString().substring(0, e.toString().length.clamp(0, 60))}')),
       );
-      RenderLog.write('c176_resolve',
-          'dispute_id=$disputeId;outcome=$outcome;result=exception');
+      RenderLog.write('c178_action', 'dispute_id=$disputeId;action=$outcome;ok=false');
     } finally {
       if (mounted) {
         setState(() => _resolving.remove(disputeId));
@@ -6888,36 +6819,68 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     }
   }
 
+  // C176/C1: smart resolve dialog for non-needsYou states
+  Future<void> _resolve(String disputeId, Map<String, dynamic> d) async {
+    if (_resolving.contains(disputeId)) return;
+    RenderLog.write('c176_resolve_dialog', 'dispute_id=$disputeId;dialog=plain');
+    RenderLog.write('c177_resolve_dialog', 'dispute_id=$disputeId');
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Resolve this dispute?'),
+        content: const Text(
+            'This marks the dispute as resolved and removes it from the list.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: _kGreen),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Resolve'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) await _resolveWith(disputeId, 'resolved');
+  }
+
   void _copyLink(String url) {
     Clipboard.setData(ClipboardData(text: url));
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Link copied'), duration: Duration(seconds: 2)),
+      const SnackBar(
+          content: Text('Link copied'), duration: Duration(seconds: 2)),
     );
     RenderLog.write('c170_admin_link_canonical', 'copied');
   }
 
-  List<MapEntry<String, List<Map<String, dynamic>>>> _groupBySupplier() {
+  List<MapEntry<String, List<Map<String, dynamic>>>> _groupBySupplier(
+      List<Map<String, dynamic>> items) {
     final order = <String>[];
     final map = <String, List<Map<String, dynamic>>>{};
-    for (final d in _disputes) {
+    for (final d in items) {
       final s = d['supplier']?.toString() ?? '—';
-      if (!map.containsKey(s)) { order.add(s); map[s] = []; }
+      if (!map.containsKey(s)) {
+        order.add(s);
+        map[s] = [];
+      }
       map[s]!.add(d);
     }
     return order.map((s) => MapEntry(s, map[s]!)).toList();
   }
 
   String _supplierLink(List<Map<String, dynamic>> items) {
-    // C174/B4: include accepted_missing/denied — these still carry a token; link stays valid
-    // C174/B10: use _kDisputeDomain (no www)
+    // C174/B4: include accepted_missing/denied — these still carry a token
     const tokenStatuses = {'reminder_sent', 'accepted_missing', 'denied'};
     final t = items
-        .where((d) {
-          final s = d['status']?.toString() ?? '';
-          return tokenStatuses.contains(s) && (d['token']?.toString() ?? '').isNotEmpty;
-        })
-        .map((d) => d['token']!.toString())
-        .firstOrNull ?? '';
+            .where((d) {
+              final s = d['status']?.toString() ?? '';
+              return tokenStatuses.contains(s) &&
+                  (d['token']?.toString() ?? '').isNotEmpty;
+            })
+            .map((d) => d['token']!.toString())
+            .firstOrNull ??
+        '';
     if (t.isNotEmpty) {
       RenderLog.write('c174_supplier_link',
           'shown_for_statuses=reminder_sent|accepted_missing|denied;domain=medibo.in');
@@ -6928,37 +6891,150 @@ class _DisputesScreenState extends State<_DisputesScreen> {
   @override
   Widget build(BuildContext context) {
     if (_loading) {
-      return const Center(child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2));
+      return const Center(
+          child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2));
     }
-    if (_disputes.isEmpty) {
-      return Center(
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          const Icon(Icons.check_circle_outline_rounded, size: 48, color: _kGreen),
-          const SizedBox(height: 12),
-          const Text('No active disputes.',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _kSub)),
-          const SizedBox(height: 16),
-          TextButton.icon(
-            onPressed: _load,
-            icon: const Icon(Icons.refresh_rounded, size: 16),
-            label: const Text('Refresh'),
-          ),
-        ]),
+
+    final needsYouList = _disputes
+        .where((d) => disputeStateOf(d) == DisputeState.needsYou)
+        .toList();
+    final inProgressList = _disputes.where((d) {
+      final s = disputeStateOf(d);
+      return s == DisputeState.waiting ||
+          s == DisputeState.resourcing ||
+          s == DisputeState.exchange;
+    }).toList();
+    // fw_get_disputes doesn't return resolved — Done is always empty
+    const doneList = <Map<String, dynamic>>[];
+
+    final displayList = _filter == _DisputeFilter.needsYou
+        ? needsYouList
+        : _filter == _DisputeFilter.inProgress
+            ? inProgressList
+            : doneList;
+
+    return Column(children: [
+      _buildFilterBar(needsYouList.length, inProgressList.length),
+      Expanded(
+        child: displayList.isEmpty
+            ? _buildEmpty()
+            : RefreshIndicator(
+                onRefresh: _load,
+                color: _kGreen,
+                child: ListView.builder(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
+                  itemCount: _groupBySupplier(displayList).length,
+                  itemBuilder: (ctx, i) {
+                    final groups = _groupBySupplier(displayList);
+                    return _buildSupplierGroup(
+                        groups[i].key, groups[i].value);
+                  },
+                ),
+              ),
+      ),
+    ]);
+  }
+
+  Widget _buildEmpty() {
+    if (_filter == _DisputeFilter.done) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(32),
+          child: Text('Resolved disputes are archived.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 14, color: _kSub)),
+        ),
       );
     }
-    final groups = _groupBySupplier();
-    return RefreshIndicator(
-      onRefresh: _load,
-      color: _kGreen,
-      child: ListView.builder(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
-        itemCount: groups.length,
-        itemBuilder: (ctx, i) => _buildSupplierGroup(groups[i].key, groups[i].value),
+    return Center(
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        const Icon(Icons.check_circle_outline_rounded, size: 48, color: _kGreen),
+        const SizedBox(height: 12),
+        Text(
+          _filter == _DisputeFilter.needsYou
+              ? 'No disputes need your decision.'
+              : 'No disputes in progress.',
+          style: const TextStyle(
+              fontSize: 16, fontWeight: FontWeight.w600, color: _kSub),
+        ),
+        const SizedBox(height: 16),
+        TextButton.icon(
+          onPressed: _load,
+          icon: const Icon(Icons.refresh_rounded, size: 16),
+          label: const Text('Refresh'),
+        ),
+      ]),
+    );
+  }
+
+  Widget _buildFilterBar(int needsYouN, int inProgressN) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+      child: Row(children: [
+        _filterChip('Needs you', needsYouN, _DisputeFilter.needsYou,
+            const Color(0xFFFEE2E2), const Color(0xFFC0392B)),
+        const SizedBox(width: 8),
+        _filterChip('In progress', inProgressN, _DisputeFilter.inProgress,
+            const Color(0xFFEDE9FE), const Color(0xFF6D5BD0)),
+        const SizedBox(width: 8),
+        _filterChip('Done', null, _DisputeFilter.done,
+            const Color(0xFFF3F4F6), const Color(0xFF6B7280)),
+      ]),
+    );
+  }
+
+  Widget _filterChip(String label, int? count, _DisputeFilter filter,
+      Color bg, Color fg) {
+    final selected = _filter == filter;
+    return GestureDetector(
+      onTap: () => setState(() => _filter = filter),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: selected ? bg : const Color(0xFFF3F4F6),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: selected
+                ? fg.withValues(alpha: 0.3)
+                : Colors.transparent,
+          ),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight:
+                  selected ? FontWeight.w700 : FontWeight.w500,
+              color: selected ? fg : _kSub,
+            ),
+          ),
+          if (count != null && count > 0) ...[
+            const SizedBox(width: 4),
+            Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: selected ? fg : const Color(0xFF9CA3AF),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                '$count',
+                style: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.white),
+              ),
+            ),
+          ],
+        ]),
       ),
     );
   }
 
-  Widget _buildSupplierGroup(String supplier, List<Map<String, dynamic>> items) {
+  Widget _buildSupplierGroup(
+      String supplier, List<Map<String, dynamic>> items) {
     final canonicalLink = _supplierLink(items);
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Padding(
@@ -6966,8 +7042,12 @@ class _DisputesScreenState extends State<_DisputesScreen> {
         child: Row(children: [
           Expanded(
             child: Text(supplier,
-                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _kText),
-                maxLines: 1, overflow: TextOverflow.ellipsis),
+                style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: _kText),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis),
           ),
           if (canonicalLink.isNotEmpty) ...[
             const SizedBox(width: 8),
@@ -6976,154 +7056,53 @@ class _DisputesScreenState extends State<_DisputesScreen> {
               style: OutlinedButton.styleFrom(
                 foregroundColor: const Color(0xFF7C3AED),
                 side: const BorderSide(color: Color(0xFFDDD6FE)),
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 10, vertical: 6),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8)),
                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
               ),
               icon: const Icon(Icons.copy_rounded, size: 14),
               label: const Text('Copy supplier link',
-                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                  style: TextStyle(
+                      fontSize: 12, fontWeight: FontWeight.w600)),
             ),
           ],
         ]),
       ),
       for (final d in items) ...[
-        _buildCard(d),
-        const SizedBox(height: 8),
+        _buildDisputeCard(d),
+        const SizedBox(height: 12),
       ],
-      const SizedBox(height: 8),
+      const SizedBox(height: 4),
     ]);
   }
 
-  Widget _buildCard(Map<String, dynamic> d) {
-    final disputeId      = d['dispute_id']?.toString() ?? '';
-    final product        = d['product_name']?.toString() ?? '—';
-    final wrongProduct   = d['wrong_product_name']?.toString();
-    final kind           = d['kind']?.toString() ?? 'short';
-    final ordered        = (d['ordered'] as num?)?.toInt() ?? 0;
-    final received       = (d['received'] as num?)?.toInt() ?? 0;
-    final short          = (d['short'] as num?)?.toInt() ?? 0;
-    final mode           = d['mode']?.toString() ?? '';
-    final status         = d['status']?.toString() ?? '';
-    final response       = d['response']?.toString();
-    final createdAt      = d['created_at']?.toString() ?? '';
-    final respondedAt    = d['responded_at']?.toString();
-    final isResolving    = _resolving.contains(disputeId);
-    final isWrongItem    = kind == 'wrong_item';
+  Widget _buildDisputeCard(Map<String, dynamic> d) {
+    final disputeId = d['dispute_id']?.toString() ?? '';
+    final token = d['token']?.toString() ?? '';
+    final itemLink =
+        token.isNotEmpty ? '$_kDisputeDomain/dispute?token=$token' : '';
+    final isResolving = _resolving.contains(disputeId);
+    final dState = disputeStateOf(d);
 
-    // C173: kind badge widget
-    final kindBadge = Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-      decoration: BoxDecoration(
-        color: isWrongItem ? const Color(0xFFEDE9FE) : const Color(0xFFFFF3CD),
-        borderRadius: BorderRadius.circular(4),
-      ),
-      child: Text(
-        isWrongItem ? 'Wrong item' : 'Short',
-        style: TextStyle(
-          fontSize: 10,
-          fontWeight: FontWeight.w700,
-          color: isWrongItem ? const Color(0xFF5B21B6) : const Color(0xFF92400E),
-        ),
-      ),
-    );
-
-    // Render-log once per card render
-    RenderLog.write('c173_admin_kind_badge', 'true');
-
-    return Container(
-      decoration: BoxDecoration(
-        color: _kCard,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: _kBorder),
-        boxShadow: [BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04), blurRadius: 6, offset: const Offset(0, 2))],
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Row(children: [
-            Expanded(
-              child: Text(product,
-                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _kText),
-                  maxLines: 1, overflow: TextOverflow.ellipsis),
-            ),
-            const SizedBox(width: 8),
-            kindBadge,
-            const SizedBox(width: 6),
-            DisputeBadge(status: status),
-            if (mode.isNotEmpty) ...[
-              const SizedBox(width: 6),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                    color: const Color(0xFFF3F4F6), borderRadius: BorderRadius.circular(4)),
-                child: Text(mode,
-                    style: const TextStyle(fontSize: 10, color: _kSub, fontWeight: FontWeight.w600)),
-              ),
-            ],
-          ]),
-          const SizedBox(height: 6),
-          if (isWrongItem) ...[
-            Text('Ordered: $product', style: const TextStyle(fontSize: 12, color: _kSub)),
-            const SizedBox(height: 2),
-            Text('Sent: ${wrongProduct?.isNotEmpty == true ? wrongProduct! : '—'}',
-                style: const TextStyle(fontSize: 12, color: _kText)),
-          ] else ...[
-            Text('Ordered $ordered · Received $received · Short $short',
-                style: const TextStyle(fontSize: 12, color: _kSub)),
-          ],
-          // C176/B2: status line — human-readable outcome
-          Builder(builder: (_) {
-            final sl = _statusLine(d);
-            RenderLog.write('c176_card_status_line',
-                'dispute_id=$disputeId;kind=$kind;status=$status;line_text=${sl.text}');
-            RenderLog.write('c177_dispute_card',
-                'dispute_id=$disputeId;kind=$kind;status=$status');
-            return Container(
-              margin: const EdgeInsets.only(top: 6),
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                  color: sl.bg, borderRadius: BorderRadius.circular(6)),
-              child: Text(sl.text,
-                  style: TextStyle(
-                      fontSize: 11, fontWeight: FontWeight.w700, color: sl.fg)),
-            );
-          }),
-          if (respondedAt != null && respondedAt.isNotEmpty) ...[
-            const SizedBox(height: 2),
-            Text('Replied: ${respondedAt.substring(0, 10)}',
-                style: const TextStyle(fontSize: 11, color: _kSub)),
-          ] else if (createdAt.isNotEmpty) ...[
-            const SizedBox(height: 2),
-            Text('Raised: ${createdAt.substring(0, 10)}',
-                style: const TextStyle(fontSize: 11, color: _kSub)),
-          ],
-          if (disputeId.isNotEmpty) ...[
-            const SizedBox(height: 10),
-            const Divider(height: 1, color: _kBorder),
-            const SizedBox(height: 8),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton.icon(
-                onPressed: isResolving ? null : () => _resolve(disputeId, d),
-                style: FilledButton.styleFrom(
-                  backgroundColor: _kGreen,
-                  disabledBackgroundColor: _kGreen.withValues(alpha: 0.4),
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                ),
-                icon: isResolving
-                    ? const SizedBox(width: 12, height: 12,
-                        child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                    : const Icon(Icons.check_rounded, size: 14, color: Colors.white),
-                label: const Text('Resolve',
-                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.white)),
-              ),
-            ),
-          ],
-        ]),
-      ),
+    return DisputeCard(
+      dispute: d,
+      isProcessing: isResolving,
+      onCopyLink:
+          (dState == DisputeState.waiting && itemLink.isNotEmpty)
+              ? () => _copyLink(itemLink)
+              : null,
+      onResolve: (dState != DisputeState.needsYou &&
+              dState != DisputeState.resolved)
+          ? () => _resolve(disputeId, d)
+          : null,
+      onAgreeSupplier: dState == DisputeState.needsYou
+          ? () => _resolveWith(disputeId, 'agree_supplier')
+          : null,
+      onReSource: dState == DisputeState.needsYou
+          ? () => _resolveWith(disputeId, 're_source')
+          : null,
     );
   }
 }

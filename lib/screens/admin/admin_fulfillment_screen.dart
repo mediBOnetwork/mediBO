@@ -2608,17 +2608,21 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // ── #142: Supplier list + accordion ─────────────────────────────────────────
 
   Widget _buildCollectList(bool isAdmin) {
-    // #183/#184: instrument shared-reveal reuse + row layout for both tabs
+    // #183/#184/#185: instrument shared-reveal reuse + row layout for both tabs
     if (widget.arrivals) {
       RenderLog.write('c183_arrivals_anim',
           'change:183,uses_shared_reveal:true,duration_ms:280,curve:easeInOutCubic,chevron_animated:true');
       RenderLog.write('c184_arrivals_row',
           'change:184,item_box_full_width:true,badge_on_status_line:true');
+      RenderLog.write('c185_arrivals_row',
+          'change:185,inset_reverted:true,name_expanded:true,name_max_lines:2');
     } else {
       RenderLog.write('c183_collect_anim',
           'change:183,uses_shared_reveal:true,duration_ms:280,curve:easeInOutCubic,chevron_animated:true');
       RenderLog.write('c184_collect_row',
           'change:184,item_box_full_width:true,badge_on_status_line:true');
+      RenderLog.write('c185_collect_row',
+          'change:185,inset_reverted:true,name_expanded:true,name_max_lines:2');
     }
     RenderLog.write('c142_supplier_list',
         'dropdown_removed=y;count=${_suppliers.length}');
@@ -3234,10 +3238,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     return ListView.separated(
       shrinkWrap: shrinkWrap,
       physics: shrinkWrap ? const NeverScrollableScrollPhysics() : null,
-      // #184: horizontal=0 when shrinkWrap (inline expand); keep 16 for standalone scroll
-      padding: shrinkWrap
-          ? EdgeInsets.fromLTRB(0, 8, 0, 24 + safeBottom)
-          : EdgeInsets.fromLTRB(16, 8, 16, 24 + safeBottom),
+      // #185: restore pre-#184 horizontal inset (16) for both modes
+      padding: EdgeInsets.fromLTRB(16, 8, 16, 24 + safeBottom),
       itemCount: _items.length + footerCount, // +1 for Confirm/Locked footer #91
       separatorBuilder: (_, i) => SizedBox(height: i == _items.length - 1 ? 16 : 4),
       itemBuilder: (_, i) {
@@ -3280,9 +3282,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min, children: [
+              // #185: 2 lines so medium-length names never clip
               Text(name,
                   style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
-                  maxLines: 1, overflow: TextOverflow.ellipsis),
+                  maxLines: 2, overflow: TextOverflow.ellipsis),
               const SizedBox(height: 1),
               Text(packType.isNotEmpty ? packType : '—',
                   style: const TextStyle(fontSize: 11, color: _kSub),
@@ -3291,16 +3294,17 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             ]),
           ),
           const SizedBox(width: 8),
-          Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
+          // #185: cap right column so it never squeezes the name Expanded
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 120),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
             Text('$recQty/$denominator',
                 style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText)),
             const SizedBox(height: 2),
             // #184: secondary badge left of status chip on bottom line
-            Row(mainAxisSize: MainAxisSize.min, children: [
-              if (openDispute != null) ...[
+            Wrap(alignment: WrapAlignment.end, spacing: 6, runSpacing: 2, children: [
+              if (openDispute != null)
                 DisputeBadge(status: openDispute['status']?.toString() ?? ''),
-                const SizedBox(width: 6),
-              ],
               _StatePill(state),
             ]),
             if (widget.arrivals && item['count_mismatch'] == true) ...[
@@ -3311,6 +3315,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
               ),
             ],
           ]),
+          ), // ConstrainedBox
         ]),
       ),
     );
@@ -3431,17 +3436,21 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   // ── Wide layout (>= 900px) — #88: single bar + popup bubble ────────────────
   Widget _buildCollectWide(bool isAdmin) {
-    // #183: instrument shared-reveal reuse (desktop path)
+    // #183/#184/#185: instrument shared-reveal reuse + row layout (desktop path)
     if (widget.arrivals) {
       RenderLog.write('c183_arrivals_anim',
           'change:183,uses_shared_reveal:true,duration_ms:280,curve:easeInOutCubic,chevron_animated:true');
       RenderLog.write('c184_arrivals_row',
           'change:184,item_box_full_width:true,badge_on_status_line:true');
+      RenderLog.write('c185_arrivals_row',
+          'change:185,inset_reverted:true,name_expanded:true,name_max_lines:2');
     } else {
       RenderLog.write('c183_collect_anim',
           'change:183,uses_shared_reveal:true,duration_ms:280,curve:easeInOutCubic,chevron_animated:true');
       RenderLog.write('c184_collect_row',
           'change:184,item_box_full_width:true,badge_on_status_line:true');
+      RenderLog.write('c185_collect_row',
+          'change:185,inset_reverted:true,name_expanded:true,name_max_lines:2');
     }
     RenderLog.write('change_100_banner_removed', '1');
     RenderLog.write('change_90_layout', 'wide');

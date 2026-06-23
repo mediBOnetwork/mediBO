@@ -762,37 +762,18 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       _arrivalsLocked = false; // #156: reset per-supplier lock when opening a new supplier
     });
 
-    // #159: Arrivals dual-fetch — get_receiving_box provides order_item_id+fulfillment_state;
-    // fw_get_state provides count_mismatch+shop_qty+arrivals lock state. Merged by product_id.
+    // #127 BUG1 FIX: Arrivals uses fw_get_state(supplier,'arrivals') items directly.
+    // get_receiving_box filtered out not-yet-warehouse items; fw_get_state returns the
+    // correct mode-filtered set (shop→received_qty>0 lines; warehouse→all). No extra gate.
     if (widget.arrivals) {
       try {
-        final results = await Future.wait([
-          Supabase.instance.client
-              .rpc('get_receiving_box', params: {'p_supplier_name': supplier}),
-          Supabase.instance.client
-              .rpc('fw_get_state', params: {'p_supplier_name': supplier, if (widget.arrivals) 'p_mode': 'arrivals'}),
-        ]);
+        final stateRes = await Supabase.instance.client
+            .rpc('fw_get_state', params: {'p_supplier_name': supplier, 'p_mode': 'arrivals'}) as Map;
         if (!mounted) return;
-        final boxItems = (results[0] as List)
+        final stateItems = (stateRes['items'] as List? ?? [])
             .map((r) => Map<String, dynamic>.from(r as Map))
             .toList();
-        final stateRes = results[1] as Map;
-        final stateByPid = <int, Map>{};
-        for (final r in (stateRes['items'] as List? ?? [])) {
-          final m = r as Map;
-          final pid = (m['product_id'] as num?)?.toInt();
-          if (pid != null) stateByPid[pid] = m;
-        }
-        for (final item in boxItems) {
-          final pid = (item['product_id'] as num?)?.toInt();
-          final s = pid != null ? stateByPid[pid] : null;
-          if (s != null) {
-            item['count_mismatch'] = s['count_mismatch'];
-            item['shop_qty'] = s['shop_qty'];
-            item['received_locked'] = s['received_locked'];
-          }
-        }
-        boxItems.sort((a, b) {
+        stateItems.sort((a, b) {
           final aPending = (a['fulfillment_state'] as String?) == 'pending' ? 0 : 1;
           final bPending = (b['fulfillment_state'] as String?) == 'pending' ? 0 : 1;
           if (aPending != bPending) return aPending - bPending;
@@ -800,26 +781,27 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
               .compareTo((b['product_name'] ?? '').toString());
         });
         final firstPending =
-            boxItems.indexWhere((i) => (i['fulfillment_state'] as String?) == 'pending');
+            stateItems.indexWhere((i) => (i['fulfillment_state'] as String?) == 'pending');
         final confirmed = stateRes['arrivals_confirmed'] == true ||
             stateRes['supplier_fully_locked'] == true;
-        // #116: parse supplier mode for Arrivals item filter
         String? parsedMode;
-        for (final r in (stateRes['items'] as List? ?? [])) {
-          final v = (r as Map)['mode']?.toString();
+        for (final r in stateItems) {
+          final v = r['mode']?.toString();
           if (v != null && v.isNotEmpty) { parsedMode = v; break; }
         }
         setState(() {
-          _items = boxItems;
+          _items = stateItems;
           _focusIdx = firstPending >= 0 ? firstPending : 0;
           _loadingBox = false;
           _showListView = false;
           _arrivalsLocked = confirmed;
           _supplierMode = parsedMode;
         });
+        RenderLog.write('c127_arrivals_filter_removed', 'true');
+        RenderLog.write('c127_arrivals_items_rendered', '${stateItems.length}');
         RenderLog.write('c159_sheet_rpc', 'uses=set_item_receiving');
         RenderLog.write('c159_voice', 'uses=set_voice_received;chip_moves=y');
-        RenderLog.write('arrivals_box_loaded', '${boxItems.length}');
+        RenderLog.write('arrivals_box_loaded', '${stateItems.length}');
       } catch (e) {
         if (!mounted) return;
         setState(() { _loadingBox = false; _error = e.toString(); });
@@ -848,7 +830,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         _focusIdx = firstPending >= 0 ? firstPending : 0;
         _loadingBox = false;
         _showListView = false;
+        _supplierMode = _collectModeMap[supplier]; // #127 BUG2: sync footer with badge
       });
+      RenderLog.write('c127_collect_footer_from_mode', 'true');
       RenderLog.write('fulfillment_ptl_loaded_${items.length}', supplier);
       _loadSupplierOrderItems(supplier);
       RenderLog.write('collect_area_rendered', supplier);
@@ -1478,36 +1462,16 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   Future<void> _reloadItemsFromDB() async {
     final supplier = _selectedSupplier;
     if (supplier == null) return;
-    // #159: Arrivals dual-fetch reload (same merge as _loadBox)
+    // #127 BUG1 FIX: Arrivals reload uses fw_get_state directly (no get_receiving_box).
     if (widget.arrivals) {
       try {
-        final results = await Future.wait([
-          Supabase.instance.client
-              .rpc('get_receiving_box', params: {'p_supplier_name': supplier}),
-          Supabase.instance.client
-              .rpc('fw_get_state', params: {'p_supplier_name': supplier, if (widget.arrivals) 'p_mode': 'arrivals'}),
-        ]);
+        final stateRes = await Supabase.instance.client
+            .rpc('fw_get_state', params: {'p_supplier_name': supplier, 'p_mode': 'arrivals'}) as Map;
         if (!mounted) return;
-        final boxItems = (results[0] as List)
+        final stateItems = (stateRes['items'] as List? ?? [])
             .map((r) => Map<String, dynamic>.from(r as Map))
             .toList();
-        final stateRes = results[1] as Map;
-        final stateByPid = <int, Map>{};
-        for (final r in (stateRes['items'] as List? ?? [])) {
-          final m = r as Map;
-          final pid = (m['product_id'] as num?)?.toInt();
-          if (pid != null) stateByPid[pid] = m;
-        }
-        for (final item in boxItems) {
-          final pid = (item['product_id'] as num?)?.toInt();
-          final s = pid != null ? stateByPid[pid] : null;
-          if (s != null) {
-            item['count_mismatch'] = s['count_mismatch'];
-            item['shop_qty'] = s['shop_qty'];
-            item['received_locked'] = s['received_locked'];
-          }
-        }
-        boxItems.sort((a, b) {
+        stateItems.sort((a, b) {
           final aPend = (a['fulfillment_state'] as String?) == 'pending' ? 0 : 1;
           final bPend = (b['fulfillment_state'] as String?) == 'pending' ? 0 : 1;
           if (aPend != bPend) return aPend - bPend;
@@ -1516,14 +1480,13 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         });
         final confirmed = stateRes['arrivals_confirmed'] == true ||
             stateRes['supplier_fully_locked'] == true;
-        // #116: update mode on reload
         String? reloadedMode;
-        for (final r in (stateRes['items'] as List? ?? [])) {
-          final v = (r as Map)['mode']?.toString();
+        for (final r in stateItems) {
+          final v = r['mode']?.toString();
           if (v != null && v.isNotEmpty) { reloadedMode = v; break; }
         }
         setState(() {
-          _items = boxItems;
+          _items = stateItems;
           if (confirmed != _arrivalsLocked) _arrivalsLocked = confirmed;
           if (reloadedMode != _supplierMode) _supplierMode = reloadedMode;
         });
@@ -1541,7 +1504,12 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         if (aPend != bPend) return aPend - bPend;
         return (a['product_name'] ?? '').toString().compareTo((b['product_name'] ?? '').toString());
       });
-      setState(() => _items = items);
+      setState(() {
+        _items = items;
+        // #127 BUG2: keep footer mode in sync with badge on reload
+        final newMode = _collectModeMap[supplier];
+        if (newMode != null) _supplierMode = newMode;
+      });
     } catch (_) {}
   }
 

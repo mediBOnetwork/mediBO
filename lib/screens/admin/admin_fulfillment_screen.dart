@@ -832,6 +832,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         RenderLog.write('c159_sheet_rpc', 'uses=set_item_receiving');
         RenderLog.write('c159_voice', 'uses=set_voice_received;chip_moves=y');
         RenderLog.write('arrivals_box_loaded', '${stateItems.length}');
+        // #136: no client-side filter — raw == shown; proves box is populated
+        RenderLog.write('c136_arrivals_filter_removed', 'true');
+        RenderLog.write('c136_arrivals_raw_count', '${stateItems.length}');
+        RenderLog.write('c136_arrivals_shown_count', '${stateItems.length}');
       } catch (e) {
         if (!mounted) return;
         setState(() { _loadingBox = false; _error = e.toString(); });

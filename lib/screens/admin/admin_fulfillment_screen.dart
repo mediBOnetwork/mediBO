@@ -797,10 +797,25 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     // correct mode-filtered set (shop→received_qty>0 lines; warehouse→all). No extra gate.
     if (widget.arrivals) {
       try {
-        final stateRes = await Supabase.instance.client
-            .rpc('fw_get_state', params: {'p_supplier_name': supplier, 'p_mode': 'arrivals'}) as Map;
+        // #160: shape-tolerant parse — fw_get_state returns jsonb object; guard against
+        // PostgREST wrapping it in [{fw_get_state: value}] on older versions.
+        final dynamic _rawState = await Supabase.instance.client
+            .rpc('fw_get_state', params: {'p_supplier_name': supplier, 'p_mode': 'arrivals'});
         if (!mounted) return;
-        final stateItems = (stateRes['items'] as List? ?? [])
+        Map<String, dynamic> stateRes;
+        if (_rawState is Map) {
+          stateRes = Map<String, dynamic>.from(_rawState);
+        } else if (_rawState is List && _rawState.isNotEmpty && _rawState[0] is Map) {
+          final first = _rawState[0] as Map;
+          final inner = first['fw_get_state'];
+          stateRes = inner is Map
+              ? Map<String, dynamic>.from(inner)
+              : Map<String, dynamic>.from(first);
+        } else {
+          stateRes = {};
+        }
+        final rawItems = stateRes['items'];
+        final stateItems = (rawItems is List ? rawItems : <dynamic>[])
             .map((r) => Map<String, dynamic>.from(r as Map))
             .toList();
         stateItems.sort((a, b) {
@@ -832,13 +847,15 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         RenderLog.write('c159_sheet_rpc', 'uses=set_item_receiving');
         RenderLog.write('c159_voice', 'uses=set_voice_received;chip_moves=y');
         RenderLog.write('arrivals_box_loaded', '${stateItems.length}');
-        // #136: no client-side filter — raw == shown; proves box is populated
         RenderLog.write('c136_arrivals_filter_removed', 'true');
         RenderLog.write('c136_arrivals_raw_count', '${stateItems.length}');
         RenderLog.write('c136_arrivals_shown_count', '${stateItems.length}');
+        RenderLog.write('c160_loadbox_ok', 'stage=arrivals;count=${stateItems.length}');
       } catch (e) {
         if (!mounted) return;
-        setState(() { _loadingBox = false; _error = e.toString(); });
+        final errMsg = e.toString();
+        setState(() { _loadingBox = false; _error = errMsg; });
+        RenderLog.write('c160_loadbox_error', errMsg.substring(0, errMsg.length.clamp(0, 120)));
       }
       return;
     }
@@ -1499,10 +1516,23 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     // #127 BUG1 FIX: Arrivals reload uses fw_get_state directly (no get_receiving_box).
     if (widget.arrivals) {
       try {
-        final stateRes = await Supabase.instance.client
-            .rpc('fw_get_state', params: {'p_supplier_name': supplier, 'p_mode': 'arrivals'}) as Map;
+        final dynamic _rawReload = await Supabase.instance.client
+            .rpc('fw_get_state', params: {'p_supplier_name': supplier, 'p_mode': 'arrivals'});
         if (!mounted) return;
-        final stateItems = (stateRes['items'] as List? ?? [])
+        Map<String, dynamic> stateRes;
+        if (_rawReload is Map) {
+          stateRes = Map<String, dynamic>.from(_rawReload);
+        } else if (_rawReload is List && _rawReload.isNotEmpty && _rawReload[0] is Map) {
+          final first = _rawReload[0] as Map;
+          final inner = first['fw_get_state'];
+          stateRes = inner is Map
+              ? Map<String, dynamic>.from(inner)
+              : Map<String, dynamic>.from(first);
+        } else {
+          stateRes = {};
+        }
+        final rawItems = stateRes['items'];
+        final stateItems = (rawItems is List ? rawItems : <dynamic>[])
             .map((r) => Map<String, dynamic>.from(r as Map))
             .toList();
         stateItems.sort((a, b) {
@@ -1524,7 +1554,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           if (confirmed != _arrivalsLocked) _arrivalsLocked = confirmed;
           if (reloadedMode != _supplierMode) _supplierMode = reloadedMode;
         });
-      } catch (_) {}
+      } catch (e) {
+        final errMsg = e.toString();
+        if (mounted) setState(() => _error = errMsg);
+        RenderLog.write('c160_loadbox_error', 'reload:${errMsg.substring(0, errMsg.length.clamp(0, 110))}');
+      }
       return;
     }
     try {
@@ -2459,6 +2493,18 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       if (_loadingBox)
         const Expanded(child: Center(
             child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2)))
+      // #160: error-aware guard
+      else if (_error != null)
+        Expanded(child: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Builder(builder: (_) {
+                RenderLog.write('c160_guard_buildCollectSingleSupplier',
+                    'items=${_items.length};visible=${_items.length};error=true');
+                return Text('Error loading items: $_error',
+                    style: const TextStyle(color: Color(0xFFDC2626), fontSize: 13),
+                    textAlign: TextAlign.center);
+              }))))
       else if (_items.isEmpty)
         const Expanded(child: Center(
             child: Text('No items in this box',
@@ -2637,6 +2683,17 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                       child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2),
                     ),
                   )
+                // #160: error-aware guard
+                else if (_error != null)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+                    child: Builder(builder: (_) {
+                      RenderLog.write('c160_guard_buildExpandedSupplierCard',
+                          'items=${_items.length};visible=${visibleItems.length};error=true');
+                      return Text('Error loading items: $_error',
+                          style: const TextStyle(color: Color(0xFFDC2626), fontSize: 13));
+                    }),
+                  )
                 else if (visibleItems.isEmpty)
                   Padding(
                     padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
@@ -2746,6 +2803,18 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         const Expanded(child: Center(
             child: Text('Choose a supplier to begin',
                 style: TextStyle(color: _kSub, fontSize: 15))))
+      // #160: error-aware guard
+      else if (_error != null)
+        Expanded(child: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Builder(builder: (_) {
+                RenderLog.write('c160_guard_buildCollectNarrow',
+                    'items=${_items.length};visible=${_items.length};error=true');
+                return Text('Error loading items: $_error',
+                    style: const TextStyle(color: Color(0xFFDC2626), fontSize: 13),
+                    textAlign: TextAlign.center);
+              }))))
       else if (_items.isEmpty)
         const Expanded(child: Center(
             child: Text('No items in this box',
@@ -3102,6 +3171,18 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       }
     });
 
+    // #160: use _visibleItems() as single source of truth (same as mobile path).
+    final visibleItems = _visibleItems();
+    // #160: log route + counts on every desktop build — fires on normal page load.
+    if (widget.arrivals) {
+      RenderLog.write('c160_route_desktop_arrivals', '_buildCollectWide');
+      RenderLog.write('c160_desktop_arrivals_built', '${visibleItems.length}');
+    } else {
+      RenderLog.write('c160_collect_wide_built', '${visibleItems.length}');
+    }
+    RenderLog.write('c160_guard_buildCollectWide',
+        'items=${_items.length};visible=${visibleItems.length};error=${_error != null}');
+
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       // ── Single merged bar (dropdown + progress + both pills) ─────────────────
       _buildWideSingleBar(isAdmin),
@@ -3113,7 +3194,15 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         const Expanded(child: Center(
             child: Text('Choose a supplier to begin',
                 style: TextStyle(color: _kSub, fontSize: 15))))
-      else if (_items.isEmpty)
+      // #160: show actual error instead of silent empty box
+      else if (_error != null)
+        Expanded(child: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Text('Error loading items: $_error',
+                  style: const TextStyle(color: Color(0xFFDC2626), fontSize: 13),
+                  textAlign: TextAlign.center))))
+      else if (visibleItems.isEmpty)
         const Expanded(child: Center(
             child: Text('No items in this box',
                 style: TextStyle(color: _kSub, fontSize: 15))))

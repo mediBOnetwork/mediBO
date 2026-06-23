@@ -669,6 +669,8 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
   Widget _buildRespondedChip(String response, {required bool isWrongItem}) {
     if (isWrongItem) {
       final isCorrectComing = response == 'correct_coming';
+      RenderLog.write('c176_supplier_chip',
+          'kind=wrong_item;status=${isCorrectComing ? "accepted_missing" : "denied"};response=$response');
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
         decoration: BoxDecoration(
@@ -697,6 +699,7 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
       );
     }
     final isMissing = response == 'missing';
+    RenderLog.write('c176_supplier_chip', 'kind=short;status=${isMissing ? "accepted_missing" : "denied"};response=$response');
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
       decoration: BoxDecoration(
@@ -714,7 +717,7 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
           child: Text(
             isMissing
                 ? 'Confirmed missing'
-                : 'Reported as supplied — re-sourcing',
+                : 'Reported as supplied — under review',
             style: TextStyle(
               fontSize: 13, fontWeight: FontWeight.w600,
               color: isMissing ? _kGreen : _kTextMuted, height: 1.35,

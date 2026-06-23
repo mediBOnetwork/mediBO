@@ -215,7 +215,11 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
           style: const TextStyle(fontSize: 13, color: _kSub)),
       actionArea: canRespond
           ? _shortButtons(disputeId, short, isResponding)
-          : _readOnlyChip(_shortOutcomeLabel(status, response)),
+          : Builder(builder: (_) {
+              RenderLog.write('c176_supplier_chip',
+                  'kind=short;status=$status;response=${response ?? ""}');
+              return _readOnlyChip(_shortOutcomeLabel(status, response));
+            }),
     );
   }
 
@@ -269,7 +273,7 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
 
   String _shortOutcomeLabel(String status, String? response) {
     if (status == 'accepted_missing') return 'Confirmed missing';
-    if (status == 'denied') return 'Reported as supplied';
+    if (status == 'denied') return 'Reported as supplied — under review';
     if (status == 'resolved') return 'Resolved';
     return status;
   }
@@ -298,7 +302,11 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
       ]),
       actionArea: canRespond
           ? _wrongItemButtons(disputeId, isResponding)
-          : _readOnlyChip(_wrongItemOutcomeLabel(status, response)),
+          : Builder(builder: (_) {
+              RenderLog.write('c176_supplier_chip',
+                  'kind=wrong_item;status=$status;response=${response ?? ""}');
+              return _readOnlyChip(_wrongItemOutcomeLabel(status, response));
+            }),
     );
   }
 

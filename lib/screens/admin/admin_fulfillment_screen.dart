@@ -6739,40 +6739,139 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     }
   }
 
-  Future<void> _resolve(String disputeId) async {
+  // C176/B1: maps dispute → human status line
+  ({String text, Color bg, Color fg}) _statusLine(Map<String, dynamic> d) {
+    final kind           = d['kind']?.toString() ?? 'short';
+    final status         = d['status']?.toString() ?? '';
+    final response       = d['response']?.toString() ?? '';
+    final rebuyStarted   = d['rebuy_started'] as bool? ?? false;
+    final resOutcome     = d['resolution_outcome']?.toString() ?? '';
+
+    if (status == 'resolved') {
+      final label = resOutcome == 'agree_supplier' ? 'Resolved — agreed with supplier'
+          : resOutcome == 're_source' ? 'Resolved — re-sourced'
+          : 'Resolved';
+      return (text: label, bg: const Color(0xFFEFF6FF), fg: const Color(0xFF1E40AF));
+    }
+
+    if (kind == 'wrong_item') {
+      switch (status) {
+        case 'reminder_sent':
+        case 'shop_logged':
+          return (text: 'Awaiting supplier (wrong item)',
+              bg: const Color(0xFFEDE9FE), fg: const Color(0xFF5B21B6));
+        case 'accepted_missing':
+          return (text: 'Sending correct item',
+              bg: const Color(0xFFD1FAE5), fg: const Color(0xFF065F46));
+        case 'denied':
+          return (text: 'Out of stock → re-sourcing',
+              bg: const Color(0xFFFEF3C7), fg: const Color(0xFF92400E));
+      }
+    } else {
+      switch (status) {
+        case 'reminder_sent':
+        case 'shop_logged':
+          return (text: 'Awaiting supplier',
+              bg: const Color(0xFFF3F4F6), fg: _kSub);
+        case 'accepted_missing':
+          return (text: 'Confirmed missing → re-sourcing',
+              bg: const Color(0xFFFEF3C7), fg: const Color(0xFF92400E));
+        case 'denied':
+          if (!rebuyStarted) {
+            return (text: 'DISPUTED — supplier says supplied',
+                bg: const Color(0xFFFEE2E2), fg: const Color(0xFF991B1B));
+          }
+          return (text: 'Denied — re-sourcing',
+              bg: const Color(0xFFFEF3C7), fg: const Color(0xFF92400E));
+      }
+    }
+    return (text: status, bg: const Color(0xFFF3F4F6), fg: _kSub);
+  }
+
+  // C176/C1: smart resolve — disputed-short gets 3-option dialog; others get plain confirm
+  Future<void> _resolve(String disputeId, Map<String, dynamic> d) async {
     if (_resolving.contains(disputeId)) return;
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Resolve this dispute?'),
-        content: const Text('This marks the dispute as resolved and removes it from the list.'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: _kGreen),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Resolve'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true || !mounted) return;
+
+    final kind         = d['kind']?.toString() ?? 'short';
+    final status       = d['status']?.toString() ?? '';
+    final rebuyStarted = d['rebuy_started'] as bool? ?? false;
+    final isDisputed   = kind == 'short' && status == 'denied' && !rebuyStarted;
+
+    RenderLog.write('c176_resolve_dialog',
+        'dispute_id=$disputeId;dialog=${isDisputed ? "disputed_short" : "plain"}');
+
+    String? outcome;
+
+    if (isDisputed) {
+      outcome = await showDialog<String>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Supplier says they supplied this'),
+          content: const Text(
+              'The supplier reported delivering the correct quantity. How do you want to resolve?'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, 'agree_supplier'),
+              child: const Text('Agree with supplier — close'),
+            ),
+            FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: const Color(0xFFDC2626)),
+              onPressed: () => Navigator.pop(ctx, 're_source'),
+              child: const Text('Side with warehouse — re-source'),
+            ),
+          ],
+        ),
+      );
+    } else {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Resolve this dispute?'),
+          content: const Text('This marks the dispute as resolved and removes it from the list.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+            FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: _kGreen),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Resolve'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed == true) outcome = 'resolved';
+    }
+
+    if (outcome == null || !mounted) return;
+
     setState(() => _resolving.add(disputeId));
     try {
-      await Supabase.instance.client.rpc('fw_resolve_dispute',
-          params: {'p_dispute_id': disputeId});
+      final res = await Supabase.instance.client.rpc('fw_resolve_dispute',
+          params: {'p_dispute_id': disputeId, 'p_outcome': outcome}) as Map;
       if (!mounted) return;
-      setState(() => _resolving.remove(disputeId));
-      await _load();
-      // Refresh Collect + Arrivals so dispute badges clear
-      widget.onRefreshCollect();
-      widget.onRefreshArrivals();
+      final err = res['error']?.toString();
+      if (err != null && err != 'already_resolved') {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $err')),
+        );
+      }
+      RenderLog.write('c176_resolve',
+          'dispute_id=$disputeId;outcome=$outcome;result=${err ?? "ok"}');
     } catch (e) {
       if (!mounted) return;
-      setState(() => _resolving.remove(disputeId));
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error: ${e.toString().substring(0, e.toString().length.clamp(0, 60))}')),
+        SnackBar(content: Text(
+            'Error: ${e.toString().substring(0, e.toString().length.clamp(0, 60))}')),
       );
+      RenderLog.write('c176_resolve',
+          'dispute_id=$disputeId;outcome=$outcome;result=exception');
+    } finally {
+      if (mounted) {
+        setState(() => _resolving.remove(disputeId));
+        await _load();
+        widget.onRefreshCollect();
+        widget.onRefreshArrivals();
+      }
     }
   }
 
@@ -6961,14 +7060,21 @@ class _DisputesScreenState extends State<_DisputesScreen> {
             Text('Ordered $ordered · Received $received · Short $short',
                 style: const TextStyle(fontSize: 12, color: _kSub)),
           ],
-          if (response != null && response.isNotEmpty) ...[
-            const SizedBox(height: 4),
-            Text(
-              isWrongItem
-                  ? (response == 'correct_coming' ? 'Supplier: Sending correct item' : 'Supplier: Out of stock — will re-source')
-                  : 'Supplier: ${response == 'missing' ? 'Accepted (qty missing)' : 'Denied (claims correct qty)'}',
-              style: const TextStyle(fontSize: 12, color: _kText)),
-          ],
+          // C176/B2: status line — human-readable outcome
+          Builder(builder: (_) {
+            final sl = _statusLine(d);
+            RenderLog.write('c176_card_status_line',
+                'dispute_id=$disputeId;kind=$kind;status=$status;line_text=${sl.text}');
+            return Container(
+              margin: const EdgeInsets.only(top: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                  color: sl.bg, borderRadius: BorderRadius.circular(6)),
+              child: Text(sl.text,
+                  style: TextStyle(
+                      fontSize: 11, fontWeight: FontWeight.w700, color: sl.fg)),
+            );
+          }),
           if (respondedAt != null && respondedAt.isNotEmpty) ...[
             const SizedBox(height: 2),
             Text('Replied: ${respondedAt.substring(0, 10)}',
@@ -6985,7 +7091,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
             SizedBox(
               width: double.infinity,
               child: FilledButton.icon(
-                onPressed: isResolving ? null : () => _resolve(disputeId),
+                onPressed: isResolving ? null : () => _resolve(disputeId, d),
                 style: FilledButton.styleFrom(
                   backgroundColor: _kGreen,
                   disabledBackgroundColor: _kGreen.withValues(alpha: 0.4),

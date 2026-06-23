@@ -1006,6 +1006,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       await Supabase.instance.client.rpc('fw_unconfirm_all_received',
           params: {'p_supplier_name': supplier});
       if (!mounted) return;
+      RenderLog.write('c125_undo_hold_fired', 'true');
       setState(() => _arrivalsLocked = false);
       _loadSuppliers(); // refresh dot
       await _reloadItemsFromDB();
@@ -1719,13 +1720,25 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     final supplier = _selectedSupplier;
     if (supplier == null) return;
     try {
-      await Supabase.instance.client.rpc('fw_undo_collect_submit',
+      final res = await Supabase.instance.client.rpc('fw_undo_collect_submit',
           params: {'p_supplier_name': supplier});
+      // R3: if already confirmed in Arrivals, show specific toast and bail
+      final errVal = (res is Map) ? res['error']?.toString() : null;
+      if (errVal == 'already_confirmed_in_arrivals') {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Undo from Arrivals first')),
+          );
+        }
+        return;
+      }
       if (!mounted) return;
+      RenderLog.write('c125_undo_hold_fired', 'true');
       setState(() { _supplierMode = null; });
-      _loadCollectModes(); // refresh badge map
+      _loadCollectModes(); // refresh badge map → P
       _loadSuppliers();
       await _reloadItemsFromDB();
+      context.findAncestorStateOfType<_AdminFulfillmentScreenState>()?._refreshArrivals(); // R3: supplier leaves Arrivals
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Submission undone')),
@@ -1733,9 +1746,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Undo error: ${e.toString().substring(0, e.toString().length.clamp(0, 80))}')),
-        );
+        final msg = e.toString();
+        final text = msg.contains('already_confirmed_in_arrivals')
+            ? 'Undo from Arrivals first'
+            : 'Undo error: ${msg.substring(0, msg.length.clamp(0, 80))}';
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
       }
     }
   }
@@ -1770,7 +1785,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       await _reloadItemsFromDB();
       RenderLog.write('c137_collect_action', 'action=confirm;supplier=$supplier');
       RenderLog.write('c117_collect_confirm_text_mode', 'shop');
+      RenderLog.write('c125_submit_refresh', 'true');
       _loadSupplierDots();
+      _loadCollectModes(); // R2: badge P→C immediately
+      context.findAncestorStateOfType<_AdminFulfillmentScreenState>()?._refreshArrivals(); // R2: supplier appears in Arrivals
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Counted and sent to warehouse')),
@@ -1816,7 +1834,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       await _reloadItemsFromDB();
       RenderLog.write('c137_collect_action', 'action=warehouse;supplier=$supplier');
       RenderLog.write('c117_collect_confirm_text_mode', 'warehouse');
+      RenderLog.write('c125_submit_refresh', 'true');
       _loadSupplierDots();
+      _loadCollectModes(); // R2: badge P→CR immediately
+      context.findAncestorStateOfType<_AdminFulfillmentScreenState>()?._refreshArrivals(); // R2: supplier appears in Arrivals
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Collected & sent to warehouse for counting')),
@@ -6233,6 +6254,10 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen> {
   void _refreshCollect() {
     _collectKey.currentState?._loadSuppliers();
     _collectKey.currentState?._loadCollectModes();
+  }
+  // #125 R2/R3: called by Collect after submit/undo to refresh Arrivals list.
+  void _refreshArrivals() {
+    _arrivalsKey.currentState?.refresh();
   }
   final _arrivalsKey = GlobalKey<_ArrivalsScreenState>();
   final _packKey     = GlobalKey<_PackScreenState>();

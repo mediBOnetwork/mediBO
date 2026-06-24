@@ -126,6 +126,7 @@ class _MergedProduct {
   final int receivedTotal;
   final List<String> orderItemIds; // underlying line IDs — for dispute lookup only
   final String combinedState; // 'pending'|'received'|'short'|'wrong'|'not_coming'
+  final bool hasArrived; // true if any underlying Arrivals line has received_locked=true
 
   const _MergedProduct({
     required this.productId,
@@ -136,6 +137,7 @@ class _MergedProduct {
     required this.receivedTotal,
     required this.orderItemIds,
     required this.combinedState,
+    this.hasArrived = false,
   });
 }
 
@@ -466,6 +468,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       } else {
         combinedState = 'short';
       }
+      final hasArrived = lines.any((r) => r['received_locked'] == true);
       merged.add(_MergedProduct(
         productId: entry.key,
         productName: first['product_name']?.toString() ?? '—',
@@ -475,6 +478,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         receivedTotal: receivedTotal,
         orderItemIds: oiids,
         combinedState: combinedState,
+        hasArrived: hasArrived,
       ));
     }
     merged.sort((a, b) {
@@ -3458,8 +3462,14 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       disputeItem ??= _disputeItemMap[oiid];
       openDispute ??= _disputeMap[oiid];
     }
-    RenderLog.write('c196_collect_card_layout_v2',
-        'surface=${widget.arrivals ? 'arrivals' : 'collect'}');
+    // #198: arrival status (Arrivals mode only)
+    final surface = widget.arrivals ? 'arrivals' : 'collect';
+    final showArrivalLine = widget.arrivals;
+    final arrivalLabel = merged.hasArrived ? 'Arrived' : 'Arrival pending';
+
+    RenderLog.write('c196_collect_card_layout_v2', 'surface=$surface');
+    RenderLog.write('c198_card_layout_v3', 'surface=$surface');
+
     return GestureDetector(
       onTap: (widget.arrivals && _arrivalsLocked) ? null : () => _showProductSheet(merged),
       child: Container(
@@ -3471,42 +3481,65 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             color: state == 'pending' ? _kBorder : (_stateBgMap[state] ?? _kBorder),
           ),
         ),
-        child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+        // #198: crossAxisAlignment.start so both columns align at their first line
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
           _FulfilImageTile(merged.imageUrl, size: 40),
           const SizedBox(width: 10),
+          // LEFT column: name + pack_type
           Expanded(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min, children: [
-              Text(merged.productName,
-                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
-                  maxLines: 2, overflow: TextOverflow.ellipsis),
-              const SizedBox(height: 1),
-              Text(merged.packType.isNotEmpty ? merged.packType : '—',
-                  style: const TextStyle(fontSize: 11, color: _kSub),
-                  maxLines: 1, overflow: TextOverflow.ellipsis),
-            ]),
+            child: Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min, children: [
+                Text(merged.productName,
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
+                    maxLines: 2, overflow: TextOverflow.ellipsis),
+                const SizedBox(height: 2),
+                Text(merged.packType.isNotEmpty ? merged.packType : '—',
+                    style: const TextStyle(fontSize: 11, color: _kSub),
+                    maxLines: 1, overflow: TextOverflow.ellipsis),
+              ]),
+            ),
           ),
           const SizedBox(width: 8),
+          // RIGHT column: qty -> status pill -> arrival -> awaiting badge
           ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 120),
             child: Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
-              Row(mainAxisSize: MainAxisSize.min, children: [
-                Text('${merged.receivedTotal}/$denominator',
-                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText)),
-                const SizedBox(width: 6),
-                _StatePill(state),
-              ]),
+              // line 1: qty (aligns with product name first line via Row crossAxisAlignment.start)
+              Text('${merged.receivedTotal}/$denominator',
+                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText)),
+              const SizedBox(height: 3),
+              // line 2: receive status pill
+              _StatePill(state),
+              // line 3: arrival status (Arrivals page only)
+              if (showArrivalLine) ...[
+                const SizedBox(height: 3),
+                Builder(builder: (_) {
+                  RenderLog.write('c198_arrival_line_shown',
+                      'arrived=${merged.hasArrived};label=$arrivalLabel');
+                  return Text(
+                    arrivalLabel,
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w500,
+                      color: merged.hasArrived ? _kReceivedFg : _kPendingFg,
+                    ),
+                    textAlign: TextAlign.end,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  );
+                }),
+              ],
+              // line 4: awaiting dispute badge (if any)
               if (disputeItem != null) ...[
                 const SizedBox(height: 3),
                 Builder(builder: (_) {
                   RenderLog.write('c196_awaiting_badge_wrapped',
-                      'surface=${widget.arrivals ? 'arrivals' : 'collect'};dispute=${disputeItem!.disputeId}');
+                      'surface=$surface;dispute=${disputeItem!.disputeId}');
                   return SizedBox(
                     width: 120,
-                    child: _DisputeStrip(
-                      item: disputeItem!,
-                      surface: widget.arrivals ? 'arrivals' : 'collect',
-                    ),
+                    child: _DisputeStrip(item: disputeItem!, surface: surface),
                   );
                 }),
               ] else if (openDispute != null) ...[

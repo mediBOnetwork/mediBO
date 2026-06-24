@@ -13,6 +13,7 @@ const _kBorder       = Color(0xFFE5E7EB);
 const _kText         = Color(0xFF111827);
 const _kSub          = Color(0xFF6B7280);
 const _kShortFg      = Color(0xFF993C1D);
+const _kPartialFg    = Color(0xFFD97706); // amber for "Few item wrong"
 const _kWrongFg      = Color(0xFFB42318);
 const _kNotComingFg  = Color(0xFF5A5A57);
 const _kReceivedFg   = Color(0xFF0F6E56);
@@ -72,7 +73,7 @@ Future<void> showFulfillItemSheet({
     );
   }
 
-  // Mobile — content-height bottom sheet (B6: Column+mainAxisSize.min, no ConstrainedBox)
+  // Mobile — content-height bottom sheet
   return showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
@@ -134,11 +135,17 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
   late int _localRecQty;
   late Map<String, dynamic>? _dispute;
 
-  bool _showStepper = false;
-  late int _shortDraft;
-  bool _confirmingShort = false;
+  // #193: inline expanders (replaces old _showStepper / _StepperBlock)
+  bool _showMissingInline = false;
+  bool _showWrongPartialInline = false;
+  late int _missingDraft;      // counted received qty (for "Report missing")
+  int _wrongPartialDraft = 1;  // wrong-qty (for "Few item wrong")
+  bool _confirmingMissing = false;
+  bool _confirmingWrongPartial = false;
+  final TextEditingController _missingQtyCtrl = TextEditingController();
+  final TextEditingController _wrongPartialQtyCtrl = TextEditingController();
 
-  // C173: wrong-item inline capture
+  // C173: wrong-item inline capture (unchanged)
   bool _flaggingWrong = false;
   bool _flaggingWrongLoading = false;
   final TextEditingController _wrongNameCtrl = TextEditingController();
@@ -147,10 +154,8 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
   void initState() {
     super.initState();
 
-    // B1/A4: accept both 'ordered_qty' (old) and 'ordered' (new RPC shape)
     final ordQty = _ordQty;
 
-    // A4: derive fulfillment_state when absent (new RPC shape has received_locked)
     final rawFs = widget.item['fulfillment_state']?.toString();
     if (rawFs != null && rawFs.isNotEmpty) {
       _localFsState = rawFs;
@@ -169,10 +174,8 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
     }
 
     _localRecQty = (widget.item['received_qty'] as num?)?.toInt() ?? 0;
-
-    // B1: guard clamp crash when ordQty == 0 (A3-i)
     final safeOrd = ordQty > 0 ? ordQty : 1;
-    _shortDraft = _localRecQty.clamp(1, safeOrd);
+    _missingDraft = _localRecQty.clamp(0, safeOrd);
 
     _dispute = widget.existingDispute;
     _logOpen();
@@ -180,6 +183,8 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
 
   @override
   void dispose() {
+    _missingQtyCtrl.dispose();
+    _wrongPartialQtyCtrl.dispose();
     _wrongNameCtrl.dispose();
     super.dispose();
   }
@@ -200,15 +205,12 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
 
     RenderLog.write('c163_sheet_state', stateStr);
     RenderLog.write('c163_oiid_present', '$oiidOk');
-
-    // Legacy c162 keys kept for backwards compat
     RenderLog.write('c162_sheet_opened', 'state=$stateStr;order_item_id=$itemId');
     RenderLog.write('c162_state_rendered', stateStr);
   }
 
   // ── Derived properties ─────────────────────────────────────────────────────
 
-  // B1/A4: accept both field name variants
   int get _ordQty {
     final v = widget.item['ordered_qty'] ?? widget.item['ordered'];
     return (v as num?)?.toInt() ?? 0;
@@ -226,19 +228,18 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
       if (dStatus == 'resolved' || dStatus == 'cancelled') {
         return _ItemSheetState.disputeResolved;
       }
-      // B13/C174: only valid contract statuses trigger disputeActive; 'responded' removed
       if (dStatus == 'reminder_sent' || dStatus == 'shop_logged' ||
           dStatus == 'accepted_missing' || dStatus == 'denied') {
         return _ItemSheetState.disputeActive;
       }
     }
     switch (_localFsState) {
-      case 'received': return _ItemSheetState.receivedFull;
-      case 'short':    return _ItemSheetState.shortfall;
-      case 'wrong':    return _ItemSheetState.wrongItem;
+      case 'received':   return _ItemSheetState.receivedFull;
+      case 'short':      return _ItemSheetState.shortfall;
+      case 'wrong':      return _ItemSheetState.wrongItem;
       case 'not_coming': return _ItemSheetState.notComing;
-      case 'pending':  return _ItemSheetState.pending;
-      default:         return _ItemSheetState.fallback;
+      case 'pending':    return _ItemSheetState.pending;
+      default:           return _ItemSheetState.fallback;
     }
   }
 
@@ -251,8 +252,8 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
       _localFsState = state;
       if (qty != null) _localRecQty = qty;
       if (state == 'short' && qty != null) {
-        _shortDraft = qty;
-        _showStepper = false;
+        _missingDraft = qty;
+        _showMissingInline = false;
       }
     });
     final stateStr = _deriveState().name.toUpperCase();
@@ -260,7 +261,65 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
     RenderLog.write('c162_state_rendered', stateStr);
   }
 
-  // ── C173: flag wrong item ─────────────────────────────────────────────────
+  // #193: Confirm missing — same short RPC, receives = counted (missing = ordered - counted)
+  Future<void> _doConfirmMissing() async {
+    if (_confirmingMissing) return;
+    setState(() => _confirmingMissing = true);
+    RenderLog.write('c193_missing_confirmed',
+        'order_item_id=${_itemId ?? ''};counted=$_missingDraft');
+    try {
+      await _doRecord('short', qty: _missingDraft);
+      if (mounted) {
+        setState(() { _confirmingMissing = false; _showMissingInline = false; });
+        Navigator.of(context).pop();
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _confirmingMissing = false);
+      final msg = e.toString().substring(0, e.toString().length.clamp(0, 80));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: $msg'), backgroundColor: const Color(0xFFDC2626)));
+    }
+  }
+
+  // #193: Confirm wrong-partial — calls fw_flag_wrong_partial
+  Future<void> _doWrongPartial() async {
+    if (_confirmingWrongPartial) return;
+    final id = _itemId;
+    if (id == null || id.isEmpty) return;
+    setState(() => _confirmingWrongPartial = true);
+    RenderLog.write('c193_wrong_partial_called',
+        'order_item_id=$id;wrong_qty=$_wrongPartialDraft');
+    try {
+      final res = await Supabase.instance.client.rpc('fw_flag_wrong_partial', params: {
+        'p_order_item_id': id,
+        'p_wrong_qty': _wrongPartialDraft,
+        'p_wrong_product_name': null,
+      }) as Map;
+      if (!mounted) return;
+      final err = res['error']?.toString();
+      if (err != null) {
+        setState(() => _confirmingWrongPartial = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $err'), backgroundColor: const Color(0xFFDC2626)));
+        return;
+      }
+      final wQty = (res['wrong_qty'] as num?)?.toInt() ?? _wrongPartialDraft;
+      final unitLabel = _unit.isNotEmpty ? ' $_unit' : '';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Marked $wQty$unitLabel wrong')));
+      setState(() { _confirmingWrongPartial = false; _showWrongPartialInline = false; });
+      if (mounted) Navigator.of(context).pop();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _confirmingWrongPartial = false);
+      final msg = e.toString().substring(0, e.toString().length.clamp(0, 80));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: $msg'), backgroundColor: const Color(0xFFDC2626)));
+    }
+  }
+
+  // ── C173: flag wrong item (whole line, unchanged) ─────────────────────────
 
   Future<void> _fw_flagWrongItem() async {
     final id = _itemId;
@@ -268,12 +327,9 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
     final wrongName = _wrongNameCtrl.text.trim();
     setState(() => _flaggingWrongLoading = true);
     try {
-      // F4/C177: set_item_receiving('wrong', p_note:...) ALONE creates the dispute.
-      // fw_flag_wrong_item is deprecated — do NOT call it.
       await _doRecord('wrong', note: wrongName.isNotEmpty ? wrongName : null);
       if (!mounted) return;
       setState(() => _flaggingWrongLoading = false);
-      // Optimistic dispute for immediate sheet state; refreshed from DB on sheet close.
       final newDispute = <String, dynamic>{
         'dispute_id': '',
         'kind': 'wrong_item',
@@ -304,6 +360,243 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
       RenderLog.write('c173_wrong_flag_error', 'order_item_id=$id;exception=$msg');
       RenderLog.write('c177_action', 'action=wrong_item;rpc=set_item_receiving;ok=false');
     }
+  }
+
+  // ── #193: Inline two-half row — Report missing ────────────────────────────
+
+  Widget _buildMissingInlineRow() {
+    final ordQty = _ordQty;
+    final missing = (ordQty - _missingDraft).clamp(0, ordQty);
+    final unitLabel = _unit.isNotEmpty ? ' $_unit' : '';
+    final confirmLabel = 'Confirm missing · $missing$unitLabel';
+    const borderColor = _kShortFg;
+
+    return SizedBox(
+      height: 52,
+      child: Row(children: [
+        // LEFT half: stepper
+        Expanded(
+          child: Container(
+            decoration: BoxDecoration(
+              color: _kShortFg.withValues(alpha: 0.06),
+              borderRadius: const BorderRadius.only(
+                topLeft: Radius.circular(11),
+                bottomLeft: Radius.circular(11),
+              ),
+              border: Border(
+                top: BorderSide(color: _kShortFg.withValues(alpha: 0.4)),
+                bottom: BorderSide(color: _kShortFg.withValues(alpha: 0.4)),
+                left: BorderSide(color: _kShortFg.withValues(alpha: 0.4)),
+              ),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                _InlineStepBtn(
+                  icon: Icons.remove,
+                  enabled: !_confirmingMissing && _missingDraft > 0,
+                  color: borderColor,
+                  onTap: () => setState(() {
+                    _missingDraft = (_missingDraft - 1).clamp(0, ordQty);
+                    _missingQtyCtrl.text = '$_missingDraft';
+                  }),
+                ),
+                SizedBox(
+                  width: 48,
+                  child: TextField(
+                    controller: _missingQtyCtrl,
+                    enabled: !_confirmingMissing,
+                    keyboardType: TextInputType.number,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
+                        color: _kText),
+                    decoration: const InputDecoration.collapsed(hintText: '0'),
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                    onChanged: (v) {
+                      final n = int.tryParse(v) ?? 0;
+                      final clamped = n.clamp(0, ordQty);
+                      setState(() => _missingDraft = clamped);
+                      if (v.isNotEmpty && v != '$clamped') {
+                        _missingQtyCtrl.value = _missingQtyCtrl.value.copyWith(
+                          text: '$clamped',
+                          selection: TextSelection.collapsed(
+                              offset: '$clamped'.length),
+                        );
+                      }
+                    },
+                  ),
+                ),
+                if (_unit.isNotEmpty)
+                  Text(' $_unit',
+                      style: const TextStyle(fontSize: 10, color: _kSub)),
+                _InlineStepBtn(
+                  icon: Icons.add,
+                  enabled: !_confirmingMissing && _missingDraft < ordQty,
+                  color: borderColor,
+                  onTap: () => setState(() {
+                    _missingDraft = (_missingDraft + 1).clamp(0, ordQty);
+                    _missingQtyCtrl.text = '$_missingDraft';
+                  }),
+                ),
+              ],
+            ),
+          ),
+        ),
+        // RIGHT half: confirm button
+        Expanded(
+          child: GestureDetector(
+            onTap: _confirmingMissing ? null : _doConfirmMissing,
+            child: Container(
+              alignment: Alignment.center,
+              padding: const EdgeInsets.symmetric(horizontal: 6),
+              decoration: BoxDecoration(
+                color: _confirmingMissing
+                    ? _kShortFg.withValues(alpha: 0.45)
+                    : _kShortFg,
+                borderRadius: const BorderRadius.only(
+                  topRight: Radius.circular(11),
+                  bottomRight: Radius.circular(11),
+                ),
+                border: Border(
+                  top: BorderSide(color: _kShortFg.withValues(alpha: 0.4)),
+                  bottom: BorderSide(color: _kShortFg.withValues(alpha: 0.4)),
+                  right: BorderSide(color: _kShortFg.withValues(alpha: 0.4)),
+                ),
+              ),
+              child: _confirmingMissing
+                  ? const SizedBox(width: 16, height: 16,
+                      child: CircularProgressIndicator(
+                          color: Colors.white, strokeWidth: 2))
+                  : Text(confirmLabel,
+                      style: const TextStyle(fontSize: 11,
+                          fontWeight: FontWeight.w700, color: Colors.white),
+                      textAlign: TextAlign.center,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis),
+            ),
+          ),
+        ),
+      ]),
+    );
+  }
+
+  // ── #193: Inline two-half row — Few item wrong ────────────────────────────
+
+  Widget _buildWrongPartialInlineRow() {
+    final ordQty = _ordQty;
+    final maxWrong = ordQty > 0 ? ordQty : 1;
+    final keepQty = (ordQty - _wrongPartialDraft).clamp(0, ordQty);
+    final unitLabel = _unit.isNotEmpty ? ' $_unit' : '';
+    final confirmLabel = 'Confirm wrong · keep $keepQty$unitLabel';
+    const borderColor = _kPartialFg;
+
+    return SizedBox(
+      height: 52,
+      child: Row(children: [
+        // LEFT half: stepper
+        Expanded(
+          child: Container(
+            decoration: BoxDecoration(
+              color: _kPartialFg.withValues(alpha: 0.06),
+              borderRadius: const BorderRadius.only(
+                topLeft: Radius.circular(11),
+                bottomLeft: Radius.circular(11),
+              ),
+              border: Border(
+                top: BorderSide(color: _kPartialFg.withValues(alpha: 0.4)),
+                bottom: BorderSide(color: _kPartialFg.withValues(alpha: 0.4)),
+                left: BorderSide(color: _kPartialFg.withValues(alpha: 0.4)),
+              ),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                _InlineStepBtn(
+                  icon: Icons.remove,
+                  enabled: !_confirmingWrongPartial && _wrongPartialDraft > 1,
+                  color: borderColor,
+                  onTap: () => setState(() {
+                    _wrongPartialDraft = (_wrongPartialDraft - 1).clamp(1, maxWrong);
+                    _wrongPartialQtyCtrl.text = '$_wrongPartialDraft';
+                  }),
+                ),
+                SizedBox(
+                  width: 48,
+                  child: TextField(
+                    controller: _wrongPartialQtyCtrl,
+                    enabled: !_confirmingWrongPartial,
+                    keyboardType: TextInputType.number,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
+                        color: _kText),
+                    decoration: const InputDecoration.collapsed(hintText: '1'),
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                    onChanged: (v) {
+                      final n = int.tryParse(v) ?? 1;
+                      final clamped = n.clamp(1, maxWrong);
+                      setState(() => _wrongPartialDraft = clamped);
+                      if (v.isNotEmpty && v != '$clamped') {
+                        _wrongPartialQtyCtrl.value = _wrongPartialQtyCtrl.value.copyWith(
+                          text: '$clamped',
+                          selection: TextSelection.collapsed(
+                              offset: '$clamped'.length),
+                        );
+                      }
+                    },
+                  ),
+                ),
+                if (_unit.isNotEmpty)
+                  Text(' $_unit',
+                      style: const TextStyle(fontSize: 10, color: _kSub)),
+                _InlineStepBtn(
+                  icon: Icons.add,
+                  enabled: !_confirmingWrongPartial && _wrongPartialDraft < maxWrong,
+                  color: borderColor,
+                  onTap: () => setState(() {
+                    _wrongPartialDraft = (_wrongPartialDraft + 1).clamp(1, maxWrong);
+                    _wrongPartialQtyCtrl.text = '$_wrongPartialDraft';
+                  }),
+                ),
+              ],
+            ),
+          ),
+        ),
+        // RIGHT half: confirm button
+        Expanded(
+          child: GestureDetector(
+            onTap: _confirmingWrongPartial ? null : _doWrongPartial,
+            child: Container(
+              alignment: Alignment.center,
+              padding: const EdgeInsets.symmetric(horizontal: 6),
+              decoration: BoxDecoration(
+                color: _confirmingWrongPartial
+                    ? _kPartialFg.withValues(alpha: 0.45)
+                    : _kPartialFg,
+                borderRadius: const BorderRadius.only(
+                  topRight: Radius.circular(11),
+                  bottomRight: Radius.circular(11),
+                ),
+                border: Border(
+                  top: BorderSide(color: _kPartialFg.withValues(alpha: 0.4)),
+                  bottom: BorderSide(color: _kPartialFg.withValues(alpha: 0.4)),
+                  right: BorderSide(color: _kPartialFg.withValues(alpha: 0.4)),
+                ),
+              ),
+              child: _confirmingWrongPartial
+                  ? const SizedBox(width: 16, height: 16,
+                      child: CircularProgressIndicator(
+                          color: Colors.white, strokeWidth: 2))
+                  : Text(confirmLabel,
+                      style: const TextStyle(fontSize: 11,
+                          fontWeight: FontWeight.w700, color: Colors.white),
+                      textAlign: TextAlign.center,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis),
+            ),
+          ),
+        ),
+      ]),
+    );
   }
 
   // ── Build ──────────────────────────────────────────────────────────────────
@@ -361,6 +654,14 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
 
           // ── PENDING ───────────────────────────────────────────────────────
           if (sheetState == _ItemSheetState.pending) ...[
+            // #193 sentinel: new v2 action set
+            Builder(builder: (_) {
+              RenderLog.write('c193_sheet_actions_v2',
+                  'report_missing=true;few_item_wrong=true;old_short_gone=true');
+              return const SizedBox.shrink();
+            }),
+
+            // Got all (N) — unchanged
             _ActionRow(
               label: 'Got all ($_ordQty)',
               color: _kGreen,
@@ -373,35 +674,52 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
               },
             ),
             const SizedBox(height: 8),
-            _ActionRow(
-              label: 'Short${_unit.isNotEmpty ? ' (enter count)' : ''}',
-              color: _kShortFg,
-              icon: Icons.content_cut_rounded,
-              filled: false,
-              loading: false,
-              onTap: () => setState(() {
-                _showStepper = !_showStepper;
-                if (_showStepper) {
+
+            // Report missing (renamed from "Short (enter count)") + inline expander
+            if (!_showMissingInline)
+              _ActionRow(
+                label: 'Report missing',
+                color: _kShortFg,
+                icon: Icons.content_cut_rounded,
+                filled: false,
+                loading: false,
+                onTap: () => setState(() {
+                  _showMissingInline = true;
+                  _showWrongPartialInline = false;
                   final safeOrd = _ordQty > 0 ? _ordQty : 1;
-                  _shortDraft = (safeOrd - 1).clamp(1, safeOrd);
-                }
-              }),
-            ),
-            if (_showStepper) ...[
-              const SizedBox(height: 12),
-              _StepperBlock(
-                value: _shortDraft,
-                max: _ordQty > 0 ? _ordQty : 1,
-                confirming: _confirmingShort,
-                onChanged: (v) => setState(() => _shortDraft = v),
-                onConfirm: widget.recording ? null : () async {
-                  setState(() => _confirmingShort = true);
-                  await _doRecord('short', qty: _shortDraft);
-                  if (mounted) setState(() => _confirmingShort = false);
-                },
-              ),
-            ],
+                  _missingDraft = _localRecQty.clamp(0, safeOrd);
+                  _missingQtyCtrl.text = '$_missingDraft';
+                  RenderLog.write('c193_missing_inline_opened',
+                      'order_item_id=${_itemId ?? ''};default=$_missingDraft');
+                }),
+              )
+            else
+              _buildMissingInlineRow(),
             const SizedBox(height: 8),
+
+            // Few item wrong (new) + inline expander
+            if (!_showWrongPartialInline)
+              _ActionRow(
+                label: 'Few item wrong',
+                color: _kPartialFg,
+                icon: Icons.remove_circle_outline_rounded,
+                filled: false,
+                loading: false,
+                onTap: () => setState(() {
+                  _showWrongPartialInline = true;
+                  _showMissingInline = false;
+                  final maxW = _ordQty > 0 ? _ordQty : 1;
+                  _wrongPartialDraft = 1.clamp(1, maxW);
+                  _wrongPartialQtyCtrl.text = '$_wrongPartialDraft';
+                  RenderLog.write('c193_wrong_inline_opened',
+                      'order_item_id=${_itemId ?? ''};default=$_wrongPartialDraft');
+                }),
+              )
+            else
+              _buildWrongPartialInlineRow(),
+            const SizedBox(height: 8),
+
+            // Wrong item — unchanged (whole-item wrong, inline name capture)
             if (!_flaggingWrong) ...[
               _ActionRow(
                 label: 'Wrong item',
@@ -409,7 +727,10 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
                 icon: Icons.close_rounded,
                 filled: false,
                 loading: false,
-                onTap: widget.recording ? null : () => setState(() { _flaggingWrong = true; _wrongNameCtrl.clear(); }),
+                onTap: widget.recording ? null : () => setState(() {
+                  _flaggingWrong = true;
+                  _wrongNameCtrl.clear();
+                }),
               ),
             ] else ...[
               Container(
@@ -421,7 +742,8 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
                 ),
                 child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
                   const Text('What did they send instead? (optional)',
-                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _kWrongFg)),
+                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
+                          color: _kWrongFg)),
                   const SizedBox(height: 8),
                   TextField(
                     controller: _wrongNameCtrl,
@@ -459,13 +781,18 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
                           onPressed: _flaggingWrongLoading ? null : _fw_flagWrongItem,
                           style: FilledButton.styleFrom(
                             backgroundColor: _kWrongFg,
-                            disabledBackgroundColor: _kWrongFg.withValues(alpha: 0.4),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                            disabledBackgroundColor:
+                                _kWrongFg.withValues(alpha: 0.4),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8)),
                           ),
                           child: _flaggingWrongLoading
                               ? const SizedBox(width: 14, height: 14,
-                                  child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                              : const Text('Confirm', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+                                  child: CircularProgressIndicator(
+                                      color: Colors.white, strokeWidth: 2))
+                              : const Text('Confirm',
+                                  style: TextStyle(fontSize: 13,
+                                      fontWeight: FontWeight.w700)),
                         ),
                       ),
                     ),
@@ -474,13 +801,20 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
                       child: SizedBox(
                         height: 40,
                         child: OutlinedButton(
-                          onPressed: _flaggingWrongLoading ? null : () => setState(() { _flaggingWrong = false; _wrongNameCtrl.clear(); }),
+                          onPressed: _flaggingWrongLoading
+                              ? null
+                              : () => setState(() {
+                                    _flaggingWrong = false;
+                                    _wrongNameCtrl.clear();
+                                  }),
                           style: OutlinedButton.styleFrom(
                             foregroundColor: _kSub,
                             side: const BorderSide(color: _kBorder),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8)),
                           ),
-                          child: const Text('Cancel', style: TextStyle(fontSize: 13)),
+                          child: const Text('Cancel',
+                              style: TextStyle(fontSize: 13)),
                         ),
                       ),
                     ),
@@ -489,6 +823,8 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
               ),
             ],
             const SizedBox(height: 8),
+
+            // Not coming — unchanged
             _ActionRow(
               label: 'Not coming',
               color: _kNotComingFg,
@@ -502,7 +838,7 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
             ),
           ]
 
-          // ── RECEIVED FULL (B2) ────────────────────────────────────────────
+          // ── RECEIVED FULL ─────────────────────────────────────────────────
           else if (sheetState == _ItemSheetState.receivedFull) ...[
             _StatusLine('Received $_localRecQty / $_ordQty', _kReceivedFg),
             const SizedBox(height: 12),
@@ -517,14 +853,13 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
                 if (mounted) Navigator.of(context).pop();
               },
             ),
-            // c163 arrivals row count proof
             Builder(builder: (_) {
               RenderLog.write('c163_arrivals_sheet_rows', '$bodyRows');
               return const SizedBox.shrink();
             }),
           ]
 
-          // ── SHORTFALL (B3) — C171: per-item send removed; passive guidance shown ──
+          // ── SHORTFALL ─────────────────────────────────────────────────────
           else if (sheetState == _ItemSheetState.shortfall) ...[
             _StatusLine(
               'Received $_localRecQty / $_ordQty — $_shortQty short',
@@ -540,7 +875,8 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
                 border: Border.all(color: const Color(0xFFFCD34D)),
               ),
               child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                const Icon(Icons.info_outline_rounded, size: 15, color: Color(0xFFD97706)),
+                const Icon(Icons.info_outline_rounded,
+                    size: 15, color: Color(0xFFD97706)),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
@@ -568,7 +904,7 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
             }),
           ]
 
-          // ── DISPUTE ACTIVE (B4) ───────────────────────────────────────────
+          // ── DISPUTE ACTIVE ────────────────────────────────────────────────
           else if (sheetState == _ItemSheetState.disputeActive) ...[
             Container(
               width: double.infinity,
@@ -579,7 +915,6 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
                 border: Border.all(color: _kPurpleBorder),
               ),
               child: Text(
-                // B11/C174: removed phantom 'responded' case (not a valid contract status)
                 disputeStatus == 'reminder_sent'
                     ? 'Reminder sent to supplier — awaiting reply'
                     : disputeStatus == 'shop_logged'
@@ -658,7 +993,7 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
             }),
           ]
 
-          // ── WRONG / NOT_COMING ────────────────────────────────────────────
+          // ── DISPUTE RESOLVED ──────────────────────────────────────────────
           else if (sheetState == _ItemSheetState.disputeResolved) ...[
             Container(
               width: double.infinity,
@@ -669,7 +1004,8 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
                 border: Border.all(color: _kBorder),
               ),
               child: Row(children: [
-                const Icon(Icons.check_circle_outline_rounded, size: 16, color: _kSub),
+                const Icon(Icons.check_circle_outline_rounded,
+                    size: 16, color: _kSub),
                 const SizedBox(width: 8),
                 const Expanded(
                   child: Text('Dispute resolved — no further action needed.',
@@ -704,7 +1040,7 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
             }),
           ]
 
-          // ── FALLBACK (B5) — guaranteed non-empty ─────────────────────────
+          // ── FALLBACK ──────────────────────────────────────────────────────
           else ...[
             _StatusLine('Status: $_localFsState', _kSub),
             const SizedBox(height: 8),
@@ -733,17 +1069,17 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
     );
   }
 
-  // Count the number of meaningful body rows for this state (used in render-log)
   int _bodyRowCount(_ItemSheetState state, bool oiidPresent, String token) {
     switch (state) {
-      case _ItemSheetState.pending:       return 4; // Got all / Short / Wrong / Not coming
-      case _ItemSheetState.receivedFull:  return 2; // Status line + Reset
-      case _ItemSheetState.shortfall:     return 2; // B2/C174: info-box + Reset = 2 rows
-      case _ItemSheetState.disputeActive: return token.isNotEmpty ? 3 : 2; // Banner + link? + View
+      case _ItemSheetState.pending:
+        return 5; // Got all / Report missing / Few item wrong / Wrong / Not coming
+      case _ItemSheetState.receivedFull:  return 2;
+      case _ItemSheetState.shortfall:     return 2;
+      case _ItemSheetState.disputeActive: return token.isNotEmpty ? 3 : 2;
       case _ItemSheetState.disputeResolved: return 1;
       case _ItemSheetState.wrongItem:
-      case _ItemSheetState.notComing:     return 2; // Status + Reset
-      case _ItemSheetState.fallback:      return 2; // Status + Close
+      case _ItemSheetState.notComing:     return 2;
+      case _ItemSheetState.fallback:      return 2;
     }
   }
 }
@@ -809,11 +1145,9 @@ class _StatusBadge extends StatelessWidget {
     }
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration:
-          BoxDecoration(color: bg, borderRadius: BorderRadius.circular(20)),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(20)),
       child: Text(label,
-          style: TextStyle(
-              fontSize: 11, fontWeight: FontWeight.w600, color: fg)),
+          style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: fg)),
     );
   }
 }
@@ -826,8 +1160,7 @@ class _StatusLine extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Text(
         text,
-        style: TextStyle(
-            fontSize: 14, fontWeight: FontWeight.w600, color: color),
+        style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: color),
       );
 }
 
@@ -898,98 +1231,26 @@ class _ActionRow extends StatelessWidget {
   }
 }
 
-/// Inline stepper with Confirm button (separate from immediate-record).
-class _StepperBlock extends StatelessWidget {
-  final int value;
-  final int max;
-  final bool confirming;
-  final ValueChanged<int> onChanged;
-  final VoidCallback? onConfirm;
-
-  const _StepperBlock({
-    required this.value,
-    required this.max,
-    required this.confirming,
-    required this.onChanged,
-    required this.onConfirm,
+/// Compact tap target for inline stepper [-] / [+] buttons.
+class _InlineStepBtn extends StatelessWidget {
+  final IconData icon;
+  final bool enabled;
+  final Color color;
+  final VoidCallback onTap;
+  const _InlineStepBtn({
+    required this.icon,
+    required this.enabled,
+    required this.color,
+    required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: _kBg,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: _kBorder),
-      ),
-      child: Column(children: [
-        const Text('How many received?',
-            style: TextStyle(
-                fontSize: 14, fontWeight: FontWeight.w600, color: _kText)),
-        const SizedBox(height: 12),
-        Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-          _StepBtn(Icons.remove, value > 0 ? () => onChanged(value - 1) : null),
-          const SizedBox(width: 4),
-          Container(
-            width: 48, height: 36, alignment: Alignment.center,
-            decoration: BoxDecoration(
-                color: Colors.white,
-                border: Border.all(color: _kBorder),
-                borderRadius: BorderRadius.circular(6)),
-            child: Text('$value',
-                style: const TextStyle(
-                    fontSize: 15, fontWeight: FontWeight.w700, color: _kText)),
-          ),
-          const SizedBox(width: 4),
-          _StepBtn(Icons.add, value < max ? () => onChanged(value + 1) : null),
-        ]),
-        const SizedBox(height: 12),
-        SizedBox(
-          width: double.infinity,
-          child: FilledButton(
-            onPressed: onConfirm,
-            style: FilledButton.styleFrom(
-              backgroundColor: _kShortFg,
-              disabledBackgroundColor: const Color(0xFFEFCFC7),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8)),
-              padding: const EdgeInsets.symmetric(vertical: 10),
-            ),
-            child: confirming
-                ? const SizedBox(
-                    width: 16, height: 16,
-                    child: CircularProgressIndicator(
-                        color: Colors.white, strokeWidth: 2))
-                : const Text('Confirm short count',
-                    style: TextStyle(
-                        fontSize: 13, fontWeight: FontWeight.w600)),
-          ),
-        ),
-      ]),
-    );
-  }
-}
-
-class _StepBtn extends StatelessWidget {
-  final IconData icon;
-  final VoidCallback? onTap;
-  const _StepBtn(this.icon, this.onTap);
-
-  @override
-  Widget build(BuildContext context) {
     return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: 36, height: 36,
-        decoration: BoxDecoration(
-          color: onTap != null ? _kCard : _kBg,
-          border: Border.all(color: _kBorder),
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Icon(icon,
-            size: 18,
-            color: onTap != null ? _kText : _kSub),
+      onTap: enabled ? onTap : null,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 8),
+        child: Icon(icon, size: 16, color: enabled ? color : _kSub),
       ),
     );
   }

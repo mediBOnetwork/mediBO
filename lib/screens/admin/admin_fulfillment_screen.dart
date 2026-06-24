@@ -3286,6 +3286,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     final itemId = item['order_item_id']?.toString();
     final openDispute = itemId != null ? _disputeMap[itemId] : null;
     final disputeItem = itemId != null ? _disputeItemMap[itemId] : null;
+    RenderLog.write('c196_collect_card_layout_v2',
+        'surface=${widget.arrivals ? 'arrivals' : 'collect'}');
     return GestureDetector(
       onTap: (widget.arrivals && _arrivalsLocked) ? null : () => _showItemSheet(item),
       child: Container(
@@ -3315,32 +3317,49 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             ]),
           ),
           const SizedBox(width: 8),
-          // #185: cap right column so it never squeezes the name Expanded
+          // #196: cap right column; badge on its own line to prevent overlap
           ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 120),
             child: Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
-            Text('$recQty/$denominator',
-                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText)),
-            const SizedBox(height: 2),
-            // #184/#189: dispute badge on status line — verbatim from DisputeItem
-            Wrap(alignment: WrapAlignment.end, spacing: 6, runSpacing: 2, children: [
-              if (disputeItem != null)
-                _DisputeStrip(
-                  item: disputeItem,
-                  surface: widget.arrivals ? 'arrivals' : 'collect',
-                )
-              else if (openDispute != null)
-                DisputeBadge(status: openDispute['status']?.toString() ?? ''),
-              _StatePill(state),
+              // qty + status pill on one line
+              Row(mainAxisSize: MainAxisSize.min, children: [
+                Text('$recQty/$denominator',
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText)),
+                const SizedBox(width: 6),
+                _StatePill(state),
+              ]),
+              // dispute badge on its own constrained line below
+              if (disputeItem != null) ...[
+                const SizedBox(height: 3),
+                Builder(builder: (_) {
+                  RenderLog.write('c196_awaiting_badge_wrapped',
+                      'surface=${widget.arrivals ? 'arrivals' : 'collect'};dispute=${disputeItem.disputeId}');
+                  return SizedBox(
+                    width: 120,
+                    child: _DisputeStrip(
+                      item: disputeItem,
+                      surface: widget.arrivals ? 'arrivals' : 'collect',
+                    ),
+                  );
+                }),
+              ] else if (openDispute != null) ...[
+                const SizedBox(height: 3),
+                SizedBox(
+                  width: 120,
+                  child: Align(
+                    alignment: Alignment.centerRight,
+                    child: DisputeBadge(status: openDispute['status']?.toString() ?? ''),
+                  ),
+                ),
+              ],
+              if (widget.arrivals && item['count_mismatch'] == true) ...[
+                const SizedBox(height: 2),
+                Text(
+                  'shop ${(item['shop_qty'] as num?)?.toInt() ?? '?'}',
+                  style: const TextStyle(fontSize: 10, color: Color(0xFF92400E)),
+                ),
+              ],
             ]),
-            if (widget.arrivals && item['count_mismatch'] == true) ...[
-              const SizedBox(height: 2),
-              Text(
-                'shop ${(item['shop_qty'] as num?)?.toInt() ?? '?'}',
-                style: const TextStyle(fontSize: 10, color: Color(0xFF92400E)),
-              ),
-            ],
-          ]),
           ), // ConstrainedBox
         ]),
       ),

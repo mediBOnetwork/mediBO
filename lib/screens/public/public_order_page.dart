@@ -80,7 +80,7 @@ class _PublicOrderPageState extends State<PublicOrderPage> {
   Widget _buildContent() {
     final order = _order!;
     final supplierName = order['supplier_name'] as String? ?? '—';
-    final orderNo      = order['order_no']      as String? ?? '—';
+    final orderNo      = order['order_no']?.toString() ?? '—';
     final status       = (order['status']       as String? ?? '').toLowerCase();
     final createdAt    = order['created_at']    as String?;
     final dateStr = createdAt != null

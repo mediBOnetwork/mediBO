@@ -101,4 +101,97 @@ void main() {
       expect(items.first.actions.first.code, 'admin_got');
     });
   });
+
+  // ── #189 supplier screen tests (Section 8.2(d)) ───────────────────────────
+  group('SupplierDisputesResult / supplier_my_disputes contract', () {
+    Map<String, dynamic> _supplierItem({
+      required String status,
+      required int supplierActionCount,
+      required int adminActionCount,
+      String disputeStatus = 'active',
+    }) {
+      return {
+        'dispute_id': 'uuid-$status',
+        'order_item_id': 'oi-$status',
+        'product_name': 'Test Product $status',
+        'supplier': 'Test Supplier',
+        'mode': 'reminder',
+        'kind': 'short',
+        'ordered': 10,
+        'received': 7,
+        'short': 3,
+        'status': status,
+        'item_status_label': 'Label $status',
+        'dispute_status': disputeStatus,
+        'actions': List.generate(supplierActionCount,
+            (i) => {'code': 'sup_$i', 'label': 'Supplier Action $i'}),
+        'admin_actions': List.generate(adminActionCount,
+            (i) => {'code': 'adm_$i', 'label': 'Admin Action $i'}),
+      };
+    }
+
+    // reminder_sent: 2 supplier actions + 3 admin actions
+    test('reminder_sent: 2 supplier actions, 3 admin actions, active', () {
+      final item = DisputeItem.fromJson(
+          _supplierItem(status: 'reminder_sent', supplierActionCount: 2, adminActionCount: 3));
+      expect(item.actions.length, 2);
+      expect(item.adminActions.length, 3);
+      expect(item.isActive, true);
+    });
+
+    // waiting_sort_qty: 0 supplier actions, 2 admin actions
+    test('waiting_sort_qty: 0 supplier actions, 2 admin actions, active', () {
+      final item = DisputeItem.fromJson(
+          _supplierItem(status: 'waiting_sort_qty', supplierActionCount: 0, adminActionCount: 2));
+      expect(item.actions.length, 0);
+      expect(item.adminActions.length, 2);
+      expect(item.isActive, true);
+    });
+
+    // missing_dispute: 0 supplier actions, 2 admin actions
+    test('missing_dispute: 0 supplier actions, 2 admin actions, active', () {
+      final item = DisputeItem.fromJson(
+          _supplierItem(status: 'missing_dispute', supplierActionCount: 0, adminActionCount: 2));
+      expect(item.actions.length, 0);
+      expect(item.adminActions.length, 2);
+      expect(item.isActive, true);
+    });
+
+    // reinquiry: 0 supplier actions, 1 admin action
+    test('reinquiry: 0 supplier actions, 1 admin action, active', () {
+      final item = DisputeItem.fromJson(
+          _supplierItem(status: 'reinquiry', supplierActionCount: 0, adminActionCount: 1));
+      expect(item.actions.length, 0);
+      expect(item.adminActions.length, 1);
+      expect(item.isActive, true);
+    });
+
+    // closed: 0 supplier actions, 0 admin actions
+    test('closed: 0 supplier actions, 0 admin actions, inactive', () {
+      final item = DisputeItem.fromJson(_supplierItem(
+          status: 'missing_arrived',
+          supplierActionCount: 0,
+          adminActionCount: 0,
+          disputeStatus: 'closed'));
+      expect(item.actions.length, 0);
+      expect(item.adminActions.length, 0);
+      expect(item.isActive, false);
+    });
+
+    // SupplierDisputesResult wrapper parses correctly
+    test('SupplierDisputesResult: parses supplier + acting + items', () {
+      final result = SupplierDisputesResult(
+        supplier: 'Test Supplier',
+        acting: true,
+        items: [
+          DisputeItem.fromJson(_supplierItem(
+              status: 'reminder_sent', supplierActionCount: 2, adminActionCount: 3)),
+        ],
+      );
+      expect(result.supplier, 'Test Supplier');
+      expect(result.acting, true);
+      expect(result.items.length, 1);
+      expect(result.items.first.adminActions.length, 3);
+    });
+  });
 }

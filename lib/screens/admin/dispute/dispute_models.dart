@@ -2,6 +2,8 @@
 // public link (#190) surfaces. Parses the union of fw_get_disputes,
 // supplier_my_disputes, and get_dispute_form response shapes.
 
+import 'package:supabase_flutter/supabase_flutter.dart';
+
 num _n(dynamic v) =>
     v == null ? 0 : (v is num ? v : num.tryParse(v.toString()) ?? 0);
 
@@ -151,4 +153,102 @@ class DisputeItem {
         .map((e) => DisputeItem.fromJson(Map<String, dynamic>.from(e)))
         .toList();
   }
+}
+
+// ── Supplier disputes result wrapper (#189) ───────────────────────────────────
+
+class SupplierDisputesResult {
+  final String supplier;
+  final bool acting;
+  final List<DisputeItem> items;
+  const SupplierDisputesResult({
+    required this.supplier,
+    required this.acting,
+    required this.items,
+  });
+}
+
+// ── Service functions (#189) — shared across screens ─────────────────────────
+
+/// Fetch admin dispute list (fw_get_disputes).
+Future<List<DisputeItem>> fetchAdminDisputesList() async {
+  final res = await Supabase.instance.client.rpc('fw_get_disputes') as Map;
+  return DisputeItem.listFromResponse(res);
+}
+
+/// Build a map from orderItemId -> DisputeItem for quick line-level badge lookup.
+Future<Map<String, DisputeItem>> fetchAdminDisputeIndexByOrderItem() async {
+  final items = await fetchAdminDisputesList();
+  final map = <String, DisputeItem>{};
+  for (final item in items) {
+    if (item.orderItemId.isNotEmpty) {
+      map[item.orderItemId] = item;
+    }
+  }
+  return map;
+}
+
+/// Fetch supplier's own disputes (supplier_my_disputes).
+/// Pass actingSupplier non-null when an admin is acting-as a supplier.
+Future<SupplierDisputesResult> fetchSupplierDisputesList({
+  String? actingSupplier,
+}) async {
+  final params = <String, dynamic>{
+    'p_acting_supplier': actingSupplier,
+  };
+  final res = await Supabase.instance.client
+      .rpc('supplier_my_disputes', params: params) as Map;
+  final err = res['error']?.toString();
+  if (err != null) throw DisputeException(err);
+  final rawList = res['disputes'];
+  final items = (rawList is List)
+      ? rawList
+          .whereType<Map>()
+          .map((e) => DisputeItem.fromJson(Map<String, dynamic>.from(e)))
+          .toList()
+      : <DisputeItem>[];
+  return SupplierDisputesResult(
+    supplier: (res['supplier'] ?? '').toString(),
+    acting: res['acting'] == true,
+    items: items,
+  );
+}
+
+/// Supplier response to a dispute (supplier_respond_dispute).
+Future<Map<String, dynamic>> supplierRespondDisputeRpc({
+  required String disputeId,
+  required String response,
+  String? actingSupplier,
+}) async {
+  final res = await Supabase.instance.client.rpc(
+    'supplier_respond_dispute',
+    params: {
+      'p_dispute_id': disputeId,
+      'p_response': response,
+      'p_acting_supplier': actingSupplier,
+    },
+  );
+  final data = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+  final err = data['error']?.toString();
+  if (err != null) throw DisputeException(err);
+  return data;
+}
+
+/// Admin resolve a dispute (fw_resolve_dispute).
+Future<Map<String, dynamic>> resolveAdminDisputeRpc({
+  required String disputeId,
+  required String outcome,
+  String? note,
+}) async {
+  final res = await Supabase.instance.client.rpc(
+    'fw_resolve_dispute',
+    params: {
+      'p_dispute_id': disputeId,
+      'p_outcome': outcome,
+      'p_note': note,
+    },
+  ) as Map;
+  final err = res['error']?.toString();
+  if (err != null) throw DisputeException(err);
+  return Map<String, dynamic>.from(res);
 }

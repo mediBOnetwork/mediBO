@@ -321,6 +321,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   // #132A: open disputes keyed by order_item_id
   Map<String, Map<String, dynamic>> _disputeMap = {};
+  // #189: DisputeItem index keyed by order_item_id for verbatim status badges
+  Map<String, DisputeItem> _disputeItemMap = {};
 
   // #156: arrivals lock state
   bool _arrivalsLocked = false;
@@ -403,8 +405,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   // C173: count wrong-item disputes flagged for this supplier (shop_logged or reminder_sent, kind=wrong_item)
   int get _wrongFlaggedCount =>
-      _disputeMap.values
-          .where((d) => d['kind']?.toString() == 'wrong_item')
+      _disputeItemMap.values
+          .where((d) => d.kind == 'wrong_item')
           .length;
 
   // #133: removed at_warehouse/received_qty filter — show ALL items from RPC
@@ -757,16 +759,21 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       final res = await Supabase.instance.client.rpc('fw_get_disputes') as Map;
       if (!mounted) return;
       final disputes = (res['disputes'] as List? ?? []);
+      // Keep legacy map for fulfill_item_sheet.dart compat
       final map = <String, Map<String, dynamic>>{};
+      // #189: new DisputeItem index for verbatim status badges
+      final itemMap = <String, DisputeItem>{};
       for (final d in disputes) {
         final dm = Map<String, dynamic>.from(d as Map);
         final oid = dm['order_item_id']?.toString();
         final status = dm['status']?.toString() ?? '';
         if (oid != null && status != 'resolved' && status != 'cancelled') {
           map[oid] = dm;
+          try {
+            itemMap[oid] = DisputeItem.fromJson(dm);
+          } catch (_) {}
         }
       }
-      // B11: use raw row count (not deduped by OI) to match inner list
       final rawOpenCount = disputes.where((d) {
         final dm2 = d is Map ? Map<String, dynamic>.from(d) : <String, dynamic>{};
         return disputeStateOf(dm2) != DisputeState.resolved;
@@ -774,8 +781,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       RenderLog.write('c132a_dispute_badge_count', '$rawOpenCount');
       RenderLog.write('c174_admin_open_predicate',
           'tab_badge_count=$rawOpenCount;inner_open_count=$rawOpenCount;equal=true');
+      RenderLog.write('c189_dispute_index_built', 'count=${itemMap.length}');
       context.findAncestorStateOfType<_AdminFulfillmentScreenState>()?._setDisputeCount(rawOpenCount);
-      setState(() { _disputeMap = map; });
+      setState(() { _disputeMap = map; _disputeItemMap = itemMap; });
     } catch (_) {}
   }
 
@@ -3263,9 +3271,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     final imageUrl = item['image_url']?.toString();
     final bool shopArrival = widget.arrivals && _supplierMode == 'shop';
     final int denominator = shopArrival ? recQty : ordQty;
-    // #132A: open dispute badge
+    // #132A/#189: open dispute badge
     final itemId = item['order_item_id']?.toString();
     final openDispute = itemId != null ? _disputeMap[itemId] : null;
+    final disputeItem = itemId != null ? _disputeItemMap[itemId] : null;
     return GestureDetector(
       onTap: (widget.arrivals && _arrivalsLocked) ? null : () => _showItemSheet(item),
       child: Container(
@@ -3302,9 +3311,14 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             Text('$recQty/$denominator',
                 style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText)),
             const SizedBox(height: 2),
-            // #184: secondary badge left of status chip on bottom line
+            // #184/#189: dispute badge on status line — verbatim from DisputeItem
             Wrap(alignment: WrapAlignment.end, spacing: 6, runSpacing: 2, children: [
-              if (openDispute != null)
+              if (disputeItem != null)
+                _DisputeStrip(
+                  item: disputeItem,
+                  surface: widget.arrivals ? 'arrivals' : 'collect',
+                )
+              else if (openDispute != null)
                 DisputeBadge(status: openDispute['status']?.toString() ?? ''),
               _StatePill(state),
             ]),
@@ -3807,9 +3821,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                 if (state == 'wrong' || state == 'not_coming') {
                   RenderLog.write('c177_shop_states', 'state=$state;idx=$i');
                 }
-                // R3: desktop dispute badge
+                // R3: desktop dispute badge (#189: use DisputeItem for verbatim labels)
                 final deskItemId = item['order_item_id']?.toString();
                 final deskDispute = deskItemId != null ? _disputeMap[deskItemId] : null;
+                final deskDisputeItem = deskItemId != null ? _disputeItemMap[deskItemId] : null;
 
                 return InkWell(
                   onTap: () => _showItemSheet(item),
@@ -3834,7 +3849,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                               Text(name,
                                   style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _kText),
                                   maxLines: 1, overflow: TextOverflow.ellipsis),
-                              if (deskDispute != null) ...[
+                              if (deskDisputeItem != null) ...[
+                                const SizedBox(height: 2),
+                                _DisputeStrip(item: deskDisputeItem, surface: 'collect'),
+                              ] else if (deskDispute != null) ...[
                                 const SizedBox(height: 2),
                                 DisputeBadge(status: deskDispute['status']?.toString() ?? ''),
                               ],
@@ -6427,6 +6445,41 @@ class CountBadge extends StatelessWidget {
 }
 
 // ── #132A: Dispute badge — item-row indicator, distinct colour from C/CR/P ────
+
+// #189: Verbatim dispute status strip for Supplier Shop + Warehouse line rows.
+// Shows item_status_label + dispute_status chip from backend — no client-side mapping.
+class _DisputeStrip extends StatelessWidget {
+  final DisputeItem item;
+  final String surface; // 'collect' or 'arrivals' — for render-log only
+
+  const _DisputeStrip({required this.item, required this.surface});
+
+  @override
+  Widget build(BuildContext context) {
+    final isActive = item.isActive;
+    final bgColor  = isActive ? const Color(0xFFFEF3C7) : const Color(0xFFD1FAE5);
+    final fgColor  = isActive ? const Color(0xFF92400E) : const Color(0xFF065F46);
+
+    if (surface == 'collect') {
+      RenderLog.write('c189_collect_badge_rendered',
+          'dispute=${item.disputeId};status=${item.disputeStatus}');
+    } else {
+      RenderLog.write('c189_arrivals_badge_rendered',
+          'dispute=${item.disputeId};status=${item.disputeStatus}');
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+      decoration: BoxDecoration(color: bgColor, borderRadius: BorderRadius.circular(4)),
+      child: Text(
+        item.itemStatusLabel,
+        style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: fgColor),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+    );
+  }
+}
 
 class DisputeBadge extends StatelessWidget {
   final String status;

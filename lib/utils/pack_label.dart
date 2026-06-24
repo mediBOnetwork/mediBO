@@ -1,8 +1,8 @@
-// Always returns the plural form of packType (e.g. Strip→Strips, Vial→Vials).
-// Returns '' when packType is null/empty.
+// Returns singular packType for qty=1, plural otherwise. Returns '' when packType null/empty.
 String packLabel(int qty, String? packType) {
   final pt = (packType ?? '').trim();
   if (pt.isEmpty) return '';
+  if (qty == 1) return pt;
   const irregular = <String, String>{
     'Box': 'Boxes',
     'Patch': 'Patches',

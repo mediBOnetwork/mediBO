@@ -166,10 +166,11 @@ void main() {
 
     testWidgets('tapping Few item wrong shows inline expander', (tester) async {
       await _pumpSheet(tester, item: _collectItem());
-      expect(find.textContaining('Confirm wrong'), findsNothing);
+      // #194: panel shows counted stepper + "Wrong: N unit" derivation + Confirm button
+      expect(find.textContaining('Wrong:'), findsNothing);
       await tester.tap(find.text('Few item wrong'));
       await tester.pump(const Duration(milliseconds: 1000));
-      expect(find.textContaining('Confirm wrong'), findsOneWidget);
+      expect(find.textContaining('Wrong:'), findsOneWidget);
     });
 
     testWidgets('only one expander open at a time', (tester) async {
@@ -182,7 +183,8 @@ void main() {
       await tester.tap(find.text('Few item wrong'));
       await tester.pump(const Duration(milliseconds: 1000));
       expect(find.textContaining('Confirm missing'), findsNothing);
-      expect(find.textContaining('Confirm wrong'), findsOneWidget);
+      // #194: new panel shows "Wrong: N unit" derived label (not the old "Confirm wrong")
+      expect(find.textContaining('Wrong:'), findsOneWidget);
     });
   });
 

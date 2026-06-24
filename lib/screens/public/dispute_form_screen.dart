@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../utils/render_log.dart';
+import '../../widgets/fulfill_item_sheet.dart' show ProofThumbnail;
 import '../admin/dispute/dispute_models.dart';
 
 // ── Palette ───────────────────────────────────────────────────────────────────
@@ -404,6 +405,20 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
             RenderLog.write('c191_link_awaiting_hidden', 'true;dispute=${item.disputeId};status=${item.statusCode}');
             return const SizedBox.shrink();
           }),
+        ],
+
+        // (e2) Proof photo — c194
+        if ((item.proofUrl ?? '').isNotEmpty) ...[
+          const SizedBox(height: 10),
+          Row(children: [
+            const Text('Proof photo:',
+                style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: _kTextMuted)),
+            const SizedBox(width: 10),
+            ProofThumbnail(proofUrl: item.proofUrl!, size: 72),
+          ]),
         ],
 
         // (f) Action buttons — dynamic from item.actions; only shown when array non-empty

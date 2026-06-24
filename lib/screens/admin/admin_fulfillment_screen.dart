@@ -7793,6 +7793,20 @@ class _DisputeActionSheetState extends State<_DisputeActionSheet> {
           ),
         ]),
 
+        // Proof photo (c194)
+        if ((item.proofUrl ?? '').isNotEmpty) ...[
+          const SizedBox(height: 12),
+          Row(children: [
+            const Text('Proof:',
+                style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF6B7280))),
+            const SizedBox(width: 10),
+            ProofThumbnail(proofUrl: item.proofUrl!, size: 72),
+          ]),
+        ],
+
         const SizedBox(height: 20),
         const Divider(height: 1, color: Color(0xFFE5E7EB)),
         const SizedBox(height: 16),

@@ -5520,17 +5520,10 @@ class _BagLabelsScreenState extends State<_BagLabelsScreen> {
       ]));
     }
     if (_bags.isEmpty) {
-      return Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
-        const Icon(Icons.qr_code_2_rounded, size: 48, color: Color(0xFFD1D5DB)),
-        const SizedBox(height: 12),
-        const Text('No customer bags yet', style: TextStyle(fontSize: 15, color: _kSub)),
-        const SizedBox(height: 12),
-        OutlinedButton.icon(
-          onPressed: _load, icon: const Icon(Icons.refresh, size: 16),
-          label: const Text('Refresh'),
-          style: OutlinedButton.styleFrom(
-              foregroundColor: _kGreen, side: const BorderSide(color: _kGreen)),
-        ),
+      return const Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Icon(Icons.qr_code_2_rounded, size: 48, color: Color(0xFFD1D5DB)),
+        SizedBox(height: 12),
+        Text('No customer bags yet', style: TextStyle(fontSize: 15, color: _kSub)),
       ]));
     }
     return Column(children: [
@@ -5548,13 +5541,6 @@ class _BagLabelsScreenState extends State<_BagLabelsScreen> {
               backgroundColor: _kGreen,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
             ),
-          ),
-          const SizedBox(width: 8),
-          OutlinedButton.icon(
-            onPressed: _load, icon: const Icon(Icons.refresh_rounded, size: 16),
-            label: const Text('Refresh'),
-            style: OutlinedButton.styleFrom(
-                foregroundColor: _kSub, side: const BorderSide(color: _kBorder)),
           ),
         ]),
       ),
@@ -5829,20 +5815,12 @@ class _PackScreenState extends State<_PackScreen> {
         const SizedBox(height: 12),
         const Text('No bags to pack', style: TextStyle(fontSize: 15, color: _kSub)),
         const SizedBox(height: 12),
-        Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-          OutlinedButton.icon(
-            onPressed: _load, icon: const Icon(Icons.refresh, size: 16),
-            label: const Text('Refresh'),
-            style: OutlinedButton.styleFrom(foregroundColor: _kGreen, side: const BorderSide(color: _kGreen)),
-          ),
-          const SizedBox(width: 10),
-          OutlinedButton.icon(
-            onPressed: () => setState(() => _showLabels = true),
-            icon: const Icon(Icons.label_outline_rounded, size: 16),
-            label: const Text('Bag Labels'),
-            style: OutlinedButton.styleFrom(foregroundColor: _kSub, side: const BorderSide(color: _kBorder)),
-          ),
-        ]),
+        OutlinedButton.icon(
+          onPressed: () => setState(() => _showLabels = true),
+          icon: const Icon(Icons.label_outline_rounded, size: 16),
+          label: const Text('Bag Labels'),
+          style: OutlinedButton.styleFrom(foregroundColor: _kSub, side: const BorderSide(color: _kBorder)),
+        ),
       ]));
     }
     return Column(children: [
@@ -5856,16 +5834,6 @@ class _PackScreenState extends State<_PackScreen> {
             onPressed: () => setState(() => _showLabels = true),
             icon: const Icon(Icons.label_outline_rounded, size: 14),
             label: const Text('Bag Labels'),
-            style: OutlinedButton.styleFrom(
-                foregroundColor: _kSub, side: const BorderSide(color: _kBorder),
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                visualDensity: VisualDensity.compact),
-          ),
-          const SizedBox(width: 8),
-          OutlinedButton.icon(
-            onPressed: _load,
-            icon: const Icon(Icons.refresh_rounded, size: 14),
-            label: const Text('Refresh'),
             style: OutlinedButton.styleFrom(
                 foregroundColor: _kSub, side: const BorderSide(color: _kBorder),
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
@@ -6608,12 +6576,82 @@ class AdminFulfillmentScreen extends StatefulWidget {
   State<AdminFulfillmentScreen> createState() => _AdminFulfillmentScreenState();
 }
 
-class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen> {
+class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
+    with WidgetsBindingObserver {
   int _tab = 0;
   int _disputeCount = 0; // #132C: open dispute count for tab badge
   final _collectKey   = GlobalKey<_PickToLightScreenState>();
   final _disputesKey  = GlobalKey<_DisputesScreenState>();
 
+  // ── #187: Realtime channels ───────────────────────────────────────────────
+  final List<RealtimeChannel> _rtChannels = [];
+  Timer? _collectDebounce;
+  Timer? _packDebounce;
+  Timer? _disputeDebounce;
+
+  void _scheduleCollectReload() {
+    _collectDebounce?.cancel();
+    _collectDebounce = Timer(const Duration(milliseconds: 400), () {
+      if (!mounted) return;
+      _collectKey.currentState?._loadSuppliers();
+      _collectKey.currentState?._loadCollectModes();
+    });
+  }
+
+  void _schedulePackReload() {
+    _packDebounce?.cancel();
+    _packDebounce = Timer(const Duration(milliseconds: 400), () {
+      if (!mounted) return;
+      _packKey.currentState?._load();
+    });
+  }
+
+  void _scheduleDisputeReload() {
+    _disputeDebounce?.cancel();
+    _disputeDebounce = Timer(const Duration(milliseconds: 400), () {
+      if (!mounted) return;
+      _collectKey.currentState?._loadDisputes();
+      _disputesKey.currentState?._load();
+    });
+  }
+
+  void _subscribeRealtime() {
+    final supabase = Supabase.instance.client;
+    int subscribed = 0;
+
+    void addChannel(String name, List<String> tables, void Function() onEvent) {
+      try {
+        var ch = supabase.channel(name);
+        for (final t in tables) {
+          ch = ch.onPostgresChanges(
+            event: PostgresChangeEvent.all,
+            schema: 'public',
+            table: t,
+            callback: (_) => onEvent(),
+          );
+        }
+        ch.subscribe((status, [_]) {
+          if (status == RealtimeSubscribeStatus.subscribed) subscribed++;
+        });
+        _rtChannels.add(ch);
+      } catch (_) {}
+    }
+
+    addChannel('fulfill_collect_187',   ['order_items'],                               _scheduleCollectReload);
+    addChannel('fulfill_pack_187',      ['orders', 'order_items'],                     _schedulePackReload);
+    addChannel('fulfill_disputes_187',  ['supplier_disputes', 'order_items'],          _scheduleDisputeReload);
+    addChannel('fulfill_suppord_187',   ['supplier_orders'],                           _scheduleCollectReload);
+
+    Future.delayed(const Duration(seconds: 3), () {
+      if (!mounted) return;
+      RenderLog.write('c187_realtime',
+        'change:187,removed_refresh_buttons:true,'
+        'channels:[order_items,orders,supplier_orders,supplier_disputes],'
+        'channels_subscribed:$subscribed,'
+        'debounce_ms:400,'
+        'reload_on_focus:true');
+    });
+  }
 
   // #125 R6: called by Arrivals after confirm to refresh Collect badge/list.
   void _refreshCollect() {
@@ -6645,11 +6683,36 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _subscribeRealtime();
     RenderLog.write('fulfillment_area_mounted', 'true');
     RenderLog.write('fulfillment_three_areas_mounted', 'true');
     RenderLog.write('c132c_disputes_view', 'true');
     RenderLog.write('c132c_resolve_wired', 'true');
     RenderLog.write('c132c_copylink_wired', 'true');
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && mounted) {
+      _scheduleCollectReload();
+      _schedulePackReload();
+      _scheduleDisputeReload();
+      _arrivalsKey.currentState?.refresh();
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _collectDebounce?.cancel();
+    _packDebounce?.cancel();
+    _disputeDebounce?.cancel();
+    for (final ch in _rtChannels) {
+      try { Supabase.instance.client.removeChannel(ch); } catch (_) {}
+    }
+    _rtChannels.clear();
+    super.dispose();
   }
 
   void _onFocus() {}
@@ -6678,7 +6741,10 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen> {
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: Row(children: [
-              _TabBtn('Supplier Shop', _tab == 0, () => setState(() => _tab = 0)),
+              _TabBtn('Supplier Shop', _tab == 0, () {
+                setState(() => _tab = 0);
+                _scheduleCollectReload();
+              }),
               const SizedBox(width: 6),
               _TabBtn('Warehouse', _tab == 1, () {
                 setState(() => _tab = 1);
@@ -6687,7 +6753,10 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen> {
                 });
               }),
               const SizedBox(width: 6),
-              _TabBtn('Pack',      _tab == 2, () => setState(() => _tab = 2)),
+              _TabBtn('Pack', _tab == 2, () {
+                setState(() => _tab = 2);
+                _schedulePackReload();
+              }),
               const SizedBox(width: 6),
               // #132C: Disputes tab with open-count badge
               Stack(clipBehavior: Clip.none, children: [
@@ -7148,18 +7217,12 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     }
 
     if (_disputes.isEmpty) {
-      return Center(
+      return const Center(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          const Icon(Icons.check_circle_outline_rounded, size: 48, color: _kGreen),
-          const SizedBox(height: 12),
-          const Text('No open disputes.',
+          Icon(Icons.check_circle_outline_rounded, size: 48, color: _kGreen),
+          SizedBox(height: 12),
+          Text('No open disputes.',
               style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _kSub)),
-          const SizedBox(height: 16),
-          TextButton.icon(
-            onPressed: _load,
-            icon: const Icon(Icons.refresh_rounded, size: 16),
-            label: const Text('Refresh'),
-          ),
         ]),
       );
     }

@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-import '../../utils/pack_label.dart';
 import '../../utils/render_log.dart';
+import '../../widgets/order_item_card.dart';
 
 const _kGreen       = Color(0xFF1B7A43);
 const _kBg          = Color(0xFFF5F6F8);
@@ -50,9 +50,8 @@ class _PublicOrderPageState extends State<PublicOrderPage> {
         _loading = false;
       });
       RenderLog.write('c188_order_page_loaded', 'true');
-      RenderLog.write('c188_order_page_items', parsedItems.length);
-      final hasPackType = parsedItems.any((i) => (i['pack_type'] as String? ?? '').isNotEmpty);
-      RenderLog.write('c188_order_page_packtype', hasPackType ? 'true' : 'false');
+      RenderLog.write('c189_order_page_shared_card', 'true');
+      RenderLog.write('c189_order_page_items', parsedItems.length);
     } catch (e) {
       setState(() { _loading = false; _error = 'Failed to load order: $e'; });
     }
@@ -83,9 +82,7 @@ class _PublicOrderPageState extends State<PublicOrderPage> {
     final orderNo      = order['order_no']?.toString() ?? '—';
     final status       = (order['status']       as String? ?? '').toLowerCase();
     final createdAt    = order['created_at']    as String?;
-    final dateStr = createdAt != null
-        ? _formatDate(createdAt)
-        : '—';
+    final dateStr = createdAt != null ? _formatDate(createdAt) : '—';
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
@@ -103,7 +100,7 @@ class _PublicOrderPageState extends State<PublicOrderPage> {
               if (_items.isEmpty)
                 const Text('No items.', style: TextStyle(color: _kTextMuted))
               else
-                ..._items.map(_buildItemRow),
+                ..._items.map((item) => OrderItemCard(item: item)),
               const SizedBox(height: 32),
             ],
           ),
@@ -136,9 +133,9 @@ class _PublicOrderPageState extends State<PublicOrderPage> {
 
   Widget _statusChip(String status) {
     Color bg; Color fg;
-    if (status == 'confirmed' || status == 'delivered') {
+    if (status == 'confirmed' || status == 'delivered' || status == 'accepted') {
       bg = const Color(0xFFD1FAE5); fg = const Color(0xFF065F46);
-    } else if (status == 'cancelled') {
+    } else if (status == 'cancelled' || status == 'rejected') {
       bg = const Color(0xFFFEE2E2); fg = const Color(0xFF991B1B);
     } else {
       bg = const Color(0xFFFEF3C7); fg = const Color(0xFF92400E);
@@ -148,50 +145,6 @@ class _PublicOrderPageState extends State<PublicOrderPage> {
       decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(20)),
       child: Text(status.isEmpty ? 'pending' : status,
           style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: fg)),
-    );
-  }
-
-  Widget _buildItemRow(Map<String, dynamic> item) {
-    final name    = (item['product_name'] as String? ?? '').trim();
-    final company = (item['company']      as String? ?? '').trim();
-    final qty     = (item['quantity']     as num?)?.toInt() ?? 0;
-    final pt      = item['pack_type']     as String?;
-    final label   = packLabel(qty, pt);
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: _kCard,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: _kBorder),
-      ),
-      child: Row(children: [
-        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(name, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: _kTextPrimary)),
-          if (company.isNotEmpty) ...[
-            const SizedBox(height: 3),
-            Text(company, style: const TextStyle(fontSize: 12, color: _kTextMuted)),
-          ],
-        ])),
-        const SizedBox(width: 12),
-        Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            decoration: BoxDecoration(
-              color: const Color(0xFFEFF6FF),
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: const Color(0xFFBFDBFE)),
-            ),
-            child: Text('Qty $qty',
-                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF1E40AF))),
-          ),
-          if (label.isNotEmpty) ...[
-            const SizedBox(height: 3),
-            Text(label, style: const TextStyle(fontSize: 11, color: _kTextMuted)),
-          ],
-        ]),
-      ]),
     );
   }
 

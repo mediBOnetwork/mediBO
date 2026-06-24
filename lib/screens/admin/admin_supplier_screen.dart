@@ -3455,6 +3455,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   Widget _buildOrderItemsPanel(List<Map<String, dynamic>> items, {double padH = 16}) {
     RenderLog.write('c108_admin_suporder_itemcard_built', items.length);
     RenderLog.write('c108_admin_suporders_list_built', 'true');
+    RenderLog.write('c189_admin_tab_merged_pill', 'true');
     return Container(
       margin: EdgeInsets.fromLTRB(padH, 0, padH, 12),
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),

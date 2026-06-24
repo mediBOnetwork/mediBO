@@ -104,6 +104,7 @@ void main() {
     RenderLog.write('inq_supplier_submit_mode', 1);
     RenderLog.write('screen', 'boot');
     RenderLog.write('c188_build', '188');
+    RenderLog.write('c189_build', '189');
 
     // Selftest hook (guarded; no-op without exact secret; mark for removal in #64).
     // Triggers signInWithPassword then defers the selftest_login trace to the

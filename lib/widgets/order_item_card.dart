@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import '../utils/pack_label.dart';
 import '../utils/render_log.dart';
 
-// Shared order-item card used by both supplier and admin supplier-orders views.
+// Shared order-item card used by supplier portal, admin supplier-orders, and public order page.
 
 const double kOrderItemWideBreakpoint = 900.0;
 
@@ -16,6 +16,7 @@ const Map<String, List<Color>> kOrderItemClassColors = {
   'DERMA':              [Color(0xFFFBEAF0), Color(0xFF993556)],
   'GYNAECOLOGICAL':     [Color(0xFFFBEAF0), Color(0xFF993556)],
   'RESPIRATORY':        [Color(0xFFE1F5EE), Color(0xFF0F6E56)],
+  'HORMONES':           [Color(0xFFFBEAF0), Color(0xFF993556)],
 };
 const _kDefaultClassBg = Color(0xFFF1EFE8);
 const _kDefaultClassFg = Color(0xFF2C2C2A);
@@ -33,20 +34,18 @@ class OrderItemCard extends StatelessWidget {
     final imageUrl    = item['image_url'] as String?;
     final qty         = (item['quantity'] as num?)?.toInt() ?? 0;
     final packType    = item['pack_type'] as String?;
-    final label       = packLabel(qty, packType);
-    if (label.isNotEmpty) {
-      RenderLog.write('c188_orderitemcard_packtype_rendered', 'true');
-    }
+    final pillText    = qtyPillLabel(qty, packType);
+    RenderLog.write('c189_merged_pill', 'true');
 
     return LayoutBuilder(builder: (context, constraints) {
       final isWide = constraints.maxWidth >= kOrderItemWideBreakpoint;
       return isWide
-          ? _buildWide(productName, tc, company, imageUrl, qty, label)
-          : _buildNarrow(productName, tc, company, imageUrl, qty, label);
+          ? _buildWide(productName, tc, company, imageUrl, pillText)
+          : _buildNarrow(productName, tc, company, imageUrl, pillText);
     });
   }
 
-  Widget _buildWide(String name, String tc, String company, String? imageUrl, int qty, String packLbl) {
+  Widget _buildWide(String name, String tc, String company, String? imageUrl, String pillText) {
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       decoration: BoxDecoration(
@@ -98,24 +97,14 @@ class OrderItemCard extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 18),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _buildQtyPill(qty),
-                if (packLbl.isNotEmpty) ...[
-                  const SizedBox(height: 4),
-                  Text(packLbl, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
-                ],
-              ],
-            ),
+            _buildQtyPill(pillText),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildNarrow(String name, String tc, String company, String? imageUrl, int qty, String packLbl) {
+  Widget _buildNarrow(String name, String tc, String company, String? imageUrl, String pillText) {
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       decoration: BoxDecoration(
@@ -172,22 +161,14 @@ class OrderItemCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 10),
-            Row(
-              children: [
-                _buildQtyPill(qty),
-                if (packLbl.isNotEmpty) ...[
-                  const SizedBox(width: 8),
-                  Text(packLbl, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
-                ],
-              ],
-            ),
+            _buildQtyPill(pillText),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildQtyPill(int qty) {
+  Widget _buildQtyPill(String label) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
@@ -196,7 +177,7 @@ class OrderItemCard extends StatelessWidget {
         border: Border.all(color: const Color(0xFFBFDBFE)),
       ),
       child: Text(
-        'Qty $qty',
+        label,
         style: const TextStyle(
           fontSize: 13,
           fontWeight: FontWeight.w600,

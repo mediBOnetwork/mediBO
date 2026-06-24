@@ -10,3 +10,8 @@ String packLabel(int qty, String? packType) {
   if (pt.endsWith('s')) return pt;
   return '${pt}s';
 }
+
+String qtyPillLabel(int qty, String? packType) {
+  final pl = packLabel(qty, packType);
+  return pl.isEmpty ? 'Qty $qty' : 'Qty $qty $pl';
+}

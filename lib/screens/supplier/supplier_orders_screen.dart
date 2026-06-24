@@ -259,11 +259,14 @@ class _OrderCard extends StatelessWidget {
               child: items.isEmpty
                   ? const Text('No items.',
                       style: TextStyle(fontSize: 13, color: Color(0xFF6B7280)))
-                  : Column(
-                      children: items
-                          .map((item) => OrderItemCard(item: item))
-                          .toList(),
-                    ),
+                  : Builder(builder: (_) {
+                      RenderLog.write('c189_supplier_tab_shared_card', 'true');
+                      return Column(
+                        children: items
+                            .map((item) => OrderItemCard(item: item))
+                            .toList(),
+                      );
+                    }),
             ),
           ],
         ],

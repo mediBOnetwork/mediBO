@@ -18,6 +18,7 @@ import 'screens/auth/login_screen.dart';
 import 'screens/home_shell.dart';
 import 'screens/public/inquiry_form_screen.dart';
 import 'screens/public/dispute_form_screen.dart';
+import 'screens/public/public_order_page.dart';
 import 'screens/about_screen.dart';
 import 'screens/contact_screen.dart';
 import 'screens/legal_pages.dart';
@@ -102,6 +103,7 @@ void main() {
     RenderLog.write('inq_admin_submit_mode', 1);
     RenderLog.write('inq_supplier_submit_mode', 1);
     RenderLog.write('screen', 'boot');
+    RenderLog.write('c188_build', '188');
 
     // Selftest hook (guarded; no-op without exact secret; mark for removal in #64).
     // Triggers signInWithPassword then defers the selftest_login trace to the
@@ -286,8 +288,18 @@ class _PharmaB2BAppState extends State<PharmaB2BApp> {
             home: _AppRoot(auth: _auth),
             // Public inquiry form — no auth required, handles /inquiry/<token>
             // Public dispute form  — no auth required, handles /dispute?token=<token>
+            // Public order view    — no auth required, handles /order/<token>
             onGenerateRoute: (settings) {
               final name = settings.name ?? '';
+              if (name.startsWith('/order/')) {
+                final token = name.substring('/order/'.length).split('?').first;
+                if (token.isNotEmpty) {
+                  return MaterialPageRoute(
+                    settings: settings,
+                    builder: (_) => PublicOrderPage(token: token),
+                  );
+                }
+              }
               if (name.startsWith('/inquiry/')) {
                 final token = name.substring('/inquiry/'.length).split('?').first;
                 if (token.isNotEmpty) {

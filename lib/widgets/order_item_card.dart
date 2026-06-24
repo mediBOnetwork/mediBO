@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../utils/pack_label.dart';
 import '../utils/render_log.dart';
 
 // Shared order-item card used by both supplier and admin supplier-orders views.
@@ -31,16 +32,21 @@ class OrderItemCard extends StatelessWidget {
     final company     = (item['company'] as String? ?? '').trim();
     final imageUrl    = item['image_url'] as String?;
     final qty         = (item['quantity'] as num?)?.toInt() ?? 0;
+    final packType    = item['pack_type'] as String?;
+    final label       = packLabel(qty, packType);
+    if (label.isNotEmpty) {
+      RenderLog.write('c188_orderitemcard_packtype_rendered', 'true');
+    }
 
     return LayoutBuilder(builder: (context, constraints) {
       final isWide = constraints.maxWidth >= kOrderItemWideBreakpoint;
       return isWide
-          ? _buildWide(productName, tc, company, imageUrl, qty)
-          : _buildNarrow(productName, tc, company, imageUrl, qty);
+          ? _buildWide(productName, tc, company, imageUrl, qty, label)
+          : _buildNarrow(productName, tc, company, imageUrl, qty, label);
     });
   }
 
-  Widget _buildWide(String name, String tc, String company, String? imageUrl, int qty) {
+  Widget _buildWide(String name, String tc, String company, String? imageUrl, int qty, String packLbl) {
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       decoration: BoxDecoration(
@@ -92,14 +98,24 @@ class OrderItemCard extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 18),
-            _buildQtyPill(qty),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _buildQtyPill(qty),
+                if (packLbl.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(packLbl, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+                ],
+              ],
+            ),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildNarrow(String name, String tc, String company, String? imageUrl, int qty) {
+  Widget _buildNarrow(String name, String tc, String company, String? imageUrl, int qty, String packLbl) {
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       decoration: BoxDecoration(
@@ -156,7 +172,15 @@ class OrderItemCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 10),
-            _buildQtyPill(qty),
+            Row(
+              children: [
+                _buildQtyPill(qty),
+                if (packLbl.isNotEmpty) ...[
+                  const SizedBox(width: 8),
+                  Text(packLbl, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+                ],
+              ],
+            ),
           ],
         ),
       ),

@@ -3254,13 +3254,17 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     if (supName == null) return;
     try {
       final rows = await Supabase.instance.client
-          .rpc('get_supplier_order_send_payload', params: {'p_supplier_name': supName}) as List;
+          .rpc('get_supplier_order_send_payload', params: {
+            'p_supplier_name': supName,
+            'p_order_id': row.id,
+          }) as List;
       final link = rows.isNotEmpty
           ? (Map<String, dynamic>.from(rows.first as Map)['link'] as String?)
           : null;
 
-      final greeting = 'Hello $supName, we are ordering these items from you. Please take our order and check the items:';
+      final greeting = 'mediBO order for $supName. View & confirm here:';
       final message = link != null && link.isNotEmpty ? '$greeting\n$link' : greeting;
+      RenderLog.write('c188_send_uses_order_link', link != null && link.isNotEmpty ? 'true' : 'no_link');
 
       await _showSendContactPicker(supplierName: supName, message: message, btnCtx: btnCtx, isOrders: true);
     } catch (e) {

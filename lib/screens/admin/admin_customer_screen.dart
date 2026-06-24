@@ -509,6 +509,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
           _deletedRows  = deleted;
           _loading      = false;
         });
+        RenderLog.write('c186_delete_order',
+            'change:186,button_present:true,uses_rpc:delete_order,confirm_dialog:true');
       }
     } catch (e) {
       if (mounted) {
@@ -1021,6 +1023,67 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       }
     } catch (e) {
       RenderLog.write('order_item_status_error', 'orderId:$orderId err:$e');
+    }
+  }
+
+  // ── Delete order ──────────────────────────────────────────────────────────
+  final Set<String> _deletingOrders = {};
+
+  Future<void> _deleteOrder(BuildContext ctx, String orderId) async {
+    final confirmed = await showDialog<bool>(
+      context: ctx,
+      builder: (dCtx) => AlertDialog(
+        title: const Text('Delete this order?'),
+        content: const Text(
+            'This permanently deletes the order and all related items, disputes, '
+            'and receiving history. This cannot be undone.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dCtx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dCtx, true),
+            style: TextButton.styleFrom(foregroundColor: const Color(0xFFDC2626)),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    if (!mounted) return;
+    setState(() => _deletingOrders.add(orderId));
+    try {
+      final res = await Supabase.instance.client
+          .rpc('delete_order', params: {'p_order_id': orderId});
+      if (!mounted) return;
+      final data = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+      final err = data['error']?.toString();
+      if (err == 'not_authorized') {
+        ScaffoldMessenger.of(ctx).showSnackBar(
+            const SnackBar(content: Text('Not allowed')));
+      } else if (err == 'order_not_found') {
+        ScaffoldMessenger.of(ctx).showSnackBar(
+            const SnackBar(content: Text('Order already removed')));
+        await _load(showSpinner: false);
+      } else if (err != null) {
+        ScaffoldMessenger.of(ctx).showSnackBar(
+            SnackBar(content: Text('Delete failed: $err')));
+      } else {
+        final deleted = data['deleted'] as Map? ?? {};
+        final itemCount = deleted['order_items'];
+        final msg = itemCount != null
+            ? 'Order deleted ($itemCount items removed)'
+            : 'Order deleted';
+        ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text(msg)));
+        await _load(showSpinner: false);
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(ctx).showSnackBar(
+          const SnackBar(content: Text('Delete failed — try again')));
+    } finally {
+      if (mounted) setState(() => _deletingOrders.remove(orderId));
     }
   }
 
@@ -1663,6 +1726,33 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
             ]),
           );
         }),
+        if (row.orderId != null) ...[
+          const SizedBox(height: 14),
+          const Divider(height: 1, color: Color(0xFFE5E7EB)),
+          const SizedBox(height: 10),
+          SizedBox(
+            width: double.infinity,
+            child: Builder(builder: (btnCtx) {
+              final isDeleting = _deletingOrders.contains(row.orderId);
+              return OutlinedButton.icon(
+                onPressed: isDeleting ? null : () => _deleteOrder(btnCtx, row.orderId!),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFFDC2626),
+                  side: const BorderSide(color: Color(0xFFDC2626)),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                ),
+                icon: isDeleting
+                    ? const SizedBox(width: 14, height: 14,
+                        child: CircularProgressIndicator(
+                            color: Color(0xFFDC2626), strokeWidth: 2))
+                    : const Icon(Icons.delete_outline_rounded, size: 16),
+                label: Text(isDeleting ? 'Deleting…' : 'Delete order',
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+              );
+            }),
+          ),
+        ],
       ]),
     );
   }

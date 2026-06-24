@@ -111,7 +111,6 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
   @override
   void initState() {
     super.initState();
-    _scroll.addListener(_onScroll);
     _loadMeta();
     _resetAndLoad();
     _injectScrollbarCss();
@@ -154,7 +153,6 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
 
   @override
   void dispose() {
-    _scroll.removeListener(_onScroll);
     _scroll.dispose();
     _focusNode.dispose();
     super.dispose();
@@ -376,6 +374,7 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
     }
     final token = _loadToken;
     final offset = _items.length;
+    RenderLog.write('c195_load_more_batch', 'category=${widget.category};offset=$offset');
     setState(() => _loadingMore = true);
     try {
       final pageResult = await widget.repo.fetchPage(
@@ -415,15 +414,10 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
     }
   }
 
-  void _onScroll() {
-    if (!_scroll.hasClients) return;
-    final pos = _scroll.position;
-    if (pos.pixels >= pos.maxScrollExtent - 300) {
-      _loadMore();
-    }
+  void _handleLoadMore() {
+    RenderLog.write('c195_load_more_tapped', 'category=${widget.category}');
+    _loadMore();
   }
-
-  void _handleLoadMore() => _loadMore();
 
   void _scrollToProducts() {
     final ctx = _productsKey.currentContext;
@@ -1150,6 +1144,7 @@ class _ProductsSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    RenderLog.write('c195_grid_manual_mode', 'category=$category');
     final searching = query.trim().isNotEmpty;
     final title = searching ? 'Search Results' : (category == 'All' ? 'Best Sellers' : prettyCategory(category));
 

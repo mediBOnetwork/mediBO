@@ -3,15 +3,16 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../utils/render_log.dart';
 
-const _kGreen  = Color(0xFF1B7A43);
-const _kText   = Color(0xFF111827);
-const _kSub    = Color(0xFF6B7280);
-const _kBorder = Color(0xFFE5E7EB);
-const _kBg     = Color(0xFFF5F6F8);
-const _kCard   = Colors.white;
-const _kRed    = Color(0xFFDC2626);
+const _kGreen       = Color(0xFF1B7A43);
+const _kText        = Color(0xFF111827);
+const _kSub         = Color(0xFF6B7280);
+const _kBorder      = Color(0xFFE5E7EB);
+const _kCard        = Colors.white;
+const _kRed         = Color(0xFFDC2626);
 const _kGreenChipBg = Color(0xFFE7F4EC);
 const _kNeutralChip = Color(0xFFF1F3F4);
+const _kAmberText   = Color(0xFFB8860B);
+const _kAmberBg     = Color(0xFFFFF8E1);
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 String _packQty(num n, String? packType) {
@@ -87,18 +88,22 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
           .toList();
       final activeCount = raw.where(_isActive).length;
       final closedCount = raw.length - activeCount;
-      final hasPackType = raw.any((i) {
-        final pt = i['pack_type']?.toString() ?? '';
-        return pt.isNotEmpty;
+      final hasCategory = raw.any((i) {
+        final c = i['category']?.toString() ?? '';
+        return c.isNotEmpty;
+      });
+      final hasCompany = raw.any((i) {
+        final c = i['company']?.toString() ?? '';
+        return c.isNotEmpty;
       });
       RenderLog.write('c175_portal_load',
           'acting=${_actingSupplier != null};count=${raw.length}');
-      RenderLog.write('c184_supplier_dispute',
-          'change:184,surface:portal,table_layout:true,'
-          'has_pack_type:$hasPackType,'
+      RenderLog.write('c185_supplier_card',
+          'change:185,surface:portal,card_layout:true,has_image_slot:true,'
+          'has_category:$hasCategory,has_company:$hasCompany,'
+          'missing_amber:true,'
           'active_count:$activeCount,'
-          'closed_count:$closedCount,'
-          'packqty_helper:true');
+          'closed_count:$closedCount');
       setState(() { _disputes = raw; _loading = false; });
     } catch (e) {
       if (!mounted) return;
@@ -227,7 +232,7 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
             children: [
               // ── Active section ──────────────────────────────────────────
               _sectionLabel('Active', activeItems.length, active: true),
-              const SizedBox(height: 6),
+              const SizedBox(height: 8),
               if (activeItems.isEmpty)
                 const Padding(
                   padding: EdgeInsets.symmetric(vertical: 12),
@@ -235,11 +240,14 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
                       style: TextStyle(fontSize: 13, color: _kSub)),
                 )
               else
-                _buildTable(activeItems, isActive: true),
+                ...activeItems.map((item) => Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: _buildItemCard(item, isActive: true),
+                )),
 
               // ── Closed section ──────────────────────────────────────────
               if (closedItems.isNotEmpty) ...[
-                const SizedBox(height: 16),
+                const SizedBox(height: 8),
                 GestureDetector(
                   onTap: () => setState(() => _closedExpanded = !_closedExpanded),
                   child: Row(mainAxisSize: MainAxisSize.min, children: [
@@ -266,8 +274,14 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
                   clipBehavior: Clip.antiAlias,
                   child: _closedExpanded
                       ? Padding(
-                          padding: const EdgeInsets.only(top: 6),
-                          child: _buildTable(closedItems, isActive: false),
+                          padding: const EdgeInsets.only(top: 8),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: closedItems.map((item) => Padding(
+                              padding: const EdgeInsets.only(bottom: 10),
+                              child: _buildItemCard(item, isActive: false),
+                            )).toList(),
+                          ),
                         )
                       : const SizedBox.shrink(),
                 ),
@@ -298,7 +312,25 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
     ]);
   }
 
-  Widget _buildTable(List<Map<String, dynamic>> items, {required bool isActive}) {
+  Widget _buildItemCard(Map<String, dynamic> item, {required bool isActive}) {
+    final disputeId = item['dispute_id']?.toString() ?? '';
+    final kind      = item['kind']?.toString() ?? 'short';
+    final isWrong   = kind == 'wrong_item';
+    final product   = item['product_name']?.toString() ?? '—';
+    final wrongProd = item['wrong_product_name']?.toString();
+    final packType  = item['pack_type']?.toString();
+    final category  = item['category']?.toString();
+    final company   = item['company']?.toString();
+    final imageUrl  = item['image_url']?.toString();
+    final ordered   = _toNum(item['ordered']);
+    final received  = _toNum(item['received']);
+    final short     = isWrong ? ordered : _toNum(item['short']);
+    final status    = item['status']?.toString() ?? '';
+    final isResponding = _responding[disputeId] == true;
+    final canRespond = isActive && (status == 'reminder_sent' || status == 'shop_logged');
+
+    final hasImage = imageUrl != null && imageUrl.isNotEmpty;
+
     return Container(
       decoration: BoxDecoration(
         color: _kCard,
@@ -309,96 +341,82 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
               blurRadius: 6, offset: const Offset(0, 2)),
         ],
       ),
+      padding: const EdgeInsets.all(14),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          child: _tableHeader(),
-        ),
-        const Divider(height: 1, color: _kBorder),
-        for (int i = 0; i < items.length; i++) ...[
-          _buildItemRow(items[i], isActive: isActive),
-          if (i < items.length - 1) const Divider(height: 1, color: _kBorder),
-        ],
-      ]),
-    );
-  }
 
-  Widget _tableHeader() {
-    const style = TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: _kSub);
-    return Row(children: const [
-      Expanded(flex: 2, child: Text('ITEM', style: style)),
-      Expanded(flex: 1, child: Text('ORD', style: style, textAlign: TextAlign.right)),
-      Expanded(flex: 1, child: Text('REC', style: style, textAlign: TextAlign.right)),
-      Expanded(flex: 1, child: Text('SHORT', style: style, textAlign: TextAlign.right)),
-    ]);
-  }
-
-  Widget _buildItemRow(Map<String, dynamic> item, {required bool isActive}) {
-    final disputeId  = item['dispute_id']?.toString() ?? '';
-    final kind       = item['kind']?.toString() ?? 'short';
-    final isWrong    = kind == 'wrong_item';
-    final product    = item['product_name']?.toString() ?? '—';
-    final wrongProd  = item['wrong_product_name']?.toString();
-    final packType   = item['pack_type']?.toString();
-    final ordered    = _toNum(item['ordered']);
-    final received   = _toNum(item['received']);
-    final short      = isWrong ? ordered : _toNum(item['short']);
-    final status     = item['status']?.toString() ?? '';
-    final isResponding = _responding[disputeId] == true;
-    final canRespond = isActive && (status == 'reminder_sent' || status == 'shop_logged');
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        // ── (1) Header row: image + info ─────────────────────────────────
         Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          // Image
+          ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: hasImage
+                ? Image.network(
+                    imageUrl!,
+                    width: 60, height: 60,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => _imagePlaceholder(),
+                  )
+                : _imagePlaceholder(),
+          ),
+          const SizedBox(width: 10),
+
+          // Info column
           Expanded(
-            flex: 2,
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(product,
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
-                      color: isActive ? _kText : _kSub),
-                  maxLines: 2, overflow: TextOverflow.ellipsis),
-              if (isWrong) ...[
+              // Line 1: name + active/closed pill
+              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Expanded(
+                  child: Text(product,
+                      style: TextStyle(
+                          fontSize: 15, fontWeight: FontWeight.w700,
+                          color: isActive ? _kText : _kSub,
+                          height: 1.3),
+                      maxLines: 2, overflow: TextOverflow.ellipsis),
+                ),
+                const SizedBox(width: 6),
+                _statusPill(isActive),
+              ]),
+              // Line 2: category
+              if (category != null && category.isNotEmpty) ...[
+                const SizedBox(height: 3),
+                Text(category,
+                    style: const TextStyle(fontSize: 12, color: _kSub),
+                    maxLines: 1, overflow: TextOverflow.ellipsis),
+              ],
+              // Line 3: company
+              if (company != null && company.isNotEmpty) ...[
                 const SizedBox(height: 2),
+                Text(company,
+                    style: const TextStyle(fontSize: 12, color: _kSub),
+                    maxLines: 1, overflow: TextOverflow.ellipsis),
+              ],
+              // Line 4: wrong item note
+              if (isWrong) ...[
+                const SizedBox(height: 3),
                 Text('Wrong: sent ${(wrongProd != null && wrongProd.isNotEmpty) ? wrongProd : '—'}',
-                    style: const TextStyle(fontSize: 11, color: _kRed),
+                    style: const TextStyle(fontSize: 12, color: _kRed),
                     maxLines: 1, overflow: TextOverflow.ellipsis),
               ],
             ]),
           ),
-          Expanded(
-            flex: 1,
-            child: Text(_packQty(ordered, packType),
-                style: TextStyle(fontSize: 12,
-                    color: isActive ? _kText : _kSub),
-                textAlign: TextAlign.right),
-          ),
-          Expanded(
-            flex: 1,
-            child: Text(_packQty(received, packType),
-                style: TextStyle(fontSize: 12,
-                    color: isActive ? _kText : _kSub),
-                textAlign: TextAlign.right),
-          ),
-          Expanded(
-            flex: 1,
-            child: Text(_packQty(short, packType),
-                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700,
-                    color: isActive ? _kRed : _kSub),
-                textAlign: TextAlign.right),
-          ),
         ]),
+
+        // ── (2) Qty table ─────────────────────────────────────────────────
+        const SizedBox(height: 12),
+        _buildQtyTable(ordered, received, short, packType),
+
+        // ── (3) Action area ───────────────────────────────────────────────
         if (canRespond) ...[
-          const SizedBox(height: 10),
+          const SizedBox(height: 12),
           _buildResponseButtons(disputeId, kind, isResponding),
         ] else if (isActive) ...[
-          const SizedBox(height: 8),
+          const SizedBox(height: 10),
           Align(
             alignment: Alignment.centerLeft,
             child: _activeChip(status, kind),
           ),
         ] else ...[
-          const SizedBox(height: 8),
+          const SizedBox(height: 10),
           Align(
             alignment: Alignment.centerLeft,
             child: _closedChip(status),
@@ -407,6 +425,85 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
       ]),
     );
   }
+
+  Widget _imagePlaceholder() => Container(
+    width: 60, height: 60,
+    decoration: BoxDecoration(
+      color: const Color(0xFFF1F3F4),
+      borderRadius: BorderRadius.circular(8),
+    ),
+    child: const Icon(Icons.medication_outlined, size: 28, color: Color(0xFFBDBDBD)),
+  );
+
+  Widget _statusPill(bool isActive) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      decoration: BoxDecoration(
+        color: isActive ? _kGreenChipBg : _kNeutralChip,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Text(
+        isActive ? 'Active' : 'Closed',
+        style: TextStyle(
+          fontSize: 11, fontWeight: FontWeight.w600,
+          color: isActive ? _kGreen : _kSub,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildQtyTable(num ordered, num received, num short, String? packType) {
+    return Container(
+      decoration: BoxDecoration(
+        border: Border.all(color: _kBorder),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(children: [
+        // Header row
+        IntrinsicHeight(
+          child: Row(children: [
+            _qtyCell('Ordered', isHeader: true, isAmber: false),
+            _vertDivider(),
+            _qtyCell('Received', isHeader: true, isAmber: false),
+            _vertDivider(),
+            _qtyCell('Missing', isHeader: true, isAmber: true),
+          ]),
+        ),
+        Divider(height: 1, color: _kBorder),
+        // Value row
+        IntrinsicHeight(
+          child: Row(children: [
+            _qtyCell(_packQty(ordered, packType), isHeader: false, isAmber: false),
+            _vertDivider(),
+            _qtyCell(_packQty(received, packType), isHeader: false, isAmber: false),
+            _vertDivider(),
+            _qtyCell(_packQty(short, packType), isHeader: false, isAmber: true, isBold: true),
+          ]),
+        ),
+      ]),
+    );
+  }
+
+  Widget _qtyCell(String text, {required bool isHeader, required bool isAmber,
+      bool isBold = false}) {
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+        color: isAmber && !isHeader ? _kAmberBg : null,
+        child: Text(
+          text,
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontSize: isHeader ? 11 : 13,
+            fontWeight: (isHeader || isBold) ? FontWeight.w700 : FontWeight.w400,
+            color: isAmber ? _kAmberText : (isHeader ? _kSub : _kText),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _vertDivider() => VerticalDivider(width: 1, color: _kBorder, thickness: 1);
 
   Widget _buildResponseButtons(String disputeId, String kind, bool isResponding) {
     final spinner = const SizedBox(width: 14, height: 14,

@@ -142,6 +142,11 @@ class DisputeItem {
     );
   }
 
+  /// True when the dispute is awaiting the supplier's Yes/No response.
+  /// Use this to suppress "Awaiting supplier response" on supplier-facing surfaces.
+  bool get isAwaitingSupplier =>
+      statusCode == 'reminder_sent' || statusCode == 'shop_logged';
+
   static List<DisputeItem> listFromResponse(dynamic response) {
     if (response is! Map) return [];
     final err = response['error'];

@@ -45,7 +45,6 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
   String _supplierName = '';
   bool _closedExpanded = false;
   final Map<String, bool> _responding = {};
-  final Map<String, bool> _resolving = {};
   RealtimeChannel? _rtChannel;
   Timer? _rtDebounce;
 
@@ -175,67 +174,6 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
     }
   }
 
-  // Admin button tap (adminActions)
-  Future<void> _resolveAdmin(DisputeItem item, DisputeAction action) async {
-    if (_resolving[item.disputeId] == true) return;
-    final noteCtrl = TextEditingController();
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(action.label),
-        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('${item.productName} — ${_supplierName}.\nConfirm: ${action.label}?',
-              style: const TextStyle(fontSize: 14)),
-          const SizedBox(height: 16),
-          TextField(
-            controller: noteCtrl,
-            maxLines: 3,
-            decoration: const InputDecoration(
-              labelText: 'Note (optional)',
-              border: OutlineInputBorder(),
-              isDense: true,
-            ),
-          ),
-        ]),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: _kGreen),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Confirm'),
-          ),
-        ],
-      ),
-    );
-    noteCtrl.dispose();
-    if (confirmed != true || !mounted) return;
-    setState(() => _resolving[item.disputeId] = true);
-    try {
-      final note = noteCtrl.text.trim().isEmpty ? null : noteCtrl.text.trim();
-      final res = await resolveAdminDisputeRpc(
-        disputeId: item.disputeId,
-        outcome: action.code,
-        note: note,
-      );
-      if (!mounted) return;
-      final newStatus = res['new_status']?.toString() ?? action.label;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Updated: $newStatus')));
-      Future.delayed(const Duration(seconds: 1), () {
-        if (mounted) _load();
-      });
-    } on DisputeException catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(e.toString().substring(0, e.toString().length.clamp(0, 80)))));
-    } finally {
-      if (mounted) setState(() => _resolving.remove(item.disputeId));
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     if (_loading) {
@@ -293,6 +231,7 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
 
     final activeItems = _disputes.where((d) => d.isActive).toList();
     final closedItems = _disputes.where((d) => !d.isActive).toList();
+    RenderLog.write('c191_reminder_no_admin_buttons', 'admin_buttons_removed=true;items=${_disputes.length}');
 
     return RefreshIndicator(
       onRefresh: _load,
@@ -415,7 +354,6 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
     final isActive   = item.isActive;
     final hasImage   = (item.imageUrl ?? '').isNotEmpty;
     final isResponding = _responding[item.disputeId] == true;
-    final isResolving  = _resolving[item.disputeId] == true;
 
     final statusBgColor  = isActive ? const Color(0xFFFEF3C7) : const Color(0xFFD1FAE5);
     final statusTxtColor = isActive ? const Color(0xFF92400E) : const Color(0xFF065F46);
@@ -495,31 +433,33 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
         const SizedBox(height: 12),
         _buildQtyTable(item.ordered, item.received, item.short, item.packType),
 
-        // (d) item_status_label badge VERBATIM
-        const SizedBox(height: 10),
-        Align(
-          alignment: Alignment.centerLeft,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(color: statusBgColor, borderRadius: BorderRadius.circular(20)),
-            child: Text(item.itemStatusLabel,
-                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
-                    color: statusTxtColor)),
-          ),
-        ),
+        // (d) item_status_label badge — hidden while awaiting (meaningless to supplier)
+        if (!item.isAwaitingSupplier) ...[
+          const SizedBox(height: 10),
+          Builder(builder: (_) {
+            RenderLog.write('c191_reminder_awaiting_hidden', 'false;dispute=${item.disputeId};status=${item.statusCode}');
+            return Align(
+              alignment: Alignment.centerLeft,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(color: statusBgColor, borderRadius: BorderRadius.circular(20)),
+                child: Text(item.itemStatusLabel,
+                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
+                        color: statusTxtColor)),
+              ),
+            );
+          }),
+        ] else ...[
+          Builder(builder: (_) {
+            RenderLog.write('c191_reminder_awaiting_hidden', 'true;dispute=${item.disputeId};status=${item.statusCode}');
+            return const SizedBox.shrink();
+          }),
+        ],
 
-        // Supplier action buttons (item.actions)
+        // Supplier action buttons (item.actions only — admin buttons never shown here)
         if (item.actions.isNotEmpty) ...[
           const SizedBox(height: 12),
           _buildSupplierButtons(item, isResponding),
-        ],
-
-        // Admin action buttons (item.adminActions — only when acting)
-        if (_acting && item.adminActions.isNotEmpty) ...[
-          const SizedBox(height: 10),
-          const Divider(height: 1, color: Color(0xFFE5E7EB)),
-          const SizedBox(height: 10),
-          _buildAdminButtons(item, isResolving),
         ],
       ]),
     );
@@ -647,48 +587,4 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
     );
   }
 
-  // Admin buttons from item.adminActions
-  Widget _buildAdminButtons(DisputeItem item, bool isResolving) {
-    RenderLog.write('c189_admin_acting_buttons_rendered',
-        'dispute=${item.disputeId};count=${item.adminActions.length}');
-    const spinner = SizedBox(width: 12, height: 12,
-        child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2));
-    if (item.adminActions.length == 1) {
-      final action = item.adminActions.first;
-      return SizedBox(
-        width: double.infinity,
-        child: FilledButton(
-          onPressed: isResolving ? null : () => _resolveAdmin(item, action),
-          style: FilledButton.styleFrom(
-            backgroundColor: _kGreen,
-            disabledBackgroundColor: _kGreen.withValues(alpha: 0.4),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-            padding: const EdgeInsets.symmetric(vertical: 10),
-          ),
-          child: isResolving ? spinner : Text(action.label,
-              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
-                  color: Colors.white)),
-        ),
-      );
-    }
-    return Wrap(
-      spacing: 8,
-      runSpacing: 8,
-      children: item.adminActions.map((action) => OutlinedButton(
-        onPressed: isResolving ? null : () => _resolveAdmin(item, action),
-        style: OutlinedButton.styleFrom(
-          foregroundColor: _kGreen,
-          side: const BorderSide(color: Color(0xFFBBDDC8)),
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-        ),
-        child: isResolving
-            ? const SizedBox(width: 12, height: 12,
-                child: CircularProgressIndicator(strokeWidth: 2))
-            : Text(action.label,
-                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-      )).toList(),
-    );
-  }
 }

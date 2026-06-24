@@ -7249,6 +7249,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     RenderLog.write('c188_disputes_tab_built', 'active=${activeDisputes.length};closed=${closedDisputes.length}');
     RenderLog.write('c170_disputes_built', 'true');
     RenderLog.write('c170_supplier_card_count', '${activeGroups.length}');
+    RenderLog.write('c191_admin_disputes_redesigned', 'active=${activeDisputes.length};closed=${closedDisputes.length};groups=${activeGroups.length}');
 
     if (_disputes.isEmpty) {
       return const Center(
@@ -7473,7 +7474,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     );
   }
 
-  // ── #188: Item card — backend-provided labels and dynamic action buttons ────
+  // ── #191: Item card redesign — cleaner layout, same data + actions ──────────
   Widget _buildDisputeItemCard(DisputeItem item) {
     final isWrong     = item.kind == 'wrong_item';
     final isResolving = _resolving.contains(item.disputeId);
@@ -7482,55 +7483,67 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     final statusTxtColor = isActive ? const Color(0xFF92400E) : const Color(0xFF065F46);
 
     return Container(
-      padding: const EdgeInsets.all(12),
+      margin: const EdgeInsets.only(bottom: 1),
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
       decoration: BoxDecoration(
-        color: const Color(0xFFF9FAFB),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: _kBorder, width: 0.5),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: _kBorder),
+        boxShadow: [BoxShadow(
+            color: Colors.black.withValues(alpha: 0.03),
+            blurRadius: 4, offset: const Offset(0, 1))],
       ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        // (a) Product name + kind tag
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+
+        // Line 1: product name + Short/Wrong kind tag
         Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(item.productName.isNotEmpty ? item.productName : '—',
-                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: _kText)),
+                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _kText,
+                      height: 1.3),
+                  maxLines: 2, overflow: TextOverflow.ellipsis),
               if (isWrong && (item.wrongProductName ?? '').isNotEmpty) ...[
                 const SizedBox(height: 2),
                 Text('Received: ${item.wrongProductName}',
-                    style: const TextStyle(fontSize: 12, color: _kSub)),
+                    style: const TextStyle(fontSize: 12, color: Color(0xFFDC2626)),
+                    maxLines: 1, overflow: TextOverflow.ellipsis),
               ],
             ]),
           ),
           const SizedBox(width: 8),
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
             decoration: BoxDecoration(
               color: isWrong ? const Color(0xFFEEF2FF) : const Color(0xFFF1F5F9),
-              borderRadius: BorderRadius.circular(4),
+              borderRadius: BorderRadius.circular(6),
             ),
             child: Text(isWrong ? 'Wrong item' : 'Short',
                 style: TextStyle(
-                  fontSize: 10, fontWeight: FontWeight.w600,
+                  fontSize: 10, fontWeight: FontWeight.w700,
                   color: isWrong ? const Color(0xFF4338CA) : const Color(0xFF475569),
                 )),
           ),
         ]),
+
+        // Line 2: quantities (muted, compact)
+        const SizedBox(height: 6),
+        Text(
+          'Ordered ${item.ordered.toInt()} · Received ${item.received.toInt()} · Short ${item.short.toInt()}',
+          style: const TextStyle(fontSize: 12, color: _kSub),
+        ),
+
+        // Line 3: status chips row
         const SizedBox(height: 8),
-        // (b) Quantities
-        Text('Ordered ${item.ordered.toInt()} · Received ${item.received.toInt()} · Short ${item.short.toInt()}',
-            style: const TextStyle(fontSize: 12, color: _kSub)),
-        const SizedBox(height: 8),
-        // (c) Item-status badge — label from backend, colour from active/closed only
-        Row(children: [
+        Wrap(spacing: 6, runSpacing: 6, children: [
+          // item_status_label badge — VERBATIM (admin sees "Awaiting supplier response")
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
             decoration: BoxDecoration(color: statusBgColor, borderRadius: BorderRadius.circular(20)),
             child: Text(item.itemStatusLabel,
                 style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: statusTxtColor)),
           ),
-          const SizedBox(width: 6),
-          // (d) Dispute-status chip — verbatim
+          // dispute_status chip — VERBATIM
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
             decoration: BoxDecoration(
@@ -7541,18 +7554,19 @@ class _DisputesScreenState extends State<_DisputesScreen> {
                 style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
                     color: isActive ? const Color(0xFF92400E) : _kSub)),
           ),
-          // (e) unfillable chip
-          if (item.unfillable) ...[
-            const SizedBox(width: 6),
+          // unfillable chip — when no supplier available
+          if (item.unfillable)
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(color: const Color(0xFFFEE2E2), borderRadius: BorderRadius.circular(20)),
-              child: const Text('No supplier available - re-inquiry dead-end',
-                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF991B1B))),
+              decoration: BoxDecoration(
+                  color: const Color(0xFFFEE2E2), borderRadius: BorderRadius.circular(20)),
+              child: const Text('No supplier available',
+                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700,
+                      color: Color(0xFF991B1B))),
             ),
-          ],
         ]),
-        // (f) Action buttons from item.actions
+
+        // Action buttons from item.actions (admin resolves here)
         if (item.actions.isNotEmpty) ...[
           const SizedBox(height: 10),
           _buildItemActions(item, isResolving),

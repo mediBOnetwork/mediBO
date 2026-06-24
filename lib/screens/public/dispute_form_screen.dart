@@ -384,17 +384,27 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
         const SizedBox(height: 12),
         _buildQtyTable(item.ordered, item.received, item.short, item.packType),
 
-        // (d) item_status_label badge — VERBATIM from backend
-        const SizedBox(height: 10),
-        Align(
-          alignment: Alignment.centerLeft,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(color: statusBgColor, borderRadius: BorderRadius.circular(20)),
-            child: Text(item.itemStatusLabel,
-                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: statusTxtColor)),
-          ),
-        ),
+        // (d) item_status_label badge — hidden while awaiting (meaningless to the supplier)
+        if (!item.isAwaitingSupplier) ...[
+          const SizedBox(height: 10),
+          Builder(builder: (_) {
+            RenderLog.write('c191_link_awaiting_hidden', 'false;dispute=${item.disputeId};status=${item.statusCode}');
+            return Align(
+              alignment: Alignment.centerLeft,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(color: statusBgColor, borderRadius: BorderRadius.circular(20)),
+                child: Text(item.itemStatusLabel,
+                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: statusTxtColor)),
+              ),
+            );
+          }),
+        ] else ...[
+          Builder(builder: (_) {
+            RenderLog.write('c191_link_awaiting_hidden', 'true;dispute=${item.disputeId};status=${item.statusCode}');
+            return const SizedBox.shrink();
+          }),
+        ],
 
         // (f) Action buttons — dynamic from item.actions; only shown when array non-empty
         if (item.actions.isNotEmpty) ...[

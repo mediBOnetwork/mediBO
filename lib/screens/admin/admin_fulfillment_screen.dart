@@ -116,6 +116,29 @@ class _OrderStatusBadge extends StatelessWidget {
   }
 }
 
+// ── #197: Merged product row (one per product, combining all customer lines) ──
+class _MergedProduct {
+  final int productId;
+  final String productName;
+  final String packType;
+  final String? imageUrl;
+  final int orderedTotal;
+  final int receivedTotal;
+  final List<String> orderItemIds; // underlying line IDs — for dispute lookup only
+  final String combinedState; // 'pending'|'received'|'short'|'wrong'|'not_coming'
+
+  const _MergedProduct({
+    required this.productId,
+    required this.productName,
+    required this.packType,
+    this.imageUrl,
+    required this.orderedTotal,
+    required this.receivedTotal,
+    required this.orderItemIds,
+    required this.combinedState,
+  });
+}
+
 class _FulfilImageTile extends StatelessWidget {
   final String? imageUrl;
   final double size;
@@ -411,6 +434,57 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   // #133: removed at_warehouse/received_qty filter — show ALL items from RPC
   List<Map<String, dynamic>> _visibleItems() => _items;
+
+  // #197: group _items by product_id → one display row per product
+  List<_MergedProduct> get _mergedItems {
+    final groups = <int, List<Map<String, dynamic>>>{};
+    for (final item in _items) {
+      final pid = (item['product_id'] as num?)?.toInt();
+      if (pid == null) continue;
+      groups.putIfAbsent(pid, () => []).add(item);
+    }
+    final merged = <_MergedProduct>[];
+    for (final entry in groups.entries) {
+      final lines = entry.value;
+      final first = lines.first;
+      final orderedTotal = lines.fold(0, (s, r) => s + ordQtyOf(r));
+      final receivedTotal = lines.fold(0, (s, r) => s + recQtyOf(r));
+      final oiids = lines
+          .map((r) => r['order_item_id']?.toString() ?? '')
+          .where((s) => s.isNotEmpty)
+          .toList();
+      final states = lines.map(stateOf).toSet();
+      String combinedState;
+      if (states.every((s) => s == 'received') && receivedTotal >= orderedTotal) {
+        combinedState = 'received';
+      } else if (states.contains('wrong')) {
+        combinedState = 'wrong';
+      } else if (states.contains('not_coming')) {
+        combinedState = 'not_coming';
+      } else if (receivedTotal == 0) {
+        combinedState = 'pending';
+      } else {
+        combinedState = 'short';
+      }
+      merged.add(_MergedProduct(
+        productId: entry.key,
+        productName: first['product_name']?.toString() ?? '—',
+        packType: first['pack_type']?.toString() ?? '',
+        imageUrl: first['image_url']?.toString(),
+        orderedTotal: orderedTotal,
+        receivedTotal: receivedTotal,
+        orderItemIds: oiids,
+        combinedState: combinedState,
+      ));
+    }
+    merged.sort((a, b) {
+      final aPend = a.combinedState == 'pending' ? 0 : 1;
+      final bPend = b.combinedState == 'pending' ? 0 : 1;
+      if (aPend != bPend) return aPend - bPend;
+      return a.productName.compareTo(b.productName);
+    });
+    return merged;
+  }
 
   // ── C167/C168 shared helpers — shape-tolerant for BOTH RPCs ─────────────────
   // Collect: ordered_qty(numeric), fulfillment_state(text), collect_locked(bool)
@@ -3246,6 +3320,14 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     if (locked) RenderLog.write('change_91_locked', '1');
     else RenderLog.write('change_91_confirm_present', '1');
 
+    // #197: one row per product
+    final merged = _mergedItems;
+    if (widget.arrivals) {
+      RenderLog.write('c197_merged_rows_wh', 'products=${merged.length};raw_lines=${_items.length}');
+    } else {
+      RenderLog.write('c197_merged_rows_shop', 'products=${merged.length};raw_lines=${_items.length}');
+    }
+
     if (showFooter) {
       final safeB = MediaQuery.of(context).padding.bottom;
       RenderLog.write('c151_footer_in_scroll', 'pinned=n;in_dropdown=y;state=${locked ? 'locked' : 'active'}');
@@ -3258,15 +3340,13 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     return ListView.separated(
       shrinkWrap: shrinkWrap,
       physics: shrinkWrap ? const NeverScrollableScrollPhysics() : null,
-      // #185: restore pre-#184 horizontal inset (16) for both modes
       padding: EdgeInsets.fromLTRB(16, 8, 16, 24 + safeBottom),
-      itemCount: _items.length + footerCount, // +1 for Confirm/Locked footer #91
-      separatorBuilder: (_, i) => SizedBox(height: i == _items.length - 1 ? 16 : 4),
+      itemCount: merged.length + footerCount,
+      separatorBuilder: (_, i) => SizedBox(height: i == merged.length - 1 ? 16 : 4),
       itemBuilder: (_, i) {
-        if (showFooter && i == _items.length)
-          return _buildConfirmFooter(widget.arrivals ? _arrivalsLocked : locked); // #156
-
-        return _buildItemTile(_items[i]);
+        if (showFooter && i == merged.length)
+          return _buildConfirmFooter(widget.arrivals ? _arrivalsLocked : locked);
+        return _buildMergedItemTile(merged[i]);
       },
     );
   }
@@ -3364,6 +3444,138 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         ]),
       ),
     );
+  }
+
+  // ── #197: Merged product card ─────────────────────────────────────────────
+  Widget _buildMergedItemTile(_MergedProduct merged) {
+    final state = merged.combinedState;
+    final bool shopArrival = widget.arrivals && _supplierMode == 'shop';
+    final int denominator = shopArrival ? merged.receivedTotal : merged.orderedTotal;
+    // Dispute: first match across all underlying lines
+    DisputeItem? disputeItem;
+    Map<String, dynamic>? openDispute;
+    for (final oiid in merged.orderItemIds) {
+      disputeItem ??= _disputeItemMap[oiid];
+      openDispute ??= _disputeMap[oiid];
+    }
+    RenderLog.write('c196_collect_card_layout_v2',
+        'surface=${widget.arrivals ? 'arrivals' : 'collect'}');
+    return GestureDetector(
+      onTap: (widget.arrivals && _arrivalsLocked) ? null : () => _showProductSheet(merged),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: _kCard,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: state == 'pending' ? _kBorder : (_stateBgMap[state] ?? _kBorder),
+          ),
+        ),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+          _FulfilImageTile(merged.imageUrl, size: 40),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min, children: [
+              Text(merged.productName,
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
+                  maxLines: 2, overflow: TextOverflow.ellipsis),
+              const SizedBox(height: 1),
+              Text(merged.packType.isNotEmpty ? merged.packType : '—',
+                  style: const TextStyle(fontSize: 11, color: _kSub),
+                  maxLines: 1, overflow: TextOverflow.ellipsis),
+            ]),
+          ),
+          const SizedBox(width: 8),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 120),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
+              Row(mainAxisSize: MainAxisSize.min, children: [
+                Text('${merged.receivedTotal}/$denominator',
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText)),
+                const SizedBox(width: 6),
+                _StatePill(state),
+              ]),
+              if (disputeItem != null) ...[
+                const SizedBox(height: 3),
+                Builder(builder: (_) {
+                  RenderLog.write('c196_awaiting_badge_wrapped',
+                      'surface=${widget.arrivals ? 'arrivals' : 'collect'};dispute=${disputeItem!.disputeId}');
+                  return SizedBox(
+                    width: 120,
+                    child: _DisputeStrip(
+                      item: disputeItem!,
+                      surface: widget.arrivals ? 'arrivals' : 'collect',
+                    ),
+                  );
+                }),
+              ] else if (openDispute != null) ...[
+                const SizedBox(height: 3),
+                SizedBox(
+                  width: 120,
+                  child: Align(
+                    alignment: Alignment.centerRight,
+                    child: DisputeBadge(status: openDispute['status']?.toString() ?? ''),
+                  ),
+                ),
+              ],
+            ]),
+          ),
+        ]),
+      ),
+    );
+  }
+
+  // #197: open per-product receiving sheet
+  Future<void> _showProductSheet(_MergedProduct merged) async {
+    if (widget.arrivals ? _arrivalsLocked : _boxLocked) return;
+    final supplier = _selectedSupplier ?? '';
+    RenderLog.write('c197_product_sheet_opened',
+        'surface=${widget.arrivals ? 'arrivals' : 'collect'};product_id=${merged.productId};ordered=${merged.orderedTotal}');
+    final isWide = MediaQuery.of(context).size.width >= 900;
+    final sheet = _ProductReceiveSheet(
+      supplierName: supplier,
+      productId: merged.productId,
+      productName: merged.productName,
+      packType: merged.packType,
+      imageUrl: merged.imageUrl,
+      orderedTotal: merged.orderedTotal,
+      receivedTotal: merged.receivedTotal,
+      combinedState: merged.combinedState,
+    );
+    if (isWide) {
+      await showDialog<void>(
+        context: context,
+        builder: (_) => Dialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          insetPadding: const EdgeInsets.symmetric(horizontal: 40, vertical: 32),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 440),
+            child: sheet,
+          ),
+        ),
+      );
+    } else {
+      await showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Colors.white,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        builder: (_) => DraggableScrollableSheet(
+          initialChildSize: 0.65,
+          minChildSize: 0.4,
+          maxChildSize: 0.95,
+          expand: false,
+          builder: (_, ctrl) => SingleChildScrollView(controller: ctrl, child: sheet),
+        ),
+      );
+    }
+    if (mounted) {
+      await _loadDisputes();
+      await _reloadItemsFromDB();
+    }
   }
 
   // ── #88: agent popup bubble management ──────────────────────────────────────
@@ -3831,86 +4043,91 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
               borderRadius: const BorderRadius.vertical(bottom: Radius.circular(10)),
               border: Border.all(color: _kBorder),
             ),
-            child: ListView.builder(
-              itemCount: _items.length + 1, // +1 for Confirm/Locked footer #91
-              itemBuilder: (_, i) {
-                if (i == _items.length) {
-                  return Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
-                    child: _buildConfirmFooter(locked, isWide: true),
-                  );
-                }
-                final item = _items[i];
-                final state   = stateOf(item); // B6: unified helper
-                final name    = item['product_name']?.toString() ?? '—';
-                final ordQty  = ordQtyOf(item); // B6: dual-key
-                final recQty  = recQtyOf(item);
-                final packType = item['pack_type']?.toString() ?? '';
-                final imageUrl = item['image_url']?.toString();
-                final isLast = i == _items.length - 1;
-                if (state == 'wrong' || state == 'not_coming') {
-                  RenderLog.write('c177_shop_states', 'state=$state;idx=$i');
-                }
-                // R3: desktop dispute badge (#189: use DisputeItem for verbatim labels)
-                final deskItemId = item['order_item_id']?.toString();
-                final deskDispute = deskItemId != null ? _disputeMap[deskItemId] : null;
-                final deskDisputeItem = deskItemId != null ? _disputeItemMap[deskItemId] : null;
-
-                return InkWell(
-                  onTap: () => _showItemSheet(item),
-                  hoverColor: _kGreen.withValues(alpha: 0.04),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                    decoration: BoxDecoration(
-                      border: isLast ? null : const Border(
-                        bottom: BorderSide(color: _kBorder, width: 0.8),
-                      ),
-                    ),
-                    child: Row(children: [
-                      // col1: thumbnail + name + dispute badge
-                      Expanded(flex: 6, child: Row(children: [
-                        _FulfilImageTile(imageUrl, size: 36),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(name,
-                                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _kText),
-                                  maxLines: 1, overflow: TextOverflow.ellipsis),
-                              if (deskDisputeItem != null) ...[
-                                const SizedBox(height: 2),
-                                _DisputeStrip(item: deskDisputeItem, surface: 'collect'),
-                              ] else if (deskDispute != null) ...[
-                                const SizedBox(height: 2),
-                                DisputeBadge(status: deskDispute['status']?.toString() ?? ''),
-                              ],
-                            ],
-                          ),
+            child: Builder(builder: (_) {
+              // #197: merged product rows for desktop table
+              final deskMerged = _mergedItems;
+              if (widget.arrivals) {
+                RenderLog.write('c197_merged_rows_wh', 'products=${deskMerged.length};raw_lines=${_items.length}');
+              } else {
+                RenderLog.write('c197_merged_rows_shop', 'products=${deskMerged.length};raw_lines=${_items.length}');
+              }
+              return ListView.builder(
+                itemCount: deskMerged.length + 1,
+                itemBuilder: (_, i) {
+                  if (i == deskMerged.length) {
+                    return Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+                      child: _buildConfirmFooter(locked, isWide: true),
+                    );
+                  }
+                  final mp = deskMerged[i];
+                  final state = mp.combinedState;
+                  final isLast = i == deskMerged.length - 1;
+                  if (state == 'wrong' || state == 'not_coming') {
+                    RenderLog.write('c177_shop_states', 'state=$state;idx=$i');
+                  }
+                  DisputeItem? deskDisputeItem;
+                  Map<String, dynamic>? deskDispute;
+                  for (final oiid in mp.orderItemIds) {
+                    deskDisputeItem ??= _disputeItemMap[oiid];
+                    deskDispute ??= _disputeMap[oiid];
+                  }
+                  return InkWell(
+                    onTap: () => _showProductSheet(mp),
+                    hoverColor: _kGreen.withValues(alpha: 0.04),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(
+                        border: isLast ? null : const Border(
+                          bottom: BorderSide(color: _kBorder, width: 0.8),
                         ),
-                      ])),
-                      // col2: pack type
-                      Expanded(flex: 2, child: Text(
-                        packType.isEmpty ? '—' : packType,
-                        style: const TextStyle(fontSize: 12, color: _kSub),
-                      )),
-                      // col3: received / ordered
-                      Expanded(flex: 2, child: Text(
-                        '$recQty / $ordQty',
-                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
-                        textAlign: TextAlign.right,
-                      )),
-                      // col4: status chip
-                      Expanded(flex: 2, child: Align(
-                        alignment: Alignment.centerRight,
-                        child: _StatePill(state),
-                      )),
-                    ]),
-                  ),
-                );
-              },
-            ),
+                      ),
+                      child: Row(children: [
+                        // col1: thumbnail + name + dispute badge
+                        Expanded(flex: 6, child: Row(children: [
+                          _FulfilImageTile(mp.imageUrl, size: 36),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(mp.productName,
+                                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _kText),
+                                    maxLines: 1, overflow: TextOverflow.ellipsis),
+                                if (deskDisputeItem != null) ...[
+                                  const SizedBox(height: 2),
+                                  _DisputeStrip(item: deskDisputeItem, surface: widget.arrivals ? 'arrivals' : 'collect'),
+                                ] else if (deskDispute != null) ...[
+                                  const SizedBox(height: 2),
+                                  DisputeBadge(status: deskDispute['status']?.toString() ?? ''),
+                                ],
+                              ],
+                            ),
+                          ),
+                        ])),
+                        // col2: pack type
+                        Expanded(flex: 2, child: Text(
+                          mp.packType.isEmpty ? '—' : mp.packType,
+                          style: const TextStyle(fontSize: 12, color: _kSub),
+                        )),
+                        // col3: received / ordered (merged totals)
+                        Expanded(flex: 2, child: Text(
+                          '${mp.receivedTotal} / ${mp.orderedTotal}',
+                          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
+                          textAlign: TextAlign.right,
+                        )),
+                        // col4: status chip
+                        Expanded(flex: 2, child: Align(
+                          alignment: Alignment.centerRight,
+                          child: _StatePill(state),
+                        )),
+                      ]),
+                    ),
+                  );
+                },
+              );
+            }),
           ),
         ),
       ]),
@@ -6554,6 +6771,566 @@ class DisputeBadge extends StatelessWidget {
       decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(4)),
       child: Text(label,
           style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: fg)),
+    );
+  }
+}
+
+// ── #197: Stepper button used by _ProductReceiveSheet ────────────────────────
+class _ProdStepBtn extends StatelessWidget {
+  final IconData icon;
+  final bool enabled;
+  final Color color;
+  final VoidCallback onTap;
+  const _ProdStepBtn({required this.icon, required this.enabled, required this.color, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: enabled ? onTap : null,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 8),
+        child: Icon(icon, size: 16, color: enabled ? color : _kSub),
+      ),
+    );
+  }
+}
+
+// ── #197: Per-product receiving sheet — calls fw_product_action ───────────────
+
+class _ProductReceiveSheet extends StatefulWidget {
+  final String supplierName;
+  final int productId;
+  final String productName;
+  final String packType;
+  final String? imageUrl;
+  final int orderedTotal;
+  final int receivedTotal;
+  final String combinedState;
+
+  const _ProductReceiveSheet({
+    required this.supplierName,
+    required this.productId,
+    required this.productName,
+    required this.packType,
+    this.imageUrl,
+    required this.orderedTotal,
+    required this.receivedTotal,
+    required this.combinedState,
+  });
+
+  @override
+  State<_ProductReceiveSheet> createState() => _ProductReceiveSheetState();
+}
+
+class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
+  late String _localState;
+  late int _localReceived;
+
+  // Report missing inline two-half
+  bool _showMissingInline = false;
+  late int _missingDraft;  // = counted (received so far)
+  bool _confirmingMissing = false;
+  final _missingCtrl = TextEditingController();
+
+  // Few wrong inline two-half
+  bool _showFewWrongInline = false;
+  late int _wrongDraft; // = wrong units (1..orderedTotal)
+  bool _confirmingFewWrong = false;
+  final _fewWrongCtrl = TextEditingController();
+
+  bool _confirmingSimple = false; // for got_all / wrong_all / not_coming
+
+  @override
+  void initState() {
+    super.initState();
+    _localState = widget.combinedState;
+    _localReceived = widget.receivedTotal;
+    final safeOrd = widget.orderedTotal > 0 ? widget.orderedTotal : 1;
+    _missingDraft = _localReceived.clamp(0, safeOrd);
+    _wrongDraft = 1;
+    _missingCtrl.text = '$_missingDraft';
+    _fewWrongCtrl.text = '1';
+    RenderLog.write('c197_product_sheet_opened',
+        'product_id=${widget.productId};ordered=${widget.orderedTotal}');
+  }
+
+  @override
+  void dispose() {
+    _missingCtrl.dispose();
+    _fewWrongCtrl.dispose();
+    super.dispose();
+  }
+
+  String get _unit => widget.packType;
+  String get _unitLabel => _unit.isNotEmpty ? ' $_unit' : '';
+  int get _orderedTotal => widget.orderedTotal;
+
+  Future<void> _callProductAction(String action, {int? qty}) async {
+    RenderLog.write('c197_product_action_called',
+        'action=$action;product_id=${widget.productId};supplier=${widget.supplierName};qty=${qty ?? 'null'}');
+    final params = <String, dynamic>{
+      'p_supplier_name': widget.supplierName,
+      'p_product_id': widget.productId,
+      'p_action': action,
+    };
+    if (qty != null) params['p_qty'] = qty;
+    final res = await Supabase.instance.client.rpc('fw_product_action', params: params) as Map;
+    final err = res['error']?.toString();
+    if (err != null) throw err;
+  }
+
+  Future<void> _doGotAll() async {
+    if (_confirmingSimple) return;
+    setState(() => _confirmingSimple = true);
+    try {
+      await _callProductAction('got_all');
+      if (!mounted) return;
+      setState(() { _localState = 'received'; _localReceived = _orderedTotal; _confirmingSimple = false; });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Got all ${_orderedTotal}$_unitLabel — marked received')));
+      Navigator.of(context).pop();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _confirmingSimple = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: $e'), backgroundColor: const Color(0xFFDC2626)));
+    }
+  }
+
+  Future<void> _doConfirmMissing() async {
+    if (_confirmingMissing) return;
+    setState(() => _confirmingMissing = true);
+    try {
+      await _callProductAction('report_missing', qty: _missingDraft);
+      if (!mounted) return;
+      final missing = _orderedTotal - _missingDraft;
+      setState(() {
+        _localState = _missingDraft >= _orderedTotal ? 'received' : 'short';
+        _localReceived = _missingDraft;
+        _confirmingMissing = false;
+        _showMissingInline = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Saved · $missing$_unitLabel short')));
+      Navigator.of(context).pop();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _confirmingMissing = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: $e'), backgroundColor: const Color(0xFFDC2626)));
+    }
+  }
+
+  Future<void> _doConfirmFewWrong() async {
+    if (_confirmingFewWrong) return;
+    setState(() => _confirmingFewWrong = true);
+    try {
+      await _callProductAction('few_wrong', qty: _wrongDraft);
+      if (!mounted) return;
+      setState(() {
+        _localState = 'wrong';
+        _confirmingFewWrong = false;
+        _showFewWrongInline = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Saved · $_wrongDraft$_unitLabel flagged wrong')));
+      Navigator.of(context).pop();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _confirmingFewWrong = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: $e'), backgroundColor: const Color(0xFFDC2626)));
+    }
+  }
+
+  Future<void> _doWrongAll() async {
+    if (_confirmingSimple) return;
+    setState(() => _confirmingSimple = true);
+    try {
+      await _callProductAction('wrong_all');
+      if (!mounted) return;
+      setState(() { _localState = 'wrong'; _confirmingSimple = false; });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('All units flagged wrong item')));
+      Navigator.of(context).pop();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _confirmingSimple = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: $e'), backgroundColor: const Color(0xFFDC2626)));
+    }
+  }
+
+  Future<void> _doNotComing() async {
+    if (_confirmingSimple) return;
+    setState(() => _confirmingSimple = true);
+    try {
+      await _callProductAction('not_coming');
+      if (!mounted) return;
+      setState(() { _localState = 'not_coming'; _confirmingSimple = false; });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Marked not coming')));
+      Navigator.of(context).pop();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _confirmingSimple = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: $e'), backgroundColor: const Color(0xFFDC2626)));
+    }
+  }
+
+  Widget _buildMissingInlineRow() {
+    final missing = (_orderedTotal - _missingDraft).clamp(0, _orderedTotal);
+    final confirmLabel = 'Confirm missing · $missing$_unitLabel';
+    const borderColor = _kShortFg;
+    return SizedBox(
+      height: 52,
+      child: Row(children: [
+        Expanded(
+          child: Container(
+            decoration: BoxDecoration(
+              color: _kShortFg.withValues(alpha: 0.06),
+              borderRadius: const BorderRadius.only(
+                topLeft: Radius.circular(11), bottomLeft: Radius.circular(11)),
+              border: Border(
+                top: BorderSide(color: _kShortFg.withValues(alpha: 0.4)),
+                bottom: BorderSide(color: _kShortFg.withValues(alpha: 0.4)),
+                left: BorderSide(color: _kShortFg.withValues(alpha: 0.4)),
+              ),
+            ),
+            child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+              _ProdStepBtn(
+                icon: Icons.remove,
+                enabled: !_confirmingMissing && _missingDraft > 0,
+                color: borderColor,
+                onTap: () => setState(() {
+                  _missingDraft = (_missingDraft - 1).clamp(0, _orderedTotal);
+                  _missingCtrl.text = '$_missingDraft';
+                }),
+              ),
+              SizedBox(
+                width: 48,
+                child: TextField(
+                  controller: _missingCtrl,
+                  enabled: !_confirmingMissing,
+                  keyboardType: TextInputType.number,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
+                  decoration: const InputDecoration.collapsed(hintText: '0'),
+                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                  onChanged: (v) {
+                    final n = int.tryParse(v) ?? 0;
+                    final clamped = n.clamp(0, _orderedTotal);
+                    setState(() => _missingDraft = clamped);
+                    if (v.isNotEmpty && v != '$clamped') {
+                      _missingCtrl.value = _missingCtrl.value.copyWith(
+                        text: '$clamped',
+                        selection: TextSelection.collapsed(offset: '$clamped'.length),
+                      );
+                    }
+                  },
+                ),
+              ),
+              if (_unit.isNotEmpty)
+                Text(' $_unit', style: const TextStyle(fontSize: 10, color: _kSub)),
+              _ProdStepBtn(
+                icon: Icons.add,
+                enabled: !_confirmingMissing && _missingDraft < _orderedTotal,
+                color: borderColor,
+                onTap: () => setState(() {
+                  _missingDraft = (_missingDraft + 1).clamp(0, _orderedTotal);
+                  _missingCtrl.text = '$_missingDraft';
+                }),
+              ),
+            ]),
+          ),
+        ),
+        Expanded(
+          child: GestureDetector(
+            onTap: _confirmingMissing ? null : _doConfirmMissing,
+            child: Container(
+              alignment: Alignment.center,
+              padding: const EdgeInsets.symmetric(horizontal: 6),
+              decoration: BoxDecoration(
+                color: _confirmingMissing ? _kShortFg.withValues(alpha: 0.45) : _kShortFg,
+                borderRadius: const BorderRadius.only(
+                  topRight: Radius.circular(11), bottomRight: Radius.circular(11)),
+                border: Border(
+                  top: BorderSide(color: _kShortFg.withValues(alpha: 0.4)),
+                  bottom: BorderSide(color: _kShortFg.withValues(alpha: 0.4)),
+                  right: BorderSide(color: _kShortFg.withValues(alpha: 0.4)),
+                ),
+              ),
+              child: _confirmingMissing
+                  ? const SizedBox(width: 16, height: 16,
+                      child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                  : Text(confirmLabel,
+                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.white),
+                      textAlign: TextAlign.center, maxLines: 2, overflow: TextOverflow.ellipsis),
+            ),
+          ),
+        ),
+      ]),
+    );
+  }
+
+  Widget _buildFewWrongInlineRow() {
+    final keep = (_orderedTotal - _wrongDraft).clamp(0, _orderedTotal);
+    final confirmLabel = 'Confirm wrong · keep $keep$_unitLabel';
+    const borderColor = const Color(0xFFD97706);
+    return SizedBox(
+      height: 52,
+      child: Row(children: [
+        Expanded(
+          child: Container(
+            decoration: BoxDecoration(
+              color: const Color(0xFFD97706).withValues(alpha: 0.06),
+              borderRadius: const BorderRadius.only(
+                topLeft: Radius.circular(11), bottomLeft: Radius.circular(11)),
+              border: Border(
+                top: BorderSide(color: const Color(0xFFD97706).withValues(alpha: 0.4)),
+                bottom: BorderSide(color: const Color(0xFFD97706).withValues(alpha: 0.4)),
+                left: BorderSide(color: const Color(0xFFD97706).withValues(alpha: 0.4)),
+              ),
+            ),
+            child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+              _ProdStepBtn(
+                icon: Icons.remove,
+                enabled: !_confirmingFewWrong && _wrongDraft > 1,
+                color: borderColor,
+                onTap: () => setState(() {
+                  _wrongDraft = (_wrongDraft - 1).clamp(1, _orderedTotal);
+                  _fewWrongCtrl.text = '$_wrongDraft';
+                }),
+              ),
+              SizedBox(
+                width: 48,
+                child: TextField(
+                  controller: _fewWrongCtrl,
+                  enabled: !_confirmingFewWrong,
+                  keyboardType: TextInputType.number,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
+                  decoration: const InputDecoration.collapsed(hintText: '1'),
+                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                  onChanged: (v) {
+                    final n = int.tryParse(v) ?? 1;
+                    final clamped = n.clamp(1, _orderedTotal);
+                    setState(() => _wrongDraft = clamped);
+                    if (v.isNotEmpty && v != '$clamped') {
+                      _fewWrongCtrl.value = _fewWrongCtrl.value.copyWith(
+                        text: '$clamped',
+                        selection: TextSelection.collapsed(offset: '$clamped'.length),
+                      );
+                    }
+                  },
+                ),
+              ),
+              if (_unit.isNotEmpty)
+                Text(' $_unit', style: const TextStyle(fontSize: 10, color: _kSub)),
+              _ProdStepBtn(
+                icon: Icons.add,
+                enabled: !_confirmingFewWrong && _wrongDraft < _orderedTotal,
+                color: borderColor,
+                onTap: () => setState(() {
+                  _wrongDraft = (_wrongDraft + 1).clamp(1, _orderedTotal);
+                  _fewWrongCtrl.text = '$_wrongDraft';
+                }),
+              ),
+            ]),
+          ),
+        ),
+        Expanded(
+          child: GestureDetector(
+            onTap: _confirmingFewWrong ? null : _doConfirmFewWrong,
+            child: Container(
+              alignment: Alignment.center,
+              padding: const EdgeInsets.symmetric(horizontal: 6),
+              decoration: BoxDecoration(
+                color: _confirmingFewWrong ? const Color(0xFFD97706).withValues(alpha: 0.45) : const Color(0xFFD97706),
+                borderRadius: const BorderRadius.only(
+                  topRight: Radius.circular(11), bottomRight: Radius.circular(11)),
+                border: Border(
+                  top: BorderSide(color: const Color(0xFFD97706).withValues(alpha: 0.4)),
+                  bottom: BorderSide(color: const Color(0xFFD97706).withValues(alpha: 0.4)),
+                  right: BorderSide(color: const Color(0xFFD97706).withValues(alpha: 0.4)),
+                ),
+              ),
+              child: _confirmingFewWrong
+                  ? const SizedBox(width: 16, height: 16,
+                      child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                  : Text(confirmLabel,
+                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.white),
+                      textAlign: TextAlign.center, maxLines: 2, overflow: TextOverflow.ellipsis),
+            ),
+          ),
+        ),
+      ]),
+    );
+  }
+
+  Widget _buildActionBtn({
+    required String label,
+    required VoidCallback? onTap,
+    Color? bg,
+    Color? fg,
+    bool loading = false,
+  }) {
+    final bgC = bg ?? _kGreen;
+    final fgC = fg ?? Colors.white;
+    return SizedBox(
+      height: 44,
+      child: FilledButton(
+        onPressed: onTap,
+        style: FilledButton.styleFrom(
+          backgroundColor: bgC,
+          disabledBackgroundColor: bgC.withValues(alpha: 0.45),
+          foregroundColor: fgC,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ),
+        child: loading
+            ? const SizedBox(width: 16, height: 16,
+                child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+            : Text(label,
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ord = _orderedTotal;
+    final state = _localState;
+    final isBusy = _confirmingSimple || _confirmingMissing || _confirmingFewWrong;
+    final bg = _stateBgMap[state] ?? _kPendingBg;
+    final fg = _stateFgMap[state] ?? _kPendingFg;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 20, 16, 32),
+      child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // Header
+        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          _FulfilImageTile(widget.imageUrl, size: 52),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(widget.productName,
+                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: _kText),
+                  maxLines: 2, overflow: TextOverflow.ellipsis),
+              const SizedBox(height: 2),
+              Text('Ordered: $ord$_unitLabel',
+                  style: const TextStyle(fontSize: 12, color: _kSub)),
+              const SizedBox(height: 4),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(20)),
+                child: Text(
+                  const <String, String>{
+                    'wrong': 'Wrong item', 'not_coming': 'Not coming',
+                  }[state] ?? state.replaceAll('_', ' '),
+                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: fg),
+                ),
+              ),
+            ]),
+          ),
+          IconButton(
+            icon: const Icon(Icons.close_rounded, size: 20, color: _kSub),
+            onPressed: () => Navigator.of(context).pop(),
+            padding: EdgeInsets.zero,
+          ),
+        ]),
+        const SizedBox(height: 20),
+        const Divider(height: 1, color: _kBorder),
+        const SizedBox(height: 16),
+
+        // Action: Got all
+        if (!_showMissingInline && !_showFewWrongInline) ...[
+          SizedBox(
+            width: double.infinity,
+            child: _buildActionBtn(
+              label: 'Got all ($ord)',
+              onTap: isBusy ? null : _doGotAll,
+              loading: _confirmingSimple && _localState != 'wrong' && _localState != 'not_coming',
+              bg: _kGreen,
+            ),
+          ),
+          const SizedBox(height: 8),
+        ],
+
+        // Action: Report missing (toggle inline)
+        if (!_showFewWrongInline) ...[
+          if (!_showMissingInline)
+            SizedBox(
+              width: double.infinity,
+              child: _buildActionBtn(
+                label: 'Report missing',
+                onTap: isBusy ? null : () => setState(() {
+                  _showMissingInline = true;
+                  _missingDraft = _localReceived.clamp(0, ord > 0 ? ord : 1);
+                  _missingCtrl.text = '$_missingDraft';
+                }),
+                bg: _kShortFg,
+              ),
+            )
+          else
+            _buildMissingInlineRow(),
+          const SizedBox(height: 8),
+        ],
+
+        // Action: Few item wrong (toggle inline)
+        if (!_showMissingInline) ...[
+          if (!_showFewWrongInline)
+            SizedBox(
+              width: double.infinity,
+              child: _buildActionBtn(
+                label: 'Few item wrong',
+                onTap: isBusy ? null : () => setState(() {
+                  _showFewWrongInline = true;
+                  _wrongDraft = 1;
+                  _fewWrongCtrl.text = '1';
+                }),
+                bg: const Color(0xFFD97706),
+              ),
+            )
+          else
+            _buildFewWrongInlineRow(),
+          const SizedBox(height: 8),
+        ],
+
+        // Cancel inline panels
+        if (_showMissingInline || _showFewWrongInline) ...[
+          TextButton(
+            onPressed: isBusy ? null : () => setState(() {
+              _showMissingInline = false;
+              _showFewWrongInline = false;
+            }),
+            child: const Text('Cancel', style: TextStyle(color: _kSub)),
+          ),
+          const SizedBox(height: 8),
+        ],
+
+        // Action: Wrong item (all)
+        if (!_showMissingInline && !_showFewWrongInline) ...[
+          SizedBox(
+            width: double.infinity,
+            child: _buildActionBtn(
+              label: 'Wrong item',
+              onTap: isBusy ? null : _doWrongAll,
+              bg: _kWrongFg,
+            ),
+          ),
+          const SizedBox(height: 8),
+          // Action: Not coming
+          SizedBox(
+            width: double.infinity,
+            child: _buildActionBtn(
+              label: 'Not coming',
+              onTap: isBusy ? null : _doNotComing,
+              bg: _kNotComingFg,
+            ),
+          ),
+        ],
+      ]),
     );
   }
 }

@@ -1,22 +1,36 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../utils/render_log.dart';
-import '../../widgets/dispute_card.dart';
 
 // ── Palette ──────────────────────────────────────────────────────────────────
 const _kGreen       = Color(0xFF1B7A43);
 const _kBg          = Color(0xFFF4F6F8);
 const _kCard        = Color(0xFFFFFFFF);
 const _kBorder      = Color(0xFFE8EAED);
-const _kDivider     = Color(0xFFF0F1F3);
 const _kTextPrimary = Color(0xFF202124);
 const _kTextMuted   = Color(0xFF5F6368);
-const _kAmber       = Color(0xFFE8870E);
-const _kAmberText   = Color(0xFF8A5A00);
-const _kAmberBg     = Color(0xFFFFF7EC);
-const _kAmberValue  = Color(0xFFC77700);
+const _kRed         = Color(0xFFDC2626);
 const _kGreenChipBg = Color(0xFFE7F4EC);
 const _kNeutralChip = Color(0xFFF1F3F4);
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+String _packQty(num n, String? packType) {
+  if (packType == null || packType.trim().isEmpty) return '$n';
+  final unit = n == 1 ? packType.trim() : '${packType.trim()}s';
+  return '$n $unit';
+}
+
+num _toNum(dynamic v) {
+  if (v == null) return 0;
+  if (v is num) return v;
+  return num.tryParse(v.toString()) ?? 0;
+}
+
+bool _isActive(Map<String, dynamic> item) {
+  if (item.containsKey('active')) return item['active'] == true;
+  final s = item['status']?.toString() ?? '';
+  return s != 'resolved' && s != 'cancelled';
+}
 
 class DisputeFormScreen extends StatefulWidget {
   final String token;
@@ -32,7 +46,7 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
   String? _supplierName;
   List<Map<String, dynamic>> _items = [];
   final Map<String, bool> _submitting = {};
-  final Map<String, String> _submitted = {};
+  bool _closedExpanded = false;
 
   @override
   void initState() {
@@ -49,7 +63,6 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
           .rpc('get_dispute_form', params: {'p_token': widget.token});
       if (!mounted) return;
       final data = Map<String, dynamic>.from(result as Map);
-      // E1/C174/B9: safe cast — never use `as String` on untrusted RPC payloads
       final loadErr = data['error']?.toString();
       if (loadErr != null) {
         setState(() { _error = loadErr; _loading = false; });
@@ -62,19 +75,26 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
         setState(() { _error = 'invalid'; _loading = false; });
         return;
       }
-      final shortCount = rawItems.where((i) => (i['kind']?.toString() ?? 'short') == 'short').length;
-      final wrongCount = rawItems.where((i) => i['kind']?.toString() == 'wrong_item').length;
       setState(() {
         _supplierName = data['supplier_name']?.toString();
         _items = rawItems;
         _loading = false;
       });
+      final activeCount = rawItems.where(_isActive).length;
+      final closedCount = rawItems.length - activeCount;
+      final hasPackType = rawItems.any((i) {
+        final pt = i['pack_type']?.toString() ?? '';
+        return pt.isNotEmpty;
+      });
       RenderLog.write('c170_dispute_form_items', '${rawItems.length}');
       RenderLog.write('c172_dispute_page_rendered',
           'supplier=${_supplierName ?? ''};item_count=${rawItems.length}');
-      RenderLog.write('c172_qty_table_rendered', 'true');
-      RenderLog.write('c172_redesign_done', 'true');
-      RenderLog.write('c173_dispute_form_kinds', 'short_count=$shortCount;wrong_count=$wrongCount');
+      RenderLog.write('c184_supplier_dispute',
+          'change:184,surface:link,table_layout:true,'
+          'has_pack_type:$hasPackType,'
+          'active_count:$activeCount,'
+          'closed_count:$closedCount,'
+          'packqty_helper:true');
     } catch (e) {
       if (!mounted) return;
       setState(() { _error = 'load_failed'; _loading = false; });
@@ -96,58 +116,45 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
       if (!mounted) return;
       final data = result is Map ? Map<String, dynamic>.from(result) : <String, dynamic>{};
       if (data['error'] != null) {
-        final err = data['error']?.toString() ?? 'unknown'; // B9/C174: safe toString
+        final err = data['error']?.toString() ?? 'unknown';
         setState(() => _submitting[disputeId] = false);
-        if (err == 'already_responded') {
-          await _load();
-          return;
-        }
+        if (err == 'already_responded') { await _load(); return; }
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $err'), backgroundColor: const Color(0xFFDC2626)),
+          SnackBar(content: Text('Error: $err'), backgroundColor: _kRed),
         );
-        RenderLog.write('c170_dispute_submit_error', '$disputeId:$err');
         return;
       }
       setState(() {
-        _submitted[disputeId] = response;
         _submitting[disputeId] = false;
         final idx = _items.indexWhere((e) => e['dispute_id']?.toString() == disputeId);
         if (idx >= 0) {
-          // Optimistic status flip: correct_coming→accepted_missing, out_of_stock→denied (backend contract)
-          String newStatus;
-          if (response == 'missing' || response == 'correct_coming') {
-            newStatus = 'accepted_missing';
-          } else {
-            newStatus = 'denied';
-          }
-          _items[idx]['status'] = newStatus;
-          _items[idx]['supplier_response'] = response;
+          final newStatus = (response == 'missing' || response == 'correct_coming')
+              ? 'accepted_missing' : 'denied';
+          _items[idx] = Map<String, dynamic>.from(_items[idx])
+            ..['status'] = newStatus
+            ..['supplier_response'] = response
+            ..['active'] = true;
         }
       });
-      final resultStr = data['result']?.toString() ?? '';
-      final kindStr = _items.firstWhere(
-          (e) => e['dispute_id']?.toString() == disputeId,
-          orElse: () => <String, dynamic>{})['kind']?.toString() ?? 'short';
-      RenderLog.write('c170_dispute_submit', '$disputeId:$response');
-      RenderLog.write('c172_item_responded', 'dispute_id=$disputeId;response=$response');
-      RenderLog.write('c173_dispute_submit', 'dispute_id=$disputeId;kind=$kindStr;response=$response;result=$resultStr');
+      RenderLog.write('c184_dispute_submit', 'dispute_id=$disputeId;response=$response');
+      await _load();
     } catch (e) {
       if (!mounted) return;
       setState(() => _submitting[disputeId] = false);
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Submission failed. Please try again.')),
       );
-      RenderLog.write('c170_dispute_submit_error', '$disputeId:exception');
     }
   }
 
-  // E2/C174/B8: only show banner when every item has a real supplier response
-  bool get _allResponded =>
-      _items.isNotEmpty &&
-      _items.every((item) {
-        final status = item['status']?.toString() ?? '';
-        return status == 'accepted_missing' || status == 'denied';
-      });
+  bool get _allActiveResponded {
+    final active = _items.where(_isActive).toList();
+    if (active.isEmpty) return false;
+    return active.every((item) {
+      final s = item['status']?.toString() ?? '';
+      return s == 'accepted_missing' || s == 'denied';
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -156,19 +163,14 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
       body: SafeArea(
         child: Center(
           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 480),
+            constraints: const BoxConstraints(maxWidth: 640),
             child: _loading
-                ? const Center(
-                    child: Column(mainAxisSize: MainAxisSize.min, children: [
-                      CircularProgressIndicator(color: _kGreen, strokeWidth: 2.5),
-                      SizedBox(height: 12),
-                      Text('Loading…',
-                          style: TextStyle(fontSize: 14, color: _kTextMuted)),
-                    ]),
-                  )
-                : _error != null
-                    ? _buildErrorState()
-                    : _buildPage(),
+                ? const Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+                    CircularProgressIndicator(color: _kGreen, strokeWidth: 2.5),
+                    SizedBox(height: 12),
+                    Text('Loading…', style: TextStyle(fontSize: 14, color: _kTextMuted)),
+                  ]))
+                : _error != null ? _buildErrorState() : _buildPage(),
           ),
         ),
       ),
@@ -193,18 +195,14 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
             _error == 'load_failed'
                 ? 'Unable to load. Please try again.'
                 : 'This link is no longer valid.',
-            style: const TextStyle(
-              fontSize: 18, fontWeight: FontWeight.w700, color: _kTextPrimary,
-              height: 1.35,
-            ),
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700,
+                color: _kTextPrimary, height: 1.35),
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: 8),
-          const Text(
-            'Please contact mediBO.',
-            style: TextStyle(fontSize: 14, color: _kTextMuted, height: 1.35),
-            textAlign: TextAlign.center,
-          ),
+          const Text('Please contact mediBO.',
+              style: TextStyle(fontSize: 14, color: _kTextMuted, height: 1.35),
+              textAlign: TextAlign.center),
           const SizedBox(height: 32),
           _footer(),
         ]),
@@ -213,25 +211,18 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
   }
 
   Widget _buildPage() {
-    // C174/B8+B9 render-log instrumentation
-    RenderLog.write('c174_form_load',
-        'all_responded_predicate=accepted_missing||denied;error_cast=safe');
+    final activeItems = _items.where(_isActive).toList();
+    final closedItems = _items.where((i) => !_isActive(i)).toList();
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(16, 20, 16, 48),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         _buildHeader(),
         const SizedBox(height: 16),
-        const Text(
-          'Delivery disputes — please confirm each item below',
-          style: TextStyle(
-            fontSize: 15, color: _kTextMuted, height: 1.35,
-          ),
-        ),
-        const SizedBox(height: 8),
+        const Text('Delivery disputes — please confirm each item below',
+            style: TextStyle(fontSize: 15, color: _kTextMuted, height: 1.35)),
+        const SizedBox(height: 12),
 
-        // All-responded success banner
-        if (_allResponded) ...[
-          const SizedBox(height: 4),
+        if (_allActiveResponded) ...[
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             decoration: BoxDecoration(
@@ -242,23 +233,60 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
             child: const Row(children: [
               Icon(Icons.check_circle_rounded, size: 18, color: _kGreen),
               SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  'Thanks — all responses recorded.',
-                  style: TextStyle(
-                    fontSize: 14, fontWeight: FontWeight.w600,
-                    color: _kGreen, height: 1.35,
-                  ),
-                ),
+              Expanded(child: Text('Thanks — all responses recorded.',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600,
+                      color: _kGreen, height: 1.35))),
+            ]),
+          ),
+          const SizedBox(height: 12),
+        ],
+
+        // ── Active section ────────────────────────────────────────────────
+        _buildSectionLabel('Active', activeItems.length, active: true),
+        const SizedBox(height: 6),
+        if (activeItems.isEmpty)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 12),
+            child: Text('No active disputes.',
+                style: TextStyle(fontSize: 13, color: _kTextMuted)),
+          )
+        else
+          _buildTable(activeItems, isActive: true),
+
+        // ── Closed section ────────────────────────────────────────────────
+        if (closedItems.isNotEmpty) ...[
+          const SizedBox(height: 16),
+          GestureDetector(
+            onTap: () => setState(() => _closedExpanded = !_closedExpanded),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Text(
+                _closedExpanded
+                    ? 'Hide closed (${closedItems.length})'
+                    : 'Show closed (${closedItems.length})',
+                style: const TextStyle(fontSize: 13, color: _kTextMuted,
+                    fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(width: 4),
+              AnimatedRotation(
+                turns: _closedExpanded ? 0.5 : 0.0,
+                duration: const Duration(milliseconds: 280),
+                curve: Curves.easeInOutCubic,
+                child: const Icon(Icons.keyboard_arrow_down_rounded,
+                    size: 16, color: _kTextMuted),
               ),
             ]),
           ),
-          const SizedBox(height: 8),
-        ],
-
-        for (int i = 0; i < _items.length; i++) ...[
-          _buildItemCard(_items[i]),
-          if (i < _items.length - 1) const SizedBox(height: 14),
+          AnimatedSize(
+            duration: const Duration(milliseconds: 280),
+            curve: Curves.easeInOutCubic,
+            clipBehavior: Clip.antiAlias,
+            child: _closedExpanded
+                ? Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: _buildTable(closedItems, isActive: false),
+                  )
+                : const SizedBox.shrink(),
+          ),
         ],
 
         const SizedBox(height: 24),
@@ -267,88 +295,258 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
     );
   }
 
-  Widget _buildHeader() {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: _kGreen,
-        borderRadius: BorderRadius.circular(16),
+  Widget _buildSectionLabel(String label, int count, {required bool active}) {
+    return Row(children: [
+      Container(
+        width: 8, height: 8,
+        decoration: BoxDecoration(
+          color: active ? _kGreen : _kTextMuted,
+          shape: BoxShape.circle,
+        ),
       ),
-      child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-        Container(
-          width: 48, height: 48,
-          decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.16),
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: const Icon(Icons.local_shipping_outlined, color: Colors.white, size: 26),
+      const SizedBox(width: 6),
+      Text(label,
+          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
+              color: active ? _kTextPrimary : _kTextMuted)),
+      const SizedBox(width: 4),
+      Text('($count)',
+          style: const TextStyle(fontSize: 12, color: _kTextMuted)),
+    ]);
+  }
+
+  Widget _buildTable(List<Map<String, dynamic>> items, {required bool isActive}) {
+    return Container(
+      decoration: BoxDecoration(
+        color: _kCard,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _kBorder),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: _tableHeader(),
         ),
-        const SizedBox(width: 14),
-        Expanded(
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(
-              'mediBO · Delivery Dispute',
-              style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.70),
-                fontSize: 11,
-                fontWeight: FontWeight.w500,
-                letterSpacing: 0.5,
-                height: 1.3,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              _supplierName ?? '',
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 21,
-                fontWeight: FontWeight.w800,
-                height: 1.2,
-              ),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ]),
-        ),
+        const Divider(height: 1, color: _kBorder),
+        for (int i = 0; i < items.length; i++) ...[
+          _buildItemRow(items[i], isActive: isActive),
+          if (i < items.length - 1) const Divider(height: 1, color: _kBorder),
+        ],
       ]),
     );
   }
 
-  Widget _buildItemCard(Map<String, dynamic> item) {
-    final disputeId   = item['dispute_id']?.toString() ?? '';
-    final kind        = item['kind']?.toString() ?? 'short';
-    final status      = item['status']?.toString() ?? '';
+  Widget _tableHeader() {
+    const style = TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: _kTextMuted);
+    return Row(children: const [
+      Expanded(flex: 2, child: Text('ITEM', style: style)),
+      Expanded(flex: 1, child: Text('ORD', style: style, textAlign: TextAlign.right)),
+      Expanded(flex: 1, child: Text('REC', style: style, textAlign: TextAlign.right)),
+      Expanded(flex: 1, child: Text('SHORT', style: style, textAlign: TextAlign.right)),
+    ]);
+  }
+
+  Widget _buildItemRow(Map<String, dynamic> item, {required bool isActive}) {
+    final disputeId  = item['dispute_id']?.toString() ?? '';
+    final kind       = item['kind']?.toString() ?? 'short';
+    final isWrong    = kind == 'wrong_item';
+    final product    = item['product_name']?.toString() ?? '—';
+    final wrongProd  = item['wrong_product_name']?.toString();
+    final packType   = item['pack_type']?.toString();
+    final ordered    = _toNum(item['ordered']);
+    final received   = _toNum(item['received']);
+    final short      = isWrong ? ordered : _toNum(item['short']);
+    final status     = item['status']?.toString() ?? '';
     final isSubmitting = _submitting[disputeId] == true;
-    final submittedResp = _submitted[disputeId];
-    final canRespond  =
-        (status == 'reminder_sent' || status == 'shop_logged') &&
-            submittedResp == null;
+    final actionable = isActive && (status == 'reminder_sent' || status == 'shop_logged');
 
-    RenderLog.write('c178_form_load',
-        'dispute_id=$disputeId;kind=$kind;status=$status');
-
-    return DisputeCard(
-      dispute: item,
-      isProcessing: isSubmitting,
-      onRespondMissing: (canRespond && kind == 'short')
-          ? () => _submit(disputeId, 'missing')
-          : null,
-      onRespondSupplied: (canRespond && kind == 'short')
-          ? () => _submit(disputeId, 'denied')
-          : null,
-      onRespondCorrect: (canRespond && kind == 'wrong_item')
-          ? () => _submit(disputeId, 'correct_coming')
-          : null,
-      onRespondOos: (canRespond && kind == 'wrong_item')
-          ? () => _submit(disputeId, 'out_of_stock')
-          : null,
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Expanded(
+            flex: 2,
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(product,
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
+                      color: isActive ? _kTextPrimary : _kTextMuted),
+                  maxLines: 2, overflow: TextOverflow.ellipsis),
+              if (isWrong) ...[
+                const SizedBox(height: 2),
+                Text('Wrong: sent ${(wrongProd != null && wrongProd.isNotEmpty) ? wrongProd : '—'}',
+                    style: const TextStyle(fontSize: 11, color: _kRed),
+                    maxLines: 1, overflow: TextOverflow.ellipsis),
+              ],
+            ]),
+          ),
+          Expanded(
+            flex: 1,
+            child: Text(_packQty(ordered, packType),
+                style: TextStyle(fontSize: 12,
+                    color: isActive ? _kTextPrimary : _kTextMuted),
+                textAlign: TextAlign.right),
+          ),
+          Expanded(
+            flex: 1,
+            child: Text(_packQty(received, packType),
+                style: TextStyle(fontSize: 12,
+                    color: isActive ? _kTextPrimary : _kTextMuted),
+                textAlign: TextAlign.right),
+          ),
+          Expanded(
+            flex: 1,
+            child: Text(_packQty(short, packType),
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700,
+                    color: isActive ? _kRed : _kTextMuted),
+                textAlign: TextAlign.right),
+          ),
+        ]),
+        if (actionable) ...[
+          const SizedBox(height: 10),
+          _buildResponseButtons(disputeId, kind, isSubmitting),
+        ] else if (isActive) ...[
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: _activeChip(status, kind),
+          ),
+        ] else ...[
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: _closedChip(status),
+          ),
+        ],
+      ]),
     );
   }
 
-  Widget _footer() => Center(
-    child: Text(
-      'mediBO · B2B Pharmacy Platform',
-      style: const TextStyle(fontSize: 11, color: _kTextMuted),
-    ),
+  Widget _buildResponseButtons(String disputeId, String kind, bool isSubmitting) {
+    final spinner = const SizedBox(width: 14, height: 14,
+        child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2));
+    if (kind == 'wrong_item') {
+      return Column(children: [
+        SizedBox(width: double.infinity,
+          child: FilledButton(
+            onPressed: isSubmitting ? null : () => _submit(disputeId, 'correct_coming'),
+            style: FilledButton.styleFrom(
+              backgroundColor: _kGreen,
+              disabledBackgroundColor: _kGreen.withValues(alpha: 0.4),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              padding: const EdgeInsets.symmetric(vertical: 11),
+            ),
+            child: isSubmitting ? spinner
+                : const Text('Sending the correct item',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
+                        color: Colors.white)),
+          ),
+        ),
+        const SizedBox(height: 6),
+        SizedBox(width: double.infinity,
+          child: OutlinedButton(
+            onPressed: isSubmitting ? null : () => _submit(disputeId, 'out_of_stock'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: _kTextPrimary,
+              side: const BorderSide(color: _kBorder),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              padding: const EdgeInsets.symmetric(vertical: 11),
+            ),
+            child: const Text('Out of stock',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+          ),
+        ),
+      ]);
+    } else {
+      return Column(children: [
+        SizedBox(width: double.infinity,
+          child: FilledButton(
+            onPressed: isSubmitting ? null : () => _submit(disputeId, 'missing'),
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFFD97706),
+              disabledBackgroundColor: const Color(0xFFFDE68A),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              padding: const EdgeInsets.symmetric(vertical: 11),
+            ),
+            child: isSubmitting ? spinner
+                : const Text('Yes, it was short / missing',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
+                        color: Colors.white)),
+          ),
+        ),
+        const SizedBox(height: 6),
+        SizedBox(width: double.infinity,
+          child: OutlinedButton(
+            onPressed: isSubmitting ? null : () => _submit(disputeId, 'denied'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: _kTextPrimary,
+              side: const BorderSide(color: _kBorder),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              padding: const EdgeInsets.symmetric(vertical: 11),
+            ),
+            child: const Text('No, I supplied it',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+          ),
+        ),
+      ]);
+    }
+  }
+
+  Widget _activeChip(String status, String kind) {
+    final isWrong = kind == 'wrong_item';
+    String label; Color bg; Color fg;
+    if (status == 'accepted_missing') {
+      if (isWrong) { label = 'Exchange awaited'; bg = _kGreenChipBg; fg = _kGreen; }
+      else { label = 'Being re-sourced'; bg = const Color(0xFFFEF3C7); fg = const Color(0xFF92400E); }
+    } else if (status == 'denied') {
+      if (isWrong) { label = 'Being re-sourced'; bg = const Color(0xFFFEF3C7); fg = const Color(0xFF92400E); }
+      else { label = 'Needs admin decision'; bg = const Color(0xFFFEE2E2); fg = _kRed; }
+    } else {
+      label = status; bg = _kNeutralChip; fg = _kTextMuted;
+    }
+    return _chip(label, bg, fg);
+  }
+
+  Widget _closedChip(String status) => status == 'cancelled'
+      ? _chip('Cancelled', _kNeutralChip, _kTextMuted)
+      : _chip('Resolved', _kGreenChipBg, _kGreen);
+
+  Widget _chip(String label, Color bg, Color fg) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+    decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(20)),
+    child: Text(label,
+        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: fg)),
+  );
+
+  Widget _buildHeader() => Container(
+    padding: const EdgeInsets.all(20),
+    decoration: BoxDecoration(color: _kGreen, borderRadius: BorderRadius.circular(16)),
+    child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+      Container(
+        width: 48, height: 48,
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.16),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: const Icon(Icons.local_shipping_outlined, color: Colors.white, size: 26),
+      ),
+      const SizedBox(width: 14),
+      Expanded(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('mediBO · Delivery Dispute',
+              style: TextStyle(color: Colors.white.withValues(alpha: 0.70),
+                  fontSize: 11, fontWeight: FontWeight.w500,
+                  letterSpacing: 0.5, height: 1.3)),
+          const SizedBox(height: 4),
+          Text(_supplierName ?? '',
+              style: const TextStyle(color: Colors.white, fontSize: 21,
+                  fontWeight: FontWeight.w800, height: 1.2),
+              maxLines: 2, overflow: TextOverflow.ellipsis),
+        ]),
+      ),
+    ]),
+  );
+
+  Widget _footer() => const Center(
+    child: Text('mediBO · B2B Pharmacy Platform',
+        style: TextStyle(fontSize: 11, color: _kTextMuted)),
   );
 }

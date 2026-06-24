@@ -107,6 +107,7 @@ void main() {
     RenderLog.write('c189_build', '189');
     RenderLog.write('c190_build', '190');
     RenderLog.write('c191_build', '191');
+    RenderLog.write('c192_build', '192');
     RenderLog.write('c190_sweep_done', 'hardcoded_labels_removed=true;dynamic_buttons=true;rpc_params_verified=true');
     RenderLog.write('c190_link_route_registered', '/dispute?token= route active');
 

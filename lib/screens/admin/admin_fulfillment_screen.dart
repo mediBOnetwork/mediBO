@@ -7474,147 +7474,370 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     );
   }
 
-  // ── #191: Item card redesign — cleaner layout, same data + actions ──────────
+  // ── #192: Compact dispute card — thumbnail + info, NO inline buttons; tap → sheet ──
   Widget _buildDisputeItemCard(DisputeItem item) {
-    final isWrong     = item.kind == 'wrong_item';
-    final isResolving = _resolving.contains(item.disputeId);
-    final isActive    = item.isActive;
+    final isWrong  = item.kind == 'wrong_item';
+    final isActive = item.isActive;
     final statusBgColor  = isActive ? const Color(0xFFFEF3C7) : const Color(0xFFD1FAE5);
     final statusTxtColor = isActive ? const Color(0xFF92400E) : const Color(0xFF065F46);
 
-    return Container(
-      margin: const EdgeInsets.only(bottom: 1),
-      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: _kBorder),
-        boxShadow: [BoxShadow(
-            color: Colors.black.withValues(alpha: 0.03),
-            blurRadius: 4, offset: const Offset(0, 1))],
-      ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+    // Meta line: packType / company / category (only the present ones)
+    final metaParts = <String>[
+      if ((item.packType ?? '').isNotEmpty) item.packType!,
+      if ((item.company ?? '').isNotEmpty) item.company!,
+      if ((item.category ?? '').isNotEmpty) item.category!,
+    ];
+    final metaLine = metaParts.join(' · ');
 
-        // Line 1: product name + Short/Wrong kind tag
-        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+    RenderLog.write('c192_dispute_card_rendered',
+        'dispute=${item.disputeId};status=${item.statusCode}');
+
+    return InkWell(
+      onTap: () => _openDisputeActionSheet(item),
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: _kBorder),
+        ),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+          // (a) Thumbnail
+          _FulfilImageTile(item.imageUrl, size: 44),
+          const SizedBox(width: 10),
+
+          // (b–f) Info column
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(item.productName.isNotEmpty ? item.productName : '—',
-                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _kText,
-                      height: 1.3),
-                  maxLines: 2, overflow: TextOverflow.ellipsis),
+              // Product name + kind tag row
+              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(item.productName.isNotEmpty ? item.productName : '—',
+                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
+                            color: _kText, height: 1.3),
+                        maxLines: 2, overflow: TextOverflow.ellipsis),
+                    if (isWrong && (item.wrongProductName ?? '').isNotEmpty) ...[
+                      const SizedBox(height: 1),
+                      Text('Received: ${item.wrongProductName}',
+                          style: const TextStyle(fontSize: 11, color: Color(0xFFDC2626)),
+                          maxLines: 1, overflow: TextOverflow.ellipsis),
+                    ],
+                  ]),
+                ),
+                const SizedBox(width: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: isWrong ? const Color(0xFFEEF2FF) : const Color(0xFFF1F5F9),
+                    borderRadius: BorderRadius.circular(5),
+                  ),
+                  child: Text(isWrong ? 'Wrong' : 'Short',
+                      style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700,
+                          color: isWrong ? const Color(0xFF4338CA) : const Color(0xFF475569))),
+                ),
+              ]),
+
+              // (c) Meta line
+              if (metaLine.isNotEmpty) ...[
+                const SizedBox(height: 2),
+                Text(metaLine,
+                    style: const TextStyle(fontSize: 11, color: _kSub),
+                    maxLines: 1, overflow: TextOverflow.ellipsis),
+              ],
+
+              // (d) Quantities
+              const SizedBox(height: 2),
+              Text(
+                'Ord ${item.ordered.toInt()} · Rec ${item.received.toInt()} · Short ${item.short.toInt()}',
+                style: const TextStyle(fontSize: 11, color: _kSub),
+              ),
+
+              // (e+f) Status chips
+              const SizedBox(height: 4),
+              Wrap(spacing: 4, runSpacing: 4, children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                      color: statusBgColor, borderRadius: BorderRadius.circular(20)),
+                  child: Text(item.itemStatusLabel,
+                      style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600,
+                          color: statusTxtColor)),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: isActive ? const Color(0xFFFEF3C7) : const Color(0xFFF3F4F6),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(item.disputeStatus,
+                      style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600,
+                          color: isActive ? const Color(0xFF92400E) : _kSub)),
+                ),
+                if (item.unfillable)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                        color: const Color(0xFFFEE2E2),
+                        borderRadius: BorderRadius.circular(20)),
+                    child: const Text('No supplier',
+                        style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700,
+                            color: Color(0xFF991B1B))),
+                  ),
+              ]),
+            ]),
+          ),
+
+          // (g) Trailing chevron — signals tappable
+          const SizedBox(width: 6),
+          const Icon(Icons.chevron_right_rounded, size: 18, color: _kSub),
+        ]),
+      ),
+    );
+  }
+
+  // ── #192: Dispute action bottom sheet — buttons live here, not on the card ──
+  void _openDisputeActionSheet(DisputeItem item) {
+    RenderLog.write('c192_dispute_sheet_opened',
+        'dispute=${item.disputeId};actions=${item.actions.length}');
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetCtx) => _DisputeActionSheet(
+        item: item,
+        onResolve: (action) async {
+          Navigator.of(sheetCtx).pop();
+          await _resolveDispute(item, action);
+        },
+      ),
+    );
+  }
+}
+
+// ── #192: Dispute action bottom sheet — shown when admin taps a dispute card ────
+class _DisputeActionSheet extends StatefulWidget {
+  final DisputeItem item;
+  final Future<void> Function(DisputeAction action) onResolve;
+
+  const _DisputeActionSheet({required this.item, required this.onResolve});
+
+  @override
+  State<_DisputeActionSheet> createState() => _DisputeActionSheetState();
+}
+
+class _DisputeActionSheetState extends State<_DisputeActionSheet> {
+  bool _resolving = false;
+
+  Future<void> _tap(DisputeAction action) async {
+    if (_resolving) return;
+    final noteCtrl = TextEditingController();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(action.label),
+        content: Column(mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('${widget.item.productName} — ${widget.item.supplier}.\nConfirm: ${action.label}?',
+              style: const TextStyle(fontSize: 14)),
+          const SizedBox(height: 16),
+          TextField(
+            controller: noteCtrl,
+            maxLines: 3,
+            decoration: const InputDecoration(
+              labelText: 'Note (optional)',
+              border: OutlineInputBorder(),
+              isDense: true,
+            ),
+          ),
+        ]),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: _kGreen),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Confirm'),
+          ),
+        ],
+      ),
+    );
+    noteCtrl.dispose();
+    if (confirmed != true || !mounted) return;
+    setState(() => _resolving = true);
+    RenderLog.write('c192_resolve_called',
+        'dispute=${widget.item.disputeId};outcome=${action.code}');
+    try {
+      await widget.onResolve(action);
+    } finally {
+      if (mounted) setState(() => _resolving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final item = widget.item;
+    final isWrong  = item.kind == 'wrong_item';
+    final isActive = item.isActive;
+    final statusBgColor  = isActive ? const Color(0xFFFEF3C7) : const Color(0xFFD1FAE5);
+    final statusTxtColor = isActive ? const Color(0xFF92400E) : const Color(0xFF065F46);
+    final safeBottom = MediaQuery.of(context).padding.bottom;
+
+    return Container(
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      padding: EdgeInsets.fromLTRB(16, 0, 16, 16 + safeBottom),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        // Drag handle
+        const SizedBox(height: 12),
+        Center(
+          child: Container(
+            width: 36, height: 4,
+            decoration: BoxDecoration(
+              color: const Color(0xFFD1D5DB),
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+
+        // Sheet header: thumbnail + name + kind + status
+        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          _FulfilImageTile(item.imageUrl, size: 48),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Expanded(
+                  child: Text(item.productName.isNotEmpty ? item.productName : '—',
+                      style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700,
+                          color: _kText, height: 1.3),
+                      maxLines: 2, overflow: TextOverflow.ellipsis),
+                ),
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: isWrong ? const Color(0xFFEEF2FF) : const Color(0xFFF1F5F9),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(isWrong ? 'Wrong item' : 'Short',
+                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700,
+                          color: isWrong ? const Color(0xFF4338CA) : const Color(0xFF475569))),
+                ),
+              ]),
               if (isWrong && (item.wrongProductName ?? '').isNotEmpty) ...[
                 const SizedBox(height: 2),
                 Text('Received: ${item.wrongProductName}',
                     style: const TextStyle(fontSize: 12, color: Color(0xFFDC2626)),
                     maxLines: 1, overflow: TextOverflow.ellipsis),
               ],
+              const SizedBox(height: 4),
+              Text(
+                'Ordered ${item.ordered.toInt()} · Received ${item.received.toInt()} · Short ${item.short.toInt()}',
+                style: const TextStyle(fontSize: 12, color: _kSub),
+              ),
+              const SizedBox(height: 4),
+              Wrap(spacing: 4, runSpacing: 4, children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                  decoration: BoxDecoration(
+                      color: statusBgColor, borderRadius: BorderRadius.circular(20)),
+                  child: Text(item.itemStatusLabel,
+                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
+                          color: statusTxtColor)),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: isActive ? const Color(0xFFFEF3C7) : const Color(0xFFF3F4F6),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(item.disputeStatus,
+                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
+                          color: isActive ? const Color(0xFF92400E) : _kSub)),
+                ),
+              ]),
             ]),
           ),
-          const SizedBox(width: 8),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-            decoration: BoxDecoration(
-              color: isWrong ? const Color(0xFFEEF2FF) : const Color(0xFFF1F5F9),
-              borderRadius: BorderRadius.circular(6),
-            ),
-            child: Text(isWrong ? 'Wrong item' : 'Short',
-                style: TextStyle(
-                  fontSize: 10, fontWeight: FontWeight.w700,
-                  color: isWrong ? const Color(0xFF4338CA) : const Color(0xFF475569),
-                )),
-          ),
         ]),
 
-        // Line 2: quantities (muted, compact)
-        const SizedBox(height: 6),
-        Text(
-          'Ordered ${item.ordered.toInt()} · Received ${item.received.toInt()} · Short ${item.short.toInt()}',
-          style: const TextStyle(fontSize: 12, color: _kSub),
-        ),
+        const SizedBox(height: 20),
+        const Divider(height: 1, color: Color(0xFFE5E7EB)),
+        const SizedBox(height: 16),
 
-        // Line 3: status chips row
-        const SizedBox(height: 8),
-        Wrap(spacing: 6, runSpacing: 6, children: [
-          // item_status_label badge — VERBATIM (admin sees "Awaiting supplier response")
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(color: statusBgColor, borderRadius: BorderRadius.circular(20)),
-            child: Text(item.itemStatusLabel,
-                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: statusTxtColor)),
-          ),
-          // dispute_status chip — VERBATIM
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(
-              color: isActive ? const Color(0xFFFEF3C7) : const Color(0xFFF3F4F6),
-              borderRadius: BorderRadius.circular(20),
+        // Action buttons (item.actions verbatim from backend)
+        if (item.actions.isEmpty) ...[
+          const Text('No actions available for this status.',
+              style: TextStyle(fontSize: 14, color: _kSub)),
+          const SizedBox(height: 16),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton(
+              onPressed: () => Navigator.of(context).pop(),
+              style: OutlinedButton.styleFrom(
+                side: const BorderSide(color: Color(0xFFE5E7EB)),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                padding: const EdgeInsets.symmetric(vertical: 12),
+              ),
+              child: const Text('Close', style: TextStyle(fontSize: 14)),
             ),
-            child: Text(item.disputeStatus,
-                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
-                    color: isActive ? const Color(0xFF92400E) : _kSub)),
           ),
-          // unfillable chip — when no supplier available
-          if (item.unfillable)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                  color: const Color(0xFFFEE2E2), borderRadius: BorderRadius.circular(20)),
-              child: const Text('No supplier available',
-                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700,
-                      color: Color(0xFF991B1B))),
-            ),
-        ]),
-
-        // Action buttons from item.actions (admin resolves here)
-        if (item.actions.isNotEmpty) ...[
-          const SizedBox(height: 10),
-          _buildItemActions(item, isResolving),
-        ],
+        ] else
+          Builder(builder: (_) {
+            RenderLog.write('c192_dispute_sheet_buttons',
+                'dispute=${item.disputeId};count=${item.actions.length}');
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: item.actions.asMap().entries.map((e) {
+                final idx = e.key;
+                final action = e.value;
+                final isPrimary = idx == 0;
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: isPrimary
+                      ? FilledButton(
+                          onPressed: _resolving ? null : () => _tap(action),
+                          style: FilledButton.styleFrom(
+                            backgroundColor: _kGreen,
+                            disabledBackgroundColor: _kGreen.withValues(alpha: 0.4),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8)),
+                            padding: const EdgeInsets.symmetric(vertical: 13),
+                          ),
+                          child: _resolving
+                              ? const SizedBox(width: 16, height: 16,
+                                  child: CircularProgressIndicator(
+                                      strokeWidth: 2, color: Colors.white))
+                              : Text(action.label,
+                                  style: const TextStyle(fontSize: 14,
+                                      fontWeight: FontWeight.w700, color: Colors.white)),
+                        )
+                      : OutlinedButton(
+                          onPressed: _resolving ? null : () => _tap(action),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: _kGreen,
+                            side: const BorderSide(color: Color(0xFFBBDDC8)),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8)),
+                            padding: const EdgeInsets.symmetric(vertical: 13),
+                          ),
+                          child: _resolving
+                              ? const SizedBox(width: 14, height: 14,
+                                  child: CircularProgressIndicator(strokeWidth: 2))
+                              : Text(action.label,
+                                  style: const TextStyle(fontSize: 14,
+                                      fontWeight: FontWeight.w700)),
+                        ),
+                );
+              }).toList(),
+            );
+          }),
       ]),
-    );
-  }
-
-  // ── #188: Dynamic action buttons from backend actions list ───────────────
-  Widget _buildItemActions(DisputeItem item, bool isResolving) {
-    RenderLog.write('c188_admin_buttons_rendered',
-        'dispute=${item.disputeId};count=${item.actions.length}');
-    const spinner = SizedBox(width: 12, height: 12,
-        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white));
-    if (item.actions.length == 1) {
-      final action = item.actions.first;
-      return SizedBox(
-        width: double.infinity,
-        child: FilledButton(
-          onPressed: isResolving ? null : () => _resolveDispute(item, action),
-          style: FilledButton.styleFrom(
-            backgroundColor: _kGreen,
-            disabledBackgroundColor: _kGreen.withValues(alpha: 0.4),
-            padding: const EdgeInsets.symmetric(vertical: 8),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-          ),
-          child: isResolving ? spinner : Text(action.label,
-              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.white)),
-        ),
-      );
-    }
-    return Wrap(
-      spacing: 8,
-      runSpacing: 8,
-      children: item.actions.map((action) => OutlinedButton(
-        onPressed: isResolving ? null : () => _resolveDispute(item, action),
-        style: OutlinedButton.styleFrom(
-          foregroundColor: _kGreen,
-          side: const BorderSide(color: Color(0xFFBBDDC8)),
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-        ),
-        child: isResolving ? const SizedBox(width: 12, height: 12,
-            child: CircularProgressIndicator(strokeWidth: 2)) : Text(action.label,
-            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-      )).toList(),
     );
   }
 }

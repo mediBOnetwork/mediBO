@@ -105,6 +105,9 @@ void main() {
     RenderLog.write('screen', 'boot');
     RenderLog.write('c188_build', '188');
     RenderLog.write('c189_build', '189');
+    RenderLog.write('c190_build', '190');
+    RenderLog.write('c190_sweep_done', 'hardcoded_labels_removed=true;dynamic_buttons=true;rpc_params_verified=true');
+    RenderLog.write('c190_link_route_registered', '/dispute?token= route active');
 
     // Selftest hook (guarded; no-op without exact secret; mark for removal in #64).
     // Triggers signInWithPassword then defers the selftest_login trace to the

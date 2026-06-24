@@ -234,6 +234,43 @@ Future<Map<String, dynamic>> supplierRespondDisputeRpc({
   return data;
 }
 
+/// Fetch the public dispute-link form (get_dispute_form) — no auth required.
+Future<({String supplierName, List<DisputeItem> items})> fetchDisputeForm(
+    String token) async {
+  final res = await Supabase.instance.client
+      .rpc('get_dispute_form', params: {'p_token': token}) as Map;
+  final err = res['error']?.toString();
+  if (err != null) throw DisputeException(err);
+  final rawList = res['items'];
+  final items = (rawList is List)
+      ? rawList
+          .whereType<Map>()
+          .map((e) => DisputeItem.fromJson(Map<String, dynamic>.from(e)))
+          .toList()
+      : <DisputeItem>[];
+  return (supplierName: (res['supplier_name'] ?? '').toString(), items: items);
+}
+
+/// Submit a supplier response via the public dispute link (submit_dispute_response).
+Future<Map<String, dynamic>> submitDisputeResponse({
+  required String token,
+  required String disputeId,
+  required String response,
+}) async {
+  final res = await Supabase.instance.client.rpc(
+    'submit_dispute_response',
+    params: {
+      'p_token': token,
+      'p_dispute_id': disputeId,
+      'p_response': response,
+    },
+  );
+  final data = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+  final err = data['error']?.toString();
+  if (err != null) throw DisputeException(err);
+  return data;
+}
+
 /// Admin resolve a dispute (fw_resolve_dispute).
 Future<Map<String, dynamic>> resolveAdminDisputeRpc({
   required String disputeId,

@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../utils/render_log.dart';
+import '../admin/dispute/dispute_models.dart';
 
-// ── Palette ──────────────────────────────────────────────────────────────────
+// ── Palette ───────────────────────────────────────────────────────────────────
 const _kGreen       = Color(0xFF1B7A43);
 const _kBg          = Color(0xFFF4F6F8);
 const _kCard        = Color(0xFFFFFFFF);
@@ -15,23 +15,10 @@ const _kNeutralChip = Color(0xFFF1F3F4);
 const _kAmberText   = Color(0xFFB8860B);
 const _kAmberBg     = Color(0xFFFFF8E1);
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
 String _packQty(num n, String? packType) {
   if (packType == null || packType.trim().isEmpty) return '$n';
   final unit = n == 1 ? packType.trim() : '${packType.trim()}s';
   return '$n $unit';
-}
-
-num _toNum(dynamic v) {
-  if (v == null) return 0;
-  if (v is num) return v;
-  return num.tryParse(v.toString()) ?? 0;
-}
-
-bool _isActive(Map<String, dynamic> item) {
-  if (item.containsKey('active')) return item['active'] == true;
-  final s = item['status']?.toString() ?? '';
-  return s != 'resolved' && s != 'cancelled';
 }
 
 class DisputeFormScreen extends StatefulWidget {
@@ -45,15 +32,14 @@ class DisputeFormScreen extends StatefulWidget {
 class _DisputeFormScreenState extends State<DisputeFormScreen> {
   bool _loading = true;
   String? _error;
-  String? _supplierName;
-  List<Map<String, dynamic>> _items = [];
+  String _supplierName = '';
+  List<DisputeItem> _items = [];
   final Map<String, bool> _submitting = {};
   bool _closedExpanded = false;
 
   @override
   void initState() {
     super.initState();
-    RenderLog.write('c170_dispute_route', 'true');
     _load();
   }
 
@@ -61,105 +47,89 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
     if (!mounted) return;
     setState(() { _loading = true; _error = null; });
     try {
-      final result = await Supabase.instance.client
-          .rpc('get_dispute_form', params: {'p_token': widget.token});
+      final result = await fetchDisputeForm(widget.token);
       if (!mounted) return;
-      final data = Map<String, dynamic>.from(result as Map);
-      final loadErr = data['error']?.toString();
-      if (loadErr != null) {
-        setState(() { _error = loadErr; _loading = false; });
-        return;
-      }
-      final rawItems = (data['items'] as List? ?? [])
-          .map((e) => Map<String, dynamic>.from(e as Map))
-          .toList();
-      if (rawItems.isEmpty) {
-        setState(() { _error = 'invalid'; _loading = false; });
-        return;
-      }
+      RenderLog.write('c190_link_loaded',
+          'supplier=${result.supplierName};count=${result.items.length}');
       setState(() {
-        _supplierName = data['supplier_name']?.toString();
-        _items = rawItems;
+        _supplierName = result.supplierName;
+        _items = result.items;
         _loading = false;
       });
-      final activeCount = rawItems.where(_isActive).length;
-      final closedCount = rawItems.length - activeCount;
-      final hasCategory = rawItems.any((i) {
-        final c = i['category']?.toString() ?? '';
-        return c.isNotEmpty;
-      });
-      final hasCompany = rawItems.any((i) {
-        final c = i['company']?.toString() ?? '';
-        return c.isNotEmpty;
-      });
-      RenderLog.write('c170_dispute_form_items', '${rawItems.length}');
-      RenderLog.write('c172_dispute_page_rendered',
-          'supplier=${_supplierName ?? ''};item_count=${rawItems.length}');
-      RenderLog.write('c185_supplier_card',
-          'change:185,surface:link,card_layout:true,has_image_slot:true,'
-          'has_category:$hasCategory,has_company:$hasCompany,'
-          'missing_amber:true,'
-          'active_count:$activeCount,'
-          'closed_count:$closedCount');
+    } on DisputeException catch (e) {
+      if (!mounted) return;
+      if (e.message == 'invalid') {
+        RenderLog.write('c190_link_invalid_shown', 'token_invalid');
+      }
+      setState(() { _error = e.message; _loading = false; });
     } catch (e) {
       if (!mounted) return;
       setState(() { _error = 'load_failed'; _loading = false; });
     }
   }
 
-  Future<void> _submit(String disputeId, String response) async {
-    if (_submitting[disputeId] == true) return;
-    setState(() => _submitting[disputeId] = true);
-    try {
-      final result = await Supabase.instance.client.rpc(
-        'submit_dispute_response',
-        params: {
-          'p_token': widget.token,
-          'p_dispute_id': disputeId,
-          'p_response': response,
-        },
-      );
-      if (!mounted) return;
-      final data = result is Map ? Map<String, dynamic>.from(result) : <String, dynamic>{};
-      if (data['error'] != null) {
-        final err = data['error']?.toString() ?? 'unknown';
-        setState(() => _submitting[disputeId] = false);
-        if (err == 'already_responded') { await _load(); return; }
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $err'), backgroundColor: _kRed),
-        );
-        return;
-      }
-      setState(() {
-        _submitting[disputeId] = false;
-        final idx = _items.indexWhere((e) => e['dispute_id']?.toString() == disputeId);
-        if (idx >= 0) {
-          final newStatus = (response == 'missing' || response == 'correct_coming')
-              ? 'accepted_missing' : 'denied';
-          _items[idx] = Map<String, dynamic>.from(_items[idx])
-            ..['status'] = newStatus
-            ..['supplier_response'] = response
-            ..['active'] = true;
-        }
-      });
-      RenderLog.write('c185_dispute_submit', 'dispute_id=$disputeId;response=$response');
-      await _load();
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _submitting[disputeId] = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Submission failed. Please try again.')),
-      );
-    }
-  }
+  Future<void> _submitAction(DisputeItem item, DisputeAction action) async {
+    if (_submitting[item.disputeId] == true) return;
 
-  bool get _allActiveResponded {
-    final active = _items.where(_isActive).toList();
-    if (active.isEmpty) return false;
-    return active.every((item) {
-      final s = item['status']?.toString() ?? '';
-      return s == 'accepted_missing' || s == 'denied';
-    });
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(action.label),
+        content: Text(
+          '${item.productName}\nConfirm: ${action.label}?',
+          style: const TextStyle(fontSize: 14),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: _kGreen),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Confirm'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _submitting[item.disputeId] = true);
+    RenderLog.write('c190_link_submit_called',
+        'dispute=${item.disputeId};response=${action.code}');
+
+    try {
+      await submitDisputeResponse(
+        token: widget.token,
+        disputeId: item.disputeId,
+        response: action.code,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Thanks — response recorded.')));
+      await _load();
+    } on DisputeException catch (e) {
+      if (!mounted) return;
+      if (e.message == 'already_responded') {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('Already answered — refreshing.')));
+        await _load();
+      } else if (e.message == 'invalid') {
+        setState(() { _error = 'invalid'; _loading = false; });
+        RenderLog.write('c190_link_invalid_shown', 'token_invalid_on_submit');
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+              content: Text('Error: ${e.message}'),
+              backgroundColor: _kRed));
+      }
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Submission failed. Please try again.')));
+    } finally {
+      if (mounted) setState(() => _submitting.remove(item.disputeId));
+    }
   }
 
   @override
@@ -184,6 +154,7 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
   }
 
   Widget _buildErrorState() {
+    final isInvalid = _error == 'invalid';
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(32),
@@ -198,17 +169,33 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
           ),
           const SizedBox(height: 20),
           Text(
-            _error == 'load_failed'
-                ? 'Unable to load. Please try again.'
-                : 'This link is no longer valid.',
+            isInvalid
+                ? 'This dispute link is invalid or has expired.'
+                : 'Unable to load. Please try again.',
             style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700,
                 color: _kTextPrimary, height: 1.35),
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: 8),
-          const Text('Please contact mediBO.',
-              style: TextStyle(fontSize: 14, color: _kTextMuted, height: 1.35),
-              textAlign: TextAlign.center),
+          Text(
+            isInvalid
+                ? 'Please contact mediBO.'
+                : 'Check your connection and try again.',
+            style: const TextStyle(fontSize: 14, color: _kTextMuted, height: 1.35),
+            textAlign: TextAlign.center,
+          ),
+          if (!isInvalid) ...[
+            const SizedBox(height: 24),
+            FilledButton.icon(
+              onPressed: _load,
+              style: FilledButton.styleFrom(
+                backgroundColor: _kGreen,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              icon: const Icon(Icons.refresh_rounded, size: 16),
+              label: const Text('Retry'),
+            ),
+          ],
           const SizedBox(height: 32),
           _footer(),
         ]),
@@ -217,37 +204,19 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
   }
 
   Widget _buildPage() {
-    final activeItems = _items.where(_isActive).toList();
-    final closedItems = _items.where((i) => !_isActive(i)).toList();
+    final activeItems = _items.where((d) => d.isActive).toList();
+    final closedItems = _items.where((d) => !d.isActive).toList();
+
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(16, 20, 16, 48),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         _buildHeader(),
         const SizedBox(height: 16),
-        const Text('Delivery disputes — please confirm each item below',
+        const Text('Please confirm the short items below.',
             style: TextStyle(fontSize: 15, color: _kTextMuted, height: 1.35)),
         const SizedBox(height: 12),
 
-        if (_allActiveResponded) ...[
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            decoration: BoxDecoration(
-              color: _kGreenChipBg,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: const Color(0xFFBBDDC8)),
-            ),
-            child: const Row(children: [
-              Icon(Icons.check_circle_rounded, size: 18, color: _kGreen),
-              SizedBox(width: 10),
-              Expanded(child: Text('Thanks — all responses recorded.',
-                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600,
-                      color: _kGreen, height: 1.35))),
-            ]),
-          ),
-          const SizedBox(height: 12),
-        ],
-
-        // ── Active section ────────────────────────────────────────────────
+        // ── Active section ─────────────────────────────────────────────────
         _buildSectionLabel('Active', activeItems.length, active: true),
         const SizedBox(height: 8),
         if (activeItems.isEmpty)
@@ -259,10 +228,10 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
         else
           ...activeItems.map((item) => Padding(
             padding: const EdgeInsets.only(bottom: 10),
-            child: _buildItemCard(item, isActive: true),
+            child: _buildItemCard(item),
           )),
 
-        // ── Closed section ────────────────────────────────────────────────
+        // ── Closed section ─────────────────────────────────────────────────
         if (closedItems.isNotEmpty) ...[
           const SizedBox(height: 8),
           GestureDetector(
@@ -296,7 +265,7 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: closedItems.map((item) => Padding(
                         padding: const EdgeInsets.only(bottom: 10),
-                        child: _buildItemCard(item, isActive: false),
+                        child: _buildItemCard(item),
                       )).toList(),
                     ),
                   )
@@ -329,24 +298,15 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
     ]);
   }
 
-  Widget _buildItemCard(Map<String, dynamic> item, {required bool isActive}) {
-    final disputeId = item['dispute_id']?.toString() ?? '';
-    final kind      = item['kind']?.toString() ?? 'short';
-    final isWrong   = kind == 'wrong_item';
-    final product   = item['product_name']?.toString() ?? '—';
-    final wrongProd = item['wrong_product_name']?.toString();
-    final packType  = item['pack_type']?.toString();
-    final category  = item['category']?.toString();
-    final company   = item['company']?.toString();
-    final imageUrl  = item['image_url']?.toString();
-    final ordered   = _toNum(item['ordered']);
-    final received  = _toNum(item['received']);
-    final short     = isWrong ? ordered : _toNum(item['short']);
-    final status    = item['status']?.toString() ?? '';
-    final isSubmitting = _submitting[disputeId] == true;
-    final actionable = isActive && (status == 'reminder_sent' || status == 'shop_logged');
+  Widget _buildItemCard(DisputeItem item) {
+    final isActive   = item.isActive;
+    final isWrong    = item.kind == 'wrong_item';
+    final hasImage   = (item.imageUrl ?? '').isNotEmpty;
+    final isSubmitting = _submitting[item.disputeId] == true;
 
-    final hasImage = imageUrl != null && imageUrl.isNotEmpty;
+    // active/closed colours derived from dispute_status
+    final statusBgColor  = isActive ? const Color(0xFFFEF3C7) : const Color(0xFFD1FAE5);
+    final statusTxtColor = isActive ? const Color(0xFF92400E) : const Color(0xFF065F46);
 
     return Container(
       decoration: BoxDecoration(
@@ -361,83 +321,85 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
       padding: const EdgeInsets.all(14),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
 
-        // ── (1) Header row: image + info ─────────────────────────────────
+        // (a) Header row
         Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          // Image
           ClipRRect(
             borderRadius: BorderRadius.circular(8),
             child: hasImage
-                ? Image.network(
-                    imageUrl!,
-                    width: 60, height: 60,
-                    fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => _imagePlaceholder(),
-                  )
+                ? Image.network(item.imageUrl!, width: 60, height: 60, fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => _imagePlaceholder())
                 : _imagePlaceholder(),
           ),
           const SizedBox(width: 10),
-
-          // Info column
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              // Line 1: name + active/closed pill
               Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Expanded(
-                  child: Text(product,
-                      style: TextStyle(
-                          fontSize: 15, fontWeight: FontWeight.w700,
-                          color: isActive ? _kTextPrimary : _kTextMuted,
-                          height: 1.3),
-                      maxLines: 2, overflow: TextOverflow.ellipsis),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(item.productName.isNotEmpty ? item.productName : '—',
+                        style: TextStyle(
+                            fontSize: 15, fontWeight: FontWeight.w700,
+                            color: isActive ? _kTextPrimary : _kTextMuted, height: 1.3),
+                        maxLines: 2, overflow: TextOverflow.ellipsis),
+                    // (a) wrong product name
+                    if (isWrong && (item.wrongProductName ?? '').isNotEmpty) ...[
+                      const SizedBox(height: 3),
+                      Text('Received: ${item.wrongProductName}',
+                          style: const TextStyle(fontSize: 12, color: _kRed),
+                          maxLines: 1, overflow: TextOverflow.ellipsis),
+                    ],
+                  ]),
                 ),
                 const SizedBox(width: 6),
-                _statusPill(isActive),
+                // (e) dispute_status chip — VERBATIM from backend
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: isActive ? _kGreenChipBg : _kNeutralChip,
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(item.disputeStatus,
+                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
+                          color: isActive ? _kGreen : _kTextMuted)),
+                ),
               ]),
-              // Line 2: category
-              if (category != null && category.isNotEmpty) ...[
+              // (b) meta
+              if ((item.category ?? '').isNotEmpty) ...[
                 const SizedBox(height: 3),
-                Text(category,
+                Text(item.category!,
                     style: const TextStyle(fontSize: 12, color: _kTextMuted),
                     maxLines: 1, overflow: TextOverflow.ellipsis),
               ],
-              // Line 3: company
-              if (company != null && company.isNotEmpty) ...[
+              if ((item.company ?? '').isNotEmpty) ...[
                 const SizedBox(height: 2),
-                Text(company,
+                Text(item.company!,
                     style: const TextStyle(fontSize: 12, color: _kTextMuted),
-                    maxLines: 1, overflow: TextOverflow.ellipsis),
-              ],
-              // Line 4: wrong item note
-              if (isWrong) ...[
-                const SizedBox(height: 3),
-                Text('Wrong: sent ${(wrongProd != null && wrongProd.isNotEmpty) ? wrongProd : '—'}',
-                    style: const TextStyle(fontSize: 12, color: _kRed),
                     maxLines: 1, overflow: TextOverflow.ellipsis),
               ],
             ]),
           ),
         ]),
 
-        // ── (2) Qty table ─────────────────────────────────────────────────
+        // (c) Quantities table
         const SizedBox(height: 12),
-        _buildQtyTable(ordered, received, short, packType),
+        _buildQtyTable(item.ordered, item.received, item.short, item.packType),
 
-        // ── (3) Action area ───────────────────────────────────────────────
-        if (actionable) ...[
+        // (d) item_status_label badge — VERBATIM from backend
+        const SizedBox(height: 10),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(color: statusBgColor, borderRadius: BorderRadius.circular(20)),
+            child: Text(item.itemStatusLabel,
+                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: statusTxtColor)),
+          ),
+        ),
+
+        // (f) Action buttons — dynamic from item.actions; only shown when array non-empty
+        if (item.actions.isNotEmpty) ...[
           const SizedBox(height: 12),
-          _buildResponseButtons(disputeId, kind, isSubmitting),
-        ] else if (isActive) ...[
-          const SizedBox(height: 10),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: _activeChip(status, kind),
-          ),
-        ] else ...[
-          const SizedBox(height: 10),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: _closedChip(status),
-          ),
+          _buildActionButtons(item, isSubmitting),
         ],
       ]),
     );
@@ -452,23 +414,6 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
     child: const Icon(Icons.medication_outlined, size: 28, color: Color(0xFFBDBDBD)),
   );
 
-  Widget _statusPill(bool isActive) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-      decoration: BoxDecoration(
-        color: isActive ? _kGreenChipBg : _kNeutralChip,
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Text(
-        isActive ? 'Active' : 'Closed',
-        style: TextStyle(
-          fontSize: 11, fontWeight: FontWeight.w600,
-          color: isActive ? _kGreen : _kTextMuted,
-        ),
-      ),
-    );
-  }
-
   Widget _buildQtyTable(num ordered, num received, num short, String? packType) {
     return Container(
       decoration: BoxDecoration(
@@ -476,41 +421,36 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
         borderRadius: BorderRadius.circular(8),
       ),
       child: Column(children: [
-        // Header row
         IntrinsicHeight(
           child: Row(children: [
-            _qtyCell('Ordered', flex: 1, isHeader: true, isAmber: false),
+            _qtyCell('Ordered', isHeader: true, isAmber: false),
             _vertDivider(),
-            _qtyCell('Received', flex: 1, isHeader: true, isAmber: false),
+            _qtyCell('Received', isHeader: true, isAmber: false),
             _vertDivider(),
-            _qtyCell('Missing', flex: 1, isHeader: true, isAmber: true),
+            _qtyCell('Missing', isHeader: true, isAmber: true),
           ]),
         ),
         Divider(height: 1, color: _kBorder),
-        // Value row
         IntrinsicHeight(
           child: Row(children: [
-            _qtyCell(_packQty(ordered, packType), flex: 1, isHeader: false, isAmber: false),
+            _qtyCell(_packQty(ordered, packType), isHeader: false, isAmber: false),
             _vertDivider(),
-            _qtyCell(_packQty(received, packType), flex: 1, isHeader: false, isAmber: false),
+            _qtyCell(_packQty(received, packType), isHeader: false, isAmber: false),
             _vertDivider(),
-            _qtyCell(_packQty(short, packType), flex: 1, isHeader: false, isAmber: true, isBold: true),
+            _qtyCell(_packQty(short, packType), isHeader: false, isAmber: true, isBold: true),
           ]),
         ),
       ]),
     );
   }
 
-  Widget _qtyCell(String text, {required int flex, required bool isHeader,
-      required bool isAmber, bool isBold = false}) {
+  Widget _qtyCell(String text, {required bool isHeader, required bool isAmber,
+      bool isBold = false}) {
     return Expanded(
-      flex: flex,
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
         color: isAmber && !isHeader ? _kAmberBg : null,
-        child: Text(
-          text,
-          textAlign: TextAlign.center,
+        child: Text(text, textAlign: TextAlign.center,
           style: TextStyle(
             fontSize: isHeader ? 11 : 13,
             fontWeight: (isHeader || isBold) ? FontWeight.w700 : FontWeight.w400,
@@ -523,101 +463,69 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
 
   Widget _vertDivider() => VerticalDivider(width: 1, color: _kBorder, thickness: 1);
 
-  Widget _buildResponseButtons(String disputeId, String kind, bool isSubmitting) {
-    final spinner = const SizedBox(width: 14, height: 14,
+  // Dynamic buttons from item.actions — no hardcoded codes or labels
+  Widget _buildActionButtons(DisputeItem item, bool isSubmitting) {
+    RenderLog.write('c190_link_buttons_rendered',
+        'dispute=${item.disputeId};count=${item.actions.length}');
+    const spinner = SizedBox(width: 14, height: 14,
         child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2));
-    if (kind == 'wrong_item') {
-      return Column(children: [
-        SizedBox(width: double.infinity,
-          child: FilledButton(
-            onPressed: isSubmitting ? null : () => _submit(disputeId, 'correct_coming'),
-            style: FilledButton.styleFrom(
-              backgroundColor: _kGreen,
-              disabledBackgroundColor: _kGreen.withValues(alpha: 0.4),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-              padding: const EdgeInsets.symmetric(vertical: 11),
-            ),
-            child: isSubmitting ? spinner
-                : const Text('Sending the correct item',
-                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
-                        color: Colors.white)),
+
+    if (item.actions.length == 1) {
+      final action = item.actions.first;
+      return SizedBox(
+        width: double.infinity,
+        child: FilledButton(
+          onPressed: isSubmitting ? null : () => _submitAction(item, action),
+          style: FilledButton.styleFrom(
+            backgroundColor: const Color(0xFFD97706),
+            disabledBackgroundColor: const Color(0xFFFDE68A),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            padding: const EdgeInsets.symmetric(vertical: 11),
           ),
+          child: isSubmitting ? spinner : Text(action.label,
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
+                  color: Colors.white)),
         ),
-        const SizedBox(height: 6),
-        SizedBox(width: double.infinity,
-          child: OutlinedButton(
-            onPressed: isSubmitting ? null : () => _submit(disputeId, 'out_of_stock'),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: _kTextPrimary,
-              side: const BorderSide(color: _kBorder),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-              padding: const EdgeInsets.symmetric(vertical: 11),
-            ),
-            child: const Text('Out of stock',
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-          ),
-        ),
-      ]);
-    } else {
-      return Column(children: [
-        SizedBox(width: double.infinity,
-          child: FilledButton(
-            onPressed: isSubmitting ? null : () => _submit(disputeId, 'missing'),
-            style: FilledButton.styleFrom(
-              backgroundColor: const Color(0xFFD97706),
-              disabledBackgroundColor: const Color(0xFFFDE68A),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-              padding: const EdgeInsets.symmetric(vertical: 11),
-            ),
-            child: isSubmitting ? spinner
-                : const Text('Yes, it was short / missing',
-                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
-                        color: Colors.white)),
-          ),
-        ),
-        const SizedBox(height: 6),
-        SizedBox(width: double.infinity,
-          child: OutlinedButton(
-            onPressed: isSubmitting ? null : () => _submit(disputeId, 'denied'),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: _kTextPrimary,
-              side: const BorderSide(color: _kBorder),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-              padding: const EdgeInsets.symmetric(vertical: 11),
-            ),
-            child: const Text('No, I supplied it',
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-          ),
-        ),
-      ]);
+      );
     }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: item.actions.asMap().entries.map((e) {
+        final idx = e.key;
+        final action = e.value;
+        final isPrimary = idx == 0;
+        if (isPrimary) {
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: FilledButton(
+              onPressed: isSubmitting ? null : () => _submitAction(item, action),
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFFD97706),
+                disabledBackgroundColor: const Color(0xFFFDE68A),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                padding: const EdgeInsets.symmetric(vertical: 11),
+              ),
+              child: isSubmitting ? spinner : Text(action.label,
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
+                      color: Colors.white)),
+            ),
+          );
+        }
+        return OutlinedButton(
+          onPressed: isSubmitting ? null : () => _submitAction(item, action),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: _kTextPrimary,
+            side: const BorderSide(color: _kBorder),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            padding: const EdgeInsets.symmetric(vertical: 11),
+          ),
+          child: Text(action.label,
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+        );
+      }).toList(),
+    );
   }
-
-  Widget _activeChip(String status, String kind) {
-    final isWrong = kind == 'wrong_item';
-    String label; Color bg; Color fg;
-    if (status == 'accepted_missing') {
-      if (isWrong) { label = 'Exchange awaited'; bg = _kGreenChipBg; fg = _kGreen; }
-      else { label = 'Being re-sourced'; bg = const Color(0xFFFEF3C7); fg = const Color(0xFF92400E); }
-    } else if (status == 'denied') {
-      if (isWrong) { label = 'Being re-sourced'; bg = const Color(0xFFFEF3C7); fg = const Color(0xFF92400E); }
-      else { label = 'Needs admin decision'; bg = const Color(0xFFFEE2E2); fg = _kRed; }
-    } else {
-      label = status; bg = _kNeutralChip; fg = _kTextMuted;
-    }
-    return _chip(label, bg, fg);
-  }
-
-  Widget _closedChip(String status) => status == 'cancelled'
-      ? _chip('Cancelled', _kNeutralChip, _kTextMuted)
-      : _chip('Resolved', _kGreenChipBg, _kGreen);
-
-  Widget _chip(String label, Color bg, Color fg) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-    decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(20)),
-    child: Text(label,
-        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: fg)),
-  );
 
   Widget _buildHeader() => Container(
     padding: const EdgeInsets.all(20),
@@ -639,7 +547,7 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
                   fontSize: 11, fontWeight: FontWeight.w500,
                   letterSpacing: 0.5, height: 1.3)),
           const SizedBox(height: 4),
-          Text(_supplierName ?? '',
+          Text('Hi $_supplierName',
               style: const TextStyle(color: Colors.white, fontSize: 21,
                   fontWeight: FontWeight.w800, height: 1.2),
               maxLines: 2, overflow: TextOverflow.ellipsis),

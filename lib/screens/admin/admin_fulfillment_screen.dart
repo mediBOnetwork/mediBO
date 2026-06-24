@@ -1358,9 +1358,20 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   // Tap-to-toggle: one tap = start, next tap = stop+send.
   Future<void> _toggleRecording() async {
+    // c194: instrument both tabs — fires on every "Count items" tap
+    if (widget.arrivals) {
+      RenderLog.write('c194_count_items_tapped_wh', 'surface=arrivals');
+    } else {
+      RenderLog.write('c194_count_items_tapped_shop', 'surface=collect');
+    }
     if (_agentPhase != AgentPhase.idle) return; // agent active — counting mic disabled
     if (_voiceProcessing) return; // busy — ignore double-tap
-    if (_boxLocked) { RenderLog.write('change_91_edit_blocked', '1'); return; } // #91
+    if (_boxLocked) {
+      RenderLog.write('change_91_edit_blocked', '1');
+      // c194: surface lock state so it's never a silent no-op
+      if (mounted) _showSnack('Counting locked — unlock first to edit');
+      return;
+    }
     if (_voiceListening) {
       // Stop
       _idleTimer?.cancel();
@@ -4605,20 +4616,36 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     final supplier    = _selectedSupplier ?? '';
     final dispute     = itemId != null ? _disputeMap[itemId] : null;
 
-    await showFulfillItemSheet(
-      context: context,
-      item: item,
-      supplierName: supplier,
-      recording: _recording,
-      existingDispute: dispute,
-      onRecord: (state, {qty, note}) => _record(state, qty: qty, note: note),
-      onDisputeCreated: (id, d) {
-        if (mounted) setState(() => _disputeMap[id] = d);
-      },
-      onViewDispute: () {
-        context.findAncestorStateOfType<_AdminFulfillmentScreenState>()?._openDisputesTab();
-      },
-    );
+    // c194: instrument list-shown + guard against silent failures
+    RenderLog.write('c194_count_items_list_shown',
+        'surface=${widget.arrivals ? "arrivals" : "collect"};item=${item['product_name'] ?? ''}');
+
+    try {
+      await showFulfillItemSheet(
+        context: context,
+        item: item,
+        supplierName: supplier,
+        recording: _recording,
+        existingDispute: dispute,
+        onRecord: (state, {qty, note}) => _record(state, qty: qty, note: note),
+        onDisputeCreated: (id, d) {
+          if (mounted) setState(() => _disputeMap[id] = d);
+        },
+        onViewDispute: () {
+          context.findAncestorStateOfType<_AdminFulfillmentScreenState>()?._openDisputesTab();
+        },
+      );
+    } catch (e) {
+      final short = e.toString().substring(0, e.toString().length.clamp(0, 80));
+      RenderLog.write('c194_count_items_error',
+          'surface=${widget.arrivals ? "arrivals" : "collect"};err=$short');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Couldn't open counting — please retry")),
+        );
+      }
+      return;
+    }
     // C174/B15: refresh dispute badges after sheet closes (user may have flagged/recorded)
     if (mounted) {
       await _loadDisputes();

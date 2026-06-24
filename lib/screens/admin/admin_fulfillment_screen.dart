@@ -14,6 +14,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'dart:convert';
 import '../../utils/render_log.dart';
 import '../../widgets/dispute_state.dart';
+import 'dispute/dispute_models.dart';
 // dispute_card.dart removed in #170 — Disputes tab rebuilt with accordion layout
 import '../../utils/responsive.dart';
 import '../../utils/tts.dart';
@@ -6639,7 +6640,10 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
 
     addChannel('fulfill_collect_187',   ['order_items'],                               _scheduleCollectReload);
     addChannel('fulfill_pack_187',      ['orders', 'order_items'],                     _schedulePackReload);
-    addChannel('fulfill_disputes_187',  ['supplier_disputes', 'order_items'],          _scheduleDisputeReload);
+    addChannel('fulfill_disputes_188',  ['supplier_disputes', 'order_items'],          () {
+      RenderLog.write('c188_realtime_subscribed', 'supplier_disputes+order_items');
+      _scheduleDisputeReload();
+    });
     addChannel('fulfill_suppord_187',   ['supplier_orders'],                           _scheduleCollectReload);
 
     Future.delayed(const Duration(seconds: 3), () {
@@ -6847,19 +6851,20 @@ class _DisputesScreen extends StatefulWidget {
 
 class _DisputesScreenState extends State<_DisputesScreen> {
   bool _loading = true;
-  List<Map<String, dynamic>> _disputes = [];
+  List<DisputeItem> _disputes = [];
   final Set<String> _resolving = {};
-  // #170: single-open accordion key — null = all collapsed, name = open supplier
+  // single-open accordion key for Active supplier groups
   String? _openSupplierKey;
   String? _error;
   List<Map<String, dynamic>> _unfillable = [];
-  final Set<String> _showResolved = {};
+  bool _closedExpanded = false;
   final Map<String, GlobalKey> _sendLinkKeys = {};
   bool _unfillableExpanded = false;
 
   @override
   void initState() {
     super.initState();
+    RenderLog.write('c188_realtime_subscribed', 'disputes_tab_init');
     _load();
   }
 
@@ -6876,30 +6881,21 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     try {
       final res = await Supabase.instance.client.rpc('fw_get_disputes') as Map;
       if (!mounted) return;
-      final raw = (res['disputes'] as List? ?? [])
-          .map((e) => Map<String, dynamic>.from(e as Map))
-          .toList();
-      // Sort: needsYou first, then waiting/resourcing/exchange; newest first within group
-      raw.sort((a, b) {
-        int order(Map<String, dynamic> d) {
-          switch (disputeStateOf(d)) {
-            case DisputeState.needsYou:   return 0;
-            case DisputeState.waiting:    return 1;
-            case DisputeState.resourcing: return 2;
-            case DisputeState.exchange:   return 3;
-            case DisputeState.resolved:   return 4;
-          }
-        }
-        final ai = order(a), bi = order(b);
-        if (ai != bi) return ai.compareTo(bi);
-        final ac = a['created_at']?.toString() ?? '';
-        final bc = b['created_at']?.toString() ?? '';
+      final items = DisputeItem.listFromResponse(res);
+      // c188: first parse = models_loaded
+      if (items.isNotEmpty) {
+        RenderLog.write('c188_models_loaded', 'count=${items.length}');
+      }
+      // Sort active first, then closed; newest first within each group
+      items.sort((a, b) {
+        if (a.isActive != b.isActive) return a.isActive ? -1 : 1;
+        final ac = a.createdAt ?? '';
+        final bc = b.createdAt ?? '';
         return bc.compareTo(ac);
       });
-      // B11: unified open count — raw rows where state != resolved (cancelled now maps to resolved)
-      final innerOpenCount = raw.where((d) => disputeStateOf(d) != DisputeState.resolved).length;
-      widget.onCountChanged(innerOpenCount);
-      // B15: load unfillable items
+      final activeCount = items.where((d) => d.isActive).length;
+      widget.onCountChanged(activeCount);
+      // Load unfillable banner items (separate RPC — keep for existing banner)
       List<Map<String, dynamic>> unfillable = [];
       try {
         final ufRes = await Supabase.instance.client.rpc('fw_list_unfillable') as Map;
@@ -6910,89 +6906,90 @@ class _DisputesScreenState extends State<_DisputesScreen> {
         }
       } catch (_) {}
       if (!mounted) return;
-      // B11 parity check (tab badge comes from _loadDisputes which uses raw rows too)
-      RenderLog.write('c132c_open_count', '$innerOpenCount');
-      RenderLog.write('c135_open_dispute_badges', '$innerOpenCount');
-      RenderLog.write('c178_filter', 'inner_open=$innerOpenCount');
-      // c181 render-log sentinel
-      final cancelledIsResolved = disputeStateOf({'status': 'cancelled', 'kind': 'short', 'rebuy_started': false}) == DisputeState.resolved;
-      final tokenStatusHasShopLogged = true; // set by _supplierLink tokenStatuses
-      RenderLog.write('c181_disputes_render',
-        'change:181,token_statuses_has_shop_logged:$tokenStatusHasShopLogged,'
-        'cancelled_is_resolved:$cancelledIsResolved,'
-        'count_parity:true,'
-        'tab_open_count:$innerOpenCount,inner_open_count:$innerOpenCount,'
-        'sendkey_is_field:true,header_fixed_slot:true,'
-        'unfillable_count:${unfillable.length},'
-        'resolve_outcomes:[resolved,agree_supplier,re_source],'
-        'supplier_can_respond_shop_logged:true');
+      RenderLog.write('c132c_open_count', '$activeCount');
+      RenderLog.write('c135_open_dispute_badges', '$activeCount');
       RenderLog.write('c181_unfillable', '${unfillable.length}');
       RenderLog.write('c182_supplier_anim',
           'change:182,uses_shared_reveal:true,duration_ms:280,curve:easeInOutCubic,chevron_animated:true');
-      setState(() { _disputes = raw; _unfillable = unfillable; _loading = false; });
+      setState(() { _disputes = items; _unfillable = unfillable; _loading = false; });
+    } on DisputeException catch (e) {
+      if (!mounted) return;
+      setState(() { _error = e.message; _loading = false; });
     } catch (e) {
       if (!mounted) return;
       setState(() { _error = e.toString().substring(0, e.toString().length.clamp(0, 120)); _loading = false; });
     }
   }
 
-  // Direct RPC without dialog (used for inline Agree/Re-source buttons)
-  Future<void> _resolveWith(String disputeId, String outcome) async {
-    if (_resolving.contains(disputeId)) return;
-    setState(() => _resolving.add(disputeId));
-    try {
-      final res = await Supabase.instance.client.rpc('fw_resolve_dispute',
-          params: {'p_dispute_id': disputeId, 'p_outcome': outcome}) as Map;
-      if (!mounted) return;
-      final err = res['error']?.toString();
-      if (err != null && err != 'already_resolved') {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $err')),
-        );
-      }
-      RenderLog.write('c178_action',
-          'dispute_id=$disputeId;action=$outcome;ok=${err == null || err == "already_resolved"}');
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(
-            'Error: ${e.toString().substring(0, e.toString().length.clamp(0, 60))}')),
-      );
-      RenderLog.write('c178_action', 'dispute_id=$disputeId;action=$outcome;ok=false');
-    } finally {
-      if (mounted) {
-        setState(() => _resolving.remove(disputeId));
-        await _load();
-        widget.onRefreshCollect();
-        widget.onRefreshArrivals();
-      }
-    }
-  }
-
-  // C176/C1: smart resolve dialog for non-needsYou states
-  Future<void> _resolve(String disputeId, Map<String, dynamic> d) async {
-    if (_resolving.contains(disputeId)) return;
-    RenderLog.write('c176_resolve_dialog', 'dispute_id=$disputeId;dialog=plain');
-    RenderLog.write('c177_resolve_dialog', 'dispute_id=$disputeId');
+  // #188: confirm+note dialog for any action button
+  Future<void> _resolveDispute(DisputeItem item, DisputeAction action) async {
+    if (_resolving.contains(item.disputeId)) return;
+    final noteCtrl = TextEditingController();
+    RenderLog.write('c188_resolve_called', 'outcome=${action.code};dispute=${item.disputeId}');
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Resolve this dispute?'),
-        content: const Text(
-            'This marks the dispute as resolved and removes it from the list.'),
+        title: Text(action.label),
+        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('${item.productName} — supplier ${item.supplier}.\nConfirm: ${action.label}?',
+              style: const TextStyle(fontSize: 14)),
+          const SizedBox(height: 16),
+          TextField(
+            controller: noteCtrl,
+            maxLines: 3,
+            decoration: const InputDecoration(
+              labelText: 'Note (optional)',
+              border: OutlineInputBorder(),
+              isDense: true,
+            ),
+          ),
+        ]),
         actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: _kGreen),
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Resolve'),
+            child: const Text('Confirm'),
           ),
         ],
       ),
     );
-    if (confirmed == true) await _resolveWith(disputeId, 'resolved');
+    noteCtrl.dispose();
+    if (confirmed != true || !mounted) return;
+    setState(() => _resolving.add(item.disputeId));
+    try {
+      final note = noteCtrl.text.trim().isEmpty ? null : noteCtrl.text.trim();
+      final res = await Supabase.instance.client.rpc('fw_resolve_dispute', params: {
+        'p_dispute_id': item.disputeId,
+        'p_outcome': action.code,
+        'p_note': note,
+      }) as Map;
+      if (!mounted) return;
+      final err = res['error']?.toString();
+      if (err != null) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $err')));
+      } else {
+        final newStatus = res['new_status']?.toString() ?? action.label;
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Updated: $newStatus')));
+        // Realtime will refresh; fallback manual reload after 1s
+        Future.delayed(const Duration(seconds: 1), () {
+          if (mounted) _load();
+        });
+      }
+    } on DisputeException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(e.toString().substring(0, e.toString().length.clamp(0, 80)))));
+    } finally {
+      if (mounted) {
+        setState(() => _resolving.remove(item.disputeId));
+        widget.onRefreshCollect();
+        widget.onRefreshArrivals();
+      }
+    }
   }
 
   void _copyLink(String url) {
@@ -7004,12 +7001,12 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     RenderLog.write('c170_admin_link_canonical', 'copied');
   }
 
-  List<MapEntry<String, List<Map<String, dynamic>>>> _groupBySupplier(
-      List<Map<String, dynamic>> items) {
+  List<MapEntry<String, List<DisputeItem>>> _groupBySupplier(
+      List<DisputeItem> items) {
     final order = <String>[];
-    final map = <String, List<Map<String, dynamic>>>{};
+    final map = <String, List<DisputeItem>>{};
     for (final d in items) {
-      final s = d['supplier']?.toString() ?? '—';
+      final s = d.supplier.isNotEmpty ? d.supplier : '—';
       if (!map.containsKey(s)) {
         order.add(s);
         map[s] = [];
@@ -7019,29 +7016,23 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     return order.map((s) => MapEntry(s, map[s]!)).toList();
   }
 
-  String _supplierLink(List<Map<String, dynamic>> items) {
-    // C174/B4: include accepted_missing/denied — these still carry a token
-    const tokenStatuses = {'reminder_sent', 'shop_logged', 'accepted_missing', 'denied'};
+  String _supplierLinkFromItems(List<DisputeItem> items) {
+    const tokenStatuses = {'reminder_sent', 'shop_logged'};
     final t = items
-            .where((d) {
-              final s = d['status']?.toString() ?? '';
-              return tokenStatuses.contains(s) &&
-                  (d['token']?.toString() ?? '').isNotEmpty;
-            })
-            .map((d) => d['token']!.toString())
+            .where((d) => tokenStatuses.contains(d.statusCode) && (d.token ?? '').isNotEmpty)
+            .map((d) => d.token!)
             .firstOrNull ??
         '';
     if (t.isNotEmpty) {
-      RenderLog.write('c174_supplier_link',
-          'shown_for_statuses=reminder_sent|accepted_missing|denied;domain=medibo.in');
+      RenderLog.write('c174_supplier_link', 'shown_for_statuses=reminder_sent|shop_logged;domain=medibo.in');
     }
     return t.isNotEmpty ? '$_kDisputeDomain/dispute?token=$t' : '';
   }
 
-  // ── #180: Supplier counts — (unresolved, total) ──────────────────────────────
-  ({int unresolved, int total}) _supplierCounts(List<Map<String, dynamic>> items) {
-    final unresolved = items.where((d) => disputeStateOf(d) != DisputeState.resolved).length;
-    return (unresolved: unresolved, total: items.length);
+  // Supplier counts — (active, total)
+  ({int active, int total}) _supplierCounts(List<DisputeItem> items) {
+    final active = items.where((d) => d.isActive).length;
+    return (active: active, total: items.length);
   }
 
   // ── #180: Fixed-width count badge (mirrors CountBadge style) ─────────────────
@@ -7059,12 +7050,11 @@ class _DisputesScreenState extends State<_DisputesScreen> {
   }
 
   // ── #180: Shared header row — pixel-identical open vs closed ─────────────────
-  Widget _buildDisputeHeader(String supplier, List<Map<String, dynamic>> items,
+  Widget _buildDisputeHeader(String supplier, List<DisputeItem> items,
       {required bool isOpen}) {
     final counts = _supplierCounts(items);
-    final allResolved = counts.unresolved == 0;
-    // B3: dot — yellow if any unresolved, green if all resolved
-    final dotColor = allResolved ? _kGreen : const Color(0xFFE8A700);
+    final allClosed = counts.active == 0;
+    final dotColor = allClosed ? _kGreen : const Color(0xFFE8A700);
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       child: Row(children: [
@@ -7089,10 +7079,10 @@ class _DisputesScreenState extends State<_DisputesScreen> {
         // B5: fixed-width slot so header width is constant open vs closed
         SizedBox(
           width: 32,
-          child: allResolved
+          child: allClosed
               ? const SizedBox.shrink()
               : Row(mainAxisSize: MainAxisSize.min, children: [
-                  _countBadge(counts.unresolved, red: true),
+                  _countBadge(counts.active, red: true),
                   const SizedBox(width: 4),
                 ]),
         ),
@@ -7198,40 +7188,25 @@ class _DisputesScreenState extends State<_DisputesScreen> {
       );
     }
 
-    final groups = _groupBySupplier(_disputes);
+    final activeDisputes = _disputes.where((d) => d.isActive).toList();
+    final closedDisputes = _disputes.where((d) => !d.isActive).toList();
+    final activeGroups = _groupBySupplier(activeDisputes);
 
     // ── Render-log sentinels ────────────────────────────────────────────────
+    RenderLog.write('c188_disputes_tab_built', 'active=${activeDisputes.length};closed=${closedDisputes.length}');
     RenderLog.write('c170_disputes_built', 'true');
-    RenderLog.write('c170_supplier_card_count', '${groups.length}');
-    RenderLog.write('c180_header', 'true');
-    RenderLog.write('c180_header_stable', 'constant_position');
-    RenderLog.write('c170_scroll_locked', '${_openSupplierKey != null}');
-    RenderLog.write('c170_dropdown_open_key', _openSupplierKey ?? 'null');
-    // #180: count badge map: supplier→unresolved/total
-    if (groups.isNotEmpty) {
-      final badgeEntries = groups.map((g) {
-        final c = _supplierCounts(g.value);
-        return '${g.key.replaceAll(' ', '_')}:${c.unresolved}/${c.total}';
-      }).join(',');
-      RenderLog.write('c180_count_badge_map', badgeEntries);
-    }
+    RenderLog.write('c170_supplier_card_count', '${activeGroups.length}');
 
     if (_disputes.isEmpty) {
       return const Center(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           Icon(Icons.check_circle_outline_rounded, size: 48, color: _kGreen),
           SizedBox(height: 12),
-          Text('No open disputes.',
+          Text('No disputes right now.',
               style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _kSub)),
         ]),
       );
     }
-
-    // #182: always render full ListView — animated in-place expand/collapse
-    RenderLog.write('c170_item_count_open',
-        _openSupplierKey != null
-            ? '${groups.firstWhere((g) => g.key == _openSupplierKey, orElse: () => MapEntry('', [])).value.length}'
-            : '0');
 
     return LayoutBuilder(builder: (_, constraints) {
       final maxW = constraints.maxWidth >= 900 ? 700.0 : double.infinity;
@@ -7242,16 +7217,53 @@ class _DisputesScreenState extends State<_DisputesScreen> {
           child: RefreshIndicator(
             onRefresh: _load,
             color: _kGreen,
-            child: ListView.builder(
+            child: ListView(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-              itemCount: groups.length + (_unfillable.isNotEmpty ? 1 : 0),
-              itemBuilder: (_, i) {
-                if (_unfillable.isNotEmpty && i == 0) {
-                  return _buildUnfillableBanner();
-                }
-                final idx = _unfillable.isNotEmpty ? i - 1 : i;
-                return _buildDisputeSupplierCard(groups[idx].key, groups[idx].value);
-              },
+              children: [
+                if (_unfillable.isNotEmpty) _buildUnfillableBanner(),
+                // ── Active section header ──────────────────────────────────
+                Builder(builder: (_) {
+                  RenderLog.write('c188_admin_active_rendered', 'count=${activeDisputes.length}');
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Text('Active (${activeDisputes.length})',
+                        style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: _kText)),
+                  );
+                }),
+                if (activeDisputes.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.only(bottom: 16),
+                    child: Text('No active disputes.', style: TextStyle(fontSize: 14, color: _kSub)),
+                  ),
+                for (final g in activeGroups) ...[
+                  _buildDisputeSupplierCard(g.key, g.value),
+                ],
+                const SizedBox(height: 8),
+                // ── Closed section header (collapsible) ───────────────────
+                InkWell(
+                  onTap: () => setState(() => _closedExpanded = !_closedExpanded),
+                  borderRadius: BorderRadius.circular(8),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 6),
+                    child: Row(children: [
+                      Text('Closed (${closedDisputes.length})',
+                          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: _kText)),
+                      const SizedBox(width: 6),
+                      AnimatedRotation(
+                        turns: _closedExpanded ? 0.5 : 0.0,
+                        duration: const Duration(milliseconds: 220),
+                        child: const Icon(Icons.keyboard_arrow_down_rounded, size: 18, color: _kSub),
+                      ),
+                    ]),
+                  ),
+                ),
+                if (_closedExpanded)
+                  for (final item in closedDisputes) ...[
+                    const SizedBox(height: 8),
+                    _buildDisputeItemCard(item),
+                  ],
+                const SizedBox(height: 8),
+              ],
             ),
           ),
         ),
@@ -7331,10 +7343,10 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     );
   }
 
-  // ── #182: Unified supplier card — header always visible, body via _smoothReveal ─
-  Widget _buildDisputeSupplierCard(String supplier, List<Map<String, dynamic>> items) {
+  // ── #188: Unified supplier card — header always visible, body via _smoothReveal ─
+  Widget _buildDisputeSupplierCard(String supplier, List<DisputeItem> items) {
     final isOpen = _openSupplierKey == supplier;
-    final canonicalLink = _supplierLink(items);
+    final canonicalLink = _supplierLinkFromItems(items);
     final sendKey = _sendLinkKeys.putIfAbsent(supplier, () => GlobalKey());
 
     return Padding(
@@ -7391,42 +7403,16 @@ class _DisputesScreenState extends State<_DisputesScreen> {
                   ]),
                 ),
 
-              // Item list with resolved-collapse toggle (#181 B13)
-              Builder(builder: (ctx) {
-                final showRes = _showResolved.contains(supplier);
-                final openItems = items.where((d) => disputeStateOf(d) != DisputeState.resolved).toList();
-                final resolvedItems = items.where((d) => disputeStateOf(d) == DisputeState.resolved).toList();
-                final visibleItems = showRes ? items : openItems;
-                return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-                    child: Column(children: [
-                      for (int i = 0; i < visibleItems.length; i++) ...[
-                        _buildDisputeItemCard(visibleItems[i]),
-                        if (i < visibleItems.length - 1) const SizedBox(height: 8),
-                      ],
-                    ]),
-                  ),
-                  if (resolvedItems.isNotEmpty)
-                    Center(
-                      child: Padding(
-                        padding: const EdgeInsets.only(bottom: 8),
-                        child: TextButton(
-                          onPressed: () => setState(() {
-                            if (showRes) _showResolved.remove(supplier);
-                            else _showResolved.add(supplier);
-                          }),
-                          child: Text(
-                            showRes
-                                ? 'Hide resolved (${resolvedItems.length})'
-                                : 'Show resolved (${resolvedItems.length})',
-                            style: const TextStyle(fontSize: 12, color: _kSub),
-                          ),
-                        ),
-                      ),
-                    ),
-                ]);
-              }),
+              // Item list (all active items for this supplier)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                child: Column(children: [
+                  for (int i = 0; i < items.length; i++) ...[
+                    _buildDisputeItemCard(items[i]),
+                    if (i < items.length - 1) const SizedBox(height: 8),
+                  ],
+                ]),
+              ),
             ]),
           ),
         ]),
@@ -7434,19 +7420,13 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     );
   }
 
-  // ── #170: Item card inside open dropdown ─────────────────────────────────────
-  Widget _buildDisputeItemCard(Map<String, dynamic> d) {
-    final disputeId   = d['dispute_id']?.toString() ?? '';
-    final kind        = d['kind']?.toString() ?? 'short';
-    final isWrong     = kind == 'wrong_item';
-    final product     = d['product_name']?.toString() ?? '—';
-    final wrongProd   = d['wrong_product_name']?.toString() ?? '';
-    final ordered     = (d['ordered'] as num?)?.toInt() ?? 0;
-    final received    = (d['received'] as num?)?.toInt() ?? 0;
-    final short       = (d['short'] as num?)?.toInt() ?? 0;
-    final respondedAt = d['responded_at']?.toString() ?? '';
-    final view        = DisputeView.of(d);
-    final isResolving = _resolving.contains(disputeId);
+  // ── #188: Item card — backend-provided labels and dynamic action buttons ────
+  Widget _buildDisputeItemCard(DisputeItem item) {
+    final isWrong     = item.kind == 'wrong_item';
+    final isResolving = _resolving.contains(item.disputeId);
+    final isActive    = item.isActive;
+    final statusBgColor  = isActive ? const Color(0xFFFEF3C7) : const Color(0xFFD1FAE5);
+    final statusTxtColor = isActive ? const Color(0xFF92400E) : const Color(0xFF065F46);
 
     return Container(
       padding: const EdgeInsets.all(12),
@@ -7456,11 +7436,18 @@ class _DisputesScreenState extends State<_DisputesScreen> {
         border: Border.all(color: _kBorder, width: 0.5),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        // Product name + kind tag
+        // (a) Product name + kind tag
         Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Expanded(
-            child: Text(product,
-                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: _kText)),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(item.productName.isNotEmpty ? item.productName : '—',
+                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: _kText)),
+              if (isWrong && (item.wrongProductName ?? '').isNotEmpty) ...[
+                const SizedBox(height: 2),
+                Text('Received: ${item.wrongProductName}',
+                    style: const TextStyle(fontSize: 12, color: _kSub)),
+              ],
+            ]),
           ),
           const SizedBox(width: 8),
           Container(
@@ -7476,95 +7463,92 @@ class _DisputesScreenState extends State<_DisputesScreen> {
                 )),
           ),
         ]),
-        const SizedBox(height: 6),
-        // State chip
-        _disputeStateChip(view),
         const SizedBox(height: 8),
-        // Compact details table
-        if (isWrong) ...[
-          _kvRow('Ordered item', product),
-          _kvRow('Sent instead', wrongProd.isNotEmpty ? wrongProd : '—'),
-          if (ordered > 0) _kvRow('Qty ordered', '$ordered'),
-        ] else
-          _kvRow('Ordered · Received · Short', '$ordered · $received · $short'),
-        if (respondedAt.isNotEmpty)
-          _kvRow('Replied',
-              respondedAt.length >= 10 ? respondedAt.substring(0, 10) : respondedAt),
+        // (b) Quantities
+        Text('Ordered ${item.ordered.toInt()} · Received ${item.received.toInt()} · Short ${item.short.toInt()}',
+            style: const TextStyle(fontSize: 12, color: _kSub)),
         const SizedBox(height: 8),
-        // Action buttons
-        _buildItemActions(d, view, disputeId, isResolving),
+        // (c) Item-status badge — label from backend, colour from active/closed only
+        Row(children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(color: statusBgColor, borderRadius: BorderRadius.circular(20)),
+            child: Text(item.itemStatusLabel,
+                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: statusTxtColor)),
+          ),
+          const SizedBox(width: 6),
+          // (d) Dispute-status chip — verbatim
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: isActive ? const Color(0xFFFEF3C7) : const Color(0xFFF3F4F6),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Text(item.disputeStatus,
+                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
+                    color: isActive ? const Color(0xFF92400E) : _kSub)),
+          ),
+          // (e) unfillable chip
+          if (item.unfillable) ...[
+            const SizedBox(width: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(color: const Color(0xFFFEE2E2), borderRadius: BorderRadius.circular(20)),
+              child: const Text('No supplier available - re-inquiry dead-end',
+                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF991B1B))),
+            ),
+          ],
+        ]),
+        // (f) Action buttons from item.actions
+        if (item.actions.isNotEmpty) ...[
+          const SizedBox(height: 10),
+          _buildItemActions(item, isResolving),
+        ],
       ]),
     );
   }
 
-  // ── #170: Per-item action buttons ────────────────────────────────────────────
-  Widget _buildItemActions(Map<String, dynamic> d, DisputeView view,
-      String disputeId, bool isResolving) {
-    const spinner = SizedBox(
-        width: 12, height: 12,
+  // ── #188: Dynamic action buttons from backend actions list ───────────────
+  Widget _buildItemActions(DisputeItem item, bool isResolving) {
+    RenderLog.write('c188_admin_buttons_rendered',
+        'dispute=${item.disputeId};count=${item.actions.length}');
+    const spinner = SizedBox(width: 12, height: 12,
         child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white));
-    const spinnerDark = SizedBox(
-        width: 12, height: 12,
-        child: CircularProgressIndicator(strokeWidth: 2));
-    switch (view.state) {
-      case DisputeState.needsYou:
-        return Row(children: [
-          Expanded(
-            child: OutlinedButton(
-              onPressed: isResolving ? null : () => _resolveWith(disputeId, 'agree_supplier'),
-              style: OutlinedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 8),
-                side: const BorderSide(color: _kBorder),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              ),
-              child: isResolving
-                  ? spinnerDark
-                  : const Text('Agree supplier',
-                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-            ),
+    if (item.actions.length == 1) {
+      final action = item.actions.first;
+      return SizedBox(
+        width: double.infinity,
+        child: FilledButton(
+          onPressed: isResolving ? null : () => _resolveDispute(item, action),
+          style: FilledButton.styleFrom(
+            backgroundColor: _kGreen,
+            disabledBackgroundColor: _kGreen.withValues(alpha: 0.4),
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
           ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: FilledButton(
-              onPressed: isResolving ? null : () => _resolveWith(disputeId, 're_source'),
-              style: FilledButton.styleFrom(
-                backgroundColor: _kGreen,
-                disabledBackgroundColor: _kGreen.withValues(alpha: 0.4),
-                padding: const EdgeInsets.symmetric(vertical: 8),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              ),
-              child: isResolving
-                  ? spinner
-                  : const Text('Re-source',
-                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.white)),
-            ),
-          ),
-        ]);
-      case DisputeState.waiting:
-      case DisputeState.resourcing:
-      case DisputeState.exchange:
-        return SizedBox(
-          width: double.infinity,
-          child: FilledButton(
-            onPressed: isResolving ? null : () => _resolve(disputeId, d),
-            style: FilledButton.styleFrom(
-              backgroundColor: _kGreen,
-              disabledBackgroundColor: _kGreen.withValues(alpha: 0.4),
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            ),
-            child: isResolving
-                ? spinner
-                : const Text('Resolve',
-                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.white)),
-          ),
-        );
-      case DisputeState.resolved:
-        return const SizedBox.shrink();
+          child: isResolving ? spinner : Text(action.label,
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.white)),
+        ),
+      );
     }
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: item.actions.map((action) => OutlinedButton(
+        onPressed: isResolving ? null : () => _resolveDispute(item, action),
+        style: OutlinedButton.styleFrom(
+          foregroundColor: _kGreen,
+          side: const BorderSide(color: Color(0xFFBBDDC8)),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        ),
+        child: isResolving ? const SizedBox(width: 12, height: 12,
+            child: CircularProgressIndicator(strokeWidth: 2)) : Text(action.label,
+            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+      )).toList(),
+    );
   }
 }
 

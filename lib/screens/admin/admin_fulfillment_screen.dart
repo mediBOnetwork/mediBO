@@ -7341,6 +7341,19 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
     final fg = _stateFgMap[state] ?? _kPendingFg;
     final isActioned = state != 'pending';
 
+    // #200: dynamic visibility predicates
+    final fullyReceived = state == 'received' && _localReceived >= ord;
+    final showGotAll    = !fullyReceived;
+    final showMissing   = ord > 1;
+    final showFewWrong  = ord > 1;
+    // Wrong item: always show
+    final showNotComing = !fullyReceived;
+
+    RenderLog.write('c200_actions_dynamic',
+        'ord=$ord;state=$state;rec=$_localReceived;fullyReceived=$fullyReceived;showGotAll=$showGotAll;showMissing=$showMissing;showFewWrong=$showFewWrong;showNotComing=$showNotComing');
+    if (ord == 1) RenderLog.write('c200_qty1_compact', 'ord=1;hiding_report_missing_and_few_wrong=true');
+    if (fullyReceived) RenderLog.write('c200_received_hides_gotall', 'state=$state;rec=$_localReceived;ord=$ord;hiding_gotall_and_notcoming=true');
+
     RenderLog.write('c199_wrong_no_inputs', 'no_image_picker;no_wrong_name_field');
 
     return Padding(
@@ -7399,8 +7412,8 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
         const Divider(height: 1, color: _kBorder),
         const SizedBox(height: 16),
 
-        // Action: Got all
-        if (!_showMissingInline && !_showFewWrongInline) ...[
+        // Action: Got all (#200: hidden when fully received)
+        if (showGotAll && !_showMissingInline && !_showFewWrongInline) ...[
           SizedBox(
             width: double.infinity,
             child: _buildActionBtn(
@@ -7413,8 +7426,8 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
           const SizedBox(height: 8),
         ],
 
-        // Action: Report missing (toggle inline)
-        if (!_showFewWrongInline) ...[
+        // Action: Report missing (#200: hidden when T == 1)
+        if (showMissing && !_showFewWrongInline) ...[
           if (!_showMissingInline)
             SizedBox(
               width: double.infinity,
@@ -7433,8 +7446,8 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
           const SizedBox(height: 8),
         ],
 
-        // Action: Few item wrong (toggle inline)
-        if (!_showMissingInline) ...[
+        // Action: Few item wrong (#200: hidden when T == 1)
+        if (showFewWrong && !_showMissingInline) ...[
           if (!_showFewWrongInline)
             SizedBox(
               width: double.infinity,
@@ -7465,7 +7478,7 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
           const SizedBox(height: 8),
         ],
 
-        // Action: Wrong item (all)
+        // Action: Wrong item (always shown; split from Not coming for independent predicate)
         if (!_showMissingInline && !_showFewWrongInline) ...[
           SizedBox(
             width: double.infinity,
@@ -7476,7 +7489,10 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
             ),
           ),
           const SizedBox(height: 8),
-          // Action: Not coming
+        ],
+
+        // Action: Not coming (#200: hidden when fully received)
+        if (showNotComing && !_showMissingInline && !_showFewWrongInline) ...[
           SizedBox(
             width: double.infinity,
             child: _buildActionBtn(

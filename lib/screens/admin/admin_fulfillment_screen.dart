@@ -6921,6 +6921,18 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
     setState(() => _undoing = true);
     RenderLog.write('c199_undo_called',
         'product_id=${widget.productId};supplier=${widget.supplierName}');
+    await _runUndo();
+  }
+
+  Future<void> _doUndoBelow() async {
+    if (_undoing) return;
+    setState(() => _undoing = true);
+    RenderLog.write('c201_undo_called',
+        'product_id=${widget.productId};supplier=${widget.supplierName};from=below_button');
+    await _runUndo();
+  }
+
+  Future<void> _runUndo() async {
     try {
       final res = await Supabase.instance.client.rpc('fw_product_undo', params: {
         'p_supplier_name': widget.supplierName,
@@ -7212,12 +7224,16 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
   Widget _buildFewWrongInlineRow() {
     final keep = (_orderedTotal - _wrongDraft).clamp(0, _orderedTotal);
     final confirmLabel = 'Confirm wrong · keep $keep$_unitLabel';
-    const borderColor = const Color(0xFFD97706);
-    return SizedBox(
-      height: 52,
-      child: Row(children: [
-        Expanded(
+    const borderColor = Color(0xFFD97706);
+    RenderLog.write('c201_fewwrong_no_overflow', 'constrained_width=true;flexible_confirm=true');
+    // #201: use IntrinsicHeight so both halves stretch to the taller half;
+    // Flexible on the confirm half prevents text overflow on narrow web widths.
+    return IntrinsicHeight(
+      child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        // Left half: stepper (fixed intrinsic width)
+        IntrinsicWidth(
           child: Container(
+            constraints: const BoxConstraints(minHeight: 52),
             decoration: BoxDecoration(
               color: const Color(0xFFD97706).withValues(alpha: 0.06),
               borderRadius: const BorderRadius.only(
@@ -7228,7 +7244,7 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
                 left: BorderSide(color: const Color(0xFFD97706).withValues(alpha: 0.4)),
               ),
             ),
-            child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
               _ProdStepBtn(
                 icon: Icons.remove,
                 enabled: !_confirmingFewWrong && _wrongDraft > 1,
@@ -7239,7 +7255,7 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
                 }),
               ),
               SizedBox(
-                width: 48,
+                width: 44,
                 child: TextField(
                   controller: _fewWrongCtrl,
                   enabled: !_confirmingFewWrong,
@@ -7262,7 +7278,10 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
                 ),
               ),
               if (_unit.isNotEmpty)
-                Text(' $_unit', style: const TextStyle(fontSize: 10, color: _kSub)),
+                Padding(
+                  padding: const EdgeInsets.only(right: 4),
+                  child: Text(_unit, style: const TextStyle(fontSize: 10, color: _kSub)),
+                ),
               _ProdStepBtn(
                 icon: Icons.add,
                 enabled: !_confirmingFewWrong && _wrongDraft < _orderedTotal,
@@ -7275,14 +7294,17 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
             ]),
           ),
         ),
-        Expanded(
+        // Right half: confirm button (Flexible — takes remaining width, never overflows)
+        Flexible(
           child: GestureDetector(
             onTap: _confirmingFewWrong ? null : _doConfirmFewWrong,
             child: Container(
               alignment: Alignment.center,
-              padding: const EdgeInsets.symmetric(horizontal: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
               decoration: BoxDecoration(
-                color: _confirmingFewWrong ? const Color(0xFFD97706).withValues(alpha: 0.45) : const Color(0xFFD97706),
+                color: _confirmingFewWrong
+                    ? const Color(0xFFD97706).withValues(alpha: 0.45)
+                    : const Color(0xFFD97706),
                 borderRadius: const BorderRadius.only(
                   topRight: Radius.circular(11), bottomRight: Radius.circular(11)),
                 border: Border(
@@ -7295,8 +7317,11 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
                   ? const SizedBox(width: 16, height: 16,
                       child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
                   : Text(confirmLabel,
-                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.white),
-                      textAlign: TextAlign.center, maxLines: 2, overflow: TextOverflow.ellipsis),
+                      style: const TextStyle(
+                          fontSize: 11, fontWeight: FontWeight.w700, color: Colors.white),
+                      textAlign: TextAlign.center,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis),
             ),
           ),
         ),
@@ -7355,6 +7380,7 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
     if (fullyReceived) RenderLog.write('c200_received_hides_gotall', 'state=$state;rec=$_localReceived;ord=$ord;hiding_gotall_and_notcoming=true');
 
     RenderLog.write('c199_wrong_no_inputs', 'no_image_picker;no_wrong_name_field');
+    RenderLog.write('c201_wrong_no_name_no_image', 'no_name_field;no_image_upload;no_view_image;p_note_null');
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 20, 16, 32),
@@ -7501,6 +7527,35 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
               bg: _kNotComingFg,
             ),
           ),
+        ],
+
+        // #201: Undo / Back — full-width, shown when product is already actioned
+        if (isActioned) ...[
+          const SizedBox(height: 12),
+          Builder(builder: (_) {
+            RenderLog.write('c201_undo_below_buttons',
+                'product_id=${widget.productId};state=$state');
+            return SizedBox(
+              width: double.infinity,
+              height: 44,
+              child: OutlinedButton.icon(
+                onPressed: (_undoing || _confirmingSimple || _confirmingMissing || _confirmingFewWrong)
+                    ? null
+                    : _doUndoBelow,
+                icon: _undoing
+                    ? const SizedBox(width: 16, height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.undo_rounded, size: 18),
+                label: const Text('Undo / Back',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: _kSub,
+                  side: const BorderSide(color: _kBorder),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+              ),
+            );
+          }),
         ],
       ]),
     );

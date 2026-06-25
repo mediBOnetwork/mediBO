@@ -4213,7 +4213,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                                               onTap: () => Navigator.of(ctx).pop(),
                                               child: Container(
                                                 decoration: BoxDecoration(
-                                                  color: Colors.black54,
+                                                  color: _kGreen,
                                                   borderRadius: BorderRadius.circular(16),
                                                 ),
                                                 padding: const EdgeInsets.all(4),

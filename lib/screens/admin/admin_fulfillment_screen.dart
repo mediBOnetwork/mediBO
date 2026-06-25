@@ -24,6 +24,7 @@ import '../../supabase_config.dart' show SupabaseConfig;
 import 'voice_receive.dart';
 import '../../widgets/pinned_footer_list.dart';
 import '../../widgets/fulfill_item_sheet.dart';
+import 'package:file_picker/file_picker.dart';
 
 // #93: JS interop — mediboCheckLoudness is defined in web/index.html
 @JS('mediboCheckLoudness')
@@ -6863,17 +6864,27 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
 
   // Report missing inline two-half
   bool _showMissingInline = false;
-  late int _missingDraft;  // = counted (received so far)
+  late int _missingDraft;
   bool _confirmingMissing = false;
   final _missingCtrl = TextEditingController();
 
-  // Few wrong inline two-half
+  // Few wrong inline panel
   bool _showFewWrongInline = false;
-  late int _wrongDraft; // = wrong units (1..orderedTotal)
+  late int _wrongDraft;
   bool _confirmingFewWrong = false;
   final _fewWrongCtrl = TextEditingController();
+  final _fewWrongNameCtrl = TextEditingController();
+  String? _fewWrongProofUrl;
+  bool _fewWrongUploading = false;
 
-  bool _confirmingSimple = false; // for got_all / wrong_all / not_coming
+  // Wrong item inline panel
+  bool _showWrongItemInline = false;
+  bool _confirmingWrongAll = false;
+  final _wrongItemNameCtrl = TextEditingController();
+  String? _wrongItemProofUrl;
+  bool _wrongItemUploading = false;
+
+  bool _confirmingSimple = false; // for got_all / not_coming
   bool _undoing = false;
 
   @override
@@ -6894,6 +6905,8 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
   void dispose() {
     _missingCtrl.dispose();
     _fewWrongCtrl.dispose();
+    _fewWrongNameCtrl.dispose();
+    _wrongItemNameCtrl.dispose();
     super.dispose();
   }
 
@@ -6901,19 +6914,45 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
   String get _unitLabel => _unit.isNotEmpty ? ' $_unit' : '';
   int get _orderedTotal => widget.orderedTotal;
 
-  Future<void> _callProductAction(String action, {int? qty}) async {
+  Future<void> _callProductAction(String action,
+      {int? qty, String? note, String? proofUrl}) async {
     RenderLog.write('c197_product_action_called',
         'action=$action;product_id=${widget.productId};supplier=${widget.supplierName};qty=${qty ?? 'null'}');
     final params = <String, dynamic>{
       'p_supplier_name': widget.supplierName,
       'p_product_id': widget.productId,
       'p_action': action,
-      'p_note': null,
+      'p_note': note,
+      'p_proof_url': proofUrl,
     };
     if (qty != null) params['p_qty'] = qty;
     final res = await Supabase.instance.client.rpc('fw_product_action', params: params) as Map;
     final err = res['error']?.toString();
     if (err != null) throw err;
+  }
+
+  // Upload a picked image to dispute-proofs; returns public URL or null on cancel/error.
+  Future<String?> _pickAndUpload() async {
+    FilePickerResult? result;
+    try {
+      result = await FilePicker.pickFiles(type: FileType.image, withData: true);
+    } catch (_) { return null; }
+    if (result == null || result.files.isEmpty) return null;
+    final file = result.files.first;
+    final bytes = file.bytes;
+    if (bytes == null || bytes.isEmpty) return null;
+    final ext = file.name.split('.').last.toLowerCase();
+    final mime = ext == 'png' ? 'image/png' : ext == 'webp' ? 'image/webp' : 'image/jpeg';
+    final ts = DateTime.now().millisecondsSinceEpoch;
+    final path = 'wrong/${widget.productId}_$ts.$ext';
+    try {
+      await Supabase.instance.client.storage
+          .from('dispute-proofs')
+          .uploadBinary(path, bytes, fileOptions: FileOptions(upsert: true, contentType: mime));
+      final url = Supabase.instance.client.storage.from('dispute-proofs').getPublicUrl(path);
+      RenderLog.write('c203_proof_uploaded', 'product_id=${widget.productId};path=$path');
+      return url;
+    } catch (_) { return null; }
   }
 
   Future<void> _doUndo() async {
@@ -7032,7 +7071,10 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
     if (_confirmingFewWrong) return;
     setState(() => _confirmingFewWrong = true);
     try {
-      await _callProductAction('few_wrong', qty: _wrongDraft);
+      final name = _fewWrongNameCtrl.text.trim();
+      final url = _fewWrongProofUrl;
+      await _callProductAction('few_wrong', qty: _wrongDraft,
+          note: name.isNotEmpty ? name : null, proofUrl: url);
       if (!mounted) return;
       final flagged = _wrongDraft;
       setState(() {
@@ -7065,12 +7107,19 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
   }
 
   Future<void> _doWrongAll() async {
-    if (_confirmingSimple) return;
-    setState(() => _confirmingSimple = true);
+    if (_confirmingWrongAll) return;
+    setState(() => _confirmingWrongAll = true);
     try {
-      await _callProductAction('wrong_all');
+      final name = _wrongItemNameCtrl.text.trim();
+      final url = _wrongItemProofUrl;
+      await _callProductAction('wrong_all',
+          note: name.isNotEmpty ? name : null, proofUrl: url);
       if (!mounted) return;
-      setState(() { _localState = 'wrong'; _confirmingSimple = false; });
+      setState(() {
+        _localState = 'wrong';
+        _confirmingWrongAll = false;
+        _showWrongItemInline = false;
+      });
       final sup = widget.supplierName;
       final pid = widget.productId;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -7089,7 +7138,7 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
       Navigator.of(context).pop();
     } catch (e) {
       if (!mounted) return;
-      setState(() => _confirmingSimple = false);
+      setState(() => _confirmingWrongAll = false);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Error: $e'), backgroundColor: const Color(0xFFDC2626)));
     }
@@ -7221,112 +7270,264 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
     );
   }
 
-  Widget _buildFewWrongInlineRow() {
+  // #203: Few item wrong — full inline panel with stepper + name + photo
+  Widget _buildFewWrongPanel() {
+    RenderLog.write('c203_few_wrong_panel_opened',
+        'product_id=${widget.productId};wrongDraft=$_wrongDraft');
+    RenderLog.write('c201_fewwrong_no_overflow', 'panel_mode=true');
     final keep = (_orderedTotal - _wrongDraft).clamp(0, _orderedTotal);
-    final confirmLabel = 'Confirm wrong · keep $keep$_unitLabel';
-    const borderColor = Color(0xFFD97706);
-    RenderLog.write('c201_fewwrong_no_overflow', 'constrained_width=true;flexible_confirm=true');
-    // #201: use IntrinsicHeight so both halves stretch to the taller half;
-    // Flexible on the confirm half prevents text overflow on narrow web widths.
-    return IntrinsicHeight(
-      child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        // Left half: stepper (fixed intrinsic width)
-        IntrinsicWidth(
-          child: Container(
-            constraints: const BoxConstraints(minHeight: 52),
-            decoration: BoxDecoration(
-              color: const Color(0xFFD97706).withValues(alpha: 0.06),
-              borderRadius: const BorderRadius.only(
-                topLeft: Radius.circular(11), bottomLeft: Radius.circular(11)),
-              border: Border(
-                top: BorderSide(color: const Color(0xFFD97706).withValues(alpha: 0.4)),
-                bottom: BorderSide(color: const Color(0xFFD97706).withValues(alpha: 0.4)),
-                left: BorderSide(color: const Color(0xFFD97706).withValues(alpha: 0.4)),
-              ),
+    final busy = _confirmingFewWrong || _fewWrongUploading;
+    const accent = Color(0xFFD97706);
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: accent.withValues(alpha: 0.05),
+        borderRadius: BorderRadius.circular(11),
+        border: Border.all(color: accent.withValues(alpha: 0.4)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+        // Qty stepper row
+        Row(children: [
+          _ProdStepBtn(
+            icon: Icons.remove,
+            enabled: !busy && _wrongDraft > 1,
+            color: accent,
+            onTap: () => setState(() {
+              _wrongDraft = (_wrongDraft - 1).clamp(1, _orderedTotal);
+              _fewWrongCtrl.text = '$_wrongDraft';
+            }),
+          ),
+          const SizedBox(width: 4),
+          SizedBox(
+            width: 48,
+            child: TextField(
+              controller: _fewWrongCtrl,
+              enabled: !busy,
+              keyboardType: TextInputType.number,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _kText),
+              decoration: const InputDecoration.collapsed(hintText: '1'),
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              onChanged: (v) {
+                final n = int.tryParse(v) ?? 1;
+                final clamped = n.clamp(1, _orderedTotal);
+                setState(() => _wrongDraft = clamped);
+                if (v.isNotEmpty && v != '$clamped') {
+                  _fewWrongCtrl.value = _fewWrongCtrl.value.copyWith(
+                    text: '$clamped',
+                    selection: TextSelection.collapsed(offset: '$clamped'.length),
+                  );
+                }
+              },
             ),
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
-              _ProdStepBtn(
-                icon: Icons.remove,
-                enabled: !_confirmingFewWrong && _wrongDraft > 1,
-                color: borderColor,
-                onTap: () => setState(() {
-                  _wrongDraft = (_wrongDraft - 1).clamp(1, _orderedTotal);
-                  _fewWrongCtrl.text = '$_wrongDraft';
-                }),
-              ),
-              SizedBox(
-                width: 44,
-                child: TextField(
-                  controller: _fewWrongCtrl,
-                  enabled: !_confirmingFewWrong,
-                  keyboardType: TextInputType.number,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
-                  decoration: const InputDecoration.collapsed(hintText: '1'),
-                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                  onChanged: (v) {
-                    final n = int.tryParse(v) ?? 1;
-                    final clamped = n.clamp(1, _orderedTotal);
-                    setState(() => _wrongDraft = clamped);
-                    if (v.isNotEmpty && v != '$clamped') {
-                      _fewWrongCtrl.value = _fewWrongCtrl.value.copyWith(
-                        text: '$clamped',
-                        selection: TextSelection.collapsed(offset: '$clamped'.length),
-                      );
-                    }
-                  },
-                ),
-              ),
-              if (_unit.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(right: 4),
-                  child: Text(_unit, style: const TextStyle(fontSize: 10, color: _kSub)),
-                ),
-              _ProdStepBtn(
-                icon: Icons.add,
-                enabled: !_confirmingFewWrong && _wrongDraft < _orderedTotal,
-                color: borderColor,
-                onTap: () => setState(() {
-                  _wrongDraft = (_wrongDraft + 1).clamp(1, _orderedTotal);
-                  _fewWrongCtrl.text = '$_wrongDraft';
-                }),
-              ),
-            ]),
+          ),
+          if (_unit.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: Text(_unit, style: const TextStyle(fontSize: 11, color: _kSub)),
+            ),
+          _ProdStepBtn(
+            icon: Icons.add,
+            enabled: !busy && _wrongDraft < _orderedTotal,
+            color: accent,
+            onTap: () => setState(() {
+              _wrongDraft = (_wrongDraft + 1).clamp(1, _orderedTotal);
+              _fewWrongCtrl.text = '$_wrongDraft';
+            }),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text('of $_orderedTotal — keep $keep$_unitLabel wrong',
+                style: const TextStyle(fontSize: 11, color: _kSub),
+                maxLines: 1, overflow: TextOverflow.ellipsis),
+          ),
+        ]),
+        const SizedBox(height: 10),
+        // Name field
+        TextField(
+          controller: _fewWrongNameCtrl,
+          enabled: !busy,
+          decoration: InputDecoration(
+            hintText: 'Wrong item name (optional)',
+            hintStyle: const TextStyle(fontSize: 13, color: _kSub),
+            filled: true, fillColor: Colors.white,
+            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                borderSide: const BorderSide(color: _kBorder)),
+            enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                borderSide: const BorderSide(color: _kBorder)),
+          ),
+          style: const TextStyle(fontSize: 13, color: _kText),
+        ),
+        const SizedBox(height: 10),
+        // Photo row
+        _buildPhotoRow(
+          proofUrl: _fewWrongProofUrl,
+          uploading: _fewWrongUploading,
+          busy: busy,
+          onPick: () async {
+            setState(() => _fewWrongUploading = true);
+            final url = await _pickAndUpload();
+            if (!mounted) return;
+            setState(() { _fewWrongProofUrl = url; _fewWrongUploading = false; });
+          },
+          onRemove: () => setState(() => _fewWrongProofUrl = null),
+        ),
+        const SizedBox(height: 12),
+        // Confirm button
+        SizedBox(
+          width: double.infinity,
+          height: 44,
+          child: FilledButton(
+            onPressed: busy ? null : _doConfirmFewWrong,
+            style: FilledButton.styleFrom(
+              backgroundColor: accent,
+              disabledBackgroundColor: accent.withValues(alpha: 0.45),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            child: busy
+                ? const SizedBox(width: 18, height: 18,
+                    child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                : Text('Confirm wrong · keep $keep$_unitLabel',
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.white),
+                    maxLines: 1, overflow: TextOverflow.ellipsis),
           ),
         ),
-        // Right half: confirm button (Flexible — takes remaining width, never overflows)
-        Flexible(
-          child: GestureDetector(
-            onTap: _confirmingFewWrong ? null : _doConfirmFewWrong,
-            child: Container(
-              alignment: Alignment.center,
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-              decoration: BoxDecoration(
-                color: _confirmingFewWrong
-                    ? const Color(0xFFD97706).withValues(alpha: 0.45)
-                    : const Color(0xFFD97706),
-                borderRadius: const BorderRadius.only(
-                  topRight: Radius.circular(11), bottomRight: Radius.circular(11)),
-                border: Border(
-                  top: BorderSide(color: const Color(0xFFD97706).withValues(alpha: 0.4)),
-                  bottom: BorderSide(color: const Color(0xFFD97706).withValues(alpha: 0.4)),
-                  right: BorderSide(color: const Color(0xFFD97706).withValues(alpha: 0.4)),
-                ),
-              ),
-              child: _confirmingFewWrong
-                  ? const SizedBox(width: 16, height: 16,
-                      child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                  : Text(confirmLabel,
-                      style: const TextStyle(
-                          fontSize: 11, fontWeight: FontWeight.w700, color: Colors.white),
-                      textAlign: TextAlign.center,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis),
-            ),
-          ),
+        const SizedBox(height: 4),
+        TextButton(
+          onPressed: busy ? null : () => setState(() {
+            _showFewWrongInline = false;
+            _fewWrongNameCtrl.clear();
+            _fewWrongProofUrl = null;
+          }),
+          child: const Text('Cancel', style: TextStyle(color: _kSub, fontSize: 13)),
         ),
       ]),
     );
+  }
+
+  // #203: Wrong item — full inline panel with name + photo
+  Widget _buildWrongItemPanel() {
+    RenderLog.write('c203_wrong_panel_opened', 'product_id=${widget.productId}');
+    final busy = _confirmingWrongAll || _wrongItemUploading;
+    const accent = Color(0xFFDC2626);
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: accent.withValues(alpha: 0.04),
+        borderRadius: BorderRadius.circular(11),
+        border: Border.all(color: accent.withValues(alpha: 0.35)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+        const Text('Wrong item details',
+            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText)),
+        const SizedBox(height: 10),
+        TextField(
+          controller: _wrongItemNameCtrl,
+          enabled: !busy,
+          decoration: InputDecoration(
+            hintText: 'Wrong item name (optional)',
+            hintStyle: const TextStyle(fontSize: 13, color: _kSub),
+            filled: true, fillColor: Colors.white,
+            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                borderSide: const BorderSide(color: _kBorder)),
+            enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                borderSide: const BorderSide(color: _kBorder)),
+          ),
+          style: const TextStyle(fontSize: 13, color: _kText),
+        ),
+        const SizedBox(height: 10),
+        _buildPhotoRow(
+          proofUrl: _wrongItemProofUrl,
+          uploading: _wrongItemUploading,
+          busy: busy,
+          onPick: () async {
+            setState(() => _wrongItemUploading = true);
+            final url = await _pickAndUpload();
+            if (!mounted) return;
+            setState(() { _wrongItemProofUrl = url; _wrongItemUploading = false; });
+          },
+          onRemove: () => setState(() => _wrongItemProofUrl = null),
+        ),
+        const SizedBox(height: 12),
+        SizedBox(
+          width: double.infinity,
+          height: 44,
+          child: FilledButton(
+            onPressed: busy ? null : _doWrongAll,
+            style: FilledButton.styleFrom(
+              backgroundColor: accent,
+              disabledBackgroundColor: accent.withValues(alpha: 0.45),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            child: busy
+                ? const SizedBox(width: 18, height: 18,
+                    child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                : const Text('Confirm wrong item',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.white)),
+          ),
+        ),
+        const SizedBox(height: 4),
+        TextButton(
+          onPressed: busy ? null : () => setState(() {
+            _showWrongItemInline = false;
+            _wrongItemNameCtrl.clear();
+            _wrongItemProofUrl = null;
+          }),
+          child: const Text('Cancel', style: TextStyle(color: _kSub, fontSize: 13)),
+        ),
+      ]),
+    );
+  }
+
+  // Shared photo-pick row: "📷 Add photo" button + thumbnail + remove
+  Widget _buildPhotoRow({
+    required String? proofUrl,
+    required bool uploading,
+    required bool busy,
+    required VoidCallback onPick,
+    required VoidCallback onRemove,
+  }) {
+    return Row(children: [
+      if (uploading)
+        const SizedBox(width: 24, height: 24,
+            child: CircularProgressIndicator(strokeWidth: 2))
+      else if (proofUrl != null && proofUrl.isNotEmpty) ...[
+        ClipRRect(
+          borderRadius: BorderRadius.circular(6),
+          child: Image.network(proofUrl, width: 56, height: 56, fit: BoxFit.cover,
+              errorBuilder: (_, __, ___) =>
+                  const Icon(Icons.broken_image_outlined, size: 40, color: _kSub)),
+        ),
+        const SizedBox(width: 8),
+        IconButton(
+          icon: const Icon(Icons.close_rounded, size: 18, color: _kSub),
+          onPressed: busy ? null : onRemove,
+          tooltip: 'Remove photo',
+          padding: EdgeInsets.zero, constraints: const BoxConstraints(),
+        ),
+        const SizedBox(width: 8),
+        TextButton.icon(
+          onPressed: busy ? null : onPick,
+          icon: const Icon(Icons.photo_camera_outlined, size: 16),
+          label: const Text('Replace', style: TextStyle(fontSize: 12)),
+          style: TextButton.styleFrom(foregroundColor: _kSub,
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4)),
+        ),
+      ] else
+        OutlinedButton.icon(
+          onPressed: busy ? null : onPick,
+          icon: const Icon(Icons.photo_camera_outlined, size: 16),
+          label: const Text('Add photo', style: TextStyle(fontSize: 13)),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: _kSub,
+            side: const BorderSide(color: _kBorder),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          ),
+        ),
+    ]);
   }
 
   Widget _buildActionBtn({
@@ -7361,26 +7562,25 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
   Widget build(BuildContext context) {
     final ord = _orderedTotal;
     final state = _localState;
-    final isBusy = _confirmingSimple || _confirmingMissing || _confirmingFewWrong || _undoing;
+    final isBusy = _confirmingSimple || _confirmingMissing || _confirmingFewWrong ||
+        _confirmingWrongAll || _wrongItemUploading || _fewWrongUploading || _undoing;
     final bg = _stateBgMap[state] ?? _kPendingBg;
     final fg = _stateFgMap[state] ?? _kPendingFg;
     final isActioned = state != 'pending';
+    final anyPanelOpen = _showMissingInline || _showFewWrongInline || _showWrongItemInline;
 
     // #200: dynamic visibility predicates
     final fullyReceived = state == 'received' && _localReceived >= ord;
     final showGotAll    = !fullyReceived;
     final showMissing   = ord > 1;
     final showFewWrong  = ord > 1;
-    // Wrong item: always show
     final showNotComing = !fullyReceived;
 
     RenderLog.write('c200_actions_dynamic',
-        'ord=$ord;state=$state;rec=$_localReceived;fullyReceived=$fullyReceived;showGotAll=$showGotAll;showMissing=$showMissing;showFewWrong=$showFewWrong;showNotComing=$showNotComing');
+        'ord=$ord;state=$state;rec=$_localReceived;fullyReceived=$fullyReceived');
     if (ord == 1) RenderLog.write('c200_qty1_compact', 'ord=1;hiding_report_missing_and_few_wrong=true');
-    if (fullyReceived) RenderLog.write('c200_received_hides_gotall', 'state=$state;rec=$_localReceived;ord=$ord;hiding_gotall_and_notcoming=true');
-
-    RenderLog.write('c199_wrong_no_inputs', 'no_image_picker;no_wrong_name_field');
-    RenderLog.write('c201_wrong_no_name_no_image', 'no_name_field;no_image_upload;no_view_image;p_note_null');
+    if (fullyReceived) RenderLog.write('c200_received_hides_gotall',
+        'state=$state;rec=$_localReceived;ord=$ord;hiding_gotall_and_notcoming=true');
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 20, 16, 32),
@@ -7439,13 +7639,13 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
         const SizedBox(height: 16),
 
         // Action: Got all (#200: hidden when fully received)
-        if (showGotAll && !_showMissingInline && !_showFewWrongInline) ...[
+        if (showGotAll && !anyPanelOpen) ...[
           SizedBox(
             width: double.infinity,
             child: _buildActionBtn(
               label: 'Got all ($ord)',
               onTap: isBusy ? null : _doGotAll,
-              loading: _confirmingSimple && _localState != 'wrong' && _localState != 'not_coming',
+              loading: _confirmingSimple,
               bg: _kGreen,
             ),
           ),
@@ -7453,7 +7653,7 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
         ],
 
         // Action: Report missing (#200: hidden when T == 1)
-        if (showMissing && !_showFewWrongInline) ...[
+        if (showMissing && !_showFewWrongInline && !_showWrongItemInline) ...[
           if (!_showMissingInline)
             SizedBox(
               width: double.infinity,
@@ -7472,8 +7672,8 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
           const SizedBox(height: 8),
         ],
 
-        // Action: Few item wrong (#200: hidden when T == 1)
-        if (showFewWrong && !_showMissingInline) ...[
+        // Action: Few item wrong — inline panel (#200: hidden when T == 1; #203: expands inline)
+        if (showFewWrong && !_showMissingInline && !_showWrongItemInline) ...[
           if (!_showFewWrongInline)
             SizedBox(
               width: double.infinity,
@@ -7483,42 +7683,39 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
                   _showFewWrongInline = true;
                   _wrongDraft = 1;
                   _fewWrongCtrl.text = '1';
+                  _fewWrongNameCtrl.clear();
+                  _fewWrongProofUrl = null;
                 }),
                 bg: const Color(0xFFD97706),
               ),
             )
           else
-            _buildFewWrongInlineRow(),
+            _buildFewWrongPanel(),
           const SizedBox(height: 8),
         ],
 
-        // Cancel inline panels
-        if (_showMissingInline || _showFewWrongInline) ...[
-          TextButton(
-            onPressed: isBusy ? null : () => setState(() {
-              _showMissingInline = false;
-              _showFewWrongInline = false;
-            }),
-            child: const Text('Cancel', style: TextStyle(color: _kSub)),
-          ),
-          const SizedBox(height: 8),
-        ],
-
-        // Action: Wrong item (always shown; split from Not coming for independent predicate)
+        // Action: Wrong item — inline panel (#203: expands inline)
         if (!_showMissingInline && !_showFewWrongInline) ...[
-          SizedBox(
-            width: double.infinity,
-            child: _buildActionBtn(
-              label: 'Wrong item',
-              onTap: isBusy ? null : _doWrongAll,
-              bg: _kWrongFg,
-            ),
-          ),
+          if (!_showWrongItemInline)
+            SizedBox(
+              width: double.infinity,
+              child: _buildActionBtn(
+                label: 'Wrong item',
+                onTap: isBusy ? null : () => setState(() {
+                  _showWrongItemInline = true;
+                  _wrongItemNameCtrl.clear();
+                  _wrongItemProofUrl = null;
+                }),
+                bg: _kWrongFg,
+              ),
+            )
+          else
+            _buildWrongItemPanel(),
           const SizedBox(height: 8),
         ],
 
         // Action: Not coming (#200: hidden when fully received)
-        if (showNotComing && !_showMissingInline && !_showFewWrongInline) ...[
+        if (showNotComing && !anyPanelOpen) ...[
           SizedBox(
             width: double.infinity,
             child: _buildActionBtn(
@@ -7527,26 +7724,27 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
               bg: _kNotComingFg,
             ),
           ),
+          const SizedBox(height: 8),
         ],
 
-        // #201: Undo / Back — full-width, shown when product is already actioned
+        // #203: ↩ Undo last action — full-width outlined, visible when actioned
         if (isActioned) ...[
-          const SizedBox(height: 12),
+          const SizedBox(height: 4),
           Builder(builder: (_) {
+            RenderLog.write('c203_undo_button_shown',
+                'product_id=${widget.productId};state=$state');
             RenderLog.write('c201_undo_below_buttons',
                 'product_id=${widget.productId};state=$state');
             return SizedBox(
               width: double.infinity,
               height: 44,
               child: OutlinedButton.icon(
-                onPressed: (_undoing || _confirmingSimple || _confirmingMissing || _confirmingFewWrong)
-                    ? null
-                    : _doUndoBelow,
+                onPressed: isBusy ? null : _doUndoBelow,
                 icon: _undoing
                     ? const SizedBox(width: 16, height: 16,
                         child: CircularProgressIndicator(strokeWidth: 2))
                     : const Icon(Icons.undo_rounded, size: 18),
-                label: const Text('Undo / Back',
+                label: const Text('↩ Undo last action',
                     style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
                 style: OutlinedButton.styleFrom(
                   foregroundColor: _kSub,
@@ -7556,7 +7754,28 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
               ),
             );
           }),
+          const SizedBox(height: 8),
         ],
+
+        // #203: ← Back — always visible at bottom
+        Builder(builder: (_) {
+          RenderLog.write('c203_back_button_shown', 'product_id=${widget.productId}');
+          return SizedBox(
+            width: double.infinity,
+            height: 44,
+            child: OutlinedButton.icon(
+              onPressed: () => Navigator.of(context).pop(),
+              icon: const Icon(Icons.arrow_back_rounded, size: 18),
+              label: const Text('← Back',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: _kSub,
+                side: const BorderSide(color: _kBorder),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+            ),
+          );
+        }),
       ]),
     );
   }

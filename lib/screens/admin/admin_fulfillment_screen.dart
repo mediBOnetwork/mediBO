@@ -3531,12 +3531,14 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                   );
                 }),
               ],
-              // line 4: awaiting dispute badge (if any)
-              if (disputeItem != null) ...[
+              // line 4: awaiting dispute badge — ACTIVE disputes only (#199)
+              if (disputeItem != null && disputeItem.isActive) ...[
                 const SizedBox(height: 3),
                 Builder(builder: (_) {
                   RenderLog.write('c196_awaiting_badge_wrapped',
                       'surface=$surface;dispute=${disputeItem!.disputeId}');
+                  RenderLog.write('c199_awaiting_active_only',
+                      'surface=$surface;dispute=${disputeItem!.disputeId};isActive=${disputeItem.isActive}');
                   return SizedBox(
                     width: 120,
                     child: _DisputeStrip(item: disputeItem!, surface: surface),
@@ -6872,6 +6874,7 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
   final _fewWrongCtrl = TextEditingController();
 
   bool _confirmingSimple = false; // for got_all / wrong_all / not_coming
+  bool _undoing = false;
 
   @override
   void initState() {
@@ -6905,11 +6908,44 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
       'p_supplier_name': widget.supplierName,
       'p_product_id': widget.productId,
       'p_action': action,
+      'p_note': null,
     };
     if (qty != null) params['p_qty'] = qty;
     final res = await Supabase.instance.client.rpc('fw_product_action', params: params) as Map;
     final err = res['error']?.toString();
     if (err != null) throw err;
+  }
+
+  Future<void> _doUndo() async {
+    if (_undoing) return;
+    setState(() => _undoing = true);
+    RenderLog.write('c199_undo_called',
+        'product_id=${widget.productId};supplier=${widget.supplierName}');
+    try {
+      final res = await Supabase.instance.client.rpc('fw_product_undo', params: {
+        'p_supplier_name': widget.supplierName,
+        'p_product_id': widget.productId,
+      }) as Map;
+      if (!mounted) return;
+      setState(() => _undoing = false);
+      final err = res['error']?.toString();
+      if (err == 'nothing_to_undo') {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Nothing to undo (already confirmed or re-sourced)')));
+      } else if (err != null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $err'), backgroundColor: const Color(0xFFDC2626)));
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Reverted')));
+        Navigator.of(context).pop();
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _undoing = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: $e'), backgroundColor: const Color(0xFFDC2626)));
+    }
   }
 
   Future<void> _doGotAll() async {
@@ -6919,8 +6955,21 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
       await _callProductAction('got_all');
       if (!mounted) return;
       setState(() { _localState = 'received'; _localReceived = _orderedTotal; _confirmingSimple = false; });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Got all ${_orderedTotal}$_unitLabel — marked received')));
+      final sup = widget.supplierName;
+      final pid = widget.productId;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Got all ${_orderedTotal}$_unitLabel — marked received'),
+        action: SnackBarAction(label: 'UNDO', onPressed: () async {
+          final res = await Supabase.instance.client.rpc('fw_product_undo',
+              params: {'p_supplier_name': sup, 'p_product_id': pid}) as Map;
+          RenderLog.write('c199_undo_called', 'product_id=$pid;supplier=$sup;from=snackbar');
+          final e = res['error']?.toString();
+          if (e == 'nothing_to_undo') {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Nothing to undo (already confirmed or re-sourced)')));
+          }
+        }),
+      ));
       Navigator.of(context).pop();
     } catch (e) {
       if (!mounted) return;
@@ -6943,8 +6992,21 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
         _confirmingMissing = false;
         _showMissingInline = false;
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Saved · $missing$_unitLabel short')));
+      final sup = widget.supplierName;
+      final pid = widget.productId;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Saved · $missing$_unitLabel short'),
+        action: SnackBarAction(label: 'UNDO', onPressed: () async {
+          final res = await Supabase.instance.client.rpc('fw_product_undo',
+              params: {'p_supplier_name': sup, 'p_product_id': pid}) as Map;
+          RenderLog.write('c199_undo_called', 'product_id=$pid;supplier=$sup;from=snackbar');
+          final e = res['error']?.toString();
+          if (e == 'nothing_to_undo') {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Nothing to undo (already confirmed or re-sourced)')));
+          }
+        }),
+      ));
       Navigator.of(context).pop();
     } catch (e) {
       if (!mounted) return;
@@ -6960,13 +7022,27 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
     try {
       await _callProductAction('few_wrong', qty: _wrongDraft);
       if (!mounted) return;
+      final flagged = _wrongDraft;
       setState(() {
         _localState = 'wrong';
         _confirmingFewWrong = false;
         _showFewWrongInline = false;
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Saved · $_wrongDraft$_unitLabel flagged wrong')));
+      final sup = widget.supplierName;
+      final pid = widget.productId;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Saved · $flagged$_unitLabel flagged wrong'),
+        action: SnackBarAction(label: 'UNDO', onPressed: () async {
+          final res = await Supabase.instance.client.rpc('fw_product_undo',
+              params: {'p_supplier_name': sup, 'p_product_id': pid}) as Map;
+          RenderLog.write('c199_undo_called', 'product_id=$pid;supplier=$sup;from=snackbar');
+          final e = res['error']?.toString();
+          if (e == 'nothing_to_undo') {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Nothing to undo (already confirmed or re-sourced)')));
+          }
+        }),
+      ));
       Navigator.of(context).pop();
     } catch (e) {
       if (!mounted) return;
@@ -6983,8 +7059,21 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
       await _callProductAction('wrong_all');
       if (!mounted) return;
       setState(() { _localState = 'wrong'; _confirmingSimple = false; });
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('All units flagged wrong item')));
+      final sup = widget.supplierName;
+      final pid = widget.productId;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: const Text('All units flagged wrong item'),
+        action: SnackBarAction(label: 'UNDO', onPressed: () async {
+          final res = await Supabase.instance.client.rpc('fw_product_undo',
+              params: {'p_supplier_name': sup, 'p_product_id': pid}) as Map;
+          RenderLog.write('c199_undo_called', 'product_id=$pid;supplier=$sup;from=snackbar');
+          final e = res['error']?.toString();
+          if (e == 'nothing_to_undo') {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Nothing to undo (already confirmed or re-sourced)')));
+          }
+        }),
+      ));
       Navigator.of(context).pop();
     } catch (e) {
       if (!mounted) return;
@@ -7001,8 +7090,21 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
       await _callProductAction('not_coming');
       if (!mounted) return;
       setState(() { _localState = 'not_coming'; _confirmingSimple = false; });
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Marked not coming')));
+      final sup = widget.supplierName;
+      final pid = widget.productId;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: const Text('Marked not coming'),
+        action: SnackBarAction(label: 'UNDO', onPressed: () async {
+          final res = await Supabase.instance.client.rpc('fw_product_undo',
+              params: {'p_supplier_name': sup, 'p_product_id': pid}) as Map;
+          RenderLog.write('c199_undo_called', 'product_id=$pid;supplier=$sup;from=snackbar');
+          final e = res['error']?.toString();
+          if (e == 'nothing_to_undo') {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Nothing to undo (already confirmed or re-sourced)')));
+          }
+        }),
+      ));
       Navigator.of(context).pop();
     } catch (e) {
       if (!mounted) return;
@@ -7234,9 +7336,12 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
   Widget build(BuildContext context) {
     final ord = _orderedTotal;
     final state = _localState;
-    final isBusy = _confirmingSimple || _confirmingMissing || _confirmingFewWrong;
+    final isBusy = _confirmingSimple || _confirmingMissing || _confirmingFewWrong || _undoing;
     final bg = _stateBgMap[state] ?? _kPendingBg;
     final fg = _stateFgMap[state] ?? _kPendingFg;
+    final isActioned = state != 'pending';
+
+    RenderLog.write('c199_wrong_no_inputs', 'no_image_picker;no_wrong_name_field');
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 20, 16, 32),
@@ -7266,6 +7371,24 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
               ),
             ]),
           ),
+          if (isActioned) ...[
+            Builder(builder: (_) {
+              RenderLog.write('c199_undo_button_shown', 'product_id=${widget.productId};state=$state');
+              return _undoing
+                  ? const SizedBox(width: 20, height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                  : TextButton(
+                      onPressed: isBusy ? null : _doUndo,
+                      style: TextButton.styleFrom(
+                        foregroundColor: _kSub,
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        minimumSize: Size.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      child: const Text('Undo', style: TextStyle(fontSize: 13)),
+                    );
+            }),
+          ],
           IconButton(
             icon: const Icon(Icons.close_rounded, size: 20, color: _kSub),
             onPressed: () => Navigator.of(context).pop(),

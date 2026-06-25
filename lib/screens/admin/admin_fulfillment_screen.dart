@@ -3486,7 +3486,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
           _FulfilImageTile(merged.imageUrl, size: 40),
           const SizedBox(width: 10),
-          // LEFT column: name + pack_type
+          // LEFT column: name + pack_type + proof thumbnail (if dispute has proof)
           Expanded(
             child: Padding(
               padding: const EdgeInsets.only(top: 2),
@@ -3499,6 +3499,40 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                 Text(merged.packType.isNotEmpty ? merged.packType : '—',
                     style: const TextStyle(fontSize: 11, color: _kSub),
                     maxLines: 1, overflow: TextOverflow.ellipsis),
+                // #203: proof thumbnail from dispute
+                if (disputeItem != null && (disputeItem.proofUrl ?? '').isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  GestureDetector(
+                    onTap: () => showDialog<void>(
+                      context: context,
+                      builder: (_) => Dialog(
+                        backgroundColor: Colors.black,
+                        insetPadding: const EdgeInsets.all(12),
+                        child: Image.network(disputeItem!.proofUrl!,
+                            fit: BoxFit.contain,
+                            errorBuilder: (_, __, ___) =>
+                                const Icon(Icons.broken_image_outlined, color: Colors.white54, size: 64)),
+                      ),
+                    ),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(4),
+                        child: Image.network(disputeItem!.proofUrl!, width: 36, height: 36,
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, __, ___) =>
+                                const Icon(Icons.broken_image_outlined, size: 24, color: _kSub)),
+                      ),
+                      const SizedBox(width: 4),
+                      const Text('proof', style: TextStyle(fontSize: 10, color: _kSub)),
+                    ]),
+                  ),
+                ],
+                if (disputeItem != null && (disputeItem.wrongProductName ?? '').isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text('↳ ${disputeItem!.wrongProductName}',
+                      style: const TextStyle(fontSize: 10, color: Color(0xFF92400E)),
+                      maxLines: 1, overflow: TextOverflow.ellipsis),
+                ],
               ]),
             ),
           ),
@@ -3568,6 +3602,12 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     final supplier = _selectedSupplier ?? '';
     RenderLog.write('c197_product_sheet_opened',
         'surface=${widget.arrivals ? 'arrivals' : 'collect'};product_id=${merged.productId};ordered=${merged.orderedTotal}');
+    // Find first dispute with proof for this product
+    DisputeItem? existingDispute;
+    for (final oiid in merged.orderItemIds) {
+      final d = _disputeItemMap[oiid];
+      if (d != null) { existingDispute = d; break; }
+    }
     final isWide = MediaQuery.of(context).size.width >= 900;
     final sheet = _ProductReceiveSheet(
       supplierName: supplier,
@@ -3578,6 +3618,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       orderedTotal: merged.orderedTotal,
       receivedTotal: merged.receivedTotal,
       combinedState: merged.combinedState,
+      existingDispute: existingDispute,
     );
     if (isWide) {
       await showDialog<void>(
@@ -4137,6 +4178,36 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                                 ] else if (deskDispute != null) ...[
                                   const SizedBox(height: 2),
                                   DisputeBadge(status: deskDispute['status']?.toString() ?? ''),
+                                ],
+                                // #203: proof thumbnail in desktop tile
+                                if (deskDisputeItem != null && (deskDisputeItem.proofUrl ?? '').isNotEmpty) ...[
+                                  const SizedBox(height: 4),
+                                  GestureDetector(
+                                    onTap: () => showDialog<void>(
+                                      context: context,
+                                      builder: (_) => Dialog(
+                                        backgroundColor: Colors.black,
+                                        insetPadding: const EdgeInsets.all(12),
+                                        child: Image.network(deskDisputeItem!.proofUrl!, fit: BoxFit.contain,
+                                            errorBuilder: (_, __, ___) => const Icon(Icons.broken_image_outlined, color: Colors.white54, size: 64)),
+                                      ),
+                                    ),
+                                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                                      ClipRRect(
+                                        borderRadius: BorderRadius.circular(4),
+                                        child: Image.network(deskDisputeItem!.proofUrl!, width: 32, height: 32, fit: BoxFit.cover,
+                                            errorBuilder: (_, __, ___) => const Icon(Icons.broken_image_outlined, size: 20, color: _kSub)),
+                                      ),
+                                      const SizedBox(width: 4),
+                                      const Text('proof', style: TextStyle(fontSize: 10, color: _kSub)),
+                                    ]),
+                                  ),
+                                ],
+                                if (deskDisputeItem != null && (deskDisputeItem.wrongProductName ?? '').isNotEmpty) ...[
+                                  const SizedBox(height: 2),
+                                  Text('↳ ${deskDisputeItem!.wrongProductName}',
+                                      style: const TextStyle(fontSize: 10, color: Color(0xFF92400E)),
+                                      maxLines: 1, overflow: TextOverflow.ellipsis),
                                 ],
                               ],
                             ),
@@ -6842,6 +6913,7 @@ class _ProductReceiveSheet extends StatefulWidget {
   final int orderedTotal;
   final int receivedTotal;
   final String combinedState;
+  final DisputeItem? existingDispute; // proof/name from prior flag
 
   const _ProductReceiveSheet({
     required this.supplierName,
@@ -6852,6 +6924,7 @@ class _ProductReceiveSheet extends StatefulWidget {
     required this.orderedTotal,
     required this.receivedTotal,
     required this.combinedState,
+    this.existingDispute,
   });
 
   @override
@@ -7270,6 +7343,62 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
     );
   }
 
+  // #203: Banner showing the uploaded proof image + wrong-name for an existing dispute
+  Widget _buildExistingProofBanner(DisputeItem dispute) {
+    final hasProof = (dispute.proofUrl ?? '').isNotEmpty;
+    final hasName  = (dispute.wrongProductName ?? '').isNotEmpty;
+    if (!hasProof && !hasName) return const SizedBox.shrink();
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFEF3C7),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFFD97706).withValues(alpha: 0.4)),
+      ),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if (hasProof) ...[
+          GestureDetector(
+            onTap: () => showDialog<void>(
+              context: context,
+              builder: (_) => Dialog(
+                backgroundColor: Colors.black,
+                insetPadding: const EdgeInsets.all(12),
+                child: Image.network(dispute.proofUrl!,
+                    fit: BoxFit.contain,
+                    errorBuilder: (_, __, ___) =>
+                        const Icon(Icons.broken_image_outlined, color: Colors.white54, size: 64)),
+              ),
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(6),
+              child: Image.network(dispute.proofUrl!, width: 64, height: 64, fit: BoxFit.cover,
+                  errorBuilder: (_, __, ___) =>
+                      const Icon(Icons.broken_image_outlined, size: 40, color: _kSub)),
+            ),
+          ),
+          const SizedBox(width: 10),
+        ],
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+            const Text('Previously uploaded proof',
+                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF92400E))),
+            if (hasName) ...[
+              const SizedBox(height: 2),
+              Text('Wrong item: ${dispute.wrongProductName}',
+                  style: const TextStyle(fontSize: 12, color: _kText),
+                  maxLines: 2, overflow: TextOverflow.ellipsis),
+            ],
+            if (hasProof) ...[
+              const SizedBox(height: 2),
+              const Text('Tap image to view full size',
+                  style: TextStyle(fontSize: 11, color: _kSub)),
+            ],
+          ]),
+        ),
+      ]),
+    );
+  }
+
   // #203: Few item wrong — full inline panel with stepper + name + photo
   Widget _buildFewWrongPanel() {
     RenderLog.write('c203_few_wrong_panel_opened',
@@ -7637,6 +7766,12 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
         const SizedBox(height: 20),
         const Divider(height: 1, color: _kBorder),
         const SizedBox(height: 16),
+
+        // #203: Show existing dispute proof + wrong name if already flagged
+        if (widget.existingDispute != null) ...[
+          _buildExistingProofBanner(widget.existingDispute!),
+          const SizedBox(height: 12),
+        ],
 
         // Action: Got all (#200: hidden when fully received)
         if (showGotAll && !anyPanelOpen) ...[

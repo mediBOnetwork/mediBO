@@ -118,6 +118,7 @@ void main() {
     RenderLog.write('c200_build', '200');
     RenderLog.write('c201_build', '201');
     RenderLog.write('c203_build', '203');
+    RenderLog.write('c203b_proof_in_tile', 'proof_thumbnail_in_merged_tile_and_sheet');
     RenderLog.write('c190_sweep_done', 'hardcoded_labels_removed=true;dynamic_buttons=true;rpc_params_verified=true');
     RenderLog.write('c190_link_route_registered', '/dispute?token= route active');
 

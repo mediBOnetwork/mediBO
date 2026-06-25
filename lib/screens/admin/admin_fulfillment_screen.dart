@@ -3505,13 +3505,29 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                   GestureDetector(
                     onTap: () => showDialog<void>(
                       context: context,
-                      builder: (_) => Dialog(
+                      builder: (ctx) => Dialog(
                         backgroundColor: Colors.black,
                         insetPadding: const EdgeInsets.all(12),
-                        child: Image.network(disputeItem!.proofUrl!,
-                            fit: BoxFit.contain,
-                            errorBuilder: (_, __, ___) =>
-                                const Icon(Icons.broken_image_outlined, color: Colors.white54, size: 64)),
+                        child: Stack(children: [
+                          Image.network(disputeItem!.proofUrl!,
+                              fit: BoxFit.contain,
+                              errorBuilder: (_, __, ___) =>
+                                  const Icon(Icons.broken_image_outlined, color: Colors.white54, size: 64)),
+                          Positioned(
+                            top: 8, right: 8,
+                            child: GestureDetector(
+                              onTap: () => Navigator.of(ctx).pop(),
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  color: Colors.black54,
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                                padding: const EdgeInsets.all(4),
+                                child: const Icon(Icons.close_rounded, color: Colors.white, size: 20),
+                              ),
+                            ),
+                          ),
+                        ]),
                       ),
                     ),
                     child: Row(mainAxisSize: MainAxisSize.min, children: [
@@ -4185,11 +4201,27 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                                   GestureDetector(
                                     onTap: () => showDialog<void>(
                                       context: context,
-                                      builder: (_) => Dialog(
+                                      builder: (ctx) => Dialog(
                                         backgroundColor: Colors.black,
                                         insetPadding: const EdgeInsets.all(12),
-                                        child: Image.network(deskDisputeItem!.proofUrl!, fit: BoxFit.contain,
-                                            errorBuilder: (_, __, ___) => const Icon(Icons.broken_image_outlined, color: Colors.white54, size: 64)),
+                                        child: Stack(children: [
+                                          Image.network(deskDisputeItem!.proofUrl!, fit: BoxFit.contain,
+                                              errorBuilder: (_, __, ___) => const Icon(Icons.broken_image_outlined, color: Colors.white54, size: 64)),
+                                          Positioned(
+                                            top: 8, right: 8,
+                                            child: GestureDetector(
+                                              onTap: () => Navigator.of(ctx).pop(),
+                                              child: Container(
+                                                decoration: BoxDecoration(
+                                                  color: Colors.black54,
+                                                  borderRadius: BorderRadius.circular(16),
+                                                ),
+                                                padding: const EdgeInsets.all(4),
+                                                child: const Icon(Icons.close_rounded, color: Colors.white, size: 20),
+                                              ),
+                                            ),
+                                          ),
+                                        ]),
                                       ),
                                     ),
                                     child: Row(mainAxisSize: MainAxisSize.min, children: [
@@ -7360,13 +7392,29 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
           GestureDetector(
             onTap: () => showDialog<void>(
               context: context,
-              builder: (_) => Dialog(
+              builder: (ctx) => Dialog(
                 backgroundColor: Colors.black,
                 insetPadding: const EdgeInsets.all(12),
-                child: Image.network(dispute.proofUrl!,
-                    fit: BoxFit.contain,
-                    errorBuilder: (_, __, ___) =>
-                        const Icon(Icons.broken_image_outlined, color: Colors.white54, size: 64)),
+                child: Stack(children: [
+                  Image.network(dispute.proofUrl!,
+                      fit: BoxFit.contain,
+                      errorBuilder: (_, __, ___) =>
+                          const Icon(Icons.broken_image_outlined, color: Colors.white54, size: 64)),
+                  Positioned(
+                    top: 8, right: 8,
+                    child: GestureDetector(
+                      onTap: () => Navigator.of(ctx).pop(),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: Colors.black54,
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        padding: const EdgeInsets.all(4),
+                        child: const Icon(Icons.close_rounded, color: Colors.white, size: 20),
+                      ),
+                    ),
+                  ),
+                ]),
               ),
             ),
             child: ClipRRect(

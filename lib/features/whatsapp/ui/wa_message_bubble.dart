@@ -241,7 +241,7 @@ class _WaMessageBubbleState extends State<WaMessageBubble> {
       children: [
         if (body != null) body,
         if (msg.text != null && msg.text!.isNotEmpty)
-          SelectableText(
+          Text(
             msg.text!,
             style: const TextStyle(fontSize: 14, color: textColor, height: 1.4),
           ),

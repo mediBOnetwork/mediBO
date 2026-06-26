@@ -188,6 +188,9 @@ class _WaChatScreenState extends State<WaChatScreen>
         // is fully scrollable (no NeverScrollableScrollPhysics).
         RenderLog.write(
             'c212_thread_open_bottom_anchored', res.messages.length);
+        // CHANGE #214: scroll fix — SelectableText removed (it blocked drags).
+        RenderLog.write('c214_thread_msgs_loaded', res.messages.length);
+        RenderLog.write('c214_thread_scroll_enabled', 'reverse=true,physics=AlwaysScrollable');
       }
       return res;
     });

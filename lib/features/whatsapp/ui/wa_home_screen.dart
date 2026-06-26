@@ -64,6 +64,9 @@ class _ConversationListViewState extends State<_ConversationListView>
   final _repo = WaRepository();
   late Future<List<WaConversation>> _future;
 
+  // CHANGE #207: phones whose badge was optimistically cleared on chat open.
+  final Set<String> _locallyRead = {};
+
   @override
   bool get wantKeepAlive => true;
 
@@ -141,14 +144,24 @@ class _ConversationListViewState extends State<_ConversationListView>
               indent: 72,
             ),
             itemBuilder: (context, i) {
-              final c = conversations[i];
+              final raw = conversations[i];
+              // CHANGE #207: optimistic badge clear for opened chats.
+              final c = _locallyRead.contains(raw.senderPhone)
+                  ? raw.copyWith(unread: 0)
+                  : raw;
               return WaConversationTile(
                 conversation: c,
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => WaChatScreen(conversation: c),
-                  ),
-                ),
+                onTap: () async {
+                  // Optimistically clear the badge immediately.
+                  setState(() => _locallyRead.add(c.senderPhone));
+                  await Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => WaChatScreen(conversation: c),
+                    ),
+                  );
+                  // Re-fetch the list so badges reflect the real backend state.
+                  if (mounted) _refresh();
+                },
               );
             },
           ),

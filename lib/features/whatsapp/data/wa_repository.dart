@@ -5,6 +5,21 @@ import 'package:pharma_b2b/utils/render_log.dart';
 import '../models/wa_conversation.dart';
 import '../models/wa_message.dart';
 
+/// CHANGE #207: result of loading a thread — messages plus resolved identity.
+class WaThreadResult {
+  final List<WaMessage> messages;
+  final String? name;
+  final String? label;
+  final String? senderType;
+
+  const WaThreadResult({
+    required this.messages,
+    this.name,
+    this.label,
+    this.senderType,
+  });
+}
+
 class WaSendException implements Exception {
   final String code;
   const WaSendException(this.code);
@@ -59,6 +74,13 @@ class WaRepository {
           .map((e) => WaConversation.fromJson(Map<String, dynamic>.from(e)))
           .toList();
       RenderLog.write('c204_wa_conv_list', conversations.length);
+      // CHANGE #207: list rendered using the REAL unread value from backend.
+      final totalUnread =
+          conversations.fold<int>(0, (sum, c) => sum + c.unread);
+      RenderLog.write('c207_unread_real', totalUnread);
+      if (conversations.any((c) => c.hasName)) {
+        RenderLog.write('c207_name_resolved', 1);
+      }
       return conversations;
     } catch (e) {
       debugPrint('[WaRepository] listConversations error: $e');
@@ -66,7 +88,9 @@ class WaRepository {
     }
   }
 
-  Future<List<WaMessage>> getThread(String phone) async {
+  /// Loads a thread. Returns messages plus the resolved name/label/sender_type
+  /// (CHANGE #207) so the chat header can show name above number.
+  Future<WaThreadResult> getThread(String phone) async {
     try {
       final res = await _client.rpc('wa_thread', params: {'p_phone': phone});
       final map = (res is String) ? jsonDecode(res) : res;
@@ -81,10 +105,28 @@ class WaRepository {
           .map((e) => WaMessage.fromJson(Map<String, dynamic>.from(e)))
           .toList();
       RenderLog.write('c204_wa_thread_opened', messages.length);
-      return messages;
+      return WaThreadResult(
+        messages: messages,
+        name: (map is Map) ? map['name']?.toString() : null,
+        label: (map is Map) ? map['label']?.toString() : null,
+        senderType: (map is Map && map['sender_type'] != null)
+            ? map['sender_type'].toString()
+            : null,
+      );
     } catch (e) {
       debugPrint('[WaRepository] getThread error: $e');
       rethrow;
+    }
+  }
+
+  /// CHANGE #207: mark a conversation read on chat open. Awaited but tolerant
+  /// of errors (anon/non-admin returns {error:...}).
+  Future<void> markRead(String phone) async {
+    try {
+      RenderLog.write('c207_mark_read', phone);
+      await _client.rpc('wa_mark_read', params: {'p_phone': phone});
+    } catch (e) {
+      debugPrint('[WaRepository] markRead error: $e');
     }
   }
 

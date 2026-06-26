@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:pharma_b2b/utils/render_log.dart';
 import '../models/wa_conversation.dart';
 
 class WaConversationTile extends StatelessWidget {
@@ -36,6 +37,7 @@ class WaConversationTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = conversation;
+    if (c.hasName) RenderLog.write('c207_name_resolved', 1);
     final initial = c.displayName.isNotEmpty
         ? c.displayName[0].toUpperCase()
         : '?';
@@ -79,6 +81,16 @@ class WaConversationTile extends StatelessWidget {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
+                  if (c.hasName) ...[
+                    const SizedBox(height: 1),
+                    Text(
+                      c.phonePretty,
+                      style: const TextStyle(
+                          fontSize: 12, color: Color(0xFF9CA3AF)),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
                   const SizedBox(height: 2),
                   Text(
                     preview,

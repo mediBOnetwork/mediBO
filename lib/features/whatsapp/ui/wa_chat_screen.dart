@@ -19,15 +19,25 @@ class _WaChatScreenState extends State<WaChatScreen> {
   final _repo = WaRepository();
   final _textController = TextEditingController();
   final _scroll = ScrollController();
-  late Future<List<WaMessage>> _future;
+  late Future<WaThreadResult> _future;
   List<WaMessage> _messages = [];
   bool _sending = false;
   bool _loggedOpen = false;
+
+  // CHANGE #207: resolved identity from wa_thread (falls back to conversation).
+  String? _threadName;
+  String? _threadLabel;
 
   @override
   void initState() {
     super.initState();
     _loadThread();
+    _markRead();
+  }
+
+  // CHANGE #207: mark this conversation read on open (await, tolerate errors).
+  Future<void> _markRead() async {
+    await _repo.markRead(widget.conversation.senderPhone);
   }
 
   @override
@@ -38,18 +48,40 @@ class _WaChatScreenState extends State<WaChatScreen> {
   }
 
   void _loadThread() {
-    _future = _repo.getThread(widget.conversation.senderPhone).then((msgs) {
+    _future = _repo.getThread(widget.conversation.senderPhone).then((res) {
       if (mounted) {
-        setState(() => _messages = msgs);
+        setState(() {
+          _messages = res.messages;
+          _threadName = res.name;
+          _threadLabel = res.label;
+        });
         if (!_loggedOpen) {
           _loggedOpen = true;
-          RenderLog.write('c204_wa_thread_opened', msgs.length);
+          RenderLog.write('c204_wa_thread_opened', res.messages.length);
         }
         WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
       }
-      return msgs;
+      return res;
     });
     if (mounted) setState(() {});
+  }
+
+  // CHANGE #207: resolved display name for header. Priority: thread name >
+  // thread label > conversation name/label > prettified phone.
+  String get _headerName {
+    final n = _threadName;
+    if (n != null && n.trim().isNotEmpty) return n.trim();
+    final l = _threadLabel;
+    if (l != null && l.trim().isNotEmpty) return l.trim();
+    return widget.conversation.displayName;
+  }
+
+  bool get _headerHasName {
+    final n = _threadName;
+    final l = _threadLabel;
+    return (n != null && n.trim().isNotEmpty) ||
+        (l != null && l.trim().isNotEmpty) ||
+        widget.conversation.hasName;
   }
 
   void _scrollToBottom() {
@@ -559,14 +591,25 @@ class _WaChatScreenState extends State<WaChatScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(
-              conv.displayName,
-              style: const TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w700,
-                  color: Color(0xFF111827)),
-              overflow: TextOverflow.ellipsis,
-            ),
+            Builder(builder: (_) {
+              if (_headerHasName) RenderLog.write('c207_name_resolved', 1);
+              return Text(
+                _headerName,
+                style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF111827)),
+                overflow: TextOverflow.ellipsis,
+              );
+            }),
+            if (_headerHasName)
+              Text(
+                conv.phonePretty,
+                style: const TextStyle(
+                    fontSize: 11, color: Color(0xFF9CA3AF)),
+                overflow: TextOverflow.ellipsis,
+              ),
+            const SizedBox(height: 2),
             Row(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -603,7 +646,7 @@ class _WaChatScreenState extends State<WaChatScreen> {
       body: Column(
         children: [
           Expanded(
-            child: FutureBuilder<List<WaMessage>>(
+            child: FutureBuilder<WaThreadResult>(
               future: _future,
               builder: (ctx, snap) {
                 if (snap.connectionState == ConnectionState.waiting &&

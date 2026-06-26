@@ -9,6 +9,14 @@ class WaMessage {
   final String? mimeType;
   final String? routedTo;
   final DateTime? receivedAt;
+  // CHANGE #208: rich message fields.
+  final String? fileName;
+  final double? latitude;
+  final double? longitude;
+  final String? locationName;
+  final String? locationAddress;
+  final String? contactName;
+  final String? contactPhone;
 
   const WaMessage({
     required this.id,
@@ -21,6 +29,13 @@ class WaMessage {
     this.mimeType,
     this.routedTo,
     this.receivedAt,
+    this.fileName,
+    this.latitude,
+    this.longitude,
+    this.locationName,
+    this.locationAddress,
+    this.contactName,
+    this.contactPhone,
   });
 
   factory WaMessage.fromJson(Map<String, dynamic> j) {
@@ -35,7 +50,40 @@ class WaMessage {
       mimeType: j['mime_type']?.toString(),
       routedTo: j['routed_to']?.toString(),
       receivedAt: _asDate(j['received_at']),
+      fileName: j['file_name']?.toString(),
+      latitude: _asDouble(j['latitude']),
+      longitude: _asDouble(j['longitude']),
+      locationName: j['location_name']?.toString(),
+      locationAddress: j['location_address']?.toString(),
+      contactName: j['contact_name']?.toString(),
+      contactPhone: j['contact_phone']?.toString(),
     );
+  }
+
+  static double? _asDouble(dynamic v) {
+    if (v == null) return null;
+    if (v is num) return v.toDouble();
+    return double.tryParse(v.toString());
+  }
+
+  /// Best display filename for a document bubble.
+  String get displayFileName {
+    if (fileName != null && fileName!.trim().isNotEmpty) return fileName!.trim();
+    if (filePath != null && filePath!.trim().isNotEmpty) {
+      final p = filePath!.trim();
+      final i = p.lastIndexOf('/');
+      return i >= 0 ? p.substring(i + 1) : p;
+    }
+    return 'Document';
+  }
+
+  /// True when this is a non-text message (media/location/contact) — used to
+  /// trigger the c208_incoming_media_render render-log key for incoming msgs.
+  bool get isNonText {
+    final t = msgType.toLowerCase();
+    return t != 'text' && (hasMedia || t == 'location' || t == 'contacts' ||
+        t == 'contact' || t == 'media' || t == 'image' || t == 'document' ||
+        t == 'audio' || t == 'voice' || t == 'video' || t == 'sticker');
   }
 
   static DateTime? _asDate(dynamic v) {

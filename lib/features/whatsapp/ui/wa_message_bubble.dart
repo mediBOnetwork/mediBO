@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:pharma_b2b/utils/render_log.dart';
 import '../data/wa_repository.dart';
 import '../models/wa_message.dart';
 
@@ -30,15 +32,15 @@ class _WaMessageBubbleState extends State<WaMessageBubble> {
         widget.message.filePath!,
       );
     }
+    // CHANGE #208: log first render of a non-text INCOMING bubble.
+    if (!widget.message.isOut && widget.message.isNonText) {
+      RenderLog.write('c208_incoming_media_render', 1);
+    }
   }
 
   String _formatTime(DateTime? dt) {
     if (dt == null) return '';
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final msgDay = DateTime(dt.year, dt.month, dt.day);
-    if (msgDay == today) return DateFormat('HH:mm').format(dt);
-    return DateFormat('d MMM HH:mm').format(dt);
+    return DateFormat('HH:mm').format(dt);
   }
 
   void _showFullscreen(BuildContext ctx, String url) {
@@ -74,8 +76,9 @@ class _WaMessageBubbleState extends State<WaMessageBubble> {
   }
 
   Future<void> _openUrl(String url) async {
-    final uri = Uri.parse(url);
-    await launchUrl(uri, mode: LaunchMode.externalApplication);
+    try {
+      await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+    } catch (_) {}
   }
 
   Widget _buildMediaContent(String kind, String signedUrl) {
@@ -95,8 +98,7 @@ class _WaMessageBubbleState extends State<WaMessageBubble> {
                 return const SizedBox(
                   height: 220,
                   child: Center(
-                    child: CircularProgressIndicator(
-                        color: Color(0xFF1B7A43)),
+                    child: CircularProgressIndicator(color: Color(0xFF1B7A43)),
                   ),
                 );
               },
@@ -111,10 +113,9 @@ class _WaMessageBubbleState extends State<WaMessageBubble> {
           ),
         );
       case 'pdf':
-        return _OpenButton(
-          label: 'Open document',
-          icon: Icons.picture_as_pdf_outlined,
-          onTap: () => _openUrl(signedUrl),
+        return _DocumentCard(
+          fileName: widget.message.displayFileName,
+          onOpen: () => _openUrl(signedUrl),
         );
       case 'audio':
         return _OpenButton(
@@ -123,16 +124,11 @@ class _WaMessageBubbleState extends State<WaMessageBubble> {
           onTap: () => _openUrl(signedUrl),
         );
       case 'video':
-        return _OpenButton(
-          label: 'Open video',
-          icon: Icons.play_circle_outline,
-          onTap: () => _openUrl(signedUrl),
-        );
+        return _VideoCard(onOpen: () => _openUrl(signedUrl));
       default:
-        return _OpenButton(
-          label: 'Open file',
-          icon: Icons.attach_file_outlined,
-          onTap: () => _openUrl(signedUrl),
+        return _DocumentCard(
+          fileName: widget.message.displayFileName,
+          onOpen: () => _openUrl(signedUrl),
         );
     }
   }
@@ -141,80 +137,120 @@ class _WaMessageBubbleState extends State<WaMessageBubble> {
   Widget build(BuildContext context) {
     final msg = widget.message;
     final isOut = msg.isOut;
-    final maxWidth = MediaQuery.of(context).size.width * 0.75;
+    final maxWidth = MediaQuery.of(context).size.width * 0.78;
 
-    final bubbleColor =
-        isOut ? const Color(0xFF1B7A43) : const Color(0xFFECFDF5);
-    final textColor = isOut ? Colors.white : const Color(0xFF111827);
-    final timeColor =
-        isOut ? Colors.white70 : const Color(0xFF9CA3AF);
+    // CHANGE #208: WhatsApp colours — outbound green, inbound white.
+    final bubbleColor = isOut ? const Color(0xFFDCF8C6) : Colors.white;
+    const textColor = Color(0xFF111827);
+    const timeColor = Color(0xFF667781);
 
-    final isLocation = msg.msgType == 'location';
-    final isContact = msg.msgType == 'contact';
+    final type = msg.msgType.toLowerCase();
+    final isLocation = type == 'location';
+    final isContact = type == 'contacts' || type == 'contact';
 
-    Widget bubbleContent = Column(
+    Widget? body;
+    try {
+      if (isLocation) {
+        body = _LocationCard(
+          lat: msg.latitude,
+          lng: msg.longitude,
+          name: msg.locationName,
+          address: msg.locationAddress,
+          onOpen: () {
+            if (msg.latitude != null && msg.longitude != null) {
+              _openUrl(
+                  'https://maps.google.com/?q=${msg.latitude},${msg.longitude}');
+            }
+          },
+        );
+      } else if (isContact) {
+        body = _ContactCard(
+          name: msg.contactName ?? 'Contact',
+          phone: msg.contactPhone ?? '',
+          onCall: () {
+            final p = msg.contactPhone;
+            if (p != null && p.isNotEmpty) _openUrl('tel:$p');
+          },
+          onCopy: () {
+            final p = msg.contactPhone;
+            if (p != null && p.isNotEmpty) {
+              Clipboard.setData(ClipboardData(text: p));
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Phone number copied'),
+                  behavior: SnackBarBehavior.floating,
+                  duration: Duration(seconds: 2),
+                ),
+              );
+            }
+          },
+        );
+      } else if (msg.hasMedia && _signedUrlFuture != null) {
+        body = FutureBuilder<String>(
+          future: _signedUrlFuture,
+          builder: (ctx, snap) {
+            if (snap.connectionState == ConnectionState.waiting) {
+              return const Padding(
+                padding: EdgeInsets.symmetric(vertical: 12),
+                child: Center(
+                  child: SizedBox(
+                    width: 24,
+                    height: 24,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: Color(0xFF1B7A43)),
+                  ),
+                ),
+              );
+            }
+            if (snap.hasError || snap.data == null) {
+              return const Padding(
+                padding: EdgeInsets.symmetric(vertical: 8),
+                child: Row(children: [
+                  Icon(Icons.error_outline, size: 16, color: Color(0xFF9CA3AF)),
+                  SizedBox(width: 4),
+                  Text('Media unavailable',
+                      style:
+                          TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
+                ]),
+              );
+            }
+            return _buildMediaContent(msg.mediaKind, snap.data!);
+          },
+        );
+      } else if ((msg.text == null || msg.text!.isEmpty) &&
+          type != 'text' &&
+          !msg.hasMedia) {
+        // Unknown / unsupported type fallback.
+        body = Text(
+          '[${msg.msgType}] message',
+          style: const TextStyle(
+              fontSize: 14, color: Color(0xFF6B7280), height: 1.4),
+        );
+      }
+    } catch (_) {
+      body = Text(
+        '[${msg.msgType}] message',
+        style: const TextStyle(
+            fontSize: 14, color: Color(0xFF6B7280), height: 1.4),
+      );
+    }
+
+    final bubbleContent = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
-        if (isLocation)
-          _TypeHeader(
-            icon: Icons.location_on_outlined,
-            label: 'Location',
-            isOut: isOut,
-          ),
-        if (isContact)
-          _TypeHeader(
-            icon: Icons.person_outline,
-            label: 'Contact',
-            isOut: isOut,
-          ),
-        if (msg.hasMedia && _signedUrlFuture != null)
-          FutureBuilder<String>(
-            future: _signedUrlFuture,
-            builder: (ctx, snap) {
-              if (snap.connectionState == ConnectionState.waiting) {
-                return const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 12),
-                  child: Center(
-                    child: SizedBox(
-                      width: 24,
-                      height: 24,
-                      child: CircularProgressIndicator(
-                          strokeWidth: 2, color: Color(0xFF1B7A43)),
-                    ),
-                  ),
-                );
-              }
-              if (snap.hasError || snap.data == null) {
-                return const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 8),
-                  child: Row(children: [
-                    Icon(Icons.error_outline,
-                        size: 16, color: Color(0xFF9CA3AF)),
-                    SizedBox(width: 4),
-                    Text('Media unavailable',
-                        style: TextStyle(
-                            fontSize: 13, color: Color(0xFF9CA3AF))),
-                  ]),
-                );
-              }
-              return _buildMediaContent(msg.mediaKind, snap.data!);
-            },
-          ),
+        if (body != null) body,
         if (msg.text != null && msg.text!.isNotEmpty)
           SelectableText(
             msg.text!,
-            style: TextStyle(fontSize: 14, color: textColor, height: 1.4),
+            style: const TextStyle(fontSize: 14, color: textColor, height: 1.4),
           ),
         if (msg.caption != null && msg.caption!.isNotEmpty)
           Padding(
             padding: const EdgeInsets.only(top: 4),
             child: Text(
               msg.caption!,
-              style: TextStyle(
-                  fontSize: 13,
-                  color: isOut ? Colors.white70 : const Color(0xFF6B7280),
-                  fontStyle: FontStyle.italic),
+              style: const TextStyle(fontSize: 13, color: Color(0xFF374151)),
             ),
           ),
         const SizedBox(height: 4),
@@ -224,11 +260,12 @@ class _WaMessageBubbleState extends State<WaMessageBubble> {
           children: [
             Text(
               _formatTime(msg.receivedAt),
-              style: TextStyle(fontSize: 11, color: timeColor),
+              style: const TextStyle(fontSize: 11, color: timeColor),
             ),
             if (isOut) ...[
               const SizedBox(width: 4),
-              Icon(Icons.done, size: 12, color: timeColor),
+              // Double tick = delivered (no read receipts from backend).
+              const Icon(Icons.done_all, size: 14, color: Color(0xFF53BDEB)),
             ],
           ],
         ),
@@ -245,19 +282,19 @@ class _WaMessageBubbleState extends State<WaMessageBubble> {
           bottom: 4,
           top: 2,
         ),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
         decoration: BoxDecoration(
           color: bubbleColor,
           borderRadius: BorderRadius.only(
-            topLeft: const Radius.circular(16),
-            topRight: const Radius.circular(16),
-            bottomLeft: Radius.circular(isOut ? 16 : 4),
-            bottomRight: Radius.circular(isOut ? 4 : 16),
+            topLeft: Radius.circular(isOut ? 12 : 2),
+            topRight: Radius.circular(isOut ? 2 : 12),
+            bottomLeft: const Radius.circular(12),
+            bottomRight: const Radius.circular(12),
           ),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withValues(alpha: 0.06),
-              blurRadius: 4,
+              color: Colors.black.withValues(alpha: 0.08),
+              blurRadius: 2,
               offset: const Offset(0, 1),
             ),
           ],
@@ -268,33 +305,232 @@ class _WaMessageBubbleState extends State<WaMessageBubble> {
   }
 }
 
-class _TypeHeader extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final bool isOut;
+class _DocumentCard extends StatelessWidget {
+  final String fileName;
+  final VoidCallback onOpen;
+  const _DocumentCard({required this.fileName, required this.onOpen});
 
-  const _TypeHeader({
-    required this.icon,
-    required this.label,
-    required this.isOut,
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 4),
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF5F6F8),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.insert_drive_file,
+              size: 28, color: Color(0xFF1B7A43)),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Text(
+              fileName,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                  color: Color(0xFF111827)),
+            ),
+          ),
+          const SizedBox(width: 8),
+          _MiniButton(label: 'Open', onTap: onOpen),
+        ],
+      ),
+    );
+  }
+}
+
+class _VideoCard extends StatelessWidget {
+  final VoidCallback onOpen;
+  const _VideoCard({required this.onOpen});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onOpen,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 4),
+        height: 120,
+        width: 200,
+        decoration: BoxDecoration(
+          color: const Color(0xFF111827),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: const Center(
+          child: Icon(Icons.play_circle_fill, size: 48, color: Colors.white),
+        ),
+      ),
+    );
+  }
+}
+
+class _LocationCard extends StatelessWidget {
+  final double? lat;
+  final double? lng;
+  final String? name;
+  final String? address;
+  final VoidCallback onOpen;
+  const _LocationCard({
+    required this.lat,
+    required this.lng,
+    required this.name,
+    required this.address,
+    required this.onOpen,
   });
 
   @override
   Widget build(BuildContext context) {
-    final color = isOut ? Colors.white : const Color(0xFF1B7A43);
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 4),
-      child: Row(
+    final coords = (lat != null && lng != null)
+        ? '${lat!.toStringAsFixed(5)}, ${lng!.toStringAsFixed(5)}'
+        : '';
+    return Container(
+      margin: const EdgeInsets.only(bottom: 4),
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF5F6F8),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 16, color: color),
-          const SizedBox(width: 4),
-          Text(
-            label,
-            style: TextStyle(
-                fontSize: 12, fontWeight: FontWeight.w600, color: color),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.location_on, size: 22, color: Color(0xFF1B7A43)),
+              const SizedBox(width: 6),
+              Flexible(
+                child: Text(
+                  (name != null && name!.isNotEmpty) ? name! : 'Location',
+                  style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF111827)),
+                ),
+              ),
+            ],
+          ),
+          if (address != null && address!.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Text(address!,
+                  style: const TextStyle(
+                      fontSize: 12, color: Color(0xFF6B7280))),
+            ),
+          if (coords.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Text(coords,
+                  style: const TextStyle(
+                      fontSize: 11, color: Color(0xFF9CA3AF))),
+            ),
+          const SizedBox(height: 6),
+          _MiniButton(label: 'Open in Maps', onTap: onOpen),
+        ],
+      ),
+    );
+  }
+}
+
+class _ContactCard extends StatelessWidget {
+  final String name;
+  final String phone;
+  final VoidCallback onCall;
+  final VoidCallback onCopy;
+  const _ContactCard({
+    required this.name,
+    required this.phone,
+    required this.onCall,
+    required this.onCopy,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final initial = name.isNotEmpty ? name[0].toUpperCase() : '?';
+    return Container(
+      margin: const EdgeInsets.only(bottom: 4),
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF5F6F8),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CircleAvatar(
+                radius: 18,
+                backgroundColor: const Color(0xFF1B7A43),
+                child: Text(initial,
+                    style: const TextStyle(
+                        color: Colors.white, fontWeight: FontWeight.w700)),
+              ),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF111827))),
+                    if (phone.isNotEmpty)
+                      Text(phone,
+                          style: const TextStyle(
+                              fontSize: 12, color: Color(0xFF6B7280))),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _MiniButton(label: 'Call', icon: Icons.call, onTap: onCall),
+              const SizedBox(width: 6),
+              _MiniButton(label: 'Copy', icon: Icons.copy, onTap: onCopy),
+            ],
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _MiniButton extends StatelessWidget {
+  final String label;
+  final IconData? icon;
+  final VoidCallback onTap;
+  const _MiniButton({required this.label, this.icon, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return OutlinedButton.icon(
+      onPressed: onTap,
+      icon: icon != null
+          ? Icon(icon, size: 16)
+          : const SizedBox.shrink(),
+      label: Text(label, style: const TextStyle(fontSize: 13)),
+      style: OutlinedButton.styleFrom(
+        foregroundColor: const Color(0xFF1B7A43),
+        side: const BorderSide(color: Color(0xFF1B7A43)),
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        minimumSize: const Size(0, 32),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
       ),
     );
   }

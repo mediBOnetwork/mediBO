@@ -80,6 +80,7 @@ class WaRepository {
       RenderLog.write('c207_unread_real', totalUnread);
       if (conversations.any((c) => c.hasName)) {
         RenderLog.write('c207_name_resolved', 1);
+        RenderLog.write('c208_name_resolved', 1);
       }
       return conversations;
     } catch (e) {
@@ -124,6 +125,7 @@ class WaRepository {
   Future<void> markRead(String phone) async {
     try {
       RenderLog.write('c207_mark_read', phone);
+      RenderLog.write('c208_mark_read', phone);
       await _client.rpc('wa_mark_read', params: {'p_phone': phone});
     } catch (e) {
       debugPrint('[WaRepository] markRead error: $e');
@@ -247,6 +249,7 @@ class WaRepository {
     }
     if (data is Map && data['status'] == 'ok') {
       RenderLog.write('c205_wa_media_sent', 1);
+      RenderLog.write('c208_media_sent', 1);
       final out = Map<String, dynamic>.from(data);
       out['media_path'] = path;
       out['media_bucket'] = bucket;
@@ -280,6 +283,7 @@ class WaRepository {
     }
     if (data is Map && data['status'] == 'ok') {
       RenderLog.write('c205_wa_location_sent', 1);
+      RenderLog.write('c208_location_sent', 1);
       return Map<String, dynamic>.from(data);
     }
     throw const WaSendException('send_failed');
@@ -309,6 +313,7 @@ class WaRepository {
     }
     if (data is Map && data['status'] == 'ok') {
       RenderLog.write('c205_wa_contact_sent', 1);
+      RenderLog.write('c208_contact_sent', 1);
       return Map<String, dynamic>.from(data);
     }
     throw const WaSendException('send_failed');

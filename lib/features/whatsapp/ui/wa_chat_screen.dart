@@ -1,5 +1,8 @@
+import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:intl/intl.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
 import '../data/wa_repository.dart';
 import '../models/wa_conversation.dart';
@@ -37,6 +40,7 @@ class _WaChatScreenState extends State<WaChatScreen> {
 
   // CHANGE #207: mark this conversation read on open (await, tolerate errors).
   Future<void> _markRead() async {
+    RenderLog.write('c208_mark_read', widget.conversation.senderPhone);
     await _repo.markRead(widget.conversation.senderPhone);
   }
 
@@ -180,26 +184,39 @@ class _WaChatScreenState extends State<WaChatScreen> {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const SizedBox(height: 8),
-            _attachTile(ctx, Icons.image_outlined, 'Photo', 'image'),
-            _attachTile(ctx, Icons.videocam_outlined, 'Video', 'video'),
-            _attachTile(
-                ctx, Icons.insert_drive_file_outlined, 'Document', 'document'),
-            _attachTile(ctx, Icons.location_on_outlined, 'Location', 'location'),
-            _attachTile(ctx, Icons.person_outline, 'Contact', 'contact'),
-            const SizedBox(height: 8),
-          ],
-        ),
-      ),
+      builder: (ctx) {
+        // CHANGE #208: attachment sheet built.
+        RenderLog.write('c208_attach_menu_shown', 1);
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 8),
+              _attachTile(ctx, Icons.photo_outlined, 'Gallery', 'gallery'),
+              _attachTile(ctx, Icons.camera_alt_outlined, 'Camera', 'camera'),
+              _attachTile(
+                  ctx, Icons.insert_drive_file_outlined, 'Document', 'document'),
+              _attachTile(ctx, Icons.audiotrack_outlined, 'Audio', 'audio'),
+              _attachTile(ctx, Icons.videocam_outlined, 'Video', 'video'),
+              _attachTile(
+                  ctx, Icons.location_on_outlined, 'Location', 'location'),
+              _attachTile(ctx, Icons.person_outline, 'Contact', 'contact'),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
     );
     if (choice == null) return;
     switch (choice) {
-      case 'image':
-        await _pickAndSendMedia(FileType.image, null);
+      case 'gallery':
+        await _pickImage(ImageSource.gallery);
+        break;
+      case 'camera':
+        await _pickImage(ImageSource.camera);
+        break;
+      case 'audio':
+        await _pickAndSendMedia(FileType.audio, null);
         break;
       case 'video':
         await _pickAndSendMedia(FileType.video, null);
@@ -256,8 +273,32 @@ class _WaChatScreenState extends State<WaChatScreen> {
     }
     final ext = (file.extension ?? '').toLowerCase();
     final mime = _mimeFor(ext);
+    await _sendBytes(bytes, file.name, mime);
+  }
 
-    // Validate size client-side before uploading.
+  // CHANGE #208: Gallery/Camera via image_picker.
+  Future<void> _pickImage(ImageSource source) async {
+    XFile? picked;
+    try {
+      picked = await ImagePicker().pickImage(source: source, imageQuality: 85);
+    } catch (e) {
+      _showError('Could not open the camera/gallery.');
+      return;
+    }
+    if (picked == null) return;
+    final bytes = await picked.readAsBytes();
+    var name = picked.name;
+    if (!name.contains('.')) name = '$name.jpg';
+    final ext = name.split('.').last.toLowerCase();
+    final mime = picked.mimeType ?? _mimeFor(ext);
+    await _sendBytes(bytes, name, mime);
+  }
+
+  /// Shared upload+send for any picked bytes (validates size, asks caption,
+  /// appends an optimistic outbound bubble).
+  Future<void> _sendBytes(
+      Uint8List bytes, String fileName, String mime) async {
+    final ext = fileName.contains('.') ? fileName.split('.').last : 'bin';
     final cat = WaRepository.categorize(mime, ext);
     if (bytes.length > WaRepository.maxBytesFor(cat)) {
       final mb = (WaRepository.maxBytesFor(cat) / (1024 * 1024)).round();
@@ -273,7 +314,7 @@ class _WaChatScreenState extends State<WaChatScreen> {
       final res = await _repo.sendMedia(
         to: widget.conversation.senderPhone,
         bytes: bytes,
-        fileName: file.name,
+        fileName: fileName,
         mime: mime,
         caption: caption,
       );
@@ -288,6 +329,7 @@ class _WaChatScreenState extends State<WaChatScreen> {
         filePath: res['media_path']?.toString(),
         mediaBucket: res['media_bucket']?.toString() ?? 'whatsapp-media',
         mimeType: mime,
+        fileName: fileName,
         receivedAt: DateTime.now(),
       ));
     } catch (e) {
@@ -395,18 +437,17 @@ class _WaChatScreenState extends State<WaChatScreen> {
         address: addrC.text,
       );
       final waId = res['wa_message_id']?.toString() ?? '';
-      final summary = [
-        if (nameC.text.trim().isNotEmpty) nameC.text.trim(),
-        if (addrC.text.trim().isNotEmpty) addrC.text.trim(),
-        '$lat, $lng',
-      ].join('\n');
       _appendOptimistic(WaMessage(
         id: waId.isNotEmpty
             ? waId
             : 'opt_${DateTime.now().millisecondsSinceEpoch}',
         direction: 'out',
         msgType: 'location',
-        text: summary,
+        latitude: lat,
+        longitude: lng,
+        locationName: nameC.text.trim().isNotEmpty ? nameC.text.trim() : null,
+        locationAddress:
+            addrC.text.trim().isNotEmpty ? addrC.text.trim() : null,
         receivedAt: DateTime.now(),
       ));
     } catch (e) {
@@ -469,8 +510,9 @@ class _WaChatScreenState extends State<WaChatScreen> {
             ? waId
             : 'opt_${DateTime.now().millisecondsSinceEpoch}',
         direction: 'out',
-        msgType: 'contact',
-        text: '$name\n+$digits',
+        msgType: 'contacts',
+        contactName: name,
+        contactPhone: digits,
         receivedAt: DateTime.now(),
       ));
     } catch (e) {
@@ -562,6 +604,26 @@ class _WaChatScreenState extends State<WaChatScreen> {
     }
   }
 
+  // CHANGE #208: WhatsApp-style day separators.
+  bool _isNewDay(DateTime? prev, DateTime? cur) {
+    if (cur == null) return false;
+    if (prev == null) return true;
+    return prev.year != cur.year ||
+        prev.month != cur.month ||
+        prev.day != cur.day;
+  }
+
+  String _dayLabel(DateTime? dt) {
+    if (dt == null) return '';
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final day = DateTime(dt.year, dt.month, dt.day);
+    final diff = today.difference(day).inDays;
+    if (diff == 0) return 'Today';
+    if (diff == 1) return 'Yesterday';
+    return DateFormat('d MMM yyyy').format(dt);
+  }
+
   String _senderTypeLabel(String type) {
     switch (type) {
       case 'customer':
@@ -592,7 +654,10 @@ class _WaChatScreenState extends State<WaChatScreen> {
           mainAxisSize: MainAxisSize.min,
           children: [
             Builder(builder: (_) {
-              if (_headerHasName) RenderLog.write('c207_name_resolved', 1);
+              if (_headerHasName) {
+                RenderLog.write('c207_name_resolved', 1);
+                RenderLog.write('c208_name_resolved', 1);
+              }
               return Text(
                 _headerName,
                 style: const TextStyle(
@@ -646,7 +711,12 @@ class _WaChatScreenState extends State<WaChatScreen> {
       body: Column(
         children: [
           Expanded(
-            child: FutureBuilder<WaThreadResult>(
+            child: Container(
+              // CHANGE #208: WhatsApp-style warm wallpaper behind messages.
+              color: const Color(0xFFECE5DD),
+              child: Builder(builder: (_) {
+                RenderLog.write('c208_chat_whatsapp_ui', 1);
+                return FutureBuilder<WaThreadResult>(
               future: _future,
               builder: (ctx, snap) {
                 if (snap.connectionState == ConnectionState.waiting &&
@@ -701,13 +771,28 @@ class _WaChatScreenState extends State<WaChatScreen> {
                     padding:
                         const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
                     itemCount: msgs.length,
-                    itemBuilder: (ctx, i) => WaMessageBubble(
-                      message: msgs[i],
-                      repo: _repo,
-                    ),
+                    itemBuilder: (ctx, i) {
+                      final m = msgs[i];
+                      final prev = i > 0 ? msgs[i - 1] : null;
+                      final showSep = _isNewDay(prev?.receivedAt, m.receivedAt);
+                      final bubble = WaMessageBubble(
+                        message: m,
+                        repo: _repo,
+                      );
+                      if (!showSep) return bubble;
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          _DaySeparator(label: _dayLabel(m.receivedAt)),
+                          bubble,
+                        ],
+                      );
+                    },
                   ),
                 );
+                });
               },
+            ),
             ),
           ),
           _ReplyBar(
@@ -717,6 +802,40 @@ class _WaChatScreenState extends State<WaChatScreen> {
             onAttach: _openAttachMenu,
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _DaySeparator extends StatelessWidget {
+  final String label;
+  const _DaySeparator({required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    if (label.isEmpty) return const SizedBox.shrink();
+    return Center(
+      child: Container(
+        margin: const EdgeInsets.symmetric(vertical: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+        decoration: BoxDecoration(
+          color: const Color(0xFFE1F2FB),
+          borderRadius: BorderRadius.circular(8),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.05),
+              blurRadius: 2,
+              offset: const Offset(0, 1),
+            ),
+          ],
+        ),
+        child: Text(
+          label,
+          style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: Color(0xFF5A6B73)),
+        ),
       ),
     );
   }

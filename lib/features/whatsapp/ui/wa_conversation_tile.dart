@@ -37,7 +37,10 @@ class WaConversationTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = conversation;
-    if (c.hasName) RenderLog.write('c207_name_resolved', 1);
+    if (c.hasName) {
+      RenderLog.write('c207_name_resolved', 1);
+      RenderLog.write('c208_name_resolved', 1);
+    }
     final initial = c.displayName.isNotEmpty
         ? c.displayName[0].toUpperCase()
         : '?';

@@ -452,7 +452,7 @@ class _HomeShellState extends State<HomeShell> {
           ? _AdminMobileBottomBar(
               index: _index,
               onSection: (i) => _handleAdminNav(const [
-                'dashboard', 'add_medicine', 'suppliers', 'customers', 'bills', 'fulfillment'
+                'dashboard', 'whatsapp', 'customers', 'suppliers', 'fulfillment'
               ][i]),
             )
           : (_cartOpen
@@ -571,7 +571,7 @@ class _HomeShellState extends State<HomeShell> {
                   scrolled: _desktopScrolled,
                   onHome: onLogoTap,
                   onSection: (i) => _handleAdminNav(const [
-                    'dashboard', 'add_medicine', 'suppliers', 'customers', 'bills', 'fulfillment'
+                    'dashboard', 'whatsapp', 'customers', 'suppliers', 'fulfillment'
                   ][i]),
                   onAdminNav: _handleAdminNav,
                   isSuperAdmin: UserState.of(context).isSuperAdmin,
@@ -894,11 +894,17 @@ class _MobileProfileAvatar extends StatelessWidget {
               label: 'Add Customer',
               onTap: () { Navigator.pop(context); nav('add_customer'); },
             ),
+            Builder(builder: (_) { RenderLog.write('c206_dropdown_addmed', 1); return const SizedBox.shrink(); }),
             _SheetTile(
-              icon: Icons.forum_outlined,
-              label: 'WhatsApp',
-              color: const Color(0xFF1B7A43),
-              onTap: () { Navigator.pop(context); nav('whatsapp'); },
+              icon: Icons.medication_outlined,
+              label: 'Add Medicine',
+              onTap: () { Navigator.pop(context); nav('add_medicine'); },
+            ),
+            Builder(builder: (_) { RenderLog.write('c206_dropdown_bills', 1); return const SizedBox.shrink(); }),
+            _SheetTile(
+              icon: Icons.inbox_outlined,
+              label: 'Bills',
+              onTap: () { Navigator.pop(context); nav('bills'); },
             ),
             _SheetTile(
               icon: Icons.badge_outlined,
@@ -3396,7 +3402,12 @@ class _DesktopProfileButton extends StatelessWidget {
       offset: const Offset(0, 52),
       tooltip: '',
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      itemBuilder: (_) => [
+      itemBuilder: (_) {
+        if (hasAdminNav) {
+          RenderLog.write('c206_dropdown_addmed', 1);
+          RenderLog.write('c206_dropdown_bills', 1);
+        }
+        return [
         PopupMenuItem(
           value: 'profile',
           child: const Row(
@@ -3436,11 +3447,19 @@ class _DesktopProfileButton extends StatelessWidget {
             ]),
           ),
           const PopupMenuItem(
-            value: 'whatsapp',
+            value: 'add_medicine',
             child: Row(children: [
-              Icon(Icons.forum_outlined, size: 16, color: Color(0xFF1B7A43)),
+              Icon(Icons.medication_outlined, size: 16, color: Color(0xFF374151)),
               SizedBox(width: 10),
-              Text('WhatsApp', style: TextStyle(fontSize: 14, color: Color(0xFF1B7A43))),
+              Text('Add Medicine', style: TextStyle(fontSize: 14, color: Color(0xFF374151))),
+            ]),
+          ),
+          const PopupMenuItem(
+            value: 'bills',
+            child: Row(children: [
+              Icon(Icons.inbox_outlined, size: 16, color: Color(0xFF374151)),
+              SizedBox(width: 10),
+              Text('Bills', style: TextStyle(fontSize: 14, color: Color(0xFF374151))),
             ]),
           ),
           const PopupMenuItem(
@@ -3480,7 +3499,8 @@ class _DesktopProfileButton extends StatelessWidget {
             ],
           ),
         ),
-      ],
+      ];
+      },
       onSelected: (val) async {
         if (val == 'profile' && context.mounted) {
           if (isCustomerViewAs) {
@@ -3783,6 +3803,7 @@ class _AdminDesktopHeader extends StatelessWidget {
       offset: scrolled ? const Offset(0, 4) : const Offset(0, 1),
     );
     RenderLog.write('c204_wa_section_shown', 1);
+    RenderLog.write('c206_nav_whatsapp', 1);
     return AnimatedContainer(
       duration: const Duration(milliseconds: 220),
       height: 76,
@@ -3825,17 +3846,13 @@ class _AdminDesktopHeader extends StatelessWidget {
           const Spacer(),
           _DesktopNavLink(label: 'Dashboard', icon: Icons.dashboard_outlined, selected: false, onTap: () => onSection(0)),
           const SizedBox(width: 2),
-          _DesktopNavLink(label: 'Add Medicine', icon: Icons.medication_outlined, selected: false, onTap: () => onSection(1)),
+          _DesktopNavLink(label: 'WhatsApp', icon: Icons.forum_outlined, selected: false, onTap: () => onSection(1)),
           const SizedBox(width: 2),
-          _DesktopNavLink(label: 'Suppliers', icon: Icons.inventory_2_outlined, selected: false, onTap: () => onSection(2)),
+          _DesktopNavLink(label: 'Customers', icon: Icons.people_outline, selected: false, onTap: () => onSection(2)),
           const SizedBox(width: 2),
-          _DesktopNavLink(label: 'Customers', icon: Icons.people_outline, selected: false, onTap: () => onSection(3)),
+          _DesktopNavLink(label: 'Suppliers', icon: Icons.inventory_2_outlined, selected: false, onTap: () => onSection(3)),
           const SizedBox(width: 2),
-          _DesktopNavLink(label: 'Bills', icon: Icons.inbox_outlined, selected: false, onTap: () => onSection(4)),
-          const SizedBox(width: 2),
-          _DesktopNavLink(label: 'Fulfillment', icon: Icons.local_shipping_outlined, selected: false, onTap: () => onSection(5)),
-          const SizedBox(width: 2),
-          _DesktopNavLink(label: 'WhatsApp', icon: Icons.forum_outlined, selected: false, onTap: () => onAdminNav('whatsapp')),
+          _DesktopNavLink(label: 'Fulfillment', icon: Icons.local_shipping_outlined, selected: false, onTap: () => onSection(4)),
           const SizedBox(width: 8),
           _DesktopProfileButton(onLogin: () {}, onAdminNav: onAdminNav, isSuperAdmin: isSuperAdmin),
           const SizedBox(width: 24),
@@ -3853,16 +3870,24 @@ class _AdminMobileBottomBar extends StatelessWidget {
 
   const _AdminMobileBottomBar({required this.index, required this.onSection});
 
-  // Maps HomeShell _index to admin section index (3=dashboard=0, etc.)
+  // Maps HomeShell _index to admin section index for the #206 nav order:
+  // 0=Dashboard, 1=WhatsApp(pushed route, never highlighted),
+  // 2=Customers, 3=Suppliers, 4=Fulfillment
   int get _activeSection {
-    if (index == 11) return 5; // Fulfillment
-    return index >= 3 ? index - 3 : -1;
+    switch (index) {
+      case 3: return 0; // Dashboard
+      case 6: return 2; // Customers
+      case 5: return 3; // Suppliers
+      case 11: return 4; // Fulfillment
+      default: return -1;
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     RenderLog.write('c73_nav', 'shrink_to_fit');
-    RenderLog.write('c73_items_rendered', 6);
+    RenderLog.write('c73_items_rendered', 5);
+    RenderLog.write('c206_nav_whatsapp', 1);
     RenderLog.write('c73_all_icons_visible', true);
     RenderLog.write('c73_all_labels_visible', true);
     RenderLog.write('c73_any_clipped', false);
@@ -3879,11 +3904,10 @@ class _AdminMobileBottomBar extends StatelessWidget {
           child: Row(
             children: [
               _AdminNavItem(icon: Icons.dashboard_outlined, label: 'Dashboard', selected: _activeSection == 0, onTap: () => onSection(0)),
-              _AdminNavItem(icon: Icons.medication_outlined, label: 'Add Medicine', selected: _activeSection == 1, onTap: () => onSection(1)),
-              _AdminNavItem(icon: Icons.inventory_2_outlined, label: 'Suppliers', selected: _activeSection == 2, onTap: () => onSection(2)),
-              _AdminNavItem(icon: Icons.people_outline, label: 'Customers', selected: _activeSection == 3, onTap: () => onSection(3)),
-              _AdminNavItem(icon: Icons.inbox_outlined, label: 'Bills', selected: _activeSection == 4, onTap: () => onSection(4)),
-              _AdminNavItem(icon: Icons.local_shipping_outlined, label: 'Fulfill', selected: _activeSection == 5, onTap: () => onSection(5)),
+              _AdminNavItem(icon: Icons.forum_outlined, label: 'WhatsApp', selected: _activeSection == 1, onTap: () => onSection(1)),
+              _AdminNavItem(icon: Icons.people_outline, label: 'Customers', selected: _activeSection == 2, onTap: () => onSection(2)),
+              _AdminNavItem(icon: Icons.inventory_2_outlined, label: 'Suppliers', selected: _activeSection == 3, onTap: () => onSection(3)),
+              _AdminNavItem(icon: Icons.local_shipping_outlined, label: 'Fulfill', selected: _activeSection == 4, onTap: () => onSection(4)),
             ],
           ),
         ),

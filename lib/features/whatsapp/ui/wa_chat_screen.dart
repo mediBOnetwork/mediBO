@@ -1,3 +1,4 @@
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
 import '../data/wa_repository.dart';
@@ -110,6 +111,422 @@ class _WaChatScreenState extends State<WaChatScreen> {
       }
     } finally {
       if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  void _appendOptimistic(WaMessage msg) {
+    if (!mounted) return;
+    setState(() => _messages.add(msg));
+    WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
+  }
+
+  void _showError(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: const Color(0xFF991B1B),
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 5),
+      ),
+    );
+  }
+
+  void _handleSendError(Object e) {
+    if (e is WaSendException) {
+      _showError(e.humanMessage);
+    } else {
+      _showError('Could not send. Please try again.');
+    }
+  }
+
+  Future<void> _openAttachMenu() async {
+    if (_sending) return;
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 8),
+            _attachTile(ctx, Icons.image_outlined, 'Photo', 'image'),
+            _attachTile(ctx, Icons.videocam_outlined, 'Video', 'video'),
+            _attachTile(
+                ctx, Icons.insert_drive_file_outlined, 'Document', 'document'),
+            _attachTile(ctx, Icons.location_on_outlined, 'Location', 'location'),
+            _attachTile(ctx, Icons.person_outline, 'Contact', 'contact'),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (choice == null) return;
+    switch (choice) {
+      case 'image':
+        await _pickAndSendMedia(FileType.image, null);
+        break;
+      case 'video':
+        await _pickAndSendMedia(FileType.video, null);
+        break;
+      case 'document':
+        await _pickAndSendMedia(
+          FileType.custom,
+          ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'csv'],
+        );
+        break;
+      case 'location':
+        await _showLocationDialog();
+        break;
+      case 'contact':
+        await _showContactDialog();
+        break;
+    }
+  }
+
+  Widget _attachTile(
+      BuildContext ctx, IconData icon, String label, String value) {
+    return ListTile(
+      leading: Icon(icon, color: const Color(0xFF1B7A43)),
+      title: Text(
+        label,
+        style: const TextStyle(
+            fontSize: 15,
+            fontWeight: FontWeight.w500,
+            color: Color(0xFF111827)),
+      ),
+      onTap: () => Navigator.of(ctx).pop(value),
+    );
+  }
+
+  Future<void> _pickAndSendMedia(
+      FileType type, List<String>? allowedExtensions) async {
+    FilePickerResult? result;
+    try {
+      result = await FilePicker.pickFiles(
+        type: type,
+        allowedExtensions: allowedExtensions,
+        withData: true,
+      );
+    } catch (e) {
+      _showError('Could not open file picker.');
+      return;
+    }
+    if (result == null || result.files.isEmpty) return;
+    final file = result.files.first;
+    final bytes = file.bytes;
+    if (bytes == null) {
+      _showError('Could not read the selected file.');
+      return;
+    }
+    final ext = (file.extension ?? '').toLowerCase();
+    final mime = _mimeFor(ext);
+
+    // Validate size client-side before uploading.
+    final cat = WaRepository.categorize(mime, ext);
+    if (bytes.length > WaRepository.maxBytesFor(cat)) {
+      final mb = (WaRepository.maxBytesFor(cat) / (1024 * 1024)).round();
+      _showError('File is too large. Limit is $mb MB for this type.');
+      return;
+    }
+
+    final caption = await _askCaption();
+    if (caption == null) return; // cancelled
+
+    setState(() => _sending = true);
+    try {
+      final res = await _repo.sendMedia(
+        to: widget.conversation.senderPhone,
+        bytes: bytes,
+        fileName: file.name,
+        mime: mime,
+        caption: caption,
+      );
+      final waId = res['wa_message_id']?.toString() ?? '';
+      _appendOptimistic(WaMessage(
+        id: waId.isNotEmpty
+            ? waId
+            : 'opt_${DateTime.now().millisecondsSinceEpoch}',
+        direction: 'out',
+        msgType: 'media',
+        caption: caption.isNotEmpty ? caption : null,
+        filePath: res['media_path']?.toString(),
+        mediaBucket: res['media_bucket']?.toString() ?? 'whatsapp-media',
+        mimeType: mime,
+        receivedAt: DateTime.now(),
+      ));
+    } catch (e) {
+      _handleSendError(e);
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  Future<String?> _askCaption() {
+    final controller = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.white,
+        title: const Text('Add a caption',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          minLines: 1,
+          maxLines: 3,
+          decoration: const InputDecoration(
+            hintText: 'Optional caption…',
+            filled: true,
+            fillColor: Color(0xFFF5F6F8),
+            border: OutlineInputBorder(borderSide: BorderSide.none),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(null),
+            child: const Text('Cancel',
+                style: TextStyle(color: Color(0xFF6B7280))),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFF1B7A43)),
+            onPressed: () => Navigator.of(ctx).pop(controller.text.trim()),
+            child: const Text('Send'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _showLocationDialog() async {
+    final latC = TextEditingController();
+    final lngC = TextEditingController();
+    final nameC = TextEditingController();
+    final addrC = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.white,
+        title: const Text('Send location',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _dialogField(latC, 'Latitude *',
+                  keyboard: const TextInputType.numberWithOptions(
+                      decimal: true, signed: true)),
+              const SizedBox(height: 8),
+              _dialogField(lngC, 'Longitude *',
+                  keyboard: const TextInputType.numberWithOptions(
+                      decimal: true, signed: true)),
+              const SizedBox(height: 8),
+              _dialogField(nameC, 'Name (optional)'),
+              const SizedBox(height: 8),
+              _dialogField(addrC, 'Address (optional)'),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel',
+                style: TextStyle(color: Color(0xFF6B7280))),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFF1B7A43)),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Send'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    final lat = double.tryParse(latC.text.trim());
+    final lng = double.tryParse(lngC.text.trim());
+    if (lat == null || lng == null || lat.abs() > 90 || lng.abs() > 180) {
+      _showError('Please enter a valid latitude and longitude.');
+      return;
+    }
+    setState(() => _sending = true);
+    try {
+      final res = await _repo.sendLocation(
+        to: widget.conversation.senderPhone,
+        latitude: lat,
+        longitude: lng,
+        name: nameC.text,
+        address: addrC.text,
+      );
+      final waId = res['wa_message_id']?.toString() ?? '';
+      final summary = [
+        if (nameC.text.trim().isNotEmpty) nameC.text.trim(),
+        if (addrC.text.trim().isNotEmpty) addrC.text.trim(),
+        '$lat, $lng',
+      ].join('\n');
+      _appendOptimistic(WaMessage(
+        id: waId.isNotEmpty
+            ? waId
+            : 'opt_${DateTime.now().millisecondsSinceEpoch}',
+        direction: 'out',
+        msgType: 'location',
+        text: summary,
+        receivedAt: DateTime.now(),
+      ));
+    } catch (e) {
+      _handleSendError(e);
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  Future<void> _showContactDialog() async {
+    final nameC = TextEditingController();
+    final phoneC = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.white,
+        title: const Text('Send contact',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _dialogField(nameC, 'Contact name *'),
+            const SizedBox(height: 8),
+            _dialogField(phoneC, 'Contact phone *',
+                keyboard: TextInputType.phone),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel',
+                style: TextStyle(color: Color(0xFF6B7280))),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFF1B7A43)),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Send'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    final name = nameC.text.trim();
+    final digits = phoneC.text.replaceAll(RegExp(r'\D'), '');
+    if (name.isEmpty || digits.isEmpty) {
+      _showError('Please enter a contact name and phone number.');
+      return;
+    }
+    setState(() => _sending = true);
+    try {
+      final res = await _repo.sendContact(
+        to: widget.conversation.senderPhone,
+        contactName: name,
+        contactPhone: digits,
+      );
+      final waId = res['wa_message_id']?.toString() ?? '';
+      _appendOptimistic(WaMessage(
+        id: waId.isNotEmpty
+            ? waId
+            : 'opt_${DateTime.now().millisecondsSinceEpoch}',
+        direction: 'out',
+        msgType: 'contact',
+        text: '$name\n+$digits',
+        receivedAt: DateTime.now(),
+      ));
+    } catch (e) {
+      _handleSendError(e);
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  Widget _dialogField(TextEditingController c, String hint,
+      {TextInputType? keyboard}) {
+    return TextField(
+      controller: c,
+      keyboardType: keyboard,
+      decoration: InputDecoration(
+        hintText: hint,
+        filled: true,
+        fillColor: const Color(0xFFF5F6F8),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: BorderSide.none,
+        ),
+      ),
+    );
+  }
+
+  static String _mimeFor(String ext) {
+    switch (ext.toLowerCase()) {
+      case 'jpg':
+      case 'jpeg':
+        return 'image/jpeg';
+      case 'png':
+        return 'image/png';
+      case 'gif':
+        return 'image/gif';
+      case 'webp':
+        return 'image/webp';
+      case 'heic':
+        return 'image/heic';
+      case 'bmp':
+        return 'image/bmp';
+      case 'mp4':
+        return 'video/mp4';
+      case 'mov':
+        return 'video/quicktime';
+      case '3gp':
+        return 'video/3gpp';
+      case 'webm':
+        return 'video/webm';
+      case 'mkv':
+        return 'video/x-matroska';
+      case 'avi':
+        return 'video/x-msvideo';
+      case 'mp3':
+        return 'audio/mpeg';
+      case 'ogg':
+      case 'opus':
+        return 'audio/ogg';
+      case 'm4a':
+        return 'audio/mp4';
+      case 'aac':
+        return 'audio/aac';
+      case 'wav':
+        return 'audio/wav';
+      case 'amr':
+        return 'audio/amr';
+      case 'pdf':
+        return 'application/pdf';
+      case 'doc':
+        return 'application/msword';
+      case 'docx':
+        return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+      case 'xls':
+        return 'application/vnd.ms-excel';
+      case 'xlsx':
+        return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+      case 'ppt':
+        return 'application/vnd.ms-powerpoint';
+      case 'pptx':
+        return 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+      case 'txt':
+        return 'text/plain';
+      case 'csv':
+        return 'text/csv';
+      default:
+        return 'application/octet-stream';
     }
   }
 
@@ -254,6 +671,7 @@ class _WaChatScreenState extends State<WaChatScreen> {
             controller: _textController,
             sending: _sending,
             onSend: _sendReply,
+            onAttach: _openAttachMenu,
           ),
         ],
       ),
@@ -265,11 +683,13 @@ class _ReplyBar extends StatelessWidget {
   final TextEditingController controller;
   final bool sending;
   final VoidCallback onSend;
+  final VoidCallback onAttach;
 
   const _ReplyBar({
     required this.controller,
     required this.sending,
     required this.onSend,
+    required this.onAttach,
   });
 
   @override
@@ -289,6 +709,12 @@ class _ReplyBar extends StatelessWidget {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
+              IconButton(
+                icon: const Icon(Icons.add_circle_outline,
+                    color: Color(0xFF1B7A43)),
+                tooltip: 'Attach',
+                onPressed: sending ? null : onAttach,
+              ),
               Expanded(
                 child: TextField(
                   controller: controller,

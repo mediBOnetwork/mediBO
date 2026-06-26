@@ -149,10 +149,25 @@ class _WaMessageBubbleState extends State<WaMessageBubble> {
     final timeColor =
         isOut ? Colors.white70 : const Color(0xFF9CA3AF);
 
+    final isLocation = msg.msgType == 'location';
+    final isContact = msg.msgType == 'contact';
+
     Widget bubbleContent = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
+        if (isLocation)
+          _TypeHeader(
+            icon: Icons.location_on_outlined,
+            label: 'Location',
+            isOut: isOut,
+          ),
+        if (isContact)
+          _TypeHeader(
+            icon: Icons.person_outline,
+            label: 'Contact',
+            isOut: isOut,
+          ),
         if (msg.hasMedia && _signedUrlFuture != null)
           FutureBuilder<String>(
             future: _signedUrlFuture,
@@ -248,6 +263,38 @@ class _WaMessageBubbleState extends State<WaMessageBubble> {
           ],
         ),
         child: bubbleContent,
+      ),
+    );
+  }
+}
+
+class _TypeHeader extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final bool isOut;
+
+  const _TypeHeader({
+    required this.icon,
+    required this.label,
+    required this.isOut,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final color = isOut ? Colors.white : const Color(0xFF1B7A43);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 16, color: color),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: TextStyle(
+                fontSize: 12, fontWeight: FontWeight.w600, color: color),
+          ),
+        ],
       ),
     );
   }

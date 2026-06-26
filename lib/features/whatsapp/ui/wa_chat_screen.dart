@@ -887,16 +887,10 @@ class _WaChatScreenState extends State<WaChatScreen>
                     ),
                   );
                 }
-                return RefreshIndicator(
-                  // CHANGE #209: pull-to-refresh kept only as a silent backstop;
-                  // the visible refresh button is gone.
-                  color: const Color(0xFF1B7A43),
-                  onRefresh: () async => _silentResync(),
-                  // CHANGE #211: reverse:true bottom-anchors the list so it
-                  // opens pinned to the newest message on the first paint with
-                  // ZERO visible scroll. `view` is msgs reversed (newest first)
-                  // WITHOUT mutating _messages; index 0 = newest = bottom.
-                  child: ListView.builder(
+                // RefreshIndicator removed — it conflicts with reverse:true on
+                // Flutter web, intercepting scroll gestures. Silent resync is
+                // handled by the reconnect path in _onThreadChannelStatus.
+                return ListView.builder(
                     controller: _scroll,
                     reverse: true,
                     padding:
@@ -926,8 +920,7 @@ class _WaChatScreenState extends State<WaChatScreen>
                         ],
                       );
                     },
-                  ),
-                );
+                  );
                 });
               },
             ),

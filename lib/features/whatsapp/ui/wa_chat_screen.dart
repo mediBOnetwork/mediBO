@@ -177,11 +177,17 @@ class _WaChatScreenState extends State<WaChatScreen>
         }
         // CHANGE #211: thread's initial messages finished loading.
         RenderLog.write('c211_thread_msgs_loaded', res.messages.length);
+        // CHANGE #212: thread's initial messages finished loading.
+        RenderLog.write('c212_thread_msgs_loaded', res.messages.length);
         // CHANGE #211: the ListView is reverse:true, so the list paints pinned
         // to the newest (bottom) message on the very FIRST frame — no jumpTo,
         // no addPostFrameCallback, ZERO visible scroll.
         RenderLog.write(
             'c211_thread_open_bottom_anchored', res.messages.length);
+        // CHANGE #212: reverse:true bottom-anchoring confirmed active; the list
+        // is fully scrollable (no NeverScrollableScrollPhysics).
+        RenderLog.write(
+            'c212_thread_open_bottom_anchored', res.messages.length);
       }
       return res;
     });

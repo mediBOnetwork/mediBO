@@ -175,7 +175,12 @@ class _WaChatScreenState extends State<WaChatScreen>
           _loggedOpen = true;
           RenderLog.write('c204_wa_thread_opened', res.messages.length);
         }
-        WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
+        // CHANGE #210: thread's initial messages finished loading.
+        RenderLog.write('c210_thread_msgs_loaded', res.messages.length);
+        // CHANGE #210: land on the LATEST (bottom) message on open. Instant
+        // jump, unconditional, scheduled after the list is laid out with the
+        // populated messages so maxScrollExtent is final.
+        WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottomInitial());
       }
       return res;
     });
@@ -198,6 +203,27 @@ class _WaChatScreenState extends State<WaChatScreen>
     return (n != null && n.trim().isNotEmpty) ||
         (l != null && l.trim().isNotEmpty) ||
         widget.conversation.hasName;
+  }
+
+  // CHANGE #210: initial open — instant jump to the LATEST (bottom) message.
+  // Newest sits at the BOTTOM (messages ordered oldest→newest), so we jump to
+  // maxScrollExtent. Unconditional on open; guarded for 0/1-message threads.
+  // A second post-frame jump catches late layout growth (bubble/image heights).
+  void _jumpToBottomInitial() {
+    if (!mounted) return;
+    if (_scroll.hasClients && _scroll.position.maxScrollExtent > 0) {
+      _scroll.jumpTo(_scroll.position.maxScrollExtent);
+      RenderLog.write('c210_thread_open_scroll_bottom', _messages.length);
+    }
+    // Re-run once more after the next frame in case content height grew.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (_scroll.hasClients &&
+          _scroll.position.maxScrollExtent > 0 &&
+          _scroll.position.pixels < _scroll.position.maxScrollExtent) {
+        _scroll.jumpTo(_scroll.position.maxScrollExtent);
+      }
+    });
   }
 
   void _scrollToBottom() {

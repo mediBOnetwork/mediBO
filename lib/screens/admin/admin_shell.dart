@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:pharma_b2b/utils/toast.dart';
 
+import '../../features/whatsapp/ui/wa_home_screen.dart';
 import '../../services/fcm_service.dart';
 import '../../theme.dart';
 import '../../user_state.dart';
+import '../../utils/render_log.dart';
 import 'admin_add_medicine_screen.dart';
 import 'admin_alert_overlay.dart';
 import 'admin_customer_screen.dart';
@@ -73,6 +75,7 @@ class _AdminShellState extends State<AdminShell> {
     }
     _loadPendingCount();
     _initFcm();
+    RenderLog.write('c204_wa_section_shown', 1);
   }
 
   void _initFcm() {
@@ -128,6 +131,11 @@ class _AdminShellState extends State<AdminShell> {
         return;
       case 'bills':
         setState(() { _view = _AdminView.section; _index = 4; });
+        return;
+      case 'whatsapp':
+        Navigator.of(ctx).push(
+          MaterialPageRoute(builder: (_) => const WaHomeScreen()),
+        );
         return;
       case 'manage_admins':
         if (!isSuperAdmin) {
@@ -271,6 +279,13 @@ class _AdminShellState extends State<AdminShell> {
                   ),
                 ),
               const PopupMenuItem(
+                value: 'whatsapp',
+                child: _PopupRow(
+                    icon: Icons.forum_outlined,
+                    label: 'WhatsApp',
+                    color: Color(0xFF1B7A43)),
+              ),
+              const PopupMenuItem(
                 value: 'add_supplier',
                 child: _PopupRow(
                     icon: Icons.add_business_outlined, label: 'Add Supplier'),
@@ -396,6 +411,8 @@ class _AdminNewDesktopHeader extends StatelessWidget {
           _DesktopNavLink(label: 'Customers', icon: Icons.people_outline, selected: false, onTap: () => onNav('customers')),
           const SizedBox(width: 2),
           _BillsNavLink(count: pendingBillsCount, onTap: () => onNav('bills')),
+          const SizedBox(width: 2),
+          _DesktopNavLink(label: 'WhatsApp', icon: Icons.forum_outlined, selected: false, onTap: () => onNav('whatsapp')),
           const SizedBox(width: 8),
           _AdminProfileChip(),
           const SizedBox(width: 24),

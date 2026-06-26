@@ -72,8 +72,8 @@ class _WaChatScreenState extends State<WaChatScreen>
     final msg = WaMessage.fromJson(Map<String, dynamic>.from(newRow));
     // DEDUPE by id (covers optimistic outbound bubbles already appended).
     if (msg.id.isNotEmpty && _messages.any((m) => m.id == msg.id)) return;
-    final nearBottom = _scroll.hasClients &&
-        (_scroll.position.maxScrollExtent - _scroll.position.pixels) < 120;
+    // CHANGE #211: list is reverse:true, so BOTTOM (newest) = offset near 0.
+    final nearBottom = _scroll.hasClients && _scroll.position.pixels < 120;
     setState(() {
       _messages.add(msg);
       // Keep chronological order (normally already sorted; cheap stable sort).
@@ -175,12 +175,13 @@ class _WaChatScreenState extends State<WaChatScreen>
           _loggedOpen = true;
           RenderLog.write('c204_wa_thread_opened', res.messages.length);
         }
-        // CHANGE #210: thread's initial messages finished loading.
-        RenderLog.write('c210_thread_msgs_loaded', res.messages.length);
-        // CHANGE #210: land on the LATEST (bottom) message on open. Instant
-        // jump, unconditional, scheduled after the list is laid out with the
-        // populated messages so maxScrollExtent is final.
-        WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottomInitial());
+        // CHANGE #211: thread's initial messages finished loading.
+        RenderLog.write('c211_thread_msgs_loaded', res.messages.length);
+        // CHANGE #211: the ListView is reverse:true, so the list paints pinned
+        // to the newest (bottom) message on the very FIRST frame — no jumpTo,
+        // no addPostFrameCallback, ZERO visible scroll.
+        RenderLog.write(
+            'c211_thread_open_bottom_anchored', res.messages.length);
       }
       return res;
     });
@@ -205,31 +206,14 @@ class _WaChatScreenState extends State<WaChatScreen>
         widget.conversation.hasName;
   }
 
-  // CHANGE #210: initial open — instant jump to the LATEST (bottom) message.
-  // Newest sits at the BOTTOM (messages ordered oldest→newest), so we jump to
-  // maxScrollExtent. Unconditional on open; guarded for 0/1-message threads.
-  // A second post-frame jump catches late layout growth (bubble/image heights).
-  void _jumpToBottomInitial() {
-    if (!mounted) return;
-    if (_scroll.hasClients && _scroll.position.maxScrollExtent > 0) {
-      _scroll.jumpTo(_scroll.position.maxScrollExtent);
-      RenderLog.write('c210_thread_open_scroll_bottom', _messages.length);
-    }
-    // Re-run once more after the next frame in case content height grew.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      if (_scroll.hasClients &&
-          _scroll.position.maxScrollExtent > 0 &&
-          _scroll.position.pixels < _scroll.position.maxScrollExtent) {
-        _scroll.jumpTo(_scroll.position.maxScrollExtent);
-      }
-    });
-  }
+  // CHANGE #211: _jumpToBottomInitial removed — reverse:true bottom-anchoring
+  // makes the list open pinned to newest on the first paint (no scroll jump).
 
+  // CHANGE #211: list is reverse:true → newest (bottom) is offset 0.
   void _scrollToBottom() {
     if (_scroll.hasClients) {
       _scroll.animateTo(
-        _scroll.position.maxScrollExtent,
+        0,
         duration: const Duration(milliseconds: 250),
         curve: Curves.easeOut,
       );
@@ -902,15 +886,27 @@ class _WaChatScreenState extends State<WaChatScreen>
                   // the visible refresh button is gone.
                   color: const Color(0xFF1B7A43),
                   onRefresh: () async => _silentResync(),
+                  // CHANGE #211: reverse:true bottom-anchors the list so it
+                  // opens pinned to the newest message on the first paint with
+                  // ZERO visible scroll. `view` is msgs reversed (newest first)
+                  // WITHOUT mutating _messages; index 0 = newest = bottom.
                   child: ListView.builder(
                     controller: _scroll,
+                    reverse: true,
                     padding:
                         const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
                     itemCount: msgs.length,
                     itemBuilder: (ctx, i) {
-                      final m = msgs[i];
-                      final prev = i > 0 ? msgs[i - 1] : null;
-                      final showSep = _isNewDay(prev?.receivedAt, m.receivedAt);
+                      final m = msgs[msgs.length - 1 - i];
+                      // The chronologically-older neighbour is the next index in
+                      // the reversed view. A day separator sits visually ABOVE
+                      // the first message of each day → between m and the older
+                      // neighbour.
+                      final older = (msgs.length - 2 - i) >= 0
+                          ? msgs[msgs.length - 2 - i]
+                          : null;
+                      final showSep =
+                          _isNewDay(older?.receivedAt, m.receivedAt);
                       final bubble = WaMessageBubble(
                         message: m,
                         repo: _repo,

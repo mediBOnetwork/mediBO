@@ -23,6 +23,7 @@ import 'admin/admin_mr_screen.dart';
 import 'admin/admin_pending_bills_screen.dart';
 import 'admin/admin_alert_overlay.dart';
 import 'admin/admin_shell.dart';
+import '../features/whatsapp/ui/wa_home_screen.dart';
 import 'admin/admin_supplier_screen.dart';
 import 'admin/admin_fulfillment_screen.dart';
 import 'auth/login_screen.dart';
@@ -238,6 +239,10 @@ class _HomeShellState extends State<HomeShell> {
       case 'fulfillment':
         setState(() { _index = 11; _cartOpen = false; });
         WidgetsBinding.instance.addPostFrameCallback((_) => AdminFulfillmentScreen.triggerFocus());
+        break;
+      case 'whatsapp':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const WaHomeScreen()));
         break;
       case 'manage_admins':
         if (UserState.of(context).isSuperAdmin) {
@@ -888,6 +893,12 @@ class _MobileProfileAvatar extends StatelessWidget {
               icon: Icons.person_add_outlined,
               label: 'Add Customer',
               onTap: () { Navigator.pop(context); nav('add_customer'); },
+            ),
+            _SheetTile(
+              icon: Icons.forum_outlined,
+              label: 'WhatsApp',
+              color: const Color(0xFF1B7A43),
+              onTap: () { Navigator.pop(context); nav('whatsapp'); },
             ),
             _SheetTile(
               icon: Icons.badge_outlined,
@@ -3425,6 +3436,14 @@ class _DesktopProfileButton extends StatelessWidget {
             ]),
           ),
           const PopupMenuItem(
+            value: 'whatsapp',
+            child: Row(children: [
+              Icon(Icons.forum_outlined, size: 16, color: Color(0xFF1B7A43)),
+              SizedBox(width: 10),
+              Text('WhatsApp', style: TextStyle(fontSize: 14, color: Color(0xFF1B7A43))),
+            ]),
+          ),
+          const PopupMenuItem(
             value: 'mr',
             child: Row(children: [
               Icon(Icons.badge_outlined, size: 16, color: Color(0xFF374151)),
@@ -3763,6 +3782,7 @@ class _AdminDesktopHeader extends StatelessWidget {
       blurRadius: scrolled ? 14.0 : 4.0,
       offset: scrolled ? const Offset(0, 4) : const Offset(0, 1),
     );
+    RenderLog.write('c204_wa_section_shown', 1);
     return AnimatedContainer(
       duration: const Duration(milliseconds: 220),
       height: 76,
@@ -3814,6 +3834,8 @@ class _AdminDesktopHeader extends StatelessWidget {
           _DesktopNavLink(label: 'Bills', icon: Icons.inbox_outlined, selected: false, onTap: () => onSection(4)),
           const SizedBox(width: 2),
           _DesktopNavLink(label: 'Fulfillment', icon: Icons.local_shipping_outlined, selected: false, onTap: () => onSection(5)),
+          const SizedBox(width: 2),
+          _DesktopNavLink(label: 'WhatsApp', icon: Icons.forum_outlined, selected: false, onTap: () => onAdminNav('whatsapp')),
           const SizedBox(width: 8),
           _DesktopProfileButton(onLogin: () {}, onAdminNav: onAdminNav, isSuperAdmin: isSuperAdmin),
           const SizedBox(width: 24),

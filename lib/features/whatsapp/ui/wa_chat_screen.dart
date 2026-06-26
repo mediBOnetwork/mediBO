@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../data/wa_repository.dart';
 import '../models/wa_conversation.dart';
 import '../models/wa_message.dart';
@@ -18,7 +19,8 @@ class WaChatScreen extends StatefulWidget {
   State<WaChatScreen> createState() => _WaChatScreenState();
 }
 
-class _WaChatScreenState extends State<WaChatScreen> {
+class _WaChatScreenState extends State<WaChatScreen>
+    with WidgetsBindingObserver {
   final _repo = WaRepository();
   final _textController = TextEditingController();
   final _scroll = ScrollController();
@@ -31,11 +33,115 @@ class _WaChatScreenState extends State<WaChatScreen> {
   String? _threadName;
   String? _threadLabel;
 
+  // CHANGE #209: Supabase Realtime — one INSERT channel per thread (phone).
+  RealtimeChannel? _waThreadChannel;
+  bool _threadFirstSubscribed = false;
+  bool _threadHadError = false;
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _loadThread();
     _markRead();
+    _subscribeThread();
+  }
+
+  // CHANGE #209: subscribe to live INSERTs for this conversation's phone.
+  void _subscribeThread() {
+    if (_waThreadChannel != null) return;
+    final phone = widget.conversation.senderPhone;
+    _waThreadChannel = Supabase.instance.client
+        .channel('wa_thread_$phone')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.insert,
+          schema: 'public',
+          table: 'whatsapp_messages',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'sender_phone',
+            value: phone,
+          ),
+          callback: (payload) => _onThreadInsert(payload.newRecord),
+        )
+        .subscribe((status, [err]) => _onThreadChannelStatus(status, err));
+  }
+
+  void _onThreadInsert(Map<String, dynamic> newRow) {
+    if (!mounted) return;
+    final msg = WaMessage.fromJson(Map<String, dynamic>.from(newRow));
+    // DEDUPE by id (covers optimistic outbound bubbles already appended).
+    if (msg.id.isNotEmpty && _messages.any((m) => m.id == msg.id)) return;
+    final nearBottom = _scroll.hasClients &&
+        (_scroll.position.maxScrollExtent - _scroll.position.pixels) < 120;
+    setState(() {
+      _messages.add(msg);
+      // Keep chronological order (normally already sorted; cheap stable sort).
+      _messages.sort((a, b) {
+        final at = a.receivedAt;
+        final bt = b.receivedAt;
+        if (at == null || bt == null) return 0;
+        return at.compareTo(bt);
+      });
+    });
+    RenderLog.write('c209_wa_realtime_thread_insert', _messages.length);
+    if (nearBottom) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
+    }
+  }
+
+  void _onThreadChannelStatus(dynamic status, Object? err) {
+    final s = status.toString().toLowerCase();
+    if (s.contains('subscribed') || s.contains('joined')) {
+      if (!_threadFirstSubscribed) {
+        _threadFirstSubscribed = true;
+        RenderLog.write('c209_wa_realtime_thread_subscribed', 1);
+      }
+      // Reconnect after a prior error/close → silent re-sync.
+      if (_threadHadError) {
+        _threadHadError = false;
+        _silentResync();
+      }
+    } else if (s.contains('error') ||
+        s.contains('closed') ||
+        s.contains('timed')) {
+      _threadHadError = true;
+    }
+  }
+
+  // CHANGE #209: silent re-sync (reconnect/resume) — re-run initial load and
+  // merge any new rows by id, no spinner, no scroll jump.
+  Future<void> _silentResync() async {
+    try {
+      final res = await _repo.getThread(widget.conversation.senderPhone);
+      if (!mounted) return;
+      final ids = _messages.map((m) => m.id).toSet();
+      final merged = List<WaMessage>.from(_messages);
+      for (final m in res.messages) {
+        if (m.id.isEmpty || ids.add(m.id)) merged.add(m);
+      }
+      merged.sort((a, b) {
+        final at = a.receivedAt;
+        final bt = b.receivedAt;
+        if (at == null || bt == null) return 0;
+        return at.compareTo(bt);
+      });
+      setState(() {
+        _messages = merged;
+        _threadName = res.name;
+        _threadLabel = res.label;
+      });
+      RenderLog.write('c209_wa_realtime_resync', merged.length);
+    } catch (_) {
+      // tolerate — backstop only.
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _silentResync();
+    }
   }
 
   // CHANGE #207: mark this conversation read on open (await, tolerate errors).
@@ -46,6 +152,12 @@ class _WaChatScreenState extends State<WaChatScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    final ch = _waThreadChannel;
+    _waThreadChannel = null;
+    if (ch != null) {
+      Supabase.instance.client.removeChannel(ch);
+    }
     _textController.dispose();
     _scroll.dispose();
     super.dispose();
@@ -638,6 +750,9 @@ class _WaChatScreenState extends State<WaChatScreen> {
   @override
   Widget build(BuildContext context) {
     final conv = widget.conversation;
+    // CHANGE #209: manual refresh button removed — thread auto-refreshes via
+    // Supabase Realtime. This key proves the no-button code path rendered.
+    RenderLog.write('c209_refresh_button_removed', 1);
     return Scaffold(
       backgroundColor: const Color(0xFFF5F6F8),
       appBar: AppBar(
@@ -696,13 +811,6 @@ class _WaChatScreenState extends State<WaChatScreen> {
             ),
           ],
         ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh, color: Color(0xFF374151)),
-            tooltip: 'Refresh thread',
-            onPressed: _loadThread,
-          ),
-        ],
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(1),
           child: Container(height: 1, color: const Color(0xFFE5E7EB)),
@@ -764,8 +872,10 @@ class _WaChatScreenState extends State<WaChatScreen> {
                   );
                 }
                 return RefreshIndicator(
+                  // CHANGE #209: pull-to-refresh kept only as a silent backstop;
+                  // the visible refresh button is gone.
                   color: const Color(0xFF1B7A43),
-                  onRefresh: () async => _loadThread(),
+                  onRefresh: () async => _silentResync(),
                   child: ListView.builder(
                     controller: _scroll,
                     padding:

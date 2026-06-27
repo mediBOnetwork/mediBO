@@ -4862,24 +4862,22 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
 
   void _subscribePayClaims() {
     _paymentChannel?.unsubscribe();
+    // No order_id filter: online claims may arrive with order_id=null initially
+    // (linked later by admin). Subscribe to ALL payment_claims changes and let
+    // the RPC handle filtering. Belt-and-suspenders with the top-level list sub.
     _paymentChannel = Supabase.instance.client
         .channel('payclaims_${widget.orderId}')
         .onPostgresChanges(
           event: PostgresChangeEvent.all,
           schema: 'public',
           table: 'payment_claims',
-          filter: PostgresChangeFilter(
-            type: PostgresChangeFilterType.eq,
-            column: 'order_id',
-            value: widget.orderId,
-          ),
           callback: (_) {
             if (mounted) _load();
           },
         )
         .subscribe();
     RenderLog.write('c227_payclaims_rt',
-        'change:227,subscribed:true,table:payment_claims,filter:order_id');
+        'change:227,subscribed:true,table:payment_claims,covers:cash+online');
   }
 
   Future<void> _load() async {

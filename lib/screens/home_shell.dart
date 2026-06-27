@@ -26,6 +26,7 @@ import 'admin/admin_shell.dart';
 import '../features/whatsapp/ui/wa_home_screen.dart';
 import 'admin/admin_supplier_screen.dart';
 import 'admin/admin_fulfillment_screen.dart';
+import 'admin/admin_upi_screen.dart';
 import 'auth/login_screen.dart';
 import 'bulk_upload_screen.dart';
 import 'cart_screen.dart';
@@ -68,6 +69,10 @@ class _HomeShellState extends State<HomeShell> {
   // Desktop scroll state (header shadow only — fires setState at most twice per visit)
   bool _desktopScrolled = false;
 
+  // CHANGE #209 — authoritative super-admin gate via am_i_super() RPC
+  bool _amISuper = false;
+  bool _amISuperChecked = false;
+
   // Desktop sidebar: populated once storefront loads its CatalogMeta
   CatalogMeta? _desktopMeta;
 
@@ -86,9 +91,27 @@ class _HomeShellState extends State<HomeShell> {
     });
   }
 
+  Future<void> _checkAmISuper() async {
+    try {
+      final r = await Supabase.instance.client.rpc('am_i_super');
+      final isSuper = r == true;
+      if (mounted) {
+        setState(() => _amISuper = isSuper);
+        RenderLog.write(isSuper ? 'c209_amisuper_true' : 'c209_amisuper_false', 1);
+      }
+    } catch (_) {
+      if (mounted) RenderLog.write('c209_amisuper_false', 1);
+    }
+  }
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    final authForSuper = UserState.of(context);
+    if (authForSuper.isAdmin && !_amISuperChecked) {
+      _amISuperChecked = true;
+      _checkAmISuper();
+    }
     final viewAs = ViewAsState.of(context);
     final key = viewAs.isActive
         ? '${viewAs.role!.name}:${viewAs.identity!.id}'
@@ -245,9 +268,15 @@ class _HomeShellState extends State<HomeShell> {
             MaterialPageRoute(builder: (_) => const WaHomeScreen()));
         break;
       case 'manage_admins':
-        if (UserState.of(context).isSuperAdmin) {
+        if (_amISuper) {
           Navigator.push(context,
               MaterialPageRoute(builder: (_) => const AdminManageAdminsScreen()));
+        }
+        break;
+      case 'payment_upi':
+        if (_amISuper) {
+          Navigator.push(context,
+              MaterialPageRoute(builder: (_) => const AdminUpiScreen()));
         }
         break;
       case 'logout':
@@ -485,7 +514,7 @@ class _HomeShellState extends State<HomeShell> {
                   onLogoTap: onLogoTap,
                   logoTooltip: '',
                   onAdminNav: isAdmin ? _handleAdminNav : null,
-                  isSuperAdmin: isAdmin ? UserState.of(context).isSuperAdmin : false,
+                  isSuperAdmin: isAdmin ? _amISuper : false,
                 ),
                 // Search + chips: storefront only (index 0)
                 if (_index == 0)
@@ -574,7 +603,7 @@ class _HomeShellState extends State<HomeShell> {
                     'dashboard', 'whatsapp', 'customers', 'suppliers', 'fulfillment'
                   ][i]),
                   onAdminNav: _handleAdminNav,
-                  isSuperAdmin: UserState.of(context).isSuperAdmin,
+                  isSuperAdmin: _amISuper,
                 )
               else
                 _DesktopHeader(
@@ -871,6 +900,12 @@ class _MobileProfileAvatar extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             const Text('Administrator', style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+            const SizedBox(height: 4),
+            Builder(builder: (_) {
+              RenderLog.write('c209_debug_banner_shown', 1);
+              return Text('super: $isSuperAdmin',
+                  style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF)));
+            }),
             const SizedBox(height: 16),
             const Divider(),
             _SheetTile(icon: Icons.person_outline, label: 'View Profile', onTap: () {
@@ -884,6 +919,16 @@ class _MobileProfileAvatar extends StatelessWidget {
                 color: const Color(0xFF1B7A43),
                 onTap: () { Navigator.pop(context); nav('manage_admins'); },
               ),
+            if (isSuperAdmin)
+              Builder(builder: (_) {
+                RenderLog.write('c209_upi_tile_rendered', 1);
+                return _SheetTile(
+                  icon: Icons.qr_code_outlined,
+                  label: 'Payment / UPI',
+                  color: const Color(0xFF1B7A43),
+                  onTap: () { Navigator.pop(context); nav('payment_upi'); },
+                );
+              }),
             _SheetTile(
               icon: Icons.add_business_outlined,
               label: 'Add Supplier',
@@ -3428,6 +3473,15 @@ class _DesktopProfileButton extends StatelessWidget {
                 Icon(Icons.admin_panel_settings_outlined, size: 16, color: Color(0xFF1B7A43)),
                 SizedBox(width: 10),
                 Text('Manage Admins', style: TextStyle(fontSize: 14, color: Color(0xFF1B7A43))),
+              ]),
+            ),
+          if (isSuperAdmin)
+            const PopupMenuItem(
+              value: 'payment_upi',
+              child: Row(children: [
+                Icon(Icons.qr_code_outlined, size: 16, color: Color(0xFF1B7A43)),
+                SizedBox(width: 10),
+                Text('Payment / UPI', style: TextStyle(fontSize: 14, color: Color(0xFF1B7A43))),
               ]),
             ),
           const PopupMenuItem(

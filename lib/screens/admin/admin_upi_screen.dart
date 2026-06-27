@@ -27,6 +27,7 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
   void initState() {
     super.initState();
     RenderLog.write('c208_upi_screen_opened', 1);
+    RenderLog.write('c209_upi_screen_opened', 1);
     _fetchList();
   }
 

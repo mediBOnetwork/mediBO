@@ -4635,40 +4635,54 @@ class _ViewPayBtn extends StatelessWidget {
 
 // ── Bucket summary card (Level 1) — CHANGE #214 polish ───────────────────────
 
+// CHANGE #215 — running-total bucket card
 class _BucketCard extends StatelessWidget {
   final String title;
-  final num? expected;
+  final num? expected;      // adjusted expected (post advance-carry for rest)
   final num? received;
+  final num? remaining;
+  final num? extra;
+  final bool fully;
+  final num? advanceCarry;  // rest bucket: >0 means carry was applied
   final int count;
-  final bool isVerified;
   final bool isOpen;
   final VoidCallback onTap;
   const _BucketCard({
     required this.title,
     required this.expected,
     required this.received,
+    required this.remaining,
+    required this.extra,
+    required this.fully,
     required this.count,
-    required this.isVerified,
     required this.isOpen,
     required this.onTap,
+    this.advanceCarry,
   });
 
   @override
   Widget build(BuildContext context) {
-    // Status pill
-    final Color pillBg, pillFg;
-    final String pillLabel;
     final rec = (received ?? 0).toDouble();
     final exp = (expected ?? 0).toDouble();
-    if (isVerified || (rec > 0 && exp > 0 && rec >= exp)) {
-      pillBg = const Color(0xFFD1FAE5); pillFg = const Color(0xFF065F46);
-      pillLabel = 'Received ${_rupee(received)}';
-    } else if (rec > 0) {
-      pillBg = const Color(0xFFFEF3C7); pillFg = const Color(0xFF92400E);
-      pillLabel = 'Partial ${_rupee(received)}';
-    } else {
+    final ext = (extra ?? 0).toDouble();
+    final rem = (remaining ?? 0).toDouble();
+
+    // ── Status pill ───────────────────────────────────────────────
+    final Color pillBg, pillFg;
+    final String pillLabel;
+    if (rec == 0) {
       pillBg = const Color(0xFFF3F4F6); pillFg = const Color(0xFF9CA3AF);
       pillLabel = 'Not received';
+    } else if (fully || (exp > 0 && rec >= exp)) {
+      pillBg = const Color(0xFFD1FAE5); pillFg = const Color(0xFF065F46);
+      pillLabel = ext > 0
+          ? 'Fully paid ✓ · +${_rupee(ext)} extra'
+          : 'Fully paid ✓';
+    } else {
+      pillBg = const Color(0xFFFEF3C7); pillFg = const Color(0xFF92400E);
+      pillLabel = rem > 0
+          ? 'Partial · ${_rupee(rem)} left'
+          : 'Partial';
     }
 
     return GestureDetector(
@@ -4679,21 +4693,27 @@ class _BucketCard extends StatelessWidget {
           color: Colors.white,
           borderRadius: BorderRadius.circular(10),
           border: Border.all(
-            color: isOpen ? const Color(0xFF1B7A43).withValues(alpha: 0.3) : const Color(0xFFE5E7EB),
+            color: isOpen
+                ? const Color(0xFF1B7A43).withValues(alpha: 0.3)
+                : const Color(0xFFE5E7EB),
           ),
         ),
-        child: Row(children: [
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          // ── Left: title + carry note + subtitle ───────────────────
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
+                // Title row
                 Row(children: [
-                  Text(title,
-                      style: const TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: Color(0xFF111827))),
+                  Flexible(
+                    child: Text(title,
+                        style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF111827))),
+                  ),
                   if (count > 0) ...[
                     const SizedBox(width: 6),
                     Container(
@@ -4709,35 +4729,66 @@ class _BucketCard extends StatelessWidget {
                     ),
                   ],
                 ]),
-                if (expected != null) ...[
-                  const SizedBox(height: 2),
-                  Text('Expected ${_rupee(expected)}',
+                // Advance-carry note (rest bucket only)
+                if ((advanceCarry ?? 0) > 0) ...[
+                  const SizedBox(height: 3),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                        color: const Color(0xFFEFF6FF),
+                        borderRadius: BorderRadius.circular(6)),
+                    child: Text(
+                      'Advance extra ${_rupee(advanceCarry)} adjusted',
                       style: const TextStyle(
-                          fontSize: 11, color: Color(0xFF9CA3AF))),
+                          fontSize: 10,
+                          fontWeight: FontWeight.w500,
+                          color: Color(0xFF1E40AF)),
+                    ),
+                  ),
+                ],
+                // Running-total subtitle
+                if (expected != null) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    'Paid ${_rupee(received)} of ${_rupee(expected)}',
+                    style: const TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w500,
+                        color: Color(0xFF6B7280)),
+                  ),
                 ],
               ],
             ),
           ),
-          const SizedBox(width: 8),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
-            decoration: BoxDecoration(
-                color: pillBg, borderRadius: BorderRadius.circular(20)),
-            child: Text(pillLabel,
-                style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                    color: pillFg)),
+          const SizedBox(width: 10),
+          // ── Right: pill + chevron ─────────────────────────────────
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                constraints: const BoxConstraints(maxWidth: 160),
+                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                decoration: BoxDecoration(
+                    color: pillBg, borderRadius: BorderRadius.circular(20)),
+                child: Text(pillLabel,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: pillFg)),
+              ),
+              if (count > 0) ...[
+                const SizedBox(height: 4),
+                AnimatedRotation(
+                  turns: isOpen ? 0.5 : 0.0,
+                  duration: const Duration(milliseconds: 150),
+                  child: const Icon(Icons.expand_more,
+                      size: 16, color: Color(0xFF6B7280)),
+                ),
+              ],
+            ],
           ),
-          if (count > 0) ...[
-            const SizedBox(width: 6),
-            AnimatedRotation(
-              turns: isOpen ? 0.5 : 0.0,
-              duration: const Duration(milliseconds: 150),
-              child: const Icon(Icons.expand_more,
-                  size: 16, color: Color(0xFF6B7280)),
-            ),
-          ],
         ]),
       ),
     );
@@ -4979,21 +5030,38 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
   }
 
   Widget _buildContent() {
-    final d = _data!;
+    final d    = _data!;
     final adv  = Map<String, dynamic>.from(d['advance'] as Map? ?? {});
     final rest = Map<String, dynamic>.from(d['rest']    as Map? ?? {});
     final other= Map<String, dynamic>.from(d['other']   as Map? ?? {});
-    final advExpected = d['advance_expected'] as num?;
-    final balExpected = d['balance_expected'] as num?;
+
+    // CHANGE #215 — read running-total fields; fall back to legacy top-level keys
+    final advExpected  = (adv['expected']   as num?) ?? (d['advance_expected'] as num?);
+    final advReceived  = adv['received']    as num?;
+    final advRemaining = adv['remaining']   as num?;
+    final advExtra     = adv['extra']       as num?;
+    final advFully     = (adv['fully']      as bool?) ?? false;
+    final advCount     = (adv['count']      as num?)?.toInt() ?? 0;
+
+    final restExpected  = (rest['expected']       as num?) ?? (d['balance_expected'] as num?);
+    final restReceived  = rest['received']         as num?;
+    final restRemaining = rest['remaining']        as num?;
+    final restExtra     = rest['extra']            as num?;
+    final restFully     = (rest['fully']           as bool?) ?? false;
+    final restCarry     = rest['advance_carry']    as num?;
+    final restCount     = (rest['count']           as num?)?.toInt() ?? 0;
+
     final advClaims   = List<Map<String, dynamic>>.from(adv['claims']   as List? ?? []);
     final restClaims  = List<Map<String, dynamic>>.from(rest['claims']  as List? ?? []);
     final otherClaims = List<Map<String, dynamic>>.from(other['claims'] as List? ?? []);
-    final advCount    = (adv['count']  as num?)?.toInt() ?? advClaims.length;
-    final restCount   = (rest['count'] as num?)?.toInt() ?? restClaims.length;
-    final advReceived  = adv['received']  as num?;
-    final restReceived = rest['received'] as num?;
-    final advVerified  = ((adv['verified']  as num?)?.toInt() ?? 0) > 0;
-    final restVerified = ((rest['verified'] as num?)?.toInt() ?? 0) > 0;
+
+    // Render-log: running totals proof
+    RenderLog.write('c215_runningtotals_built', 1);
+    RenderLog.write(
+      'c215_adv_${(advReceived ?? 0).toInt()}_of_${(advExpected ?? 0).toInt()}', 1);
+    if ((restCarry ?? 0) > 0) {
+      RenderLog.write('c215_carry_${(restCarry!).toInt()}', 1);
+    }
 
     if (advClaims.isEmpty && restClaims.isEmpty && otherClaims.isEmpty) {
       return const Padding(
@@ -5012,8 +5080,10 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
         title: 'Advance payment',
         expected: advExpected,
         received: advReceived,
+        remaining: advRemaining,
+        extra: advExtra,
+        fully: advFully,
         count: advCount,
-        isVerified: advVerified,
         isOpen: _bucketOpen.contains('advance'),
         onTap: () => toggle('advance'),
       ),
@@ -5024,16 +5094,19 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
       const SizedBox(height: 8),
       _BucketCard(
         title: 'Rest payment',
-        expected: balExpected,
+        expected: restExpected,
         received: restReceived,
+        remaining: restRemaining,
+        extra: restExtra,
+        fully: restFully,
+        advanceCarry: restCarry,
         count: restCount,
-        isVerified: restVerified,
         isOpen: _bucketOpen.contains('rest'),
         onTap: () => toggle('rest'),
       ),
       if (_bucketOpen.contains('rest') && restClaims.isNotEmpty) ...[
         const SizedBox(height: 6),
-        ...restClaims.map((c) => _buildClaimBlock(c, balExpected)),
+        ...restClaims.map((c) => _buildClaimBlock(c, restExpected)),
       ],
       if (otherClaims.isNotEmpty) ...[
         const SizedBox(height: 8),
@@ -5041,8 +5114,10 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
           title: 'Other payments',
           expected: null,
           received: null,
+          remaining: null,
+          extra: null,
+          fully: false,
           count: otherClaims.length,
-          isVerified: false,
           isOpen: _bucketOpen.contains('other'),
           onTap: () => toggle('other'),
         ),

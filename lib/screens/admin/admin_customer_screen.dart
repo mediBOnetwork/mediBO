@@ -12,7 +12,7 @@ import '../../config/api_keys.dart';
 import '../../util.dart';
 import '../../utils/render_log.dart';
 import '../bulk_upload_screen.dart';
-import 'payments_tab.dart';
+import 'order_payment_section.dart';
 
 // ── Item model ────────────────────────────────────────────────────────────────
 
@@ -235,7 +235,6 @@ enum _CustFilter {
   cartNotOrdered,
   pendingRegistrations,
   leads,
-  payments, // CHANGE #211
 }
 
 // ── Screen ────────────────────────────────────────────────────────────────────
@@ -270,10 +269,6 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   // orderId → per-product inquiry status from get_order_item_inquiry_status
   final Map<String, List<Map<String, dynamic>>> _orderItemStatuses = {};
   final ScrollController _scrollCtrl = ScrollController();
-
-  // CHANGE #211 — Payments tab
-  final _paymentsKey = GlobalKey<State<PaymentsTab>>();
-  int _claimedCount = 0;
 
   final List<RealtimeChannel> _realtimeChannels = [];
   Timer? _debounce;
@@ -708,7 +703,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       case _CustFilter.pendingRegistrations:
       case _CustFilter.approvedCustomers:
       case _CustFilter.leads:
-      case _CustFilter.payments:             return [];
+        return [];
     }
   }
 
@@ -1125,15 +1120,6 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   }
 
   Widget _buildScrollContent(bool isDesktop) {
-    // CHANGE #211 — Payments tab
-    if (_filter == _CustFilter.payments) {
-      return PaymentsTab(
-        key: _paymentsKey,
-        onClaimedCountChanged: (n) {
-          if (mounted && _claimedCount != n) setState(() => _claimedCount = n);
-        },
-      );
-    }
     // Leads tab
     if (_isLeadsView) return _buildLeadsContent(isDesktop);
     // Approved customers view
@@ -1238,6 +1224,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       child: Builder(builder: (_) {
         RenderLog.write('titles_removed_customers', 'true');
         RenderLog.write('customer_tabs_horizontal_scroll', 'true');
+        RenderLog.write('c212_tab_removed', 1);
         // Single row: tabs scroll in Expanded, refresh pinned right — no vertical stacking.
         return Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
           Expanded(
@@ -1258,9 +1245,6 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                 const SizedBox(width: 4),
                 _tab(_CustFilter.leads,
                     'Leads (${_loggedInLeads.length + _otherLeads.length})'),
-                const SizedBox(width: 4),
-                _tab(_CustFilter.payments,
-                    _claimedCount > 0 ? 'Payments ($_claimedCount)' : 'Payments'),
               ]),
             ),
           ),
@@ -1745,6 +1729,13 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
             ]),
           );
         }),
+        // CHANGE #212 — per-order payment section
+        if (row.orderId != null) ...[
+          const SizedBox(height: 14),
+          const Divider(height: 1, color: Color(0xFFE5E7EB)),
+          OrderPaymentSection(orderId: row.orderId!, orderStatus: row.orderStatus),
+          const Divider(height: 1, color: Color(0xFFE5E7EB)),
+        ],
         if (row.orderId != null) ...[
           const SizedBox(height: 14),
           const Divider(height: 1, color: Color(0xFFE5E7EB)),

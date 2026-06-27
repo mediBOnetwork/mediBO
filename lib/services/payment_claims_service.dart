@@ -26,6 +26,15 @@ class PaymentClaimsService {
     });
   }
 
+  // CHANGE #212 — per-order payment data
+  static Future<Map<String, dynamic>> orderPayment(String orderId) async {
+    final res = await _client
+        .rpc('admin_order_payment', params: {'p_order_id': orderId});
+    RenderLog.write('c212_service_loaded', 1);
+    if (res == null) return {};
+    return Map<String, dynamic>.from(res as Map);
+  }
+
   static Future<String?> signedScreenshotUrl(String filePath) async {
     try {
       final url = await _client.storage

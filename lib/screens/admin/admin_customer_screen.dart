@@ -4865,13 +4865,22 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
     add(rest['claims'] as List? ?? [], 'rest');
     add(unassigned, 'unassigned');
     add(inactive,   'inactive');
+    // CHANGE #218 — sort by payment time (oldest first); fall back to paid_at; unknown → end
+    DateTime? _parseTs(PaymentClaim c) {
+      if (c.receivedAt != null && c.receivedAt!.isNotEmpty) {
+        final dt = DateTime.tryParse(c.receivedAt!);
+        if (dt != null) return dt;
+      }
+      if (c.paidAt != null && c.paidAt!.isNotEmpty) {
+        return DateTime.tryParse(c.paidAt!);
+      }
+      return null;
+    }
+    final farFuture = DateTime(9999);
     all.sort((a, b) {
-      int ord(String s) => switch(s) {
-        'verified' => 0, 'claimed' => 1, _ => 2,
-      };
-      final cmp = ord(a.status).compareTo(ord(b.status));
-      if (cmp != 0) return cmp;
-      return (b.receivedAt ?? '').compareTo(a.receivedAt ?? '');
+      final ta = _parseTs(a) ?? farFuture;
+      final tb = _parseTs(b) ?? farFuture;
+      return ta.compareTo(tb);
     });
     return all;
   }
@@ -5050,6 +5059,8 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
   Widget _buildChipRow() {
     final n = _claims.length + 1;
     RenderLog.write('c217_chips_$n', 1);
+    RenderLog.write('c218_chips_timesorted', 1);
+    RenderLog.write('c218_chip_order_$n', 1);
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       child: Row(children: [

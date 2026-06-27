@@ -4633,17 +4633,19 @@ class _ViewPayBtn extends StatelessWidget {
   }
 }
 
-// ── Bucket summary row (Level 1) ──────────────────────────────────────────────
+// ── Bucket summary card (Level 1) — CHANGE #214 polish ───────────────────────
 
-class _BucketRow extends StatelessWidget {
-  final String label;
+class _BucketCard extends StatelessWidget {
+  final String title;
+  final num? expected;
   final num? received;
   final int count;
   final bool isVerified;
   final bool isOpen;
   final VoidCallback onTap;
-  const _BucketRow({
-    required this.label,
+  const _BucketCard({
+    required this.title,
+    required this.expected,
     required this.received,
     required this.count,
     required this.isVerified,
@@ -4653,59 +4655,89 @@ class _BucketRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final Color chipBg, chipFg;
-    if (isVerified) {
-      chipBg = const Color(0xFFD1FAE5); chipFg = const Color(0xFF065F46);
-    } else if ((received ?? 0) > 0) {
-      chipBg = const Color(0xFFFEF3C7); chipFg = const Color(0xFF92400E);
+    // Status pill
+    final Color pillBg, pillFg;
+    final String pillLabel;
+    final rec = (received ?? 0).toDouble();
+    final exp = (expected ?? 0).toDouble();
+    if (isVerified || (rec > 0 && exp > 0 && rec >= exp)) {
+      pillBg = const Color(0xFFD1FAE5); pillFg = const Color(0xFF065F46);
+      pillLabel = 'Received ${_rupee(received)}';
+    } else if (rec > 0) {
+      pillBg = const Color(0xFFFEF3C7); pillFg = const Color(0xFF92400E);
+      pillLabel = 'Partial ${_rupee(received)}';
     } else {
-      chipBg = const Color(0xFFF3F4F6); chipFg = const Color(0xFF6B7280);
+      pillBg = const Color(0xFFF3F4F6); pillFg = const Color(0xFF9CA3AF);
+      pillLabel = 'Not received';
     }
+
     return GestureDetector(
       onTap: count > 0 ? onTap : null,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
         decoration: BoxDecoration(
-          color: isOpen ? const Color(0xFFEFF6FF) : const Color(0xFFF9FAFB),
-          borderRadius: BorderRadius.circular(8),
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(10),
           border: Border.all(
-            color: isOpen ? const Color(0xFFBFDBFE) : const Color(0xFFE5E7EB),
+            color: isOpen ? const Color(0xFF1B7A43).withValues(alpha: 0.3) : const Color(0xFFE5E7EB),
           ),
         ),
         child: Row(children: [
           Expanded(
-            child: Text(
-              '$label  ($count)',
-              style: const TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: Color(0xFF111827)),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(children: [
+                  Text(title,
+                      style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFF111827))),
+                  if (count > 0) ...[
+                    const SizedBox(width: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                      decoration: BoxDecoration(
+                          color: const Color(0xFFF3F4F6),
+                          borderRadius: BorderRadius.circular(10)),
+                      child: Text('$count',
+                          style: const TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w600,
+                              color: Color(0xFF6B7280))),
+                    ),
+                  ],
+                ]),
+                if (expected != null) ...[
+                  const SizedBox(height: 2),
+                  Text('Expected ${_rupee(expected)}',
+                      style: const TextStyle(
+                          fontSize: 11, color: Color(0xFF9CA3AF))),
+                ],
+              ],
             ),
           ),
-          if (received != null) ...[
-            Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-              decoration: BoxDecoration(
-                  color: chipBg,
-                  borderRadius: BorderRadius.circular(20)),
-              child: Text(
-                'received ${_rupee(received)}',
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+            decoration: BoxDecoration(
+                color: pillBg, borderRadius: BorderRadius.circular(20)),
+            child: Text(pillLabel,
                 style: TextStyle(
                     fontSize: 11,
-                    fontWeight: FontWeight.w500,
-                    color: chipFg),
-              ),
-            ),
+                    fontWeight: FontWeight.w600,
+                    color: pillFg)),
+          ),
+          if (count > 0) ...[
             const SizedBox(width: 6),
-          ],
-          if (count > 0)
             AnimatedRotation(
               turns: isOpen ? 0.5 : 0.0,
               duration: const Duration(milliseconds: 150),
               child: const Icon(Icons.expand_more,
                   size: 16, color: Color(0xFF6B7280)),
             ),
+          ],
         ]),
       ),
     );
@@ -4764,21 +4796,21 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
     }
   }
 
-  Future<void> _verify(String claimId, num? amount) async {
+  // CHANGE #214 — step 1: mark received (replaces old verify-and-accept)
+  Future<void> _markReceived(String claimId, num? amount) async {
     final orderId = widget.orderId;
     if (claimId.isEmpty || orderId.isEmpty) {
-      RenderLog.write('c213_bad_id', 'verify claimId=$claimId orderId=$orderId');
+      RenderLog.write('c214_bad_id', 'claimId=$claimId orderId=$orderId');
       return;
     }
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Confirm Payment',
+        title: const Text('Mark Payment Received',
             style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
         content: Text(
-          'Verify ${amount != null ? _rupee(amount) : 'this payment'}'
-          ' for order ${widget.orderNumber ?? orderId.substring(0, 8)}'
-          ' and accept the order?',
+          'Mark ${amount != null ? _rupee(amount) : 'this payment'} as received?\n'
+          'The customer will get a payment-received WhatsApp.',
         ),
         actions: [
           TextButton(
@@ -4789,7 +4821,7 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
             style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFF1B7A43),
                 foregroundColor: Colors.white),
-            child: const Text('Verify & Accept'),
+            child: const Text('Mark Received'),
           ),
         ],
       ),
@@ -4797,12 +4829,12 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
     if (confirmed != true || !mounted) return;
     setState(() => _acting.add(claimId));
     try {
-      await PaymentClaimsService.verifyAndAccept(claimId, orderId);
-      RenderLog.write('c213_verify_ok', 1);
+      await PaymentClaimsService.markPaymentReceived(claimId, orderId);
+      RenderLog.write('c214_received_ok', 1);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-            content: Text('Verified & accepted'),
+            content: Text('Payment marked received ✓'),
             backgroundColor: Color(0xFF1B7A43)),
       );
       widget.onStatusChanged?.call();
@@ -4811,7 +4843,7 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-            content: Text('Verify failed: $e'),
+            content: Text('Failed: $e'),
             backgroundColor: const Color(0xFFDC2626)),
       );
     } finally {
@@ -4854,7 +4886,7 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
     setState(() => _acting.add(claimId));
     try {
       await PaymentClaimsService.rejectClaim(claimId, reason);
-      RenderLog.write('c213_reject_ok', 1);
+      RenderLog.write('c214_reject_ok', 1);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -4899,49 +4931,48 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
 
   @override
   Widget build(BuildContext context) {
+    RenderLog.write('c214_payment_ui_polished', 1);
     return Container(
-      color: const Color(0xFFF0F9FF),
-      padding: const EdgeInsets.fromLTRB(24, 12, 24, 14),
+      color: const Color(0xFFFAFAFA),
+      padding: const EdgeInsets.fromLTRB(20, 12, 20, 16),
       decoration: const BoxDecoration(
         border: Border(
-          top: BorderSide(color: Color(0xFFBAE6FD)),
-          bottom: BorderSide(color: Color(0xFFBAE6FD)),
+          top: BorderSide(color: Color(0xFFE5E7EB)),
+          bottom: BorderSide(color: Color(0xFFE5E7EB)),
         ),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // ── Header ──────────────────────────────────────────────────
         Row(children: [
-          const Icon(Icons.payment_outlined,
-              size: 14, color: Color(0xFF1E40AF)),
-          const SizedBox(width: 6),
-          const Text('Payment Overview',
+          const Text('Payment',
               style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
-                  color: Color(0xFF1E40AF))),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF6B7280),
+                  letterSpacing: 0.3)),
           const Spacer(),
-          if (!_loading)
+          if (_loading)
+            const SizedBox(
+                width: 13,
+                height: 13,
+                child: CircularProgressIndicator(
+                    strokeWidth: 1.5,
+                    color: Color(0xFF9CA3AF)))
+          else
             GestureDetector(
               onTap: _load,
-              child: const Icon(Icons.refresh,
-                  size: 14, color: Color(0xFF6B7280)),
+              child: const Icon(Icons.refresh_rounded,
+                  size: 15, color: Color(0xFF9CA3AF)),
             ),
         ]),
-        const SizedBox(height: 10),
-        if (_loading)
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 8),
-            child: Center(
-              child: SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2)),
-            ),
-          )
-        else if (_error != null)
+        const SizedBox(height: 8),
+        const Divider(height: 1, color: Color(0xFFE5E7EB)),
+        const SizedBox(height: 12),
+        if (_error != null)
           Text('Error: $_error',
               style:
                   const TextStyle(fontSize: 12, color: Color(0xFFDC2626)))
-        else
+        else if (!_loading)
           _buildContent(),
       ]),
     );
@@ -4949,352 +4980,314 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
 
   Widget _buildContent() {
     final d = _data!;
-    final adv =
-        Map<String, dynamic>.from(d['advance'] as Map? ?? {});
-    final rest =
-        Map<String, dynamic>.from(d['rest'] as Map? ?? {});
-    final other =
-        Map<String, dynamic>.from(d['other'] as Map? ?? {});
+    final adv  = Map<String, dynamic>.from(d['advance'] as Map? ?? {});
+    final rest = Map<String, dynamic>.from(d['rest']    as Map? ?? {});
+    final other= Map<String, dynamic>.from(d['other']   as Map? ?? {});
     final advExpected = d['advance_expected'] as num?;
     final balExpected = d['balance_expected'] as num?;
-    final advClaims = List<Map<String, dynamic>>.from(
-        adv['claims'] as List? ?? []);
-    final restClaims = List<Map<String, dynamic>>.from(
-        rest['claims'] as List? ?? []);
-    final otherClaims = List<Map<String, dynamic>>.from(
-        other['claims'] as List? ?? []);
-    final advCount =
-        (adv['count'] as num?)?.toInt() ?? advClaims.length;
-    final restCount =
-        (rest['count'] as num?)?.toInt() ?? restClaims.length;
-    final advReceived = adv['received'] as num?;
+    final advClaims   = List<Map<String, dynamic>>.from(adv['claims']   as List? ?? []);
+    final restClaims  = List<Map<String, dynamic>>.from(rest['claims']  as List? ?? []);
+    final otherClaims = List<Map<String, dynamic>>.from(other['claims'] as List? ?? []);
+    final advCount    = (adv['count']  as num?)?.toInt() ?? advClaims.length;
+    final restCount   = (rest['count'] as num?)?.toInt() ?? restClaims.length;
+    final advReceived  = adv['received']  as num?;
     final restReceived = rest['received'] as num?;
-    final advVerified =
-        ((adv['verified'] as num?)?.toInt() ?? 0) > 0;
-    final restVerified =
-        ((rest['verified'] as num?)?.toInt() ?? 0) > 0;
+    final advVerified  = ((adv['verified']  as num?)?.toInt() ?? 0) > 0;
+    final restVerified = ((rest['verified'] as num?)?.toInt() ?? 0) > 0;
 
-    if (advClaims.isEmpty &&
-        restClaims.isEmpty &&
-        otherClaims.isEmpty) {
-      return const Text(
-        'No payment received for this order yet.',
-        style: TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+    if (advClaims.isEmpty && restClaims.isEmpty && otherClaims.isEmpty) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 8),
+        child: Text('No payment received for this order yet.',
+            style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
       );
     }
 
+    void toggle(String key) => setState(() {
+      _bucketOpen.contains(key) ? _bucketOpen.remove(key) : _bucketOpen.add(key);
+    });
+
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      // ── Advance bucket ────────────────────────────────────────────
-      _BucketRow(
-        label: 'Advance payment — ${_rupee(advExpected)}',
+      _BucketCard(
+        title: 'Advance payment',
+        expected: advExpected,
         received: advReceived,
         count: advCount,
         isVerified: advVerified,
         isOpen: _bucketOpen.contains('advance'),
-        onTap: () => setState(() {
-          _bucketOpen.contains('advance')
-              ? _bucketOpen.remove('advance')
-              : _bucketOpen.add('advance');
-        }),
+        onTap: () => toggle('advance'),
       ),
-      if (_bucketOpen.contains('advance') &&
-          advClaims.isNotEmpty) ...[
+      if (_bucketOpen.contains('advance') && advClaims.isNotEmpty) ...[
         const SizedBox(height: 6),
         ...advClaims.map((c) => _buildClaimBlock(c, advExpected)),
-        const SizedBox(height: 4),
       ],
-      const SizedBox(height: 6),
-      // ── Rest bucket ───────────────────────────────────────────────
-      _BucketRow(
-        label: 'Rest payment — ${_rupee(balExpected)}',
+      const SizedBox(height: 8),
+      _BucketCard(
+        title: 'Rest payment',
+        expected: balExpected,
         received: restReceived,
         count: restCount,
         isVerified: restVerified,
         isOpen: _bucketOpen.contains('rest'),
-        onTap: () => setState(() {
-          _bucketOpen.contains('rest')
-              ? _bucketOpen.remove('rest')
-              : _bucketOpen.add('rest');
-        }),
+        onTap: () => toggle('rest'),
       ),
-      if (_bucketOpen.contains('rest') &&
-          restClaims.isNotEmpty) ...[
+      if (_bucketOpen.contains('rest') && restClaims.isNotEmpty) ...[
         const SizedBox(height: 6),
         ...restClaims.map((c) => _buildClaimBlock(c, balExpected)),
-        const SizedBox(height: 4),
       ],
-      // ── Other bucket (if any) ─────────────────────────────────────
       if (otherClaims.isNotEmpty) ...[
-        const SizedBox(height: 6),
-        _BucketRow(
-          label: 'Other payments',
+        const SizedBox(height: 8),
+        _BucketCard(
+          title: 'Other payments',
+          expected: null,
           received: null,
           count: otherClaims.length,
           isVerified: false,
           isOpen: _bucketOpen.contains('other'),
-          onTap: () => setState(() {
-            _bucketOpen.contains('other')
-                ? _bucketOpen.remove('other')
-                : _bucketOpen.add('other');
-          }),
+          onTap: () => toggle('other'),
         ),
         if (_bucketOpen.contains('other')) ...[
           const SizedBox(height: 6),
           ...otherClaims.map((c) => _buildClaimBlock(c, null)),
-          const SizedBox(height: 4),
         ],
       ],
     ]);
   }
 
-  Widget _buildClaimBlock(
-      Map<String, dynamic> claim, num? bucketExpected) {
-    final claimId = claim['claim_id'] as String? ?? '';
-    final status = claim['status'] as String? ?? '';
-    final amount = claim['amount'] as num?;
-    final utr = claim['utr'] as String?;
-    final txnId = claim['txn_id'] as String?;
-    final app = claim['app'] as String?;
-    final paidAt = claim['paid_at'] as String?;
+  Widget _buildClaimBlock(Map<String, dynamic> claim, num? bucketExpected) {
+    final claimId   = claim['claim_id']   as String? ?? '';
+    final status    = claim['status']     as String? ?? '';
+    final amount    = claim['amount']     as num?;
+    final utr       = claim['utr']        as String?;
+    final txnId     = claim['txn_id']     as String?;
+    final app       = claim['app']        as String?;
+    final paidAt    = claim['paid_at']    as String?;
     final payeeName = claim['payee_name'] as String?;
-    final filePath = claim['file_path'] as String?;
-    final isActing = _acting.contains(claimId);
+    final filePath  = claim['file_path']  as String?;
+    final isActing  = _acting.contains(claimId);
 
-    final (Color statusBg, Color statusFg, String statusLabel) =
-        switch (status) {
-      'claimed' => (
-          const Color(0xFFFEF3C7),
-          const Color(0xFF92400E),
-          'To verify'
-        ),
-      'verified' => (
-          const Color(0xFFD1FAE5),
-          const Color(0xFF065F46),
-          'Verified ✓'
-        ),
-      'rejected' => (
-          const Color(0xFFFEE2E2),
-          const Color(0xFF991B1B),
-          'Rejected'
-        ),
-      'duplicate' => (
-          const Color(0xFFEFF6FF),
-          const Color(0xFF1E40AF),
-          'Duplicate'
-        ),
-      _ => (
-          const Color(0xFFF3F4F6),
-          const Color(0xFF374151),
-          status
-        ),
+    final (Color sBg, Color sFg, String sLabel) = switch (status) {
+      'claimed'   => (const Color(0xFFFEF3C7), const Color(0xFF92400E), 'To verify'),
+      'verified'  => (const Color(0xFFD1FAE5), const Color(0xFF065F46), 'Received ✓'),
+      'rejected'  => (const Color(0xFFFEE2E2), const Color(0xFF991B1B), 'Rejected'),
+      'duplicate' => (const Color(0xFFEFF6FF), const Color(0xFF1E40AF), 'Duplicate'),
+      _           => (const Color(0xFFF3F4F6), const Color(0xFF374151), status),
     };
 
-    final amountMatches = amount != null &&
-        bucketExpected != null &&
-        amount == bucketExpected;
-    final amountMismatch = amount != null &&
-        bucketExpected != null &&
-        amount != bucketExpected;
+    final amountMatches  = amount != null && bucketExpected != null && amount == bucketExpected;
+    final amountMismatch = amount != null && bucketExpected != null && amount != bucketExpected;
 
     return Container(
-      margin: const EdgeInsets.only(bottom: 8, left: 8),
-      padding: const EdgeInsets.all(12),
+      margin: const EdgeInsets.only(bottom: 8),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(10),
         border: Border.all(color: const Color(0xFFE5E7EB)),
       ),
-      child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-        // Status + amount chips
-        Wrap(spacing: 8, runSpacing: 4, children: [
-          Container(
-            padding: const EdgeInsets.symmetric(
-                horizontal: 8, vertical: 3),
-            decoration: BoxDecoration(
-                color: statusBg,
-                borderRadius: BorderRadius.circular(20)),
-            child: Text(statusLabel,
-                style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                    color: statusFg)),
-          ),
-          if (amount != null)
-            Row(mainAxisSize: MainAxisSize.min, children: [
-              const Text('Amount: ',
-                  style: TextStyle(
-                      fontSize: 12, color: Color(0xFF6B7280))),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // ── Top row: app + status chip ──────────────────────────────
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+          child: Row(children: [
+            Expanded(
+              child: Text(
+                app != null && app.isNotEmpty ? app : 'Payment',
+                style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF111827)),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(color: sBg, borderRadius: BorderRadius.circular(20)),
+              child: Text(sLabel,
+                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: sFg)),
+            ),
+          ]),
+        ),
+        // ── Amount line ─────────────────────────────────────────────
+        if (amount != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
               Text(_rupee(amount),
                   style: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
+                      fontSize: 20,
+                      fontWeight: FontWeight.w800,
                       color: Color(0xFF111827))),
-              if (amountMatches) ...[
-                const SizedBox(width: 6),
-                const Text('✓ matches',
-                    style: TextStyle(
-                        fontSize: 11, color: Color(0xFF065F46))),
-              ] else if (amountMismatch) ...[
-                const SizedBox(width: 6),
-                Text('≠ ${_rupee(bucketExpected)}',
-                    style: const TextStyle(
-                        fontSize: 11,
-                        color: Color(0xFF92400E))),
-              ],
+              const SizedBox(width: 8),
+              if (amountMatches)
+                _matchChip('✓ matches', const Color(0xFFD1FAE5), const Color(0xFF065F46))
+              else if (amountMismatch)
+                _matchChip('≠ ${_rupee(bucketExpected)}', const Color(0xFFFEF3C7), const Color(0xFF92400E)),
             ]),
-        ]),
-        const SizedBox(height: 6),
-        // Detail lines (skip null/empty)
-        if (utr != null && utr.isNotEmpty)
-          _det('UTR', utr),
-        if (txnId != null && txnId.isNotEmpty)
-          _det('Txn', txnId),
-        if (app != null && app.isNotEmpty)
-          _det('App', app),
-        if (paidAt != null && paidAt.isNotEmpty)
-          _det('Paid', paidAt),
-        if (payeeName != null && payeeName.isNotEmpty)
-          _det('Payee', payeeName),
-        // Screenshot (Level 3)
-        if (filePath != null && filePath.isNotEmpty) ...[
-          const SizedBox(height: 8),
-          FutureBuilder<String?>(
-            future:
-                PaymentClaimsService.signedScreenshotUrl(filePath),
-            builder: (ctx, snap) {
-              if (snap.connectionState ==
-                  ConnectionState.waiting) {
-                return const SizedBox(
-                    width: 120,
-                    height: 90,
-                    child: Center(
-                        child: CircularProgressIndicator(
-                            strokeWidth: 2)));
-              }
-              final url = snap.data;
-              if (url == null) {
-                RenderLog.write('c213_shot_err', 1);
-                return Container(
-                  width: 120,
-                  height: 90,
-                  decoration: BoxDecoration(
-                      color: const Color(0xFFF3F4F6),
-                      borderRadius: BorderRadius.circular(8)),
-                  child: const Center(
-                      child: Text('screenshot\nunavailable',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                              fontSize: 10,
-                              color: Color(0xFF9CA3AF)))),
-                );
-              }
-              RenderLog.write('c213_shot_ok', 1);
-              return GestureDetector(
-                onTap: () => _showScreenshot(ctx, url),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(8),
-                  child: Image.network(
-                    url,
-                    width: 120,
-                    height: 90,
-                    fit: BoxFit.cover,
-                    errorBuilder: (_, e, __) => Container(
-                      width: 120,
-                      height: 90,
-                      decoration: BoxDecoration(
-                          color: const Color(0xFFF3F4F6),
-                          borderRadius:
-                              BorderRadius.circular(8)),
-                      child: const Center(
-                          child: Icon(
-                              Icons.broken_image_outlined,
-                              color: Color(0xFF9CA3AF))),
-                    ),
-                  ),
-                ),
-              );
-            },
           ),
-        ],
-        // Actions for 'claimed' status
-        if (status == 'claimed') ...[
-          const SizedBox(height: 12),
-          if (isActing)
-            const Center(
-                child: SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(
-                        strokeWidth: 2)))
-          else
-            Wrap(spacing: 8, runSpacing: 6, children: [
-              if (claimId.isNotEmpty)
-                ElevatedButton(
-                  onPressed: () => _verify(claimId, amount),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF1B7A43),
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8)),
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 14, vertical: 8),
-                    textStyle: const TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600),
-                  ),
-                  child: const Text('Verify & Accept'),
-                ),
-              if (claimId.isNotEmpty)
-                OutlinedButton(
-                  onPressed: () => _reject(claimId),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: const Color(0xFFDC2626),
-                    side: const BorderSide(
-                        color: Color(0xFFDC2626)),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8)),
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 14, vertical: 8),
-                    textStyle: const TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600),
-                  ),
-                  child: const Text('Reject'),
-                ),
-              if (claimId.isEmpty)
-                const Text('Missing claim ID',
-                    style: TextStyle(
-                        fontSize: 11,
-                        color: Color(0xFFDC2626))),
-            ]),
-        ] else if (status == 'verified')
+        // ── Detail grid ─────────────────────────────────────────────
+        if ([utr, txnId, paidAt, payeeName].any((v) => v != null && v.isNotEmpty))
           Padding(
-            padding: const EdgeInsets.only(top: 6),
-            child: Container(
-              padding: const EdgeInsets.symmetric(
-                  horizontal: 10, vertical: 4),
-              decoration: BoxDecoration(
-                  color: const Color(0xFFD1FAE5),
-                  borderRadius: BorderRadius.circular(20)),
-              child: const Text('Paid • Verified',
-                  style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF065F46))),
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+            child: Wrap(
+              spacing: 20,
+              runSpacing: 4,
+              children: [
+                if (utr != null && utr.isNotEmpty)       _kv('UTR',   utr,   mono: true),
+                if (txnId != null && txnId.isNotEmpty)   _kv('Txn',   txnId, truncate: true),
+                if (paidAt != null && paidAt.isNotEmpty) _kv('Paid',  _fmtDate(paidAt)),
+                if (payeeName != null && payeeName.isNotEmpty) _kv('Payee', payeeName),
+              ],
             ),
           ),
+        // ── Screenshot ──────────────────────────────────────────────
+        if (filePath != null && filePath.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+            child: FutureBuilder<String?>(
+              future: PaymentClaimsService.signedScreenshotUrl(filePath),
+              builder: (ctx, snap) {
+                if (snap.connectionState == ConnectionState.waiting) {
+                  return Container(
+                    width: 110, height: 80,
+                    decoration: BoxDecoration(
+                        color: const Color(0xFFF3F4F6),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: const Color(0xFFE5E7EB))),
+                    child: const Center(
+                        child: SizedBox(width: 16, height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2))),
+                  );
+                }
+                final url = snap.data;
+                if (url == null) {
+                  RenderLog.write('c214_shot_err', 1);
+                  return Container(
+                    width: 110, height: 80,
+                    decoration: BoxDecoration(
+                        color: const Color(0xFFF3F4F6),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: const Color(0xFFE5E7EB))),
+                    child: const Center(
+                        child: Icon(Icons.image_not_supported_outlined,
+                            color: Color(0xFF9CA3AF), size: 20)),
+                  );
+                }
+                RenderLog.write('c214_shot_ok', 1);
+                return GestureDetector(
+                  onTap: () => _showScreenshot(ctx, url),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: Container(
+                      decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: const Color(0xFFE5E7EB))),
+                      child: Image.network(url,
+                          width: 110, height: 80, fit: BoxFit.cover,
+                          errorBuilder: (_, e, __) => Container(
+                            width: 110, height: 80,
+                            color: const Color(0xFFF3F4F6),
+                            child: const Center(child: Icon(
+                                Icons.broken_image_outlined,
+                                color: Color(0xFF9CA3AF))),
+                          )),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        // ── Action buttons ──────────────────────────────────────────
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+          child: status == 'claimed'
+              ? (isActing
+                  ? const SizedBox(width: 18, height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                  : Wrap(spacing: 8, runSpacing: 6, children: [
+                      if (claimId.isNotEmpty)
+                        ElevatedButton(
+                          onPressed: () => _markReceived(claimId, amount),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF1B7A43),
+                            foregroundColor: Colors.white,
+                            elevation: 0,
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8)),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 16, vertical: 9),
+                            textStyle: const TextStyle(
+                                fontSize: 13, fontWeight: FontWeight.w600),
+                          ),
+                          child: const Text('Received'),
+                        ),
+                      if (claimId.isNotEmpty)
+                        OutlinedButton(
+                          onPressed: () => _reject(claimId),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: const Color(0xFFDC2626),
+                            side: const BorderSide(color: Color(0xFFDC2626)),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8)),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 16, vertical: 9),
+                            textStyle: const TextStyle(
+                                fontSize: 13, fontWeight: FontWeight.w600),
+                          ),
+                          child: const Text('Reject'),
+                        ),
+                      if (claimId.isEmpty)
+                        const Text('Missing claim ID',
+                            style: TextStyle(fontSize: 11, color: Color(0xFFDC2626))),
+                    ]))
+              : const SizedBox.shrink(),
+        ),
       ]),
     );
+  }
+
+  Widget _matchChip(String label, Color bg, Color fg) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+        decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(6)),
+        child: Text(label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: fg)),
+      );
+
+  Widget _kv(String label, String value,
+      {bool mono = false, bool truncate = false}) =>
+      SizedBox(
+        width: 150,
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(label,
+              style: const TextStyle(
+                  fontSize: 10, fontWeight: FontWeight.w500, color: Color(0xFF9CA3AF))),
+          const SizedBox(height: 1),
+          Text(value,
+              maxLines: 1,
+              overflow: truncate ? TextOverflow.ellipsis : TextOverflow.clip,
+              style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                  color: const Color(0xFF374151),
+                  fontFamily: mono ? 'monospace' : null)),
+        ]),
+      );
+
+  String _fmtDate(String raw) {
+    try {
+      final dt = DateTime.parse(raw).toLocal();
+      final h = dt.hour.toString().padLeft(2, '0');
+      final m = dt.minute.toString().padLeft(2, '0');
+      return '${dt.day}/${dt.month} $h:$m';
+    } catch (_) {
+      return raw.length > 16 ? raw.substring(0, 16) : raw;
+    }
   }
 
   Widget _det(String label, String value) => Padding(
         padding: const EdgeInsets.only(bottom: 2),
         child: Row(children: [
           Text('$label: ',
-              style: const TextStyle(
-                  fontSize: 12, color: Color(0xFF6B7280))),
+              style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
           Flexible(
               child: Text(value,
                   style: const TextStyle(

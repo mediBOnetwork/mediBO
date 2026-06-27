@@ -49,6 +49,21 @@ class PaymentClaimsService {
     return Map<String, dynamic>.from(res as Map);
   }
 
+  // CHANGE #214 — two-step received flow (step 1: mark payment received + WhatsApp)
+  static Future<Map<String, dynamic>> markPaymentReceived(
+      String claimId, String orderId) async {
+    if (claimId.isEmpty || orderId.isEmpty) {
+      RenderLog.write('c214_bad_id', 'claimId=$claimId orderId=$orderId');
+      throw Exception('Empty claim_id or order_id');
+    }
+    final res = await _client.rpc('mark_payment_received', params: {
+      'p_claim_id': claimId,
+      'p_order_id': orderId,
+    });
+    if (res == null) return {};
+    return Map<String, dynamic>.from(res as Map);
+  }
+
   static Future<String?> signedScreenshotUrl(String filePath) async {
     try {
       final url = await _client.storage

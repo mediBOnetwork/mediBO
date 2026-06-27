@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <meta name="build-commit" content="2be24e5">
+  <meta name="build-commit" content="75b23da">
   <!-- CHANGE #58: SW killswitch — unregisters ALL service workers + clears all caches, then reloads ONCE.
        Runs before Flutter loader so even devices with stale SW get fresh bundle next load. -->
   <script>(function(){try{if('serviceWorker'in navigator){navigator.serviceWorker.getRegistrations().then(function(rs){var had=rs&&rs.length>0;return Promise.all((rs||[]).map(function(r){return r.unregister();})).then(function(){return had;});}).then(function(had){if(window.caches&&caches.keys){return caches.keys().then(function(k){return Promise.all(k.map(function(x){return caches.delete(x);}));}).then(function(){return had;});}return had;}).then(function(had){if(had&&!sessionStorage.getItem('sw_killed_58')){sessionStorage.setItem('sw_killed_58','1');location.reload();}}).catch(function(){});}}catch(e){}})();</script>
@@ -136,10 +136,10 @@
        On every load, fetches /version.json (no-cache). If the live commit differs
        from the build-stamped commit below, does ONE hard reload so the PWA gets the
        newest bundle instead of staying on a stale cached build.
-       2be24e5 is replaced with the actual short commit hash by deploy.sh. -->
+       75b23da is replaced with the actual short commit hash by deploy.sh. -->
   <script>
     (function () {
-      var _builtCommit = '2be24e5';
+      var _builtCommit = '75b23da';
       var _sessionKey  = 'c220_pwa_reloaded';
       function _rlWrite(key, val) {
         try {
@@ -157,7 +157,7 @@
           // Already reloaded once this session — skip to prevent loop.
           if (sessionStorage.getItem(_sessionKey)) return;
           // Skip if placeholder was not stamped (local dev / test build).
-          if (_builtCommit === '2be24e5') return;
+          if (_builtCommit === '75b23da') return;
           fetch('/version.json?_t=' + Date.now(), { cache: 'no-store' })
             .then(function (r) { return r.json(); })
             .then(function (data) {
@@ -173,7 +173,7 @@
       });
       // Wire confirmation — written once regardless of outcome.
       window.addEventListener('DOMContentLoaded', function () {
-        if (_builtCommit !== '2be24e5') {
+        if (_builtCommit !== '75b23da') {
           _rlWrite('c220_pwa_check_wired', 1);
         }
       });
@@ -410,7 +410,7 @@
   </style>
   <div id="boot-loader"><div class="spin"></div></div>
 
-  <script src="flutter_bootstrap.js?v=2be24e5" async></script>
+  <script src="flutter_bootstrap.js?v=75b23da" async></script>
   <script>
     var recaptchaResolve = null;
     var recaptchaWidgetId = null;

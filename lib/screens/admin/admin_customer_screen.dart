@@ -329,7 +329,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   void _subscribeRealtime() {
     final client = Supabase.instance.client;
     final ts = DateTime.now().millisecondsSinceEpoch;
-    for (final table in ['cart_items', 'orders', 'pharmacy_profiles']) {
+    for (final table in ['cart_items', 'orders', 'pharmacy_profiles', 'payment_claims']) {
       final ch = client
           .channel('admin_${table}_$ts')
           .onPostgresChanges(
@@ -4851,7 +4851,7 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
   void initState() {
     super.initState();
     _load();
-    _subscribeRealtime();
+    _subscribePayClaims();
   }
 
   @override
@@ -4860,10 +4860,10 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
     super.dispose();
   }
 
-  void _subscribeRealtime() {
+  void _subscribePayClaims() {
     _paymentChannel?.unsubscribe();
     _paymentChannel = Supabase.instance.client
-        .channel('payment_claims_${widget.orderId}')
+        .channel('payclaims_${widget.orderId}')
         .onPostgresChanges(
           event: PostgresChangeEvent.all,
           schema: 'public',
@@ -4878,7 +4878,8 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
           },
         )
         .subscribe();
-    RenderLog.write('c226_realtime', 1);
+    RenderLog.write('c227_payclaims_rt',
+        'change:227,subscribed:true,table:payment_claims,filter:order_id');
   }
 
   Future<void> _load() async {

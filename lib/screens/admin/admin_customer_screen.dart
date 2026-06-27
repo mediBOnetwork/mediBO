@@ -2,6 +2,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:html' as html;
+import 'dart:ui_web' as ui_web;
 
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
@@ -4841,7 +4842,8 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
   bool _loading = true;
   String? _error;
   final Set<String> _acting = {};
-  final Map<String, String> _signedUrls = {};  // claimId → signed URL
+  final Map<String, String> _signedUrls = {};     // claimId → signed URL
+  final Map<String, String> _imgViewTypes = {};   // claimId → HtmlElementView viewType
 
   @override
   void initState() {
@@ -4875,11 +4877,24 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
       try {
         final url = await PaymentClaimsService.signedScreenshotUrl(claim.filePath!);
         if (url != null && mounted) {
-          setState(() => _signedUrls[claim.claimId] = url);
+          final vt = 'claim-img-${claim.claimId}';
+          if (!_imgViewTypes.containsKey(claim.claimId)) {
+            ui_web.platformViewRegistry.registerViewFactory(vt, (int viewId) {
+              return html.ImageElement()
+                ..src = url
+                ..style.width = '100%'
+                ..style.height = '100%'
+                ..style.objectFit = 'cover';
+            });
+          }
+          setState(() {
+            _signedUrls[claim.claimId] = url;
+            _imgViewTypes[claim.claimId] = vt;
+          });
         }
       } catch (_) {}
     }
-    if (mounted) RenderLog.write('c224_signed_urls_fix', 1);
+    if (mounted) RenderLog.write('c225_signed_urls_fix', 1);
   }
 
   List<PaymentClaim> _parseClaims(Map<String, dynamic> d) {
@@ -5561,13 +5576,14 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
             child: Text(claim.verifyReason!,
                 style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
           ),
-        // Screenshot — pre-loaded signed URL (CHANGE #224)
+        // Screenshot — HtmlElementView for reliable web rendering (CHANGE #225)
         if (claim.filePath != null && claim.filePath!.isNotEmpty)
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
             child: Builder(builder: (ctx) {
+              final vt = _imgViewTypes[claim.claimId];
               final url = _signedUrls[claim.claimId];
-              if (url == null) {
+              if (vt == null) {
                 return Container(
                   width: 110, height: 80,
                   decoration: BoxDecoration(
@@ -5578,23 +5594,14 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
                       child: CircularProgressIndicator(strokeWidth: 2))),
                 );
               }
-              RenderLog.write('c224_img_ok', 1);
+              RenderLog.write('c225_img_ok', 1);
               return GestureDetector(
-                onTap: () => _showScreenshot(ctx, url),
+                onTap: url != null ? () => _showScreenshot(ctx, url) : null,
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(8),
-                  child: Container(
-                    decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: const Color(0xFFE5E7EB))),
-                    child: Image.network(url,
-                        width: 110, height: 80, fit: BoxFit.cover,
-                        errorBuilder: (_, e, __) => Container(
-                          width: 110, height: 80,
-                          color: const Color(0xFFF3F4F6),
-                          child: const Center(child: Icon(
-                              Icons.broken_image_outlined, color: Color(0xFF9CA3AF))),
-                        )),
+                  child: SizedBox(
+                    width: 110, height: 80,
+                    child: HtmlElementView(viewType: vt),
                   ),
                 ),
               );

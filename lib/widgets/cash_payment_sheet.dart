@@ -2,6 +2,8 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:html' as html;
+import 'dart:typed_data';
+import 'dart:ui_web' as ui_web;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -24,8 +26,9 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
   final _amountCtrl = TextEditingController();
   final _collectedByCtrl = TextEditingController();
   Uint8List? _fileBytes;
-  String? _fileDataUrl;   // data: URL for browser preview
+  String? _fileDataUrl;
   String? _fileMime;
+  String? _viewType;   // registered HtmlElementView viewType for preview
   double? _lat;
   double? _lng;
   bool _locating = false;
@@ -59,12 +62,9 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
   }
 
   void _pickFile() {
-    // Use dart:html FileUploadInputElement — works natively on Flutter Web.
-    // readAsDataUrl gives a base64 data: URL — used directly for preview
-    // (avoids black-image bug from readAsArrayBuffer ByteBuffer cast).
-    final input = html.FileUploadInputElement()
-      ..accept = 'image/*,application/pdf'
-      ..multiple = false;
+    final input = html.FileUploadInputElement();
+    input.accept = 'image/*';
+    input.multiple = false;
     input.click();
 
     input.onChange.listen((_) async {
@@ -75,14 +75,27 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
       reader.readAsDataUrl(file);
       await reader.onLoad.first;
       final dataUrl = reader.result as String;
-      // Decode base64 payload for storage upload
-      final base64Part = dataUrl.split(',').last;
-      final bytes = base64Decode(base64Part);
+      final comma = dataUrl.indexOf(',');
+      final b64 = dataUrl.substring(comma + 1);
+      final bytes = base64Decode(b64);
+
+      // Register an HTML img element — most reliable preview on Flutter Web
+      final vt = 'cash-preview-${DateTime.now().millisecondsSinceEpoch}';
+      ui_web.platformViewRegistry.registerViewFactory(vt, (int viewId) {
+        return html.ImageElement()
+          ..src = dataUrl
+          ..style.width = '100%'
+          ..style.height = '100%'
+          ..style.objectFit = 'cover'
+          ..style.borderRadius = '10px';
+      });
+
       if (mounted) {
         setState(() {
           _fileBytes = bytes;
           _fileDataUrl = dataUrl;
           _fileMime = file.type.isNotEmpty ? file.type : 'image/jpeg';
+          _viewType = vt;
         });
       }
     });
@@ -94,7 +107,6 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
       _locError = null;
     });
     try {
-      // Use browser Geolocation API directly — no plugin required on Flutter Web.
       final completer = Completer<html.Geoposition>();
       html.window.navigator.geolocation
           .getCurrentPosition(
@@ -302,34 +314,38 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
                 ),
               )
             else
-              GestureDetector(
-                onTap: _pickFile,
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(10),
-                  child: Stack(children: [
-                    // data URL preview — no black-box bug unlike Image.memory
-                    if (_fileDataUrl != null)
-                      Image.network(_fileDataUrl!,
-                          height: 130, width: double.infinity, fit: BoxFit.cover)
-                    else
-                      Image.memory(_fileBytes!,
-                          height: 130, width: double.infinity, fit: BoxFit.cover),
-                    Positioned(
-                      top: 6,
-                      right: 6,
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: Colors.black54,
-                          borderRadius: BorderRadius.circular(20),
+              SizedBox(
+                height: 130,
+                width: double.infinity,
+                child: GestureDetector(
+                  onTap: _pickFile,
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(10),
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        if (_viewType != null)
+                          HtmlElementView(viewType: _viewType!)
+                        else
+                          Container(color: Colors.grey.shade200),
+                        Positioned(
+                          top: 6,
+                          right: 6,
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: Colors.black54,
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 4),
+                            child: const Text('Change',
+                                style: TextStyle(
+                                    color: Colors.white, fontSize: 11)),
+                          ),
                         ),
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 4),
-                        child: const Text('Change',
-                            style:
-                                TextStyle(color: Colors.white, fontSize: 11)),
-                      ),
+                      ],
                     ),
-                  ]),
+                  ),
                 ),
               ),
             const SizedBox(height: 16),

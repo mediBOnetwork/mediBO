@@ -5231,24 +5231,15 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
   // ── All dashboard view ───────────────────────────────────────────────────────
   Widget _buildAllDashboard() {
     RenderLog.write('c217_all_selected', 1);
+    RenderLog.write('c231_advance_cap',
+        'change:231,advance_capped:true,fully_paid_badge_removed:true');
     final d    = PaymentDashboardData.fromMap(_data!);
     final pct  = d.totalValue > 0
         ? (100 * d.totalReceived / d.totalValue).round() : 0;
-    final advExtra = (d.advReceived - d.advExpected).clamp(0.0, double.infinity);
-
-    // ── Advance status pill ───────────────────────────────────────────
-    final (Color advPillBg, Color advPillFg, String advPillLabel) = () {
-      if (d.advReceived == 0) {
-        return (const Color(0xFFF3F4F6), const Color(0xFF9CA3AF), 'Not received');
-      } else if (d.advReceived >= d.advExpected && d.advExpected > 0) {
-        final lbl = advExtra > 0
-            ? 'Fully paid ✓ · +${_rupee(advExtra)} extra' : 'Fully paid ✓';
-        return (const Color(0xFFD1FAE5), const Color(0xFF065F46), lbl);
-      } else {
-        final rem = _rupee(d.advanceRemaining);
-        return (const Color(0xFFFEF3C7), const Color(0xFF92400E), 'Partial · $rem left');
-      }
-    }();
+    // Cap advance shown so it never exceeds expected (CHANGE #233).
+    final advShown = d.advExpected > 0
+        ? d.advReceived.clamp(0.0, d.advExpected)
+        : d.advReceived;
 
     // ── Remaining pill ────────────────────────────────────────────────
     final remaining = d.remainingBalance;
@@ -5295,9 +5286,9 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
     final totalFill = d.totalValue > 0 ? (d.totalReceived / d.totalValue) : 0.0;
     final totalBarColor = pct >= 100 ? const Color(0xFF1B7A43) : const Color(0xFF1B7A43);
 
-    // D2 advance
-    final advFill = d.advExpected > 0 ? (d.advReceived / d.advExpected) : 0.0;
-    final advBarColor = d.advReceived >= d.advExpected && d.advExpected > 0
+    // D2 advance — use capped advShown for display and progress bar.
+    final advFill = d.advExpected > 0 ? (advShown / d.advExpected) : 0.0;
+    final advBarColor = advShown >= d.advExpected && d.advExpected > 0
         ? const Color(0xFF1B7A43) : const Color(0xFFD97706);
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -5320,23 +5311,11 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
           border: Border.all(color: const Color(0xFFE5E7EB)),
         ),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Row(children: [
-            const Expanded(
-              child: Text('Advance payment',
-                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w500,
-                      color: Color(0xFF9CA3AF))),
-            ),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-              decoration: BoxDecoration(
-                  color: advPillBg, borderRadius: BorderRadius.circular(20)),
-              child: Text(advPillLabel,
-                  style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600,
-                      color: advPillFg)),
-            ),
-          ]),
+          Text('Advance payment',
+              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500,
+                  color: Color(0xFF9CA3AF))),
           const SizedBox(height: 4),
-          Text('${_rupee(d.advReceived)} / ${_rupee(d.advExpected)}',
+          Text('${_rupee(advShown)} / ${_rupee(d.advExpected)}',
               style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700,
                   color: Color(0xFF111827))),
           const SizedBox(height: 8),

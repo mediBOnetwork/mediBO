@@ -4937,6 +4937,8 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
           'change:229,thumb_onclick:true,fullscreen:true,covers:cash+online,buckets:whatsapp+cash_payments');
       RenderLog.write('c230_paycard_polish',
           'change:230,fullscreen_tap_close:true,copy_buttons:true,badges_removed:true,covers:cash+online');
+      RenderLog.write('c232_copy_right',
+          'change:232,copy_right_aligned:true,covers:cash+online');
     }
   }
 
@@ -5618,21 +5620,24 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
     final v = (value ?? '').trim();
     if (v.isEmpty) return const SizedBox.shrink();
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 8, 4, 0),
-      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      padding: const EdgeInsets.fromLTRB(12, 6, 4, 0),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(label,
-                style: const TextStyle(
-                    fontSize: 10, fontWeight: FontWeight.w500, color: Color(0xFF9CA3AF))),
+                style: const TextStyle(fontSize: 12, color: Color(0xFF9E9E9E))),
             const SizedBox(height: 2),
             Text(v,
-                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500,
-                    color: Color(0xFF374151))),
+                style: const TextStyle(fontSize: 15, color: Color(0xFF212121))),
           ]),
         ),
-        InkWell(
-          onTap: () {
+        const SizedBox(width: 8),
+        IconButton(
+          visualDensity: VisualDensity.compact,
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+          icon: const Icon(Icons.copy, size: 18, color: Color(0xFF2E7D32)),
+          onPressed: () {
             Clipboard.setData(ClipboardData(text: v));
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
@@ -5642,11 +5647,6 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
               ),
             );
           },
-          borderRadius: BorderRadius.circular(20),
-          child: const Padding(
-            padding: EdgeInsets.all(6),
-            child: Icon(Icons.copy, size: 16, color: Color(0xFF2E7D32)),
-          ),
         ),
       ]),
     );

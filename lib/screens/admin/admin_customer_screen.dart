@@ -4838,8 +4838,12 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
           ((data['advance'] as Map?)?['count'] as num?)?.toInt() ?? 0;
       final rest =
           ((data['rest'] as Map?)?['count'] as num?)?.toInt() ?? 0;
+      final unassignedCount = (data['unassigned'] as List?)?.length ?? 0;
+      final inactiveCount   = (data['inactive']   as List?)?.length ?? 0;
       RenderLog.write('c213_payview_loaded_$shortId', 1);
       RenderLog.write('c213_adv_${adv}_rest_$rest', 1);
+      RenderLog.write('c216_unassigned_$unassignedCount', 1);
+      RenderLog.write('c216_inactive_$inactiveCount', 1);
       setState(() { _data = data; _loading = false; });
     } catch (e) {
       if (!mounted) return;
@@ -4957,6 +4961,443 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
     }
   }
 
+  // CHANGE #216 — link unassigned claim to this order and mark received
+  Future<void> _linkAndReceive(String claimId, num? amount) async {
+    final orderId = widget.orderId;
+    if (claimId.isEmpty || orderId.isEmpty) {
+      RenderLog.write('c216_bad_id', 'claimId=$claimId orderId=$orderId');
+      return;
+    }
+    final po = widget.orderNumber ?? 'this order';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Link & Mark Received',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+        content: Text(
+          'Link ${amount != null ? _rupee(amount) : 'this payment'} to $po '
+          'and mark received?\nThe customer will get a payment-received WhatsApp.',
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF1B7A43),
+                foregroundColor: Colors.white),
+            child: const Text('Mark Received'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => _acting.add(claimId));
+    try {
+      await PaymentClaimsService.markPaymentReceived(claimId, orderId);
+      RenderLog.write('c216_assign_received_ok', 1);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text('Linked & marked received ✓'),
+            backgroundColor: Color(0xFF1B7A43)),
+      );
+      widget.onStatusChanged?.call();
+      await _load();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+            content: Text('Failed: $e'),
+            backgroundColor: const Color(0xFFDC2626)),
+      );
+    } finally {
+      if (mounted) setState(() => _acting.remove(claimId));
+    }
+  }
+
+  // CHANGE #216 — reject from unassigned section
+  Future<void> _rejectUnassigned(String claimId) async {
+    if (claimId.isEmpty) {
+      RenderLog.write('c216_bad_id', 'reject claimId empty');
+      return;
+    }
+    final ctrl = TextEditingController(text: 'Not received');
+    final reason = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Reject Payment',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+        content: TextField(
+          controller: ctrl,
+          decoration: const InputDecoration(labelText: 'Reason'),
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+            style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFDC2626),
+                foregroundColor: Colors.white),
+            child: const Text('Reject'),
+          ),
+        ],
+      ),
+    );
+    ctrl.dispose();
+    if (reason == null || reason.isEmpty || !mounted) return;
+    setState(() => _acting.add(claimId));
+    try {
+      await PaymentClaimsService.rejectClaim(claimId, reason);
+      RenderLog.write('c216_reject_ok', 1);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text('Payment rejected'),
+            backgroundColor: Color(0xFF6B7280)),
+      );
+      await _load();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+            content: Text('Reject failed: $e'),
+            backgroundColor: const Color(0xFFDC2626)),
+      );
+    } finally {
+      if (mounted) setState(() => _acting.remove(claimId));
+    }
+  }
+
+  Widget _buildUnassignedSection(List<Map<String, dynamic>> claims) {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(children: [
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('Unassigned payments (${claims.length})',
+                style: const TextStyle(
+                    fontSize: 13, fontWeight: FontWeight.w700,
+                    color: Color(0xFF111827))),
+            const SizedBox(height: 2),
+            const Text('Not yet linked to this order',
+                style: TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
+          ]),
+        ),
+      ]),
+      const SizedBox(height: 8),
+      ...claims.map((c) => _buildUnassignedBlock(c)),
+    ]);
+  }
+
+  Widget _buildUnassignedBlock(Map<String, dynamic> claim) {
+    final claimId       = claim['claim_id']        as String? ?? '';
+    final amount        = claim['amount']           as num?;
+    final utr           = claim['utr']              as String?;
+    final txnId         = claim['txn_id']           as String?;
+    final app           = claim['app']              as String?;
+    final paidAt        = claim['paid_at']          as String?;
+    final payeeName     = claim['payee_name']       as String?;
+    final filePath      = claim['file_path']        as String?;
+    final matchAdv      = claim['matches_advance']  as bool? ?? false;
+    final matchRest     = claim['matches_rest']     as bool? ?? false;
+    final isActing      = _acting.contains(claimId);
+
+    final (Color hBg, Color hFg, String hLabel) = matchAdv
+        ? (const Color(0xFFD1FAE5), const Color(0xFF065F46), '✓ advance')
+        : matchRest
+            ? (const Color(0xFFD1FAE5), const Color(0xFF065F46), '✓ rest')
+            : (const Color(0xFFFEF3C7), const Color(0xFF92400E), '≠ no exact match');
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // ── Top row: app + amber "To verify" chip ───────────────────
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+          child: Row(children: [
+            Expanded(
+              child: Text(
+                app != null && app.isNotEmpty ? app : 'Payment',
+                style: const TextStyle(
+                    fontSize: 13, fontWeight: FontWeight.w700,
+                    color: Color(0xFF111827)),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                  color: const Color(0xFFFEF3C7),
+                  borderRadius: BorderRadius.circular(20)),
+              child: const Text('To verify',
+                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
+                      color: Color(0xFF92400E))),
+            ),
+          ]),
+        ),
+        // ── Amount + hint chip ───────────────────────────────────────
+        if (amount != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+              Text(_rupee(amount),
+                  style: const TextStyle(
+                      fontSize: 20, fontWeight: FontWeight.w800,
+                      color: Color(0xFF111827))),
+              const SizedBox(width: 8),
+              _matchChip(hLabel, hBg, hFg),
+            ]),
+          ),
+        // ── Detail grid ─────────────────────────────────────────────
+        if ([utr, txnId, paidAt, payeeName].any((v) => v != null && v.isNotEmpty))
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+            child: Wrap(spacing: 20, runSpacing: 4, children: [
+              if (utr != null && utr.isNotEmpty)           _kv('UTR',   utr,   mono: true),
+              if (txnId != null && txnId.isNotEmpty)       _kv('Txn',   txnId, truncate: true),
+              if (paidAt != null && paidAt.isNotEmpty)     _kv('Paid',  _fmtDate(paidAt)),
+              if (payeeName != null && payeeName.isNotEmpty) _kv('Payee', payeeName),
+            ]),
+          ),
+        // ── Screenshot ──────────────────────────────────────────────
+        if (filePath != null && filePath.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+            child: FutureBuilder<String?>(
+              future: PaymentClaimsService.signedScreenshotUrl(filePath),
+              builder: (ctx, snap) {
+                if (snap.connectionState == ConnectionState.waiting) {
+                  return Container(
+                    width: 110, height: 80,
+                    decoration: BoxDecoration(
+                        color: const Color(0xFFF3F4F6),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: const Color(0xFFE5E7EB))),
+                    child: const Center(child: SizedBox(width: 16, height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2))),
+                  );
+                }
+                final url = snap.data;
+                if (url == null) {
+                  RenderLog.write('c216_shot_err', 1);
+                  return Container(
+                    width: 110, height: 80,
+                    decoration: BoxDecoration(
+                        color: const Color(0xFFF3F4F6),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: const Color(0xFFE5E7EB))),
+                    child: const Center(child: Icon(
+                        Icons.image_not_supported_outlined,
+                        color: Color(0xFF9CA3AF), size: 20)),
+                  );
+                }
+                RenderLog.write('c216_shot_ok', 1);
+                return GestureDetector(
+                  onTap: () => _showScreenshot(ctx, url),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: Container(
+                      decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: const Color(0xFFE5E7EB))),
+                      child: Image.network(url,
+                          width: 110, height: 80, fit: BoxFit.cover,
+                          errorBuilder: (_, e, __) => Container(
+                            width: 110, height: 80,
+                            color: const Color(0xFFF3F4F6),
+                            child: const Center(child: Icon(
+                                Icons.broken_image_outlined,
+                                color: Color(0xFF9CA3AF))),
+                          )),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        // ── Buttons ─────────────────────────────────────────────────
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+          child: isActing
+              ? const SizedBox(width: 18, height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2))
+              : claimId.isEmpty
+                  ? const Text('Missing claim ID',
+                      style: TextStyle(fontSize: 11, color: Color(0xFFDC2626)))
+                  : Wrap(spacing: 8, runSpacing: 6, children: [
+                      ElevatedButton(
+                        onPressed: () => _linkAndReceive(claimId, amount),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF1B7A43),
+                          foregroundColor: Colors.white,
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8)),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 9),
+                          textStyle: const TextStyle(
+                              fontSize: 13, fontWeight: FontWeight.w600),
+                        ),
+                        child: const Text('Mark Received'),
+                      ),
+                      OutlinedButton(
+                        onPressed: () => _rejectUnassigned(claimId),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: const Color(0xFFDC2626),
+                          side: const BorderSide(color: Color(0xFFDC2626)),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8)),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 9),
+                          textStyle: const TextStyle(
+                              fontSize: 13, fontWeight: FontWeight.w600),
+                        ),
+                        child: const Text('Reject'),
+                      ),
+                    ]),
+        ),
+      ]),
+    );
+  }
+
+  Widget _buildInactiveSection(List<Map<String, dynamic>> claims) {
+    final isOpen = _bucketOpen.contains('inactive');
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      GestureDetector(
+        onTap: () => setState(() =>
+            isOpen ? _bucketOpen.remove('inactive') : _bucketOpen.add('inactive')),
+        child: Row(children: [
+          AnimatedRotation(
+            turns: isOpen ? 0.25 : 0,
+            duration: const Duration(milliseconds: 150),
+            child: const Icon(Icons.chevron_right_rounded,
+                size: 16, color: Color(0xFF9CA3AF)),
+          ),
+          const SizedBox(width: 4),
+          Text('Other payment attempts (${claims.length})',
+              style: const TextStyle(
+                  fontSize: 12, fontWeight: FontWeight.w500,
+                  color: Color(0xFF9CA3AF))),
+        ]),
+      ),
+      if (isOpen) ...[
+        const SizedBox(height: 6),
+        ...claims.map((c) => _buildInactiveRow(c)),
+      ],
+    ]);
+  }
+
+  Widget _buildInactiveRow(Map<String, dynamic> claim) {
+    final status       = claim['status']        as String? ?? '';
+    final amount       = claim['amount']        as num?;
+    final utr          = claim['utr']           as String?;
+    final app          = claim['app']           as String?;
+    final filePath     = claim['file_path']     as String?;
+    final verifyReason = claim['verify_reason'] as String?;
+
+    final (Color sBg, Color sFg, String sLabel) = switch (status) {
+      'rejected'  => (const Color(0xFFFEE2E2), const Color(0xFF991B1B), 'Rejected'),
+      'duplicate' => (const Color(0xFFF3F4F6), const Color(0xFF6B7280), 'Duplicate'),
+      _           => (const Color(0xFFF3F4F6), const Color(0xFF6B7280), status),
+    };
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF9FAFB),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+      ),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // status + meta
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                decoration: BoxDecoration(
+                    color: sBg, borderRadius: BorderRadius.circular(20)),
+                child: Text(sLabel,
+                    style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600,
+                        color: sFg)),
+              ),
+              const SizedBox(width: 8),
+              if (amount != null)
+                Text(_rupee(amount),
+                    style: const TextStyle(
+                        fontSize: 13, fontWeight: FontWeight.w700,
+                        color: Color(0xFF374151))),
+              if (app != null && app.isNotEmpty) ...[
+                const SizedBox(width: 6),
+                Text(app,
+                    style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
+              ],
+            ]),
+            if (utr != null && utr.isNotEmpty) ...[
+              const SizedBox(height: 3),
+              Text('UTR: $utr',
+                  style: const TextStyle(
+                      fontSize: 11, color: Color(0xFF6B7280),
+                      fontFamily: 'monospace')),
+            ],
+            if (verifyReason != null && verifyReason.isNotEmpty) ...[
+              const SizedBox(height: 2),
+              Text(verifyReason,
+                  style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
+            ],
+          ]),
+        ),
+        // tiny screenshot
+        if (filePath != null && filePath.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(left: 8),
+            child: FutureBuilder<String?>(
+              future: PaymentClaimsService.signedScreenshotUrl(filePath),
+              builder: (ctx, snap) {
+                final url = snap.data;
+                if (snap.connectionState == ConnectionState.waiting) {
+                  return Container(
+                      width: 48, height: 36,
+                      decoration: BoxDecoration(
+                          color: const Color(0xFFF3F4F6),
+                          borderRadius: BorderRadius.circular(4)),
+                      child: const Center(child: SizedBox(width: 12, height: 12,
+                          child: CircularProgressIndicator(strokeWidth: 1.5))));
+                }
+                if (url == null) return const SizedBox.shrink();
+                return GestureDetector(
+                  onTap: () => _showScreenshot(ctx, url),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(4),
+                    child: Image.network(url,
+                        width: 48, height: 36, fit: BoxFit.cover,
+                        errorBuilder: (_, e, __) => Container(
+                          width: 48, height: 36,
+                          color: const Color(0xFFF3F4F6),
+                          child: const Center(child: Icon(
+                              Icons.broken_image_outlined,
+                              color: Color(0xFF9CA3AF), size: 14)),
+                        )),
+                  ),
+                );
+              },
+            ),
+          ),
+      ]),
+    );
+  }
+
   void _showScreenshot(BuildContext ctx, String url) {
     showDialog(
       context: ctx,
@@ -4983,6 +5424,7 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
   @override
   Widget build(BuildContext context) {
     RenderLog.write('c214_payment_ui_polished', 1);
+    RenderLog.write('c216_unassigned_built', 1);
     return Container(
       color: const Color(0xFFFAFAFA),
       padding: const EdgeInsets.fromLTRB(20, 12, 20, 16),
@@ -5055,6 +5497,10 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
     final restClaims  = List<Map<String, dynamic>>.from(rest['claims']  as List? ?? []);
     final otherClaims = List<Map<String, dynamic>>.from(other['claims'] as List? ?? []);
 
+    // CHANGE #216 — unassigned (not yet linked to any order) + inactive (rejected/duplicate)
+    final unassigned = List<Map<String, dynamic>>.from(d['unassigned'] as List? ?? []);
+    final inactive   = List<Map<String, dynamic>>.from(d['inactive']   as List? ?? []);
+
     // Render-log: running totals proof
     RenderLog.write('c215_runningtotals_built', 1);
     RenderLog.write(
@@ -5063,7 +5509,8 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
       RenderLog.write('c215_carry_${(restCarry!).toInt()}', 1);
     }
 
-    if (advClaims.isEmpty && restClaims.isEmpty && otherClaims.isEmpty) {
+    if (advClaims.isEmpty && restClaims.isEmpty && otherClaims.isEmpty &&
+        unassigned.isEmpty && inactive.isEmpty) {
       return const Padding(
         padding: EdgeInsets.symmetric(vertical: 8),
         child: Text('No payment received for this order yet.',
@@ -5125,6 +5572,18 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
           const SizedBox(height: 6),
           ...otherClaims.map((c) => _buildClaimBlock(c, null)),
         ],
+      ],
+
+      // CHANGE #216 — Unassigned payments (not yet linked to this order)
+      if (unassigned.isNotEmpty) ...[
+        const SizedBox(height: 16),
+        _buildUnassignedSection(unassigned),
+      ],
+
+      // CHANGE #216 — Inactive (rejected/duplicate) — collapsed history
+      if (inactive.isNotEmpty) ...[
+        const SizedBox(height: 8),
+        _buildInactiveSection(inactive),
       ],
     ]);
   }

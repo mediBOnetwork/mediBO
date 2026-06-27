@@ -4908,12 +4908,17 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
         if (url != null && mounted) {
           final vt = 'claim-img-${claim.claimId}';
           if (!_imgViewTypes.containsKey(claim.claimId)) {
+            final capturedContext = context;
             ui_web.platformViewRegistry.registerViewFactory(vt, (int viewId) {
-              return html.ImageElement()
+              final img = html.ImageElement()
                 ..src = url
                 ..style.width = '100%'
                 ..style.height = '100%'
-                ..style.objectFit = 'cover';
+                ..style.objectFit = 'cover'
+                ..style.cursor = 'pointer';
+              // Platform views absorb Flutter pointer events — use native onClick instead.
+              img.onClick.listen((_) => openFullscreenImage(capturedContext, url));
+              return img;
             });
           }
           setState(() {
@@ -4927,6 +4932,8 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
       RenderLog.write('c225_signed_urls_fix', 1);
       RenderLog.write('c228_payview_complete',
           'change:228,signed_urls:true,realtime:true,fullscreen:true,covers:cash+online');
+      RenderLog.write('c229_img_fullscreen_fix',
+          'change:229,thumb_onclick:true,fullscreen:true,covers:cash+online,buckets:whatsapp+cash_payments');
     }
   }
 
@@ -5606,14 +5613,13 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
                 );
               }
               RenderLog.write('c225_img_ok', 1);
-              return GestureDetector(
-                onTap: url != null ? () => _showScreenshot(ctx, url) : null,
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(8),
-                  child: SizedBox(
-                    width: 110, height: 80,
-                    child: HtmlElementView(viewType: vt),
-                  ),
+              // No GestureDetector — platform view eats Flutter taps.
+              // onClick is wired on the ImageElement in _loadSignedUrls.
+              return ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: SizedBox(
+                  width: 110, height: 80,
+                  child: HtmlElementView(viewType: vt),
                 ),
               );
             }),

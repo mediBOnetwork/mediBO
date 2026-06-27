@@ -82,13 +82,18 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
       final bytes = base64Decode(b64);
 
       final vt = 'cash-preview-${DateTime.now().millisecondsSinceEpoch}';
+      final capturedContext = context;
       ui_web.platformViewRegistry.registerViewFactory(vt, (int viewId) {
-        return html.ImageElement()
+        final img = html.ImageElement()
           ..src = dataUrl
           ..style.width = '100%'
           ..style.height = '100%'
           ..style.objectFit = 'cover'
-          ..style.borderRadius = '10px';
+          ..style.borderRadius = '10px'
+          ..style.cursor = 'pointer';
+        // Platform view absorbs Flutter taps — use native onClick.
+        img.onClick.listen((_) => openFullscreenImage(capturedContext, dataUrl));
+        return img;
       });
 
       if (mounted) {
@@ -283,17 +288,11 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
                   child: Stack(
                     fit: StackFit.expand,
                     children: [
-                      // Tap image → fullscreen viewer
-                      GestureDetector(
-                        onTap: () {
-                          if (_fileDataUrl != null) {
-                            openFullscreenImage(context, _fileDataUrl!);
-                          }
-                        },
-                        child: _viewType != null
-                            ? HtmlElementView(viewType: _viewType!)
-                            : Container(color: Colors.grey.shade200),
-                      ),
+                      // onClick wired on ImageElement in _pickFile — GestureDetector
+                      // never fires on platform views.
+                      _viewType != null
+                          ? HtmlElementView(viewType: _viewType!)
+                          : Container(color: Colors.grey.shade200),
                       // Tap Change badge → re-pick file
                       Positioned(
                         top: 6, right: 6,

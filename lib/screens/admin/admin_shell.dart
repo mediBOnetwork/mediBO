@@ -14,6 +14,7 @@ import 'admin_supplier_screen.dart';
 import 'admin_dashboard_screen.dart';
 import 'admin_manage_admins_screen.dart';
 import 'admin_pending_bills_screen.dart';
+import 'admin_upi_screen.dart';
 
 // ── View state ────────────────────────────────────────────────────────────────
 
@@ -76,6 +77,16 @@ class _AdminShellState extends State<AdminShell> {
     _loadPendingCount();
     _initFcm();
     RenderLog.write('c204_wa_section_shown', 1);
+    _checkSuperAdmin();
+  }
+
+  Future<void> _checkSuperAdmin() async {
+    try {
+      final isSuper = (await Supabase.instance.client.rpc('am_i_super')) == true;
+      RenderLog.write(isSuper ? 'c208_is_super_true' : 'c208_is_super_false', 1);
+    } catch (_) {
+      RenderLog.write('c208_is_super_false', 1);
+    }
   }
 
   void _initFcm() {
@@ -143,6 +154,15 @@ class _AdminShellState extends State<AdminShell> {
           return;
         }
         setState(() { _view = _AdminView.section; _index = 5; });
+        return;
+      case 'payment_upi':
+        if (!isSuperAdmin) {
+          showToast(ctx, 'Only super-admins can manage UPI accounts', isError: true);
+          return;
+        }
+        Navigator.of(ctx).push(
+          MaterialPageRoute(builder: (_) => const AdminUpiScreen()),
+        );
         return;
       case 'add_supplier':
         Navigator.of(ctx).push(MaterialPageRoute(
@@ -213,6 +233,7 @@ class _AdminShellState extends State<AdminShell> {
               onLogoTap: _onLogoTap,
               onNav: (route) => _navigateQuickLink(ctx, route, isSuperAdmin),
               pendingBillsCount: _pendingBillsCount,
+              isSuperAdmin: isSuperAdmin,
             ),
             Expanded(child: _buildBody(isSuperAdmin)),
           ],
@@ -275,6 +296,15 @@ class _AdminShellState extends State<AdminShell> {
                   child: _PopupRow(
                     icon: Icons.admin_panel_settings_outlined,
                     label: 'Manage Admins',
+                    color: Color(0xFF1B7A43),
+                  ),
+                ),
+              if (isSuperAdmin)
+                const PopupMenuItem(
+                  value: 'payment_upi',
+                  child: _PopupRow(
+                    icon: Icons.qr_code_outlined,
+                    label: 'Payment / UPI',
                     color: Color(0xFF1B7A43),
                   ),
                 ),
@@ -346,11 +376,13 @@ class _AdminNewDesktopHeader extends StatelessWidget {
   final VoidCallback onLogoTap;
   final ValueChanged<String> onNav;
   final int pendingBillsCount;
+  final bool isSuperAdmin;
 
   const _AdminNewDesktopHeader({
     required this.onLogoTap,
     required this.onNav,
     this.pendingBillsCount = 0,
+    this.isSuperAdmin = false,
   });
 
   @override
@@ -413,6 +445,10 @@ class _AdminNewDesktopHeader extends StatelessWidget {
           _BillsNavLink(count: pendingBillsCount, onTap: () => onNav('bills')),
           const SizedBox(width: 2),
           _DesktopNavLink(label: 'WhatsApp', icon: Icons.forum_outlined, selected: false, onTap: () => onNav('whatsapp')),
+          if (isSuperAdmin) ...[
+            const SizedBox(width: 2),
+            _DesktopNavLink(label: 'Payment / UPI', icon: Icons.qr_code_outlined, selected: false, onTap: () => onNav('payment_upi')),
+          ],
           const SizedBox(width: 8),
           _AdminProfileChip(),
           const SizedBox(width: 24),

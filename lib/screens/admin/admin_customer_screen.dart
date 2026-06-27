@@ -4841,6 +4841,7 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
   bool _loading = true;
   String? _error;
   final Set<String> _acting = {};
+  final Map<String, String> _signedUrls = {};  // claimId → signed URL
 
   @override
   void initState() {
@@ -4860,10 +4861,25 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
       RenderLog.write('c217_service_loaded', 1);
       RenderLog.write('c217_payview_loaded_$shortId', 1);
       setState(() { _data = data; _claims = parsed; _loading = false; });
+      _loadSignedUrls(parsed);
     } catch (e) {
       if (!mounted) return;
       setState(() { _error = e.toString(); _loading = false; });
     }
+  }
+
+  Future<void> _loadSignedUrls(List<PaymentClaim> claims) async {
+    for (final claim in claims) {
+      if (claim.filePath == null || claim.filePath!.isEmpty) continue;
+      if (_signedUrls.containsKey(claim.claimId)) continue;
+      try {
+        final url = await PaymentClaimsService.signedScreenshotUrl(claim.filePath!);
+        if (url != null && mounted) {
+          setState(() => _signedUrls[claim.claimId] = url);
+        }
+      } catch (_) {}
+    }
+    if (mounted) RenderLog.write('c224_signed_urls_fix', 1);
   }
 
   List<PaymentClaim> _parseClaims(Map<String, dynamic> d) {
@@ -5545,63 +5561,44 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
             child: Text(claim.verifyReason!,
                 style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
           ),
-        // Screenshot (CHANGE #223 — signed URL already via signedScreenshotUrl)
+        // Screenshot — pre-loaded signed URL (CHANGE #224)
         if (claim.filePath != null && claim.filePath!.isNotEmpty)
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
-            child: FutureBuilder<String?>(
-              future: PaymentClaimsService.signedScreenshotUrl(claim.filePath!).then((u) {
-                RenderLog.write('c223_signed_url', 1);
-                return u;
-              }),
-              builder: (ctx, snap) {
-                if (snap.connectionState == ConnectionState.waiting) {
-                  return Container(
-                    width: 110, height: 80,
-                    decoration: BoxDecoration(
-                        color: const Color(0xFFF3F4F6),
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: const Color(0xFFE5E7EB))),
-                    child: const Center(child: SizedBox(width: 16, height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2))),
-                  );
-                }
-                final url = snap.data;
-                if (url == null) {
-                  RenderLog.write('c217_shot_err', 1);
-                  return Container(
-                    width: 110, height: 80,
-                    decoration: BoxDecoration(
-                        color: const Color(0xFFF3F4F6),
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: const Color(0xFFE5E7EB))),
-                    child: const Center(child: Icon(
-                        Icons.image_not_supported_outlined,
-                        color: Color(0xFF9CA3AF), size: 20)),
-                  );
-                }
-                RenderLog.write('c217_shot_ok', 1);
-                return GestureDetector(
-                  onTap: () => _showScreenshot(ctx, url),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(8),
-                    child: Container(
-                      decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: const Color(0xFFE5E7EB))),
-                      child: Image.network(url,
-                          width: 110, height: 80, fit: BoxFit.cover,
-                          errorBuilder: (_, e, __) => Container(
-                            width: 110, height: 80,
-                            color: const Color(0xFFF3F4F6),
-                            child: const Center(child: Icon(
-                                Icons.broken_image_outlined, color: Color(0xFF9CA3AF))),
-                          )),
-                    ),
-                  ),
+            child: Builder(builder: (ctx) {
+              final url = _signedUrls[claim.claimId];
+              if (url == null) {
+                return Container(
+                  width: 110, height: 80,
+                  decoration: BoxDecoration(
+                      color: const Color(0xFFF3F4F6),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: const Color(0xFFE5E7EB))),
+                  child: const Center(child: SizedBox(width: 16, height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2))),
                 );
-              },
-            ),
+              }
+              RenderLog.write('c224_img_ok', 1);
+              return GestureDetector(
+                onTap: () => _showScreenshot(ctx, url),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: Container(
+                    decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: const Color(0xFFE5E7EB))),
+                    child: Image.network(url,
+                        width: 110, height: 80, fit: BoxFit.cover,
+                        errorBuilder: (_, e, __) => Container(
+                          width: 110, height: 80,
+                          color: const Color(0xFFF3F4F6),
+                          child: const Center(child: Icon(
+                              Icons.broken_image_outlined, color: Color(0xFF9CA3AF))),
+                        )),
+                  ),
+                ),
+              );
+            }),
           ),
         // Action buttons
         Padding(

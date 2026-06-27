@@ -15,6 +15,7 @@ import '../../utils/render_log.dart';
 import '../bulk_upload_screen.dart';
 import '../../services/payment_claims_service.dart';
 import '../../widgets/cash_payment_sheet.dart';
+import '../../widgets/fullscreen_image.dart';
 
 // ── Item model ────────────────────────────────────────────────────────────────
 
@@ -4844,11 +4845,40 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
   final Set<String> _acting = {};
   final Map<String, String> _signedUrls = {};     // claimId → signed URL
   final Map<String, String> _imgViewTypes = {};   // claimId → HtmlElementView viewType
+  RealtimeChannel? _paymentChannel;
 
   @override
   void initState() {
     super.initState();
     _load();
+    _subscribeRealtime();
+  }
+
+  @override
+  void dispose() {
+    _paymentChannel?.unsubscribe();
+    super.dispose();
+  }
+
+  void _subscribeRealtime() {
+    _paymentChannel?.unsubscribe();
+    _paymentChannel = Supabase.instance.client
+        .channel('payment_claims_${widget.orderId}')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'payment_claims',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'order_id',
+            value: widget.orderId,
+          ),
+          callback: (_) {
+            if (mounted) _load();
+          },
+        )
+        .subscribe();
+    RenderLog.write('c226_realtime', 1);
   }
 
   Future<void> _load() async {
@@ -5039,25 +5069,8 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
   }
 
   void _showScreenshot(BuildContext ctx, String url) {
-    showDialog(
-      context: ctx,
-      builder: (dlgCtx) => Dialog(
-        backgroundColor: Colors.black,
-        insetPadding: EdgeInsets.zero,
-        child: GestureDetector(
-          onTap: () => Navigator.pop(dlgCtx),
-          child: InteractiveViewer(
-            child: Image.network(
-              url,
-              fit: BoxFit.contain,
-              errorBuilder: (_, e, __) => const Center(
-                child: Icon(Icons.broken_image_outlined, color: Colors.white54, size: 48),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
+    RenderLog.write('c226_fullscreen', 1);
+    openFullscreenImage(ctx, url);
   }
 
   @override
@@ -5080,12 +5093,7 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
           const Spacer(),
           if (_loading)
             const SizedBox(width: 13, height: 13,
-                child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF9CA3AF)))
-          else
-            GestureDetector(
-              onTap: _load,
-              child: const Icon(Icons.refresh_rounded, size: 15, color: Color(0xFF9CA3AF)),
-            ),
+                child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF9CA3AF))),
         ]),
         const SizedBox(height: 8),
         const Divider(height: 1, color: Color(0xFFE5E7EB)),

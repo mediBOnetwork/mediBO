@@ -7,6 +7,7 @@ import 'dart:ui_web' as ui_web;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'fullscreen_image.dart';
 
 class CashPaymentSheet extends StatefulWidget {
   final String orderId;
@@ -28,11 +29,12 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
   Uint8List? _fileBytes;
   String? _fileDataUrl;
   String? _fileMime;
-  String? _viewType;   // registered HtmlElementView viewType for preview
+  String? _viewType;
   double? _lat;
   double? _lng;
   bool _locating = false;
   bool _submitting = false;
+  double _uploadProgress = 0.0;
   String? _error;
   String? _locError;
   String? _locationLabel;
@@ -79,7 +81,6 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
       final b64 = dataUrl.substring(comma + 1);
       final bytes = base64Decode(b64);
 
-      // Register an HTML img element — most reliable preview on Flutter Web
       final vt = 'cash-preview-${DateTime.now().millisecondsSinceEpoch}';
       ui_web.platformViewRegistry.registerViewFactory(vt, (int viewId) {
         return html.ImageElement()
@@ -102,22 +103,13 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
   }
 
   Future<void> _requestLocation() async {
-    setState(() {
-      _locating = true;
-      _locError = null;
-    });
+    setState(() { _locating = true; _locError = null; });
     try {
       final completer = Completer<html.Geoposition>();
       html.window.navigator.geolocation
-          .getCurrentPosition(
-        enableHighAccuracy: false,
-        timeout: const Duration(seconds: 20),
-      )
-          .then((pos) {
-        if (!completer.isCompleted) completer.complete(pos);
-      }).catchError((e) {
-        if (!completer.isCompleted) completer.completeError(e);
-      });
+          .getCurrentPosition(enableHighAccuracy: false, timeout: const Duration(seconds: 20))
+          .then((pos) { if (!completer.isCompleted) completer.complete(pos); })
+          .catchError((e) { if (!completer.isCompleted) completer.completeError(e); });
 
       final pos = await completer.future.timeout(
         const Duration(seconds: 25),
@@ -134,16 +126,14 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
           _lng = lng;
           _locating = false;
           _locError = null;
-          _locationLabel =
-              '${lat.toStringAsFixed(5)}, ${lng.toStringAsFixed(5)}';
+          _locationLabel = '${lat.toStringAsFixed(5)}, ${lng.toStringAsFixed(5)}';
         });
       }
     } catch (e) {
       if (mounted) {
         setState(() {
           _locating = false;
-          _locError =
-              'Could not get location. Allow location in browser and tap retry.';
+          _locError = 'Could not get location. Allow location in browser and tap retry.';
         });
       }
     }
@@ -151,29 +141,21 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
 
   Future<void> _submit() async {
     if (!_canSubmit) return;
-    setState(() {
-      _submitting = true;
-      _error = null;
-    });
+    setState(() { _submitting = true; _error = null; _uploadProgress = 0.1; });
     try {
       final supabase = Supabase.instance.client;
       final mime = _fileMime ?? 'image/jpeg';
-      final ext = mime.contains('png')
-          ? 'png'
-          : mime.contains('pdf')
-              ? 'pdf'
-              : mime.contains('webp')
-                  ? 'webp'
-                  : 'jpg';
+      final ext = mime.contains('png') ? 'png' : mime.contains('webp') ? 'webp' : 'jpg';
       final filename = 'cash_${DateTime.now().millisecondsSinceEpoch}.$ext';
       final path = 'cash_payments/$filename';
 
+      setState(() { _uploadProgress = 0.3; });
       await supabase.storage.from('whatsapp-media').uploadBinary(
-            path,
-            _fileBytes!,
-            fileOptions: FileOptions(contentType: mime, upsert: true),
-          );
+        path, _fileBytes!,
+        fileOptions: FileOptions(contentType: mime, upsert: true),
+      );
 
+      setState(() { _uploadProgress = 0.7; });
       final res = await supabase.rpc('admin_record_cash_payment', params: {
         'p_order_id': widget.orderId,
         'p_amount': double.parse(_amountCtrl.text.trim()),
@@ -183,23 +165,19 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
         'p_lng': _lng,
       });
 
+      setState(() { _uploadProgress = 1.0; });
       final result = Map<String, dynamic>.from(res as Map);
       if (result['ok'] == true) {
-        if (mounted) {
-          Navigator.pop(context);
-          widget.onSuccess();
-        }
+        if (mounted) { Navigator.pop(context); widget.onSuccess(); }
       } else {
         setState(() {
           _error = result['error']?.toString() ?? 'Submission failed';
           _submitting = false;
+          _uploadProgress = 0.0;
         });
       }
     } catch (e) {
-      setState(() {
-        _error = e.toString();
-        _submitting = false;
-      });
+      setState(() { _error = e.toString(); _submitting = false; _uploadProgress = 0.0; });
     }
   }
 
@@ -222,9 +200,7 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       padding: EdgeInsets.only(
-        left: 16,
-        right: 16,
-        top: 16,
+        left: 16, right: 16, top: 16,
         bottom: MediaQuery.of(context).viewInsets.bottom + 24,
       ),
       child: SingleChildScrollView(
@@ -249,55 +225,41 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
 
             // AMOUNT
             const Text('Amount (₹)',
-                style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: Color(0xFF424242))),
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF424242))),
             const SizedBox(height: 6),
             TextField(
               controller: _amountCtrl,
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true),
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
               inputFormatters: [
                 FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}')),
               ],
               decoration: InputDecoration(
                 prefixText: '₹ ',
                 hintText: '0.00',
-                border:
-                    OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
               ),
             ),
             const SizedBox(height: 16),
 
             // RECEIVED BY
             const Text('Received by',
-                style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: Color(0xFF424242))),
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF424242))),
             const SizedBox(height: 6),
             TextField(
               controller: _collectedByCtrl,
               textCapitalization: TextCapitalization.words,
               decoration: InputDecoration(
                 hintText: 'Staff name',
-                border:
-                    OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
               ),
             ),
             const SizedBox(height: 16),
 
             // FILE UPLOAD
             const Text('Upload File',
-                style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: Color(0xFF424242))),
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF424242))),
             const SizedBox(height: 6),
             if (_fileBytes == null)
               SizedBox(
@@ -308,8 +270,7 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
                   icon: const Icon(Icons.attach_file),
                   label: const Text('Choose Photo / File'),
                   style: OutlinedButton.styleFrom(
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10)),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                   ),
                 ),
               )
@@ -317,34 +278,39 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
               SizedBox(
                 height: 130,
                 width: double.infinity,
-                child: GestureDetector(
-                  onTap: _pickFile,
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(10),
-                    child: Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        if (_viewType != null)
-                          HtmlElementView(viewType: _viewType!)
-                        else
-                          Container(color: Colors.grey.shade200),
-                        Positioned(
-                          top: 6,
-                          right: 6,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      // Tap image → fullscreen viewer
+                      GestureDetector(
+                        onTap: () {
+                          if (_fileDataUrl != null) {
+                            openFullscreenImage(context, _fileDataUrl!);
+                          }
+                        },
+                        child: _viewType != null
+                            ? HtmlElementView(viewType: _viewType!)
+                            : Container(color: Colors.grey.shade200),
+                      ),
+                      // Tap Change badge → re-pick file
+                      Positioned(
+                        top: 6, right: 6,
+                        child: GestureDetector(
+                          onTap: _pickFile,
                           child: Container(
                             decoration: BoxDecoration(
                               color: Colors.black54,
                               borderRadius: BorderRadius.circular(20),
                             ),
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 8, vertical: 4),
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                             child: const Text('Change',
-                                style: TextStyle(
-                                    color: Colors.white, fontSize: 11)),
+                                style: TextStyle(color: Colors.white, fontSize: 11)),
                           ),
                         ),
-                      ],
-                    ),
+                      ),
+                    ],
                   ),
                 ),
               ),
@@ -352,38 +318,26 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
 
             // LOCATION
             const Text('Location',
-                style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: Color(0xFF424242))),
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF424242))),
             const SizedBox(height: 6),
             if (_lat != null)
               Row(children: [
-                const Icon(Icons.location_on,
-                    color: Color(0xFF2E7D32), size: 18),
+                const Icon(Icons.location_on, color: Color(0xFF2E7D32), size: 18),
                 const SizedBox(width: 6),
                 Expanded(
                   child: Text('Location captured ✓\n$_locationLabel',
-                      style: const TextStyle(
-                          fontSize: 12, color: Color(0xFF2E7D32))),
+                      style: const TextStyle(fontSize: 12, color: Color(0xFF2E7D32))),
                 ),
                 TextButton(
                   onPressed: _requestLocation,
-                  child:
-                      const Text('Refresh', style: TextStyle(fontSize: 12)),
+                  child: const Text('Refresh', style: TextStyle(fontSize: 12)),
                 ),
               ])
             else if (_locating)
               const Row(children: [
-                SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                ),
+                SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
                 SizedBox(width: 8),
-                Text('Getting location...',
-                    style:
-                        TextStyle(fontSize: 13, color: Color(0xFF757575))),
+                Text('Getting location...', style: TextStyle(fontSize: 13, color: Color(0xFF757575))),
               ])
             else
               SizedBox(
@@ -406,10 +360,8 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
                           ? const Color(0xFFD32F2F)
                           : const Color(0xFF1565C0),
                     ),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10)),
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 10),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                   ),
                 ),
               ),
@@ -417,9 +369,7 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
             // SUBMIT ERROR
             if (_error != null) ...[
               const SizedBox(height: 12),
-              Text(_error!,
-                  style: const TextStyle(
-                      color: Color(0xFFD32F2F), fontSize: 12)),
+              Text(_error!, style: const TextStyle(color: Color(0xFFD32F2F), fontSize: 12)),
             ],
 
             const SizedBox(height: 20),
@@ -435,20 +385,32 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
                   foregroundColor: Colors.white,
                   disabledBackgroundColor: Colors.grey.shade300,
                   disabledForegroundColor: Colors.grey.shade500,
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12)),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                   elevation: _canSubmit ? 2 : 0,
                 ),
                 child: _submitting
-                    ? const SizedBox(
-                        width: 22,
-                        height: 22,
-                        child: CircularProgressIndicator(
-                            color: Colors.white, strokeWidth: 2.5),
+                    ? Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          SizedBox(
+                            width: 22, height: 22,
+                            child: CircularProgressIndicator(
+                              value: _uploadProgress > 0 ? _uploadProgress : null,
+                              color: Colors.white,
+                              strokeWidth: 2.5,
+                              backgroundColor: Colors.white24,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Text(
+                            '${(_uploadProgress * 100).toInt()}%',
+                            style: const TextStyle(
+                                fontSize: 15, fontWeight: FontWeight.w700, color: Colors.white),
+                          ),
+                        ],
                       )
                     : const Text('\u{1F4B5}  Collect Cash',
-                        style: TextStyle(
-                            fontSize: 15, fontWeight: FontWeight.w700)),
+                        style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
               ),
             ),
             const SizedBox(height: 8),

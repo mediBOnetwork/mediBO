@@ -13,6 +13,7 @@ import '../../util.dart';
 import '../../utils/render_log.dart';
 import '../bulk_upload_screen.dart';
 import '../../services/payment_claims_service.dart';
+import '../../widgets/cash_payment_sheet.dart';
 
 // ── Item model ────────────────────────────────────────────────────────────────
 
@@ -1440,6 +1441,15 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                             onTap: () => setState(() =>
                                 _payOpen[row.orderId!] =
                                     !(_payOpen[row.orderId!] ?? false)),
+                            onLongPress: () => showModalBottomSheet(
+                              context: context,
+                              isScrollControlled: true,
+                              backgroundColor: Colors.transparent,
+                              builder: (_) => CashPaymentSheet(
+                                orderId: row.orderId!,
+                                onSuccess: () => setState(() {}),
+                              ),
+                            ),
                           ),
                         )
                       : const SizedBox()),
@@ -1569,6 +1579,15 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                       onTap: () => setState(() =>
                           _payOpen[row.orderId!] =
                               !(_payOpen[row.orderId!] ?? false)),
+                      onLongPress: () => showModalBottomSheet(
+                        context: context,
+                        isScrollControlled: true,
+                        backgroundColor: Colors.transparent,
+                        builder: (_) => CashPaymentSheet(
+                          orderId: row.orderId!,
+                          onSuccess: () => setState(() {}),
+                        ),
+                      ),
                     ),
                   ),
                 ],
@@ -4590,13 +4609,15 @@ String _rupee(num? v) {
 class _ViewPayBtn extends StatelessWidget {
   final bool isOpen;
   final VoidCallback onTap;
-  const _ViewPayBtn({required this.isOpen, required this.onTap});
+  final VoidCallback? onLongPress;
+  const _ViewPayBtn({required this.isOpen, required this.onTap, this.onLongPress});
 
   @override
   Widget build(BuildContext context) {
     RenderLog.write('c213_viewpay_built', 1);
     return GestureDetector(
       onTap: onTap,
+      onLongPress: onLongPress,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
@@ -5045,6 +5066,42 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
             TextButton(onPressed: _load, child: const Text('Retry')),
           ])
         else if (!_loading) ...[
+          // CHANGE #221 — Add Cash Payment button (web/desktop trigger)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: OutlinedButton.icon(
+              onPressed: () => showDialog(
+                context: context,
+                barrierDismissible: true,
+                builder: (_) => Dialog(
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16)),
+                  child: SizedBox(
+                    width: 400,
+                    child: CashPaymentSheet(
+                      orderId: widget.orderId,
+                      onSuccess: () {
+                        widget.onStatusChanged?.call();
+                        _load();
+                      },
+                    ),
+                  ),
+                ),
+              ),
+              icon: const Icon(Icons.add, size: 16),
+              label: const Text('Add Cash Payment'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: const Color(0xFF2E7D32),
+                side: const BorderSide(color: Color(0xFF2E7D32)),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8)),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                textStyle: const TextStyle(
+                    fontSize: 12, fontWeight: FontWeight.w600),
+              ),
+            ),
+          ),
           if (_claims.isNotEmpty) ...[
             _buildChipRow(),
             const SizedBox(height: 12),
@@ -5075,7 +5132,8 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
         ),
         ..._claims.map((claim) {
           final colors = _chipColors(claim.status);
-          final label = claim.amount != null ? _rupee(claim.amount) : '₹?';
+          final cashPrefix = claim.paymentMethod == 'cash' ? '💵' : '';
+          final label = '$cashPrefix${claim.amount != null ? _rupee(claim.amount) : '₹?'}';
           return Padding(
             padding: const EdgeInsets.only(left: 8),
             child: _PayChip(
@@ -5289,7 +5347,60 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
         ]),
       ),
 
-      // D4 Legend
+      // D4 Cash vs Online split bar (CHANGE #221)
+      Builder(builder: (ctx) {
+        RenderLog.write('c221_bars_4', 1);
+        RenderLog.write('c221_cash_sheet', 'built');
+        final cashTotal   = d.cashTotal;
+        final onlineTotal = d.onlineTotal;
+        return Container(
+          margin: const EdgeInsets.only(bottom: 12),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: const Color(0xFFE5E7EB)),
+          ),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+              const Text('Cash vs Online',
+                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w500,
+                      color: Color(0xFF9CA3AF))),
+              Text('💵 ${_rupee(cashTotal)}  ·  📱 ${_rupee(onlineTotal)}',
+                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700,
+                      color: Color(0xFF111827))),
+            ]),
+            const SizedBox(height: 8),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: d.totalReceived > 0
+                  ? Row(children: [
+                      if (cashTotal > 0)
+                        Flexible(
+                          flex: (cashTotal * 1000).round(),
+                          child: Container(height: 7,
+                              color: const Color(0xFF2E7D32)),
+                        ),
+                      if (onlineTotal > 0)
+                        Flexible(
+                          flex: (onlineTotal * 1000).round(),
+                          child: Container(height: 7,
+                              color: const Color(0xFF1565C0)),
+                        ),
+                    ])
+                  : Container(height: 7, color: Colors.grey.shade200),
+            ),
+            const SizedBox(height: 8),
+            Row(children: [
+              _legendDot(const Color(0xFF2E7D32), 'Cash'),
+              const SizedBox(width: 12),
+              _legendDot(const Color(0xFF1565C0), 'Online'),
+            ]),
+          ]),
+        );
+      }),
+
+      // D5 Legend
       Row(mainAxisSize: MainAxisSize.min, children: [
         _legendDot(const Color(0xFFD97706), 'Claimed'),
         const SizedBox(width: 12),
@@ -5571,6 +5682,10 @@ class PaymentClaim {
   final bool?   matchesAdvance;
   final bool?   matchesRest;
   final String? verifyReason;
+  final String  paymentMethod;   // 'online' | 'cash'
+  final String? collectedBy;
+  final double? locationLat;
+  final double? locationLng;
 
   const PaymentClaim({
     required this.claimId,
@@ -5589,6 +5704,10 @@ class PaymentClaim {
     this.matchesAdvance,
     this.matchesRest,
     this.verifyReason,
+    this.paymentMethod = 'online',
+    this.collectedBy,
+    this.locationLat,
+    this.locationLng,
   });
 
   factory PaymentClaim.fromMap(Map<String, dynamic> m, String bucket) {
@@ -5596,6 +5715,12 @@ class PaymentClaim {
     double? amt;
     if (rawAmt is num) amt = rawAmt.toDouble();
     else if (rawAmt is String) amt = double.tryParse(rawAmt);
+    double? _parseCoord(dynamic v) {
+      if (v == null) return null;
+      if (v is num) return v.toDouble();
+      if (v is String) return double.tryParse(v);
+      return null;
+    }
     return PaymentClaim(
       claimId:        m['claim_id']       as String? ?? '',
       amount:         amt,
@@ -5613,6 +5738,10 @@ class PaymentClaim {
       matchesAdvance: m['matches_advance'] as bool?,
       matchesRest:    m['matches_rest']   as bool?,
       verifyReason:   m['verify_reason']  as String?,
+      paymentMethod:  m['payment_method'] as String? ?? 'online',
+      collectedBy:    m['collected_by']   as String?,
+      locationLat:    _parseCoord(m['location_lat']),
+      locationLng:    _parseCoord(m['location_lng']),
     );
   }
 }
@@ -5626,6 +5755,8 @@ class PaymentDashboardData {
   final double totalReceived;
   final double remainingBalance;
   final double advanceRemaining;
+  final double cashTotal;
+  final double onlineTotal;
 
   const PaymentDashboardData({
     required this.totalValue,
@@ -5636,6 +5767,8 @@ class PaymentDashboardData {
     required this.totalReceived,
     required this.remainingBalance,
     required this.advanceRemaining,
+    this.cashTotal = 0.0,
+    this.onlineTotal = 0.0,
   });
 
   static double _coerce(dynamic v) {
@@ -5654,7 +5787,11 @@ class PaymentDashboardData {
     final advReceived   = _coerce(adv['received']);
     final restExpected  = _coerce(rest['expected']  ?? d['balance_expected']);
     final restReceived  = _coerce(rest['received']);
-    final totalReceived = advReceived + restReceived;
+    final cashTotal     = _coerce(d['cash_total']);
+    final onlineTotal   = _coerce(d['online_total']);
+    // Prefer RPC-supplied total_received (includes cash); fall back to adv+rest sum
+    final rpcTotal      = _coerce(d['total_received']);
+    final totalReceived = rpcTotal > 0 ? rpcTotal : (advReceived + restReceived);
     final remaining     = (totalValue - totalReceived).clamp(0.0, double.infinity);
     final advRemaining  = _coerce(adv['remaining']);
 
@@ -5667,6 +5804,8 @@ class PaymentDashboardData {
       totalReceived:    totalReceived,
       remainingBalance: remaining,
       advanceRemaining: advRemaining,
+      cashTotal:        cashTotal,
+      onlineTotal:      onlineTotal,
     );
   }
 }

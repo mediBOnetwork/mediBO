@@ -64,6 +64,27 @@ class PaymentClaimsService {
     return Map<String, dynamic>.from(res as Map);
   }
 
+  // CHANGE #221 — record cash payment collected in person
+  static Future<Map<String, dynamic>> adminRecordCashPayment({
+    required String orderId,
+    required double amount,
+    required String collectedBy,
+    required String filePath,
+    double? lat,
+    double? lng,
+  }) async {
+    final res = await _client.rpc('admin_record_cash_payment', params: {
+      'p_order_id':    orderId,
+      'p_amount':      amount,
+      'p_collected_by': collectedBy,
+      'p_file_path':   filePath,
+      'p_lat':         lat,
+      'p_lng':         lng,
+    });
+    if (res == null) return {};
+    return Map<String, dynamic>.from(res as Map);
+  }
+
   static Future<String?> signedScreenshotUrl(String filePath) async {
     try {
       final url = await _client.storage

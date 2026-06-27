@@ -1,7 +1,43 @@
 // CHANGE #211 — Admin Payments verification tab
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../../services/payment_claims_service.dart';
 import '../../utils/render_log.dart';
+
+// Top-level copyable row — works from any widget/class (context passed explicitly).
+Widget _copyRowGlobal(BuildContext context, String label, String? value) {
+  final v = (value ?? '').trim();
+  if (v.isEmpty) return const SizedBox.shrink();
+  RenderLog.write('c233_copyrow_rendered', 1);
+  return Padding(
+    padding: const EdgeInsets.symmetric(vertical: 6),
+    child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+      Expanded(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(label, style: const TextStyle(fontSize: 12, color: Color(0xFF9E9E9E))),
+          const SizedBox(height: 2),
+          Text(v, style: const TextStyle(fontSize: 15, color: Color(0xFF212121))),
+        ]),
+      ),
+      const SizedBox(width: 8),
+      IconButton(
+        visualDensity: VisualDensity.compact,
+        padding: EdgeInsets.zero,
+        constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+        icon: const Icon(Icons.copy, size: 18, color: Color(0xFF2E7D32)),
+        onPressed: () {
+          Clipboard.setData(ClipboardData(text: v));
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Copied: $v', maxLines: 1, overflow: TextOverflow.ellipsis),
+              duration: const Duration(seconds: 1),
+            ),
+          );
+        },
+      ),
+    ]),
+  );
+}
 
 // ── Public widget ────────────────────────────────────────────────────────────
 
@@ -372,31 +408,26 @@ class _OcrBlock extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.fromLTRB(12, 12, 4, 12),
       decoration: BoxDecoration(
         color: const Color(0xFFF9FAFB),
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: const Color(0xFFE5E7EB)),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text('Paid: $amountStr',
-            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
-        const SizedBox(height: 4),
-        _row('UTR', utr),
-        _row('Txn', txnId),
-        _row('Time', paidAt),
-        _row('Payee', payeeName),
+        Padding(
+          padding: const EdgeInsets.only(right: 8),
+          child: Text('Paid: $amountStr',
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700,
+                  color: Color(0xFF111827))),
+        ),
+        _copyRowGlobal(context, 'UTR', utr),
+        _copyRowGlobal(context, 'Txn', txnId),
+        _copyRowGlobal(context, 'Time', paidAt),
+        _copyRowGlobal(context, 'Payee', payeeName),
       ]),
     );
   }
-
-  Widget _row(String label, String value) => Padding(
-    padding: const EdgeInsets.only(top: 2),
-    child: Row(children: [
-      SizedBox(width: 44, child: Text('$label:', style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)))),
-      Expanded(child: Text(value, style: const TextStyle(fontSize: 12, color: Color(0xFF374151)), overflow: TextOverflow.ellipsis)),
-    ]),
-  );
 }
 
 // ── Per-order row inside a claim ──────────────────────────────────────────────

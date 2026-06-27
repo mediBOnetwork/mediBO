@@ -4923,7 +4923,11 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
         }
       } catch (_) {}
     }
-    if (mounted) RenderLog.write('c225_signed_urls_fix', 1);
+    if (mounted) {
+      RenderLog.write('c225_signed_urls_fix', 1);
+      RenderLog.write('c228_payview_complete',
+          'change:228,signed_urls:true,realtime:true,fullscreen:true,covers:cash+online');
+    }
   }
 
   List<PaymentClaim> _parseClaims(Map<String, dynamic> d) {

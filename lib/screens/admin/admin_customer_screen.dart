@@ -5423,6 +5423,7 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
 
   // ── Single claim detail (chip selected) ──────────────────────────────────────
   Widget _buildChipClaimDetail(PaymentClaim claim) {
+    RenderLog.write('c223_cash_detail_fix', 1);
     final claimId  = claim.claimId;
     final status   = claim.status;
     final amount   = claim.amount;
@@ -5430,7 +5431,7 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
 
     final (Color sBg, Color sFg, String sLabel) = switch (status) {
       'claimed'               => (const Color(0xFFFEF3C7), const Color(0xFF92400E), 'Claimed'),
-      'verified'              => (const Color(0xFFD1FAE5), const Color(0xFF065F46), 'Received ✓'),
+      'verified' || 'received'=> (const Color(0xFFD1FAE5), const Color(0xFF065F46), 'Received ✓'),
       'rejected'              => (const Color(0xFFFEE2E2), const Color(0xFF991B1B), 'Rejected'),
       'duplicate'             => (const Color(0xFFF3F4F6), const Color(0xFF6B7280), 'Duplicate'),
       _                       => (const Color(0xFFF3F4F6), const Color(0xFF374151), status),
@@ -5472,7 +5473,9 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
           child: Row(children: [
             Expanded(
               child: Text(
-                claim.app != null && claim.app!.isNotEmpty ? claim.app! : 'Payment',
+                claim.paymentMethod == 'cash'
+                    ? '💵 Cash'
+                    : (claim.app != null && claim.app!.isNotEmpty ? claim.app! : 'Payment'),
                 style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
                     color: Color(0xFF111827)),
                 overflow: TextOverflow.ellipsis,
@@ -5498,22 +5501,42 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
               if (hintChip != null) ...[const SizedBox(width: 8), hintChip],
             ]),
           ),
-        // Detail grid
-        if ([claim.utr, claim.txnId, claim.paidAt, claim.payeeName]
-            .any((v) => v != null && v.isNotEmpty))
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-            child: Wrap(spacing: 20, runSpacing: 4, children: [
-              if (claim.utr != null && claim.utr!.isNotEmpty)
-                _kv('UTR', claim.utr!, mono: true),
-              if (claim.txnId != null && claim.txnId!.isNotEmpty)
-                _kv('Txn', claim.txnId!, truncate: true),
-              if (claim.paidAt != null && claim.paidAt!.isNotEmpty)
-                _kv('Paid', _fmtDate(claim.paidAt!)),
-              if (claim.payeeName != null && claim.payeeName!.isNotEmpty)
-                _kv('Payee', claim.payeeName!),
-            ]),
-          ),
+        // Detail grid — cash vs online fields
+        if (claim.paymentMethod == 'cash') ...[
+          // CHANGE #223 — cash payment fields
+          if (claim.collectedBy != null && claim.collectedBy!.isNotEmpty ||
+              claim.locationLat != null ||
+              claim.receivedAt != null && claim.receivedAt!.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+              child: Wrap(spacing: 20, runSpacing: 4, children: [
+                if (claim.collectedBy != null && claim.collectedBy!.isNotEmpty)
+                  _kv('Collected by', claim.collectedBy!),
+                if (claim.locationLat != null && claim.locationLng != null)
+                  _kv('Location',
+                      '${claim.locationLat!.toStringAsFixed(5)}, ${claim.locationLng!.toStringAsFixed(5)}'),
+                if (claim.receivedAt != null && claim.receivedAt!.isNotEmpty)
+                  _kv('Received', _fmtDate(claim.receivedAt!)),
+              ]),
+            ),
+        ] else ...[
+          // Online payment fields
+          if ([claim.utr, claim.txnId, claim.paidAt, claim.payeeName]
+              .any((v) => v != null && v.isNotEmpty))
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+              child: Wrap(spacing: 20, runSpacing: 4, children: [
+                if (claim.utr != null && claim.utr!.isNotEmpty)
+                  _kv('UTR', claim.utr!, mono: true),
+                if (claim.txnId != null && claim.txnId!.isNotEmpty)
+                  _kv('Txn', claim.txnId!, truncate: true),
+                if (claim.paidAt != null && claim.paidAt!.isNotEmpty)
+                  _kv('Paid', _fmtDate(claim.paidAt!)),
+                if (claim.payeeName != null && claim.payeeName!.isNotEmpty)
+                  _kv('Payee', claim.payeeName!),
+              ]),
+            ),
+        ],
         // verify_reason for rejected/duplicate
         if ((status == 'rejected' || status == 'duplicate') &&
             claim.verifyReason != null && claim.verifyReason!.isNotEmpty)
@@ -5522,12 +5545,15 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
             child: Text(claim.verifyReason!,
                 style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
           ),
-        // Screenshot
+        // Screenshot (CHANGE #223 — signed URL already via signedScreenshotUrl)
         if (claim.filePath != null && claim.filePath!.isNotEmpty)
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
             child: FutureBuilder<String?>(
-              future: PaymentClaimsService.signedScreenshotUrl(claim.filePath!),
+              future: PaymentClaimsService.signedScreenshotUrl(claim.filePath!).then((u) {
+                RenderLog.write('c223_signed_url', 1);
+                return u;
+              }),
               builder: (ctx, snap) {
                 if (snap.connectionState == ConnectionState.waiting) {
                   return Container(

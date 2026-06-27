@@ -1,5 +1,6 @@
 // ignore_for_file: avoid_web_libraries_in_flutter, deprecated_member_use
 import 'dart:async';
+import 'dart:convert';
 import 'dart:html' as html;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -23,6 +24,7 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
   final _amountCtrl = TextEditingController();
   final _collectedByCtrl = TextEditingController();
   Uint8List? _fileBytes;
+  String? _fileDataUrl;   // data: URL for browser preview
   String? _fileMime;
   double? _lat;
   double? _lng;
@@ -58,7 +60,8 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
 
   void _pickFile() {
     // Use dart:html FileUploadInputElement — works natively on Flutter Web.
-    // No plugin needed; avoids MissingPluginException from image_picker on web.
+    // readAsDataUrl gives a base64 data: URL — used directly for preview
+    // (avoids black-image bug from readAsArrayBuffer ByteBuffer cast).
     final input = html.FileUploadInputElement()
       ..accept = 'image/*,application/pdf'
       ..multiple = false;
@@ -69,14 +72,16 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
       if (files == null || files.isEmpty) return;
       final file = files.first;
       final reader = html.FileReader();
-      reader.readAsArrayBuffer(file);
+      reader.readAsDataUrl(file);
       await reader.onLoad.first;
-      final result = reader.result;
-      if (result is! List<int>) return;
-      final bytes = Uint8List.fromList(result);
+      final dataUrl = reader.result as String;
+      // Decode base64 payload for storage upload
+      final base64Part = dataUrl.split(',').last;
+      final bytes = base64Decode(base64Part);
       if (mounted) {
         setState(() {
           _fileBytes = bytes;
+          _fileDataUrl = dataUrl;
           _fileMime = file.type.isNotEmpty ? file.type : 'image/jpeg';
         });
       }
@@ -302,8 +307,13 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(10),
                   child: Stack(children: [
-                    Image.memory(_fileBytes!,
-                        height: 130, width: double.infinity, fit: BoxFit.cover),
+                    // data URL preview — no black-box bug unlike Image.memory
+                    if (_fileDataUrl != null)
+                      Image.network(_fileDataUrl!,
+                          height: 130, width: double.infinity, fit: BoxFit.cover)
+                    else
+                      Image.memory(_fileBytes!,
+                          height: 130, width: double.infinity, fit: BoxFit.cover),
                     Positioned(
                       top: 6,
                       right: 6,

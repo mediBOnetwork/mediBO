@@ -418,6 +418,8 @@ class _AppRootState extends State<_AppRoot> {
           _didWriteBootSuccess = true;
           WidgetsBinding.instance.addPostFrameCallback((_) {
             try { RenderLog.write('boot_status', 'painted'); } catch (_) {}
+            try { RenderLog.write('c237_cache_bust',
+                'change:237,no_cache_headers:true,sw_kill_script:true,sw_reload_guard:true'); } catch (_) {}
           });
         }
         return const HomeShell();

@@ -763,5 +763,16 @@
     <a href="https://medibo.in/privacy">Privacy Policy</a> |
     <a href="https://medibo.in/terms">Terms &amp; Conditions</a>
   </noscript>
+
+  <!-- CHANGE #237: reload once when a new SW activates (kill-SW triggers controllerchange). -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.addEventListener('controllerchange', function () {
+        if (window.__reloadedForSW) return;
+        window.__reloadedForSW = true;
+        window.location.reload();
+      });
+    }
+  </script>
 </body>
 </html>

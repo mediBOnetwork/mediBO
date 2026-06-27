@@ -218,6 +218,10 @@ class AuthNotifier extends ChangeNotifier {
           _profileLoading = false;
           notifyListeners();
         }
+        // CHANGE #210 — fire login notify for customer/supplier only, on fresh signedIn
+        if (state.event == AuthChangeEvent.signedIn) {
+          _maybeSendLoginNotify(user.id);
+        }
       } else if (_loading) {
         _loading = false;
         notifyListeners();
@@ -345,6 +349,21 @@ class AuthNotifier extends ChangeNotifier {
         notifyListeners();
       }
     } catch (_) {}
+  }
+
+  // CHANGE #210 — WhatsApp login notify for customer/supplier only.
+  // Fire-and-forget: never blocks the UI, swallows all errors.
+  void _maybeSendLoginNotify(String userId) {
+    if (_isAdmin) {
+      RenderLog.write('c210_login_notify_skipped_admin', 1);
+      return;
+    }
+    Supabase.instance.client.functions
+        .invoke('user-notify',
+            body: {'event': 'login', 'user_id': userId},
+            headers: {'x-notify-secret': 'medibo_order_notify_2027'})
+        .then((_) => RenderLog.write('c210_login_notify_sent', 1))
+        .catchError((_) => RenderLog.write('c210_login_notify_sent', 1));
   }
 
   // DB-authoritative role resolution via get_my_role() RPC.

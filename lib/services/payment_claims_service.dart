@@ -12,7 +12,12 @@ class PaymentClaimsService {
     return List<Map<String, dynamic>>.from(res as List);
   }
 
+  // CHANGE #213 — guard against empty ids (fix: "invalid input syntax for type uuid")
   static Future<void> verifyAndAccept(String claimId, String orderId) async {
+    if (claimId.isEmpty || orderId.isEmpty) {
+      RenderLog.write('c213_bad_id', 'claimId=$claimId orderId=$orderId');
+      throw Exception('Empty claim_id or order_id — cannot call verify_and_accept_payment');
+    }
     await _client.rpc('verify_and_accept_payment', params: {
       'p_claim_id': claimId,
       'p_order_id': orderId,
@@ -26,7 +31,16 @@ class PaymentClaimsService {
     });
   }
 
-  // CHANGE #212 — per-order payment data
+  // CHANGE #213 — per-order payment view (nested advance/rest/other buckets)
+  static Future<Map<String, dynamic>> orderPaymentView(String orderId) async {
+    final res = await _client
+        .rpc('admin_order_payment_view', params: {'p_order_id': orderId});
+    RenderLog.write('c213_service_loaded', 1);
+    if (res == null) return {};
+    return Map<String, dynamic>.from(res as Map);
+  }
+
+  // CHANGE #212 — per-order payment data (legacy, kept for reference)
   static Future<Map<String, dynamic>> orderPayment(String orderId) async {
     final res = await _client
         .rpc('admin_order_payment', params: {'p_order_id': orderId});

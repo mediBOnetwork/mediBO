@@ -1,5 +1,6 @@
 // CHANGE #208 — Super-Admin UPI Account Manager (Payment Settings)
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:pharma_b2b/utils/toast.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
@@ -51,6 +52,8 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
         _loading = false;
       });
       RenderLog.write('c208_upi_list_loaded_${rows.length}', 1);
+      RenderLog.write('c232_copy_fix',
+          'change:232,paycard_copy_right:true,upi_copy:true,covers:cash+online');
     } catch (e) {
       if (!mounted) return;
       RenderLog.write('c208_upi_error', 1);
@@ -409,9 +412,28 @@ class _UpiRow extends StatelessWidget {
                   ],
                 ),
                 const SizedBox(height: 2),
-                Text(pa,
-                    style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
-                    overflow: TextOverflow.ellipsis),
+                Row(children: [
+                  Expanded(
+                    child: Text(pa,
+                        style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+                        overflow: TextOverflow.ellipsis),
+                  ),
+                  IconButton(
+                    visualDensity: VisualDensity.compact,
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                    icon: const Icon(Icons.copy, size: 15, color: Color(0xFF9CA3AF)),
+                    tooltip: 'Copy UPI ID',
+                    onPressed: () {
+                      Clipboard.setData(ClipboardData(text: pa));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                            content: Text('UPI ID copied'),
+                            duration: Duration(seconds: 1)),
+                      );
+                    },
+                  ),
+                ]),
               ],
             ),
           ),

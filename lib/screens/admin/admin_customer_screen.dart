@@ -5,6 +5,7 @@ import 'dart:html' as html;
 import 'dart:ui_web' as ui_web;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:pharma_b2b/utils/toast.dart';
@@ -4934,6 +4935,8 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
           'change:228,signed_urls:true,realtime:true,fullscreen:true,covers:cash+online');
       RenderLog.write('c229_img_fullscreen_fix',
           'change:229,thumb_onclick:true,fullscreen:true,covers:cash+online,buckets:whatsapp+cash_payments');
+      RenderLog.write('c230_paycard_polish',
+          'change:230,fullscreen_tap_close:true,copy_buttons:true,badges_removed:true,covers:cash+online');
     }
   }
 
@@ -5486,28 +5489,7 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
       _                       => (const Color(0xFFF3F4F6), const Color(0xFF374151), status),
     };
 
-    // Hint chip: for linked claims compare amount to bucket expected;
-    // for unassigned use matches_advance/matches_rest
-    Widget? hintChip;
-    if (amount != null) {
-      if (claim.bucket == 'unassigned') {
-        final (Color hBg, Color hFg, String hLabel) = claim.matchesAdvance == true
-            ? (const Color(0xFFD1FAE5), const Color(0xFF065F46), '✓ advance')
-            : claim.matchesRest == true
-                ? (const Color(0xFFD1FAE5), const Color(0xFF065F46), '✓ rest')
-                : (const Color(0xFFFEF3C7), const Color(0xFF92400E), '≠ no exact match');
-        hintChip = _matchChip(hLabel, hBg, hFg);
-      } else if (_data != null) {
-        final bucketKey = claim.bucket == 'advance' ? 'advance' : 'rest';
-        final bExp = PaymentDashboardData._coerce(
-            (Map<String,dynamic>.from(_data![bucketKey] as Map? ?? {}))['expected']);
-        if (bExp > 0) {
-          hintChip = amount == bExp
-              ? _matchChip('✓ matches', const Color(0xFFD1FAE5), const Color(0xFF065F46))
-              : _matchChip('≠ ${_rupee(bExp)}', const Color(0xFFFEF3C7), const Color(0xFF92400E));
-        }
-      }
-    }
+    // Amount-comparison badges removed (CHANGE #232).
 
     return Container(
       decoration: BoxDecoration(
@@ -5539,52 +5521,32 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
             ),
           ]),
         ),
-        // Amount + hint chip
+        // Amount
         if (amount != null)
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
-            child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-              Text(_rupee(amount),
-                  style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800,
-                      color: Color(0xFF111827))),
-              if (hintChip != null) ...[const SizedBox(width: 8), hintChip],
-            ]),
+            child: Text(_rupee(amount),
+                style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800,
+                    color: Color(0xFF111827))),
           ),
-        // Detail grid — cash vs online fields
+        // Detail rows with copy buttons (CHANGE #232)
         if (claim.paymentMethod == 'cash') ...[
-          // CHANGE #223 — cash payment fields
-          if (claim.collectedBy != null && claim.collectedBy!.isNotEmpty ||
-              claim.locationLat != null ||
-              claim.receivedAt != null && claim.receivedAt!.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-              child: Wrap(spacing: 20, runSpacing: 4, children: [
-                if (claim.collectedBy != null && claim.collectedBy!.isNotEmpty)
-                  _kv('Collected by', claim.collectedBy!),
-                if (claim.locationLat != null && claim.locationLng != null)
-                  _kv('Location',
-                      '${claim.locationLat!.toStringAsFixed(5)}, ${claim.locationLng!.toStringAsFixed(5)}'),
-                if (claim.receivedAt != null && claim.receivedAt!.isNotEmpty)
-                  _kv('Received', _fmtDate(claim.receivedAt!)),
-              ]),
-            ),
+          if (claim.collectedBy != null && claim.collectedBy!.isNotEmpty)
+            _copyRow('Collected by', claim.collectedBy),
+          if (claim.locationLat != null && claim.locationLng != null)
+            _copyRow('Location',
+                '${claim.locationLat!.toStringAsFixed(5)}, ${claim.locationLng!.toStringAsFixed(5)}'),
+          if (claim.receivedAt != null && claim.receivedAt!.isNotEmpty)
+            _copyRow('Received', _fmtDate(claim.receivedAt!)),
         ] else ...[
-          // Online payment fields
-          if ([claim.utr, claim.txnId, claim.paidAt, claim.payeeName]
-              .any((v) => v != null && v.isNotEmpty))
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-              child: Wrap(spacing: 20, runSpacing: 4, children: [
-                if (claim.utr != null && claim.utr!.isNotEmpty)
-                  _kv('UTR', claim.utr!, mono: true),
-                if (claim.txnId != null && claim.txnId!.isNotEmpty)
-                  _kv('Txn', claim.txnId!, truncate: true),
-                if (claim.paidAt != null && claim.paidAt!.isNotEmpty)
-                  _kv('Paid', _fmtDate(claim.paidAt!)),
-                if (claim.payeeName != null && claim.payeeName!.isNotEmpty)
-                  _kv('Payee', claim.payeeName!),
-              ]),
-            ),
+          if (claim.utr != null && claim.utr!.isNotEmpty)
+            _copyRow('UTR', claim.utr),
+          if (claim.txnId != null && claim.txnId!.isNotEmpty)
+            _copyRow('Txn', claim.txnId),
+          if (claim.paidAt != null && claim.paidAt!.isNotEmpty)
+            _copyRow('Paid', _fmtDate(claim.paidAt!)),
+          if (claim.payeeName != null && claim.payeeName!.isNotEmpty)
+            _copyRow('Payee', claim.payeeName),
         ],
         // verify_reason for rejected/duplicate
         if ((status == 'rejected' || status == 'duplicate') &&
@@ -5671,6 +5633,46 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
   }
 
   // ── Helpers ──────────────────────────────────────────────────────────────────
+
+  // Copyable detail row — label above value, copy icon on right (CHANGE #232).
+  Widget _copyRow(String label, String? value) {
+    final v = (value ?? '').trim();
+    if (v.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 4, 0),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(label,
+                style: const TextStyle(
+                    fontSize: 10, fontWeight: FontWeight.w500, color: Color(0xFF9CA3AF))),
+            const SizedBox(height: 2),
+            Text(v,
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500,
+                    color: Color(0xFF374151))),
+          ]),
+        ),
+        InkWell(
+          onTap: () {
+            Clipboard.setData(ClipboardData(text: v));
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Copied: $v',
+                    maxLines: 1, overflow: TextOverflow.ellipsis),
+                duration: const Duration(seconds: 1),
+              ),
+            );
+          },
+          borderRadius: BorderRadius.circular(20),
+          child: const Padding(
+            padding: EdgeInsets.all(6),
+            child: Icon(Icons.copy, size: 16, color: Color(0xFF2E7D32)),
+          ),
+        ),
+      ]),
+    );
+  }
+
   Widget _matchChip(String label, Color bg, Color fg) => Container(
         padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
         decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(6)),

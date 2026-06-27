@@ -11,46 +11,27 @@ void openFullscreenImage(BuildContext context, String imageUrl) {
       ..style.width = '100%'
       ..style.height = '100%'
       ..style.objectFit = 'contain'
-      ..style.cursor = 'pointer';
+      ..style.cursor = 'pointer'
+      ..style.pointerEvents = 'none'; // let taps fall through to Flutter
   });
 
   showDialog(
     context: context,
-    barrierColor: Colors.black.withOpacity(0.9),
-    builder: (ctx) => Stack(
-      children: [
-        // Tap backdrop to close (behind the image).
-        Positioned.fill(
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: () => Navigator.of(ctx).pop(),
-            child: const SizedBox.expand(),
-          ),
-        ),
+    barrierColor: Colors.black.withOpacity(0.92),
+    builder: (ctx) => GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => Navigator.of(ctx).pop(),
+      child: Stack(children: [
+        Positioned.fill(child: Container(color: Colors.transparent)),
         Center(
           child: SizedBox(
             width: MediaQuery.of(ctx).size.width * 0.95,
             height: MediaQuery.of(ctx).size.height * 0.85,
-            child: HtmlElementView(viewType: vt),
+            // IgnorePointer ensures Flutter sees the tap even through the platform view.
+            child: IgnorePointer(child: HtmlElementView(viewType: vt)),
           ),
         ),
-        // Close button above the platform view.
-        Positioned(
-          top: 40,
-          right: 20,
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: () => Navigator.of(ctx).pop(),
-            child: Container(
-              decoration: BoxDecoration(
-                  color: Colors.black54,
-                  borderRadius: BorderRadius.circular(24)),
-              padding: const EdgeInsets.all(8),
-              child: const Icon(Icons.close, color: Colors.white, size: 30),
-            ),
-          ),
-        ),
-      ],
+      ]),
     ),
   );
 }

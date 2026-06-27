@@ -1,6 +1,10 @@
 # CHANGE #58: no-cache namers; immutable hashed bundle
 
 # ── Entry points + namers — always fresh ────────────────────────────────────
+/
+  Cache-Control: no-cache, no-store, must-revalidate
+  Pragma: no-cache
+
 /index.html
   Cache-Control: no-cache, no-store, must-revalidate
   Pragma: no-cache

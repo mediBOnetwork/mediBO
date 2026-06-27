@@ -502,14 +502,27 @@ class _StatusChip extends StatelessWidget {
 
 // ── Screenshot thumbnail ─────────────────────────────────────────────────────
 
-class _ScreenshotThumbnail extends StatelessWidget {
+class _ScreenshotThumbnail extends StatefulWidget {
   final String filePath;
   const _ScreenshotThumbnail({required this.filePath});
 
   @override
+  State<_ScreenshotThumbnail> createState() => _ScreenshotThumbnailState();
+}
+
+class _ScreenshotThumbnailState extends State<_ScreenshotThumbnail> {
+  late final Future<String?> _urlFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _urlFuture = PaymentClaimsService.signedScreenshotUrl(widget.filePath);
+  }
+
+  @override
   Widget build(BuildContext context) {
     return FutureBuilder<String?>(
-      future: PaymentClaimsService.signedScreenshotUrl(filePath),
+      future: _urlFuture,
       builder: (ctx, snap) {
         if (snap.connectionState != ConnectionState.done) {
           return const SizedBox(

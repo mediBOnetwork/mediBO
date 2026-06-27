@@ -194,27 +194,7 @@ class _OrderPaymentSectionState extends State<OrderPaymentSection> {
           if (utr != null && utr.isNotEmpty) _infoRow('UTR', utr),
           if (screenshotPath != null && screenshotPath.isNotEmpty) ...[
             const SizedBox(height: 8),
-            FutureBuilder<String?>(
-              future: PaymentClaimsService.signedScreenshotUrl(screenshotPath),
-              builder: (ctx, snap) {
-                if (snap.connectionState == ConnectionState.waiting) {
-                  return const SizedBox(width: 80, height: 60, child: Center(child: CircularProgressIndicator(strokeWidth: 2)));
-                }
-                final url = snap.data;
-                if (url == null) return const SizedBox.shrink();
-                return ClipRRect(
-                  borderRadius: BorderRadius.circular(6),
-                  child: Image.network(
-                    url,
-                    width: 120,
-                    height: 90,
-                    fit: BoxFit.cover,
-                    errorBuilder: (_, e, __) => const SizedBox(width: 80, height: 60,
-                        child: Icon(Icons.broken_image_outlined, color: Color(0xFF9CA3AF))),
-                  ),
-                );
-              },
-            ),
+            _SignedScreenshot(filePath: screenshotPath),
           ],
           if (status == 'claimed') ...[
             const SizedBox(height: 12),
@@ -302,5 +282,48 @@ class _OrderPaymentSectionState extends State<OrderPaymentSection> {
       'duplicate' => (const Color(0xFFEFF6FF), const Color(0xFF1E40AF)),
       _           => (const Color(0xFFF3F4F6), const Color(0xFF374151)),
     };
+  }
+}
+
+class _SignedScreenshot extends StatefulWidget {
+  final String filePath;
+  const _SignedScreenshot({required this.filePath});
+
+  @override
+  State<_SignedScreenshot> createState() => _SignedScreenshotState();
+}
+
+class _SignedScreenshotState extends State<_SignedScreenshot> {
+  late final Future<String?> _urlFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _urlFuture = PaymentClaimsService.signedScreenshotUrl(widget.filePath);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<String?>(
+      future: _urlFuture,
+      builder: (ctx, snap) {
+        if (snap.connectionState == ConnectionState.waiting) {
+          return const SizedBox(width: 80, height: 60,
+              child: Center(child: CircularProgressIndicator(strokeWidth: 2)));
+        }
+        final url = snap.data;
+        if (url == null) return const SizedBox.shrink();
+        RenderLog.write('c225_signed_url_fix', 1);
+        return ClipRRect(
+          borderRadius: BorderRadius.circular(6),
+          child: Image.network(
+            url,
+            width: 120, height: 90, fit: BoxFit.cover,
+            errorBuilder: (_, e, __) => const SizedBox(width: 80, height: 60,
+                child: Icon(Icons.broken_image_outlined, color: Color(0xFF9CA3AF))),
+          ),
+        );
+      },
+    );
   }
 }

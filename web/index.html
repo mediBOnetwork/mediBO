@@ -1,9 +1,12 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <!-- CHANGE #58: SW killswitch — unregisters ALL service workers + clears all caches, then reloads ONCE.
-       Runs before Flutter loader so even devices with stale SW get fresh bundle next load. -->
-  <script>(function(){try{if('serviceWorker'in navigator){navigator.serviceWorker.getRegistrations().then(function(rs){var had=rs&&rs.length>0;return Promise.all((rs||[]).map(function(r){return r.unregister();})).then(function(){return had;});}).then(function(had){if(window.caches&&caches.keys){return caches.keys().then(function(k){return Promise.all(k.map(function(x){return caches.delete(x);}));}).then(function(){return had;});}return had;}).then(function(had){if(had&&!sessionStorage.getItem('sw_killed_58')){sessionStorage.setItem('sw_killed_58','1');location.reload();}}).catch(function(){});}}catch(e){}})();</script>
+  <!-- CHANGE #238: SW permanently disabled. Unregister ALL SWs + wipe all caches on every load.
+       No sessionStorage guard — runs unconditionally so even users whose old SW served this
+       HTML from cache will have SWs cleared on the very next in-SW-controlled load.
+       No location.reload() here — the kill-SW (flutter_service_worker.js) handles tab reload
+       via client.navigate() once it activates. After that, no SW exists and no reload is needed. -->
+  <script>(function(){try{if('serviceWorker'in navigator){navigator.serviceWorker.getRegistrations().then(function(regs){regs.forEach(function(r){r.unregister();});}).catch(function(){});}if(window.caches&&caches.keys){caches.keys().then(function(names){names.forEach(function(n){caches.delete(n);});}).catch(function(){});}}catch(e){}})();</script>
   <!--
     If you are serving your web app in a path other than the root, change the
     href value below to reflect the base path you are serving from.

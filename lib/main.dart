@@ -420,6 +420,8 @@ class _AppRootState extends State<_AppRoot> {
             try { RenderLog.write('boot_status', 'painted'); } catch (_) {}
             try { RenderLog.write('c237_cache_bust',
                 'change:237,no_cache_headers:true,sw_kill_script:true,sw_reload_guard:true'); } catch (_) {}
+            try { RenderLog.write('c238_sw_disabled',
+                'change:238,service_worker:disabled,sw_unregister_on_load:true,network_first:true'); } catch (_) {}
           });
         }
         return const HomeShell();

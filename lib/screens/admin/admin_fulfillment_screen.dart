@@ -3107,11 +3107,36 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       RenderLog.write('c133_arrivals_filter_removed', 'true');
       RenderLog.write('c133_arrivals_item_count', '${visibleItems.length}');
     }
+    // #255: bag control for Arrivals — rendered here (mobile accordion path).
+    // _buildItemList() is unused in this path; _buildNarrowItemList() is the actual mobile list.
+    final noBagInArrivals = widget.arrivals && _activeBag == null && !_loadingBox;
+    RenderLog.write('c255_bag_control_rendered',
+        'arrivals=${widget.arrivals};activeBag=${_activeBag != null};supplier=$name');
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       const Divider(height: 1, color: _kBorder),
       _buildNarrowVoiceBar(isAdmin),
       if (_items.isNotEmpty) _buildNarrowProgressRow(),
-      const SizedBox(height: 8),
+      // #255: Bag control appears directly above the item list (mobile accordion).
+      if (widget.arrivals && !_loadingBox) _buildBagControl(),
+      // #255: "Scan a bag to begin" banner + dimmed list when no bag attached.
+      if (noBagInArrivals && _items.isNotEmpty)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFFF8E1),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0xFFFFB300).withValues(alpha: 0.5)),
+            ),
+            child: const Row(children: [
+              Icon(Icons.info_outline_rounded, size: 15, color: Color(0xFF92400E)),
+              SizedBox(width: 6),
+              Expanded(child: Text('Scan a bag to begin counting',
+                  style: TextStyle(fontSize: 12, color: Color(0xFF92400E)))),
+            ]),
+          ),
+        ),
       if (_loadingBox)
         const Center(
           child: Padding(
@@ -3134,8 +3159,12 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           ),
         )
       else
-        // #184: no extra horizontal padding — items flush with card body edges
-        _buildNarrowItemList(showFooter: false, shrinkWrap: true),
+        // #184: no extra horizontal padding — items flush with card body edges.
+        // #255: dim item list when no bag attached (gate is also in handler level).
+        Opacity(
+          opacity: noBagInArrivals ? 0.45 : 1.0,
+          child: _buildNarrowItemList(showFooter: false, shrinkWrap: true),
+        ),
       if (!_loadingBox && _items.isNotEmpty) ...[
         const Divider(height: 1, color: _kBorder),
         Padding(

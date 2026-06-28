@@ -304,7 +304,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     final ts = DateTime.now().millisecondsSinceEpoch;
 
     // Single-binding channel for supplier_profiles: UPDATE → surgical patch;
-    // INSERT/DELETE → full debounced reload.
+    // INSERT/DELETE → full debounced reload. CHANGE #252: c252_rt_sub logged on subscribe.
     RenderLog.write('rt_supplier_profiles', 1);
     final spCh = client
         .channel('admin_supplier_profiles')
@@ -316,11 +316,16 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
             if (payload.eventType == PostgresChangeEvent.update) {
               _patchSupplierRow(payload.newRecord);
             } else {
+              RenderLog.write('c252_rt_reload', 'table=supplier_profiles');
               _debouncedLoad();
             }
           },
         )
-        .subscribe();
+        .subscribe((status, [_]) {
+          if (status == RealtimeSubscribeStatus.subscribed) {
+            RenderLog.write('c252_rt_sub', 'channel=supplier_profiles');
+          }
+        });
     _channels.add(spCh);
 
     // Separate channels for other tables (single-binding each).
@@ -835,7 +840,11 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           if (isMobile) ...[
             Builder(builder: (_) {
               RenderLog.write('c251_overflow_built', 'filter=$_filter');
-              return _buildOverflowMenu();
+              RenderLog.write('c252_dot_flush', 'mobile=true;filter=$_filter');
+              return SizedBox(
+                width: 36,
+                child: _buildOverflowMenu(),
+              );
             }),
           ]
           // ── WEB/WIDE: pinned controls inline (unchanged) ───────────────────
@@ -957,9 +966,10 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     );
   }
 
-  // CHANGE #251: 3-dot overflow menu for mobile — contains all per-tab controls + Refresh.
+  // CHANGE #251/252: 3-dot overflow menu for mobile.
   Widget _buildOverflowMenu() {
     return PopupMenuButton<String>(
+      padding: EdgeInsets.zero,
       icon: const Icon(Icons.more_vert, color: Color(0xFF6B7280)),
       tooltip: 'More',
       itemBuilder: (ctx) {
@@ -1041,8 +1051,8 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           ));
           items.add(const PopupMenuDivider());
         } else if (_filter == _SupFilter.suppliers) {
-          // Sort options as radio items
-          for (final entry in const [
+          // CHANGE #252: sort options only; Refresh removed (realtime handles sync)
+          for (final entry in [
             (_SupSortMode.spnDesc, 'Sort: SPN'),
             (_SupSortMode.nameAsc, 'Sort: Name'),
           ]) {
@@ -1058,32 +1068,18 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
               ]),
             ));
           }
-          items.add(const PopupMenuDivider());
         }
-        items.add(PopupMenuItem<String>(
-          value: 'refresh',
-          child: Row(children: const [
-            Icon(Icons.refresh_outlined, size: 20, color: Color(0xFF6B7280)),
-            SizedBox(width: 10),
-            Text('Refresh', style: TextStyle(fontSize: 14)),
-          ]),
-        ));
         return items;
       },
       onSelected: (v) {
-        if (v == 'refresh') {
-          RenderLog.write('c251_refresh_menu', 'filter=$_filter');
-          if (_filter == _SupFilter.inquiry) {
-            _fetchInquiryOverview();
-            _fetchUnassignedItems();
-          } else {
-            _load();
-          }
-        } else if (v == 'sort_${_SupSortMode.spnDesc.name}') {
+        // CHANGE #252: sort applies instantly via setState + _applySort; no reload needed
+        if (v == 'sort_${_SupSortMode.spnDesc.name}') {
           setState(() { _sortMode = _SupSortMode.spnDesc; _applySort(); });
+          RenderLog.write('c252_sort_instant', 'mode=spn_desc');
           RenderLog.write('supplier_sort_mode', 'spn_desc');
         } else if (v == 'sort_${_SupSortMode.nameAsc.name}') {
           setState(() { _sortMode = _SupSortMode.nameAsc; _applySort(); });
+          RenderLog.write('c252_sort_instant', 'mode=name_asc');
           RenderLog.write('supplier_sort_mode', 'name_asc');
         }
       },

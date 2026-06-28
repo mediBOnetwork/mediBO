@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'fullscreen_image.dart';
+import '../utils/render_log.dart';
 
 class CashPaymentSheet extends StatefulWidget {
   final String orderId;
@@ -39,11 +40,18 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
   String? _locError;
   String? _locationLabel;
 
+  // CHANGE #243 — selfie verification state
+  bool _selfieVerifying = false;
+  bool _selfieVerified  = false;
+  String? _selfieError;
+
   bool get _canSubmit {
     final amt = double.tryParse(_amountCtrl.text.trim()) ?? 0;
     return amt > 0 &&
         _collectedByCtrl.text.trim().isNotEmpty &&
         _fileBytes != null &&
+        _selfieVerified &&          // must pass Gemini selfie check
+        !_selfieVerifying &&        // not mid-check
         _lat != null &&
         _lng != null &&
         !_submitting;
@@ -54,6 +62,7 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
     super.initState();
     _amountCtrl.addListener(() => setState(() {}));
     _collectedByCtrl.addListener(() => setState(() {}));
+    try { RenderLog.write('c243_selfie_check_wired', 'on_pick=true'); } catch (_) {}
   }
 
   @override
@@ -73,6 +82,24 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
       final files = input.files;
       if (files == null || files.isEmpty) return;
       final file = files.first;
+
+      // Non-image guard
+      final mime = file.type.isNotEmpty ? file.type : 'image/jpeg';
+      if (!mime.startsWith('image/')) {
+        if (mounted) {
+          setState(() {
+            _selfieError = 'Please upload a selfie photo (image).';
+            _selfieVerified = false;
+            _fileBytes = null;
+            _fileDataUrl = null;
+            _fileMime = null;
+            _viewType = null;
+          });
+        }
+        return;
+      }
+
+      // Read file
       final reader = html.FileReader();
       reader.readAsDataUrl(file);
       await reader.onLoad.first;
@@ -81,6 +108,7 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
       final b64 = dataUrl.substring(comma + 1);
       final bytes = base64Decode(b64);
 
+      // Register preview
       final vt = 'cash-preview-${DateTime.now().millisecondsSinceEpoch}';
       final capturedContext = context;
       ui_web.platformViewRegistry.registerViewFactory(vt, (int viewId) {
@@ -91,20 +119,77 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
           ..style.objectFit = 'cover'
           ..style.borderRadius = '10px'
           ..style.cursor = 'pointer';
-        // Platform view absorbs Flutter taps — use native onClick.
         img.onClick.listen((_) => openFullscreenImage(capturedContext, dataUrl));
         return img;
       });
 
-      if (mounted) {
-        setState(() {
-          _fileBytes = bytes;
-          _fileDataUrl = dataUrl;
-          _fileMime = file.type.isNotEmpty ? file.type : 'image/jpeg';
-          _viewType = vt;
-        });
-      }
+      if (!mounted) return;
+      setState(() {
+        _fileBytes = bytes;
+        _fileDataUrl = dataUrl;
+        _fileMime = mime;
+        _viewType = vt;
+        _selfieVerifying = true;
+        _selfieVerified = false;
+        _selfieError = null;
+      });
+
+      // Verify on pick — sends to Gemini via verify-selfie edge function
+      await _verifySelfie(bytes, mime, b64);
     });
+  }
+
+  Future<void> _verifySelfie(Uint8List bytes, String mime, String b64) async {
+    try {
+      final supabase = Supabase.instance.client;
+      final res = await supabase.functions
+          .invoke(
+            'verify-selfie',
+            body: {'image_base64': b64, 'mime_type': mime},
+          )
+          .timeout(const Duration(seconds: 25));
+
+      final data = res.data;
+      final Map<String, dynamic> map = data is Map
+          ? Map<String, dynamic>.from(data)
+          : <String, dynamic>{};
+      final human = map['human'] == true;
+
+      if (!mounted) return;
+      setState(() {
+        _selfieVerifying = false;
+        if (human) {
+          _selfieVerified = true;
+          _selfieError = null;
+          try { RenderLog.write('c243_selfie_pass', 'human=true'); } catch (_) {}
+        } else {
+          _selfieVerified = false;
+          _selfieError = 'No human selfie detected. Please upload a selfie.';
+          // Clear the file so it is never submitted
+          _fileBytes = null;
+          _fileDataUrl = null;
+          _fileMime = null;
+          _viewType = null;
+          try {
+            RenderLog.write('c243_selfie_fail',
+                'reason=${map['reason'] ?? 'none'}');
+          } catch (_) {}
+        }
+      });
+    } catch (e) {
+      // Network / timeout / 500 → treat as non-human, require retry
+      if (!mounted) return;
+      setState(() {
+        _selfieVerifying = false;
+        _selfieVerified = false;
+        _selfieError = 'Verification failed. Please try again.';
+        _fileBytes = null;
+        _fileDataUrl = null;
+        _fileMime = null;
+        _viewType = null;
+      });
+      try { RenderLog.write('c243_selfie_fail', 'reason=error:$e'); } catch (_) {}
+    }
   }
 
   Future<void> _requestLocation() async {
@@ -145,6 +230,13 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
   }
 
   Future<void> _submit() async {
+    // Belt-and-suspenders: never submit without a verified selfie
+    if (!_selfieVerified) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Upload a verified selfie first')),
+      );
+      return;
+    }
     if (!_canSubmit) return;
     setState(() { _submitting = true; _error = null; _uploadProgress = 0.1; });
     try {
@@ -191,7 +283,7 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
     final amt = double.tryParse(_amountCtrl.text.trim()) ?? 0;
     if (amt <= 0) m.add('amount');
     if (_collectedByCtrl.text.trim().isEmpty) m.add('received by');
-    if (_fileBytes == null) m.add('file');
+    if (_fileBytes == null || !_selfieVerified) m.add('verified selfie');
     if (_lat == null) m.add('location');
     if (m.isEmpty) return '';
     return 'Required: ${m.join(', ')}';
@@ -262,24 +354,31 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
             ),
             const SizedBox(height: 16),
 
-            // FILE UPLOAD
-            const Text('Upload File',
+            // FILE UPLOAD + SELFIE VERIFICATION
+            const Text('Upload Selfie',
                 style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF424242))),
             const SizedBox(height: 6),
-            if (_fileBytes == null)
-              SizedBox(
+
+            // Verifying state: spinner + message
+            if (_selfieVerifying) ...[
+              Container(
                 width: double.infinity,
-                height: 48,
-                child: OutlinedButton.icon(
-                  onPressed: _pickFile,
-                  icon: const Icon(Icons.attach_file),
-                  label: const Text('Choose Photo / File'),
-                  style: OutlinedButton.styleFrom(
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                  ),
+                padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFF8E1),
+                  border: Border.all(color: const Color(0xFFFFB300)),
+                  borderRadius: BorderRadius.circular(10),
                 ),
-              )
-            else
+                child: const Row(children: [
+                  SizedBox(width: 18, height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFFF8F00))),
+                  SizedBox(width: 10),
+                  Text('Verifying selfie…',
+                      style: TextStyle(fontSize: 13, color: Color(0xFF6D4C00))),
+                ]),
+              ),
+            ] else if (_selfieVerified && _fileBytes != null) ...[
+              // Verified: show image with green badge + Change option
               SizedBox(
                 height: 130,
                 width: double.infinity,
@@ -288,12 +387,28 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
                   child: Stack(
                     fit: StackFit.expand,
                     children: [
-                      // onClick wired on ImageElement in _pickFile — GestureDetector
-                      // never fires on platform views.
                       _viewType != null
                           ? HtmlElementView(viewType: _viewType!)
                           : Container(color: Colors.grey.shade200),
-                      // Tap Change badge → re-pick file
+                      // Green verified badge
+                      Positioned(
+                        top: 6, left: 6,
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF2E7D32),
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                            Icon(Icons.check_circle, color: Colors.white, size: 13),
+                            SizedBox(width: 4),
+                            Text('Selfie verified ✓',
+                                style: TextStyle(color: Colors.white, fontSize: 11,
+                                    fontWeight: FontWeight.w600)),
+                          ]),
+                        ),
+                      ),
+                      // Change badge
                       Positioned(
                         top: 6, right: 6,
                         child: GestureDetector(
@@ -313,6 +428,33 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
                   ),
                 ),
               ),
+            ] else ...[
+              // Idle or rejected state: upload button
+              SizedBox(
+                width: double.infinity,
+                height: 48,
+                child: OutlinedButton.icon(
+                  onPressed: _pickFile,
+                  icon: const Icon(Icons.camera_alt_outlined),
+                  label: Text(_selfieError != null ? 'Re-upload selfie' : 'Choose Photo / File'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: _selfieError != null
+                        ? const Color(0xFFD32F2F)
+                        : null,
+                    side: _selfieError != null
+                        ? const BorderSide(color: Color(0xFFD32F2F))
+                        : null,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                ),
+              ),
+              // Error message
+              if (_selfieError != null) ...[
+                const SizedBox(height: 6),
+                Text(_selfieError!,
+                    style: const TextStyle(fontSize: 12, color: Color(0xFFD32F2F))),
+              ],
+            ],
             const SizedBox(height: 16),
 
             // LOCATION

@@ -1028,7 +1028,16 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   // B8: session-only voice clip counter — reset on box open, increment per clip
   int _sessionVoiceCount = 0;
-  int get _spokenCount => _sessionVoiceCount;
+  // #263: spoken badge = distinct products (product_id) in voice clip mentions, not clip count
+  List<Map<String, dynamic>> _voiceMentions = [];
+  int get _spokenCount {
+    final count = _voiceMentions
+        .map((m) => m['product_id'])
+        .where((id) => id != null)
+        .toSet()
+        .length;
+    return count;
+  }
 
   // ── Lifecycle ───────────────────────────────────────────────────────────────
 
@@ -1490,8 +1499,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           _arrivalsLocked = confirmed;
           _supplierMode = parsedMode;
           _activeBag = activeBag;
-          _sessionVoiceCount = 0; // B8: reset on box open
+          _sessionVoiceCount = 0;
+          _voiceMentions = []; // clear stale mentions; fresh fetch below
         });
+        _refreshVoiceMentions(); // #263: load today's mentions for distinct-product spoken count
         RenderLog.write('c127_arrivals_filter_removed', 'true');
         RenderLog.write('c127_arrivals_items_rendered', '${stateItems.length}');
         RenderLog.write('c159_sheet_rpc', 'uses=set_item_receiving');
@@ -1548,8 +1559,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         _loadingBox = false;
         _showListView = false;
         _supplierMode = freshMode;
-        _sessionVoiceCount = 0; // B1/c168: reset per Collect box-open
+        _sessionVoiceCount = 0;
+        _voiceMentions = []; // clear stale; fresh fetch below
       });
+      _refreshVoiceMentions(); // #263: load today's mentions for distinct-product spoken count
       RenderLog.write('c127_collect_footer_from_mode', 'true');
       RenderLog.write('c168_collect_spoken_open', '0');
       RenderLog.write('c168_collect_mode', '${_supplierMode ?? 'null'}');
@@ -2161,8 +2174,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       }
       await _commitVoiceItems(items);
       if (mounted) {
-        setState(() => _sessionVoiceCount++); // B8: count session clips only
+        setState(() => _sessionVoiceCount++); // kept for legacy logs; badge now uses _voiceMentions
         _advanceIfReceived(); // B4: auto-advance after voice commit
+        _refreshVoiceMentions(); // #263: update distinct-product spoken count
       }
     } catch (e) {
       if (!mounted) return;
@@ -2412,6 +2426,21 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       if (mounted) _showSnack('Commit error: $e');
       return false;
     }
+  }
+
+  // #263: load voice clip mentions from DB → derive distinct-product count for "N spoken" badge.
+  Future<void> _refreshVoiceMentions() async {
+    final supplier = _selectedSupplier;
+    if (supplier == null) return;
+    try {
+      final rows = await Supabase.instance.client
+          .rpc('get_voice_clip_mentions', params: {'p_supplier_name': supplier}) as List;
+      if (!mounted) return;
+      final mentions = rows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
+      final distinct = mentions.map((m) => m['product_id']).where((id) => id != null).toSet().length;
+      RenderLog.write('c263_spoken_count', 'distinct_products=$distinct;total_mentions=${mentions.length}');
+      setState(() => _voiceMentions = mentions);
+    } catch (_) {}
   }
 
   Future<void> _reloadItemsFromDB() async {

@@ -6,8 +6,10 @@ import 'dart:typed_data';
 import 'dart:js_interop';
 import 'dart:js_interop_unsafe';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -243,7 +245,6 @@ class _BagScannerDialogState extends State<_BagScannerDialog> {
 
   void _close(BuildContext ctx, {String? code}) {
     if (!_detected || code == null) {
-      // stop camera before closing to avoid use-after-dispose
       try { _ctrl.stop(); } catch (_) {}
     }
     if (Navigator.of(ctx).canPop()) Navigator.of(ctx).pop(code);
@@ -256,12 +257,65 @@ class _BagScannerDialogState extends State<_BagScannerDialog> {
     super.dispose();
   }
 
+  // #256: Upload QR from gallery — decodes with analyzeImage (mobile only; web hides the button).
+  Future<void> _pickAndDecodeQr(BuildContext ctx) async {
+    if (_detected) return;
+    RenderLog.write('c256_upload_qr', 'started');
+    try {
+      final picker = ImagePicker();
+      final XFile? file = await picker.pickImage(source: ImageSource.gallery);
+      if (file == null) return;
+      final BarcodeCapture? result = await _ctrl.analyzeImage(file.path);
+      final codes = result?.barcodes ?? const [];
+      final v = codes.isNotEmpty ? codes.first.rawValue : null;
+      if (v == null || v.isEmpty) {
+        RenderLog.write('c256_upload_qr', 'no_qr_found');
+        if (ctx.mounted) {
+          ScaffoldMessenger.of(ctx).showSnackBar(
+              const SnackBar(content: Text('No QR found in that image — try the live camera')));
+        }
+        return;
+      }
+      _detected = true;
+      try { _ctrl.stop(); } catch (_) {}
+      RenderLog.write('c256_upload_qr', 'success;code=$v');
+      if (ctx.mounted && Navigator.of(ctx).canPop()) Navigator.of(ctx).pop(v);
+    } catch (e) {
+      RenderLog.write('c256_upload_qr', 'error;$e');
+      if (ctx.mounted) {
+        ScaffoldMessenger.of(ctx).showSnackBar(
+            const SnackBar(content: Text('Could not read QR from image')));
+      }
+    }
+  }
+
+  Widget _scannerActionBtn({required IconData icon, required String label, required VoidCallback onTap}) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Container(
+          width: 52, height: 52,
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.45),
+            shape: BoxShape.circle,
+            border: Border.all(color: Colors.white.withValues(alpha: 0.25), width: 1),
+          ),
+          child: Icon(icon, color: Colors.white, size: 24),
+        ),
+        const SizedBox(height: 5),
+        Text(label, style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600,
+            shadows: [Shadow(color: Colors.black54, blurRadius: 4)])),
+      ]),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    RenderLog.write('c256_scanner_controls', 'upload_qr=${!kIsWeb};torch=true');
     return Dialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: SizedBox(
-        width: 320, height: 400,
+        width: 320, height: 420,
         child: Column(children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 16, 8, 0),
@@ -276,39 +330,63 @@ class _BagScannerDialogState extends State<_BagScannerDialog> {
           ),
           const Padding(
             padding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-            child: Text('Point camera at the bag QR code',
+            child: Text('Point camera at bag QR  •  or upload a photo',
                 style: TextStyle(fontSize: 13, color: _kSub)),
           ),
           Expanded(
             child: ClipRRect(
               borderRadius: const BorderRadius.vertical(bottom: Radius.circular(16)),
-              child: MobileScanner(
-                controller: _ctrl,
-                errorBuilder: (ctx, error, _) => Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Column(mainAxisSize: MainAxisSize.min, children: [
-                      const Icon(Icons.camera_alt_outlined, size: 48, color: Color(0xFFD1D5DB)),
-                      const SizedBox(height: 12),
-                      const Text('Camera unavailable', style: TextStyle(color: _kSub, fontSize: 14)),
-                      const SizedBox(height: 4),
-                      Text(error.errorCode.name, style: const TextStyle(fontSize: 12, color: _kSub)),
-                      const SizedBox(height: 16),
-                      TextButton(onPressed: () => _close(ctx), child: const Text('Close')),
-                    ]),
+              child: Stack(children: [
+                // Live camera
+                MobileScanner(
+                  controller: _ctrl,
+                  errorBuilder: (ctx, error, _) => Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Column(mainAxisSize: MainAxisSize.min, children: [
+                        const Icon(Icons.camera_alt_outlined, size: 48, color: Color(0xFFD1D5DB)),
+                        const SizedBox(height: 12),
+                        const Text('Camera unavailable', style: TextStyle(color: _kSub, fontSize: 14)),
+                        const SizedBox(height: 4),
+                        Text(error.errorCode.name, style: const TextStyle(fontSize: 12, color: _kSub)),
+                        const SizedBox(height: 16),
+                        TextButton(onPressed: () => _close(ctx), child: const Text('Close')),
+                      ]),
+                    ),
                   ),
+                  onDetect: (capture) {
+                    if (_detected) return;
+                    final code = capture.barcodes.isNotEmpty ? capture.barcodes.first.rawValue : null;
+                    if (code != null && code.isNotEmpty) {
+                      _detected = true;
+                      _ctrl.stop();
+                      if (mounted) Navigator.of(context).pop(code);
+                    }
+                  },
                 ),
-                onDetect: (capture) {
-                  if (_detected) return;
-                  final code = capture.barcodes.isNotEmpty ? capture.barcodes.first.rawValue : null;
-                  if (code != null && code.isNotEmpty) {
-                    _detected = true;
-                    _ctrl.stop();
-                    // Pop with the code value so showDialog<String> returns it correctly.
-                    if (mounted) Navigator.of(context).pop(code);
-                  }
-                },
-              ),
+                // #256: Bottom action bar — Upload QR (mobile only) + Torch toggle
+                Positioned(
+                  bottom: 20, left: 0, right: 0,
+                  child: Builder(builder: (ctx) => Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      if (!kIsWeb) ...[
+                        _scannerActionBtn(
+                          icon: Icons.photo_library_outlined,
+                          label: 'Upload QR',
+                          onTap: () => _pickAndDecodeQr(ctx),
+                        ),
+                        const SizedBox(width: 40),
+                      ],
+                      _scannerActionBtn(
+                        icon: Icons.flashlight_on_outlined,
+                        label: 'Torch',
+                        onTap: () { try { _ctrl.toggleTorch(); } catch (_) {} },
+                      ),
+                    ],
+                  )),
+                ),
+              ]),
             ),
           ),
         ]),
@@ -2223,15 +2301,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           ),
         ]);
       }
-      // C171: short reminder + confirm all items received
-      final sc = _shortCount;
-      RenderLog.write('c171_short_btn_visible',
-          'supplier=${_selectedSupplier ?? ''};short_count=$sc;visible=${sc > 0}');
+      // #256: "Send supplier reminder" removed from Warehouse — disputes are raised automatically
+      // by fw_confirm_all_received and handled in the Disputes tab.
+      RenderLog.write('c256_reminder_removed', 'warehouse_footer_built_without_reminder');
       return Column(mainAxisSize: MainAxisSize.min, children: [
-        if (sc > 0 || _wrongFlaggedCount > 0) ...[
-          _buildShortReminderBtn(),
-          const SizedBox(height: 8),
-        ],
         SizedBox(
           height: 44,
           child: FilledButton(

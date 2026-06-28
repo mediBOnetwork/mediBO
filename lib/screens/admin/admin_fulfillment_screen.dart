@@ -1669,7 +1669,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           await Supabase.instance.client.rpc('fw_confirm_all_received',
               params: {'p_supplier_name': supplier, 'p_force': true});
           if (!mounted) return;
-          setState(() { _arrivalsLocked = true; _confirmingAll = false; });
+          setState(() { _arrivalsLocked = true; _confirmingAll = false;
+            // #261 5F: confirm-all auto-detaches bags; clear any pending change progress
+            if (supplier != null) _changeProgressBySupplier.remove(supplier); });
           _loadSuppliers();
           await _reloadItemsFromDB();
           RenderLog.write('c158_confirm_lock',
@@ -2502,72 +2504,81 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   }
 
   // Attach a freshly scanned bag code to this supplier (initial attach — no existing bag).
-  Future<void> _chooseBag() async {
+  // #261: unified bag-flow entry point — called by BOTH the "Scan bag to start counting"
+  // button AND the "Change Bag" yellow pill. Routes to the correct sub-flow:
+  //   • mid-change (old detached, awaiting new) → resume _ChangeBagScanner at needNew
+  //   • active bag present → start _ChangeBagScanner at needOld (normal change)
+  //   • neither → first-attach plain scanner (_BagScannerDialog)
+  Future<void> _openBagFlow() async {
     final supplier = _selectedSupplier;
     if (supplier == null) return;
-    RenderLog.write('c253_scanner_open', 'supplier=$supplier;action=attach');
+
+    final prog = _changeProgressBySupplier[supplier];
+    final active = _activeBag;
+
+    if (prog != null && prog['old_detached'] == true) {
+      // RESUME: old bag was detached in a prior session; open directly at need_new
+      RenderLog.write('c261_resume_need_new',
+          'supplier=$supplier;old_bag=${prog['old_bag']}');
+      await _openChangeBagModal(supplier,
+          initialStep: _CBStep.needNew,
+          currentBag: {'bag_no': prog['old_bag']});
+    } else if (active != null) {
+      // CHANGE: active bag present → start at need_old
+      await _openChangeBagModal(supplier,
+          initialStep: _CBStep.needOld,
+          currentBag: active);
+    } else {
+      // FIRST ATTACH: no active bag, no pending change → plain scanner
+      await _openChooseBagModal(supplier);
+    }
+  }
+
+  // Opens the two-step color-coded Change-Bag modal. Handles progress save on detach + clear on attach.
+  Future<void> _openChangeBagModal(String supplier,
+      {required _CBStep initialStep, required Map<String, dynamic> currentBag}) async {
+    RenderLog.write('c258_changebag_step',
+        'open;supplier=$supplier;bag=${currentBag['bag_no']};step=${initialStep.name}');
+    final result = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (_) => _ChangeBagScanner(
+        supplier: supplier,
+        currentBag: currentBag,
+        initialStep: initialStep,
+      ),
+    );
+    if (!mounted) return;
+    if (result != null && result['_partial'] == true) {
+      // Old bag detached, modal closed before new bag — save progress for resume
+      setState(() {
+        _activeBag = null;
+        _changeProgressBySupplier[supplier] = {
+          'old_bag': result['old_bag_no'],
+          'old_detached': true,
+        };
+      });
+    } else if (result != null && result['_partial'] != true) {
+      // Attach succeeded — clear progress, update active bag
+      RenderLog.write('c261_change_attach_done',
+          'supplier=$supplier;new_bag=${result['bag_no']}');
+      setState(() {
+        _activeBag = result;
+        _changeProgressBySupplier.remove(supplier);
+      });
+    }
+    // null: modal closed with no action (e.g. X before any scan) — keep state as-is
+    await _reloadItemsFromDB();
+  }
+
+  // Plain first-attach scanner — no change progress involved.
+  Future<void> _openChooseBagModal(String supplier) async {
+    RenderLog.write('c253_scanner_open', 'supplier=$supplier;action=first_attach');
     final code = await showDialog<String>(
       context: context,
       builder: (_) => const _BagScannerDialog(title: 'Scan Bag to Attach'),
     );
     if (code == null || !mounted) return;
     await _attachBagCode(supplier, code);
-  }
-
-  // #258 BUG3: Change-bag — single color-coded 2-step modal (old=RED→GREEN, new=GREY→RED→GREEN).
-  Future<void> _changeActiveBag() async {
-    final supplier = _selectedSupplier;
-    if (supplier == null) return;
-
-    // #261: restore step from saved progress if old bag was already detached in a prior open
-    final savedProgress = _changeProgressBySupplier[supplier];
-    final currentBag = _activeBag;
-
-    _CBStep initialStep;
-    Map<String, dynamic> bagForModal;
-
-    if (currentBag != null) {
-      // Normal start: active bag present → scan old first
-      initialStep = _CBStep.needOld;
-      bagForModal = currentBag;
-    } else if (savedProgress != null) {
-      // Reopen after prior detach: skip to scan-new step
-      initialStep = _CBStep.needNew;
-      bagForModal = savedProgress;
-      RenderLog.write('c261_changebag_reopen',
-          'supplier=$supplier;old_bag=${savedProgress['bag_no']};step=need_new');
-    } else {
-      return; // no active bag and no in-progress change — nothing to do
-    }
-
-    RenderLog.write('c258_changebag_step',
-        'open;supplier=$supplier;bag=${bagForModal['bag_no']};initialStep=${initialStep.name}');
-
-    final result = await showDialog<Map<String, dynamic>>(
-      context: context,
-      builder: (_) => _ChangeBagScanner(
-        supplier: supplier,
-        currentBag: bagForModal,
-        initialStep: initialStep,
-      ),
-    );
-    if (!mounted) return;
-
-    if (result != null && result['_partial'] == true) {
-      // Old bag detached, modal closed before new bag scanned — save progress
-      setState(() {
-        _activeBag = null;
-        _changeProgressBySupplier[supplier] = {'bag_no': result['old_bag_no']};
-      });
-    } else if (result != null && result['_partial'] != true) {
-      // Attach succeeded — clear progress and update active bag
-      setState(() {
-        _activeBag = result;
-        _changeProgressBySupplier.remove(supplier);
-      });
-    }
-    // null return: modal closed with no action taken
-    await _reloadItemsFromDB();
   }
 
   // Shared attach logic — calls bag_attach, normalizes result, updates state.
@@ -2619,11 +2630,42 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   Widget _buildBagControl() {
     final bag = _activeBag;
+    final supplier = _selectedSupplier ?? '';
+    final midChange = bag == null && (_changeProgressBySupplier[supplier]?['old_detached'] == true);
+
     if (bag == null) {
+      // Show "mid-change resume" bar when old bag detached but new not yet scanned
+      if (midChange) {
+        final oldBagNo = _changeProgressBySupplier[supplier]?['old_bag'];
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+          child: GestureDetector(
+            onTap: _openBagFlow,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFEF3C7),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: const Color(0xFFD97706).withValues(alpha: 0.5)),
+              ),
+              child: Row(children: [
+                const Icon(Icons.swap_horiz_rounded, size: 18, color: Color(0xFF92400E)),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text('Bag $oldBagNo detached — tap to scan new bag',
+                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
+                          color: Color(0xFF92400E))),
+                ),
+                const Icon(Icons.chevron_right_rounded, size: 18, color: Color(0xFF92400E)),
+              ]),
+            ),
+          ),
+        );
+      }
       return Padding(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
         child: OutlinedButton.icon(
-          onPressed: _chooseBag,
+          onPressed: _openBagFlow,
           icon: const Icon(Icons.qr_code_scanner_rounded, size: 18),
           label: const Text('Scan bag to start counting'),
           style: OutlinedButton.styleFrom(
@@ -2654,9 +2696,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                 style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
                     color: Color(0xFF065F46))),
           ),
-          // #261: yellow pill "Change Bag" button; X removed
+          // #261: yellow pill "Change Bag" button; X removed; both buttons → _openBagFlow
           GestureDetector(
-            onTap: _changeActiveBag,
+            onTap: _openBagFlow,
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
               decoration: BoxDecoration(

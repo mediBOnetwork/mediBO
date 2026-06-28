@@ -128,6 +128,7 @@ class _MergedProduct {
   final List<String> orderItemIds; // underlying line IDs — for dispute lookup only
   final String combinedState; // 'pending'|'received'|'short'|'wrong'|'not_coming'
   final bool hasArrived; // true if any underlying Arrivals line has received_locked=true
+  final List<Map>? bagBreakdown; // #254: per-bag breakdown for Arrivals
 
   const _MergedProduct({
     required this.productId,
@@ -139,6 +140,7 @@ class _MergedProduct {
     required this.orderItemIds,
     required this.combinedState,
     this.hasArrived = false,
+    this.bagBreakdown,
   });
 }
 
@@ -235,11 +237,12 @@ class _BagScannerDialogState extends State<_BagScannerDialog> {
   @override
   void initState() {
     super.initState();
-    _ctrl = MobileScannerController(detectionSpeed: DetectionSpeed.normal);
+    _ctrl = MobileScannerController(detectionSpeed: DetectionSpeed.noDuplicates);
   }
 
   @override
   void dispose() {
+    RenderLog.write('c254_scanner_dispose', 'ok');
     _ctrl.dispose();
     super.dispose();
   }
@@ -473,6 +476,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         combinedState = 'short';
       }
       final hasArrived = lines.any((r) => r['received_locked'] == true);
+      // #254: collect bag_breakdown from first line (Arrivals only; one line per product)
+      final rawBd = first['bag_breakdown'];
+      final bagBreakdown = rawBd is List ? rawBd.cast<Map>().toList() : null;
       merged.add(_MergedProduct(
         productId: entry.key,
         productName: first['product_name']?.toString() ?? '—',
@@ -483,6 +489,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         orderItemIds: oiids,
         combinedState: combinedState,
         hasArrived: hasArrived,
+        bagBreakdown: bagBreakdown,
       ));
     }
     merged.sort((a, b) {
@@ -985,6 +992,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         final parsedMode = supplierModeOf(stateRes); // B5: top-level, not per-item
         final activeBagRaw = stateRes['active_bag'];
         final activeBag = activeBagRaw is Map ? Map<String, dynamic>.from(activeBagRaw) : null;
+        RenderLog.write('c254_per_supplier_bag',
+            'supplier=$supplier;bag=${activeBag != null ? activeBag['bag_no'] : 'none'}');
         setState(() {
           _items = stateItems;
           _focusIdx = firstPending >= 0 ? firstPending : 0;
@@ -1368,16 +1377,21 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         final setQty = state == 'received'
             ? ordQty.toDouble()
             : (qty != null ? qty.toDouble() : 1.0);
-        final bagNo = (_activeBag!['bag_no'] as num).toInt();
+        final bagNo = _activeBag!['bag_no'];
         final res = await Supabase.instance.client.rpc('bag_count_set', params: {
           'p_supplier_name': supplier,
           'p_product_id': productId,
-          'p_bag_no': bagNo,
           'p_qty': setQty,
           'p_note': note ?? 'tap:$state',
         }) as Map?;
         if (!mounted) return;
-        if (res != null && res['error'] != null) throw Exception(res['error'].toString());
+        if (res != null && res['error'] != null) {
+          final msg = _bagCountError(res);
+          if (mounted) setState(() => _recording = false);
+          _showSnack(msg);
+          RenderLog.write('c254_gate_block', 'tap_count_error=${res['error']}');
+          return;
+        }
         RenderLog.write('c253_bag_count', 'bag=$bagNo;product=$productId;qty=$setQty');
         await _reloadItemsFromDB();
         if (mounted) setState(() => _recording = false);
@@ -1792,14 +1806,19 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     try {
       final Map? res;
       if (widget.arrivals) {
-        final bagNo = (_activeBag!['bag_no'] as num).toInt();
+        final bagNo = _activeBag!['bag_no'];
         res = await Supabase.instance.client.rpc('bag_count_set', params: {
           'p_supplier_name': supplier,
           'p_product_id': productId,
-          'p_bag_no': bagNo,
           'p_qty': qty,
           'p_note': 'voice: $rawSegment',
         }) as Map?;
+        if (!mounted) return;
+        if (res != null && res['error'] != null) {
+          _showSnack(_bagCountError(res));
+          RenderLog.write('c254_gate_block', 'voice_count_error=${res['error']}');
+          return;
+        }
         RenderLog.write('c253_bag_count', 'bag=$bagNo;product=$productId;qty=$qty');
       } else {
         res = await Supabase.instance.client.rpc('set_voice_received', params: {
@@ -1808,12 +1827,13 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           'p_qty': qty,
           'p_note': 'voice: $rawSegment',
         }) as Map?;
+        if (!mounted) return;
+        if (res != null && res['error'] != null) {
+          _showSnack(res['error'] == 'received_locked' ? 'Already received — locked' : 'Error: ${res['error']}');
+          return;
+        }
       }
       if (!mounted) return;
-      if (res != null && res['error'] == 'received_locked') {
-        _showSnack('Already received — locked');
-        return;
-      }
       RenderLog.write('84_committed', '$productName:set${qty.toInt()}');
       setState(() { _tally[productId] = qty; });
       await _reloadItemsFromDB();
@@ -1935,15 +1955,52 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   // ── #253: Bag attach/detach helpers ─────────────────────────────────────────
 
+  // Maps bag attach/detach error codes to user-friendly messages.
   String _bagError(Map m) {
     final code = m['error']?.toString() ?? '';
-    return switch (code) {
-      'bag_not_found' => 'Bag not found — scan again',
-      'bag_in_use' => 'Bag already in use by another supplier',
-      'bag_not_attached' => 'No bag attached',
-      'bag_wrong_supplier' => 'Bag belongs to a different supplier',
-      _ => code.isNotEmpty ? 'Bag error: $code' : 'Unknown bag error',
-    };
+    switch (code) {
+      case 'bad_code': return 'Invalid QR — scan a valid BAG-xxx code';
+      case 'no_such_bag': return 'Bag not found — check the QR and retry';
+      case 'bag_not_found': return 'Bag not found — check the QR and retry';
+      case 'bag_full': return 'Bag is already full — use an empty bag';
+      case 'bag_in_use':
+        final held = m['held_by']?.toString() ?? '';
+        return held.isNotEmpty ? 'Bag in use by $held' : 'Bag already in use by another supplier';
+      case 'wrong_bag':
+        final expected = m['expected']?.toString() ?? '?';
+        final scanned = m['scanned']?.toString() ?? '?';
+        return 'Wrong bag — expected $expected, scanned $scanned';
+      case 'no_active_bag': return 'No bag attached — scan a bag first';
+      case 'bag_wrong_supplier': return 'Bag belongs to a different supplier';
+      case 'not_authorized': return 'Not authorized for this action';
+      default: return code.isNotEmpty ? 'Bag error: $code' : 'Unknown bag error';
+    }
+  }
+
+  // Maps bag_count_set error codes to user-friendly messages.
+  String _bagCountError(Map m) {
+    final code = m['error']?.toString() ?? '';
+    switch (code) {
+      case 'no_bag_selected': return 'Scan a bag first before counting';
+      case 'received_locked': return 'Already locked — cannot change count';
+      case 'bad_qty': return 'Invalid quantity';
+      case 'product_not_for_supplier': return 'Product not in this supplier\'s order';
+      case 'not_authorized': return 'Not authorized';
+      case 'exceeds_ordered':
+        final ordered = m['ordered'];
+        final maxBag = m['max_for_this_bag'];
+        final inOther = m['already_in_other_bags'];
+        final attempted = m['attempted'];
+        RenderLog.write('c254_exceeds_handled',
+            'ordered=$ordered;max_bag=$maxBag;in_other=$inOther;attempted=$attempted');
+        if (maxBag != null && inOther != null && ordered != null) {
+          return 'Over-limit — only $maxBag can go in this bag '
+              '($inOther already counted in other bags, $ordered ordered). '
+              'Count not saved.';
+        }
+        return 'Quantity exceeds ordered amount. Count not saved.';
+      default: return code.isNotEmpty ? 'Count error: $code' : 'Unknown count error';
+    }
   }
 
   Future<void> _chooseBag() async {
@@ -1980,12 +2037,17 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     final supplier = _selectedSupplier;
     if (supplier == null || _activeBag == null) return;
     try {
-      final bagNo = (_activeBag!['bag_no'] as num).toInt();
-      await Supabase.instance.client.rpc('bag_detach', params: {
+      final bagNo = _activeBag!['bag_no'];
+      final bagCode = _activeBag!['bag_code']?.toString() ?? '';
+      final res = await Supabase.instance.client.rpc('bag_detach', params: {
         'p_supplier_name': supplier,
-        'p_bag_no': bagNo,
-      });
+        'p_bag_code': bagCode,
+      }) as Map?;
       if (!mounted) return;
+      if (res != null && res['error'] != null) {
+        _showSnack(_bagError(res));
+        return;
+      }
       setState(() => _activeBag = null);
       RenderLog.write('c253_bag_detached', 'bag=$bagNo;supplier=$supplier');
     } catch (e) {
@@ -2593,20 +2655,41 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     if (action == null) return;
     final supplier = _selectedSupplier;
     if (supplier == null) return;
+    // #254: gate agent commit on active bag for Arrivals
+    if (widget.arrivals && _activeBag == null) {
+      setState(() { _agentReply = 'Pehle bag scan karo.'; _agentPhase = AgentPhase.speaking; });
+      RenderLog.write('c254_gate_block', 'agent_commit_no_bag');
+      await _speakReply(_agentReply);
+      if (mounted) setState(() { _pendingAction = null; _agentPhase = AgentPhase.idle; });
+      return;
+    }
     setState(() => _agentPhase = AgentPhase.thinking);
     try {
-      final res = await Supabase.instance.client.rpc('set_voice_received', params: {
-        'p_supplier_name': supplier,
-        'p_product_id': (action['product_id'] as num).toInt(),
-        'p_qty': (action['qty'] as num).toDouble(),
-        'p_note': 'voice-agent #85',
-      });
+      final dynamic res;
+      if (widget.arrivals) {
+        // #254: Arrivals agent commit → bag_count_set (no p_bag_no; backend uses active bag)
+        res = await Supabase.instance.client.rpc('bag_count_set', params: {
+          'p_supplier_name': supplier,
+          'p_product_id': (action['product_id'] as num).toInt(),
+          'p_qty': (action['qty'] as num).toDouble(),
+          'p_note': 'voice-agent #253',
+        });
+      } else {
+        res = await Supabase.instance.client.rpc('set_voice_received', params: {
+          'p_supplier_name': supplier,
+          'p_product_id': (action['product_id'] as num).toInt(),
+          'p_qty': (action['qty'] as num).toDouble(),
+          'p_note': 'voice-agent #85',
+        });
+      }
       if (!mounted) return;
       if (res is Map && res['error'] != null) {
-        setState(() { _agentReply = 'Save nahi hua, dobara.'; _agentPhase = AgentPhase.speaking; });
+        final errMsg = widget.arrivals ? _bagCountError(res as Map) : 'Save nahi hua, dobara.';
+        RenderLog.write(widget.arrivals ? 'c254_gate_block' : 'change_85_agent_commit_fail',
+            widget.arrivals ? 'agent_commit_error=${res['error']}' : '1');
+        setState(() { _agentReply = errMsg; _agentPhase = AgentPhase.speaking; });
         await _speakReply(_agentReply);
         if (mounted) setState(() => _agentPhase = AgentPhase.idle);
-        RenderLog.write('change_85_agent_commit_fail', '1');
         return;
       }
       await _reloadItemsFromDB();
@@ -4029,7 +4112,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             child: Text('No items in this box',
                 style: TextStyle(color: _kSub, fontSize: 15))))
       else
-        Expanded(child: _buildWideItemTable()),
+        ...[
+          // #254: bag control above item table on desktop (Arrivals only)
+          if (widget.arrivals) _buildBagControl(),
+          Expanded(child: _buildWideItemTable()),
+        ],
     ]);
   }
 
@@ -4052,7 +4139,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c114_progress_expanded', 'desktop');
     final doneCount = _items.length - _pendingCount;
     final total = _items.length;
-    final countingDisabled = _agentPhase != AgentPhase.idle;
+    final countingDisabled = _agentPhase != AgentPhase.idle ||
+        (widget.arrivals && _activeBag == null); // #254: bag gate on desktop too
     final agentDisabled = _voiceListening || _voiceProcessing;
     final agentPhase = _agentPhase;
     final bool agentBusy = agentPhase == AgentPhase.thinking || agentPhase == AgentPhase.speaking;
@@ -4361,6 +4449,19 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                                 Text(mp.productName,
                                     style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _kText),
                                     maxLines: 1, overflow: TextOverflow.ellipsis),
+                                // #254: bag breakdown (Arrivals only, desktop)
+                                if (widget.arrivals && mp.bagBreakdown != null && mp.bagBreakdown!.isNotEmpty) ...[
+                                  const SizedBox(height: 2),
+                                  Builder(builder: (_) {
+                                    final bd = mp.bagBreakdown!
+                                        .map((b) => '${b['bag_no']}:${(b['qty'] as num).toInt().toString().padLeft(2, '0')}')
+                                        .join(' ');
+                                    RenderLog.write('c254_breakdown_ok', 'desktop;bags=$bd');
+                                    return Text(bd,
+                                        style: const TextStyle(fontSize: 11, color: Color(0xFF065F46)),
+                                        maxLines: 1, overflow: TextOverflow.ellipsis);
+                                  }),
+                                ],
                                 if (deskDisputeItem != null) ...[
                                   const SizedBox(height: 2),
                                   _DisputeStrip(item: deskDisputeItem, surface: widget.arrivals ? 'arrivals' : 'collect'),
@@ -5120,15 +5221,15 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
               RenderLog.write('c177_wh_states', 'state=$state;idx=$i');
             }
 
-            // #253: bag_breakdown per item (Arrivals only)
+            // #253/#254: bag_breakdown per item (Arrivals only), format: "37:03 38:05"
             final breakdownRaw = item['bag_breakdown'];
-            final breakdown = breakdownRaw is List
+            final breakdown = breakdownRaw is List && (breakdownRaw as List).isNotEmpty
                 ? breakdownRaw.cast<Map>()
-                    .map((b) => 'Bag ${b['bag_no']}: ${b['qty']}')
-                    .join(', ')
+                    .map((b) => '${b['bag_no']}:${(b['qty'] as num).toInt().toString().padLeft(2, '0')}')
+                    .join(' ')
                 : null;
             if (widget.arrivals && breakdown != null && breakdown.isNotEmpty) {
-              RenderLog.write('c253_breakdown_render', 'idx=$i;bags=$breakdown');
+              RenderLog.write('c254_breakdown_ok', 'mobile;idx=$i;bags=$breakdown');
             }
 
             return GestureDetector(

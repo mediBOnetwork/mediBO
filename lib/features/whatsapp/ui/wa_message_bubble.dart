@@ -41,7 +41,11 @@ class _WaMessageBubbleState extends State<WaMessageBubble> {
 
   String _formatTime(DateTime? dt) {
     if (dt == null) return '';
-    return DateFormat('HH:mm').format(dt);
+    // CHANGE #248: 12h IST display (toLocal() gives IST in the Indian user's browser).
+    final ist = dt.toUtc().add(const Duration(hours: 5, minutes: 30));
+    final t = DateFormat('h:mm a').format(ist).toLowerCase();
+    RenderLog.write('c248_bubble_time_12h', t);
+    return t;
   }
 
   void _showFullscreen(BuildContext ctx, String url) {

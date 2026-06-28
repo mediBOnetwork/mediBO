@@ -5479,39 +5479,43 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
         border: Border.all(color: const Color(0xFFE5E7EB)),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        // Top row: app + status badge
+        // CHANGE #241: header restructured — status LEFT, mode badge RIGHT; big amount removed
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
-          child: Row(children: [
-            Expanded(
-              child: Text(
-                claim.paymentMethod == 'cash'
-                    ? '💵 Cash'
-                    : (claim.app != null && claim.app!.isNotEmpty ? claim.app! : 'Payment'),
-                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
-                    color: Color(0xFF111827)),
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-            const SizedBox(width: 8),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+            // Status pill (moved to left)
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
               decoration: BoxDecoration(color: sBg, borderRadius: BorderRadius.circular(20)),
               child: Text(sLabel,
                   style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: sFg)),
             ),
+            const Spacer(),
+            // Mode badge (new, right-aligned)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: claim.paymentMethod == 'cash'
+                    ? const Color(0xFFF3F4F6)
+                    : const Color(0xFFE8F5E9),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Text(
+                claim.paymentMethod == 'cash' ? 'Cash' : 'Online',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: claim.paymentMethod == 'cash'
+                      ? const Color(0xFF374151)
+                      : const Color(0xFF1B5E20),
+                ),
+              ),
+            ),
           ]),
         ),
-        // Amount
-        if (amount != null)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
-            child: Text(_rupee(amount),
-                style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800,
-                    color: Color(0xFF111827))),
-          ),
-        // Detail rows — CHANGE #241: reordered + Mode row + copy on every row
+        // Detail rows — CHANGE #241: Amount first, then Mode, then variant rows
         if (claim.paymentMethod == 'cash') ...[
+          _copyRow('Amount', _rupee(amount)),
           _copyRow('Mode', 'Cash'),
           if (claim.collectedBy != null && claim.collectedBy!.isNotEmpty)
             _copyRow('Received by', claim.collectedBy),
@@ -5521,6 +5525,7 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
           if (claim.receivedAt != null && claim.receivedAt!.isNotEmpty)
             _copyRow('Received', _fmtDate(claim.receivedAt!)),
         ] else ...[
+          _copyRow('Amount', _rupee(amount)),
           _copyRow('Mode', 'Online'),
           if (claim.payeeName != null && claim.payeeName!.isNotEmpty)
             _copyRow('Payee', claim.payeeName),
@@ -5537,6 +5542,9 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
           RenderLog.write('c241_payrows_built',
               'variant=${claim.paymentMethod == "cash" ? "cash" : "online"} mode_row=added');
           RenderLog.write('c241_copy_all', 'rows_with_copy=all');
+          RenderLog.write('c241_hdr_restructured', 'status_left=true mode_badge_right=true');
+          RenderLog.write('c241_amount_row',
+              'present=true variant=${claim.paymentMethod == "cash" ? "cash" : "online"}');
           return const SizedBox.shrink();
         }),
         // verify_reason for rejected/duplicate

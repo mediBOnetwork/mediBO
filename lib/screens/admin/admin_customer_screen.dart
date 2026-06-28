@@ -5559,9 +5559,40 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
           _copyRow('Amount', _rupee(amount)),
           if (claim.collectedBy != null && claim.collectedBy!.isNotEmpty)
             _copyRow('Received by', claim.collectedBy),
-          if (claim.locationLat != null && claim.locationLng != null)
-            _copyRow('Location',
-                '${claim.locationLat!.toStringAsFixed(5)}, ${claim.locationLng!.toStringAsFixed(5)}'),
+          if (claim.locationLat != null && claim.locationLng != null) ...[
+            // CHANGE #244: show address if available, else coords; add Open-in-Maps button
+            Builder(builder: (mCtx) {
+              RenderLog.write('c244_card_maplink', 'present=true');
+              final locAddr = (claim.locationAddress != null &&
+                      claim.locationAddress!.isNotEmpty)
+                  ? claim.locationAddress!
+                  : '${claim.locationLat!.toStringAsFixed(5)}, ${claim.locationLng!.toStringAsFixed(5)}';
+              final mapsUrl =
+                  'https://www.google.com/maps?q=${claim.locationLat},${claim.locationLng}';
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _copyRow('Location', locAddr),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 2, 12, 0),
+                    child: GestureDetector(
+                      onTap: () {
+                        try { html.window.open(mapsUrl, '_blank'); } catch (_) {}
+                      },
+                      child: Row(mainAxisSize: MainAxisSize.min, children: const [
+                        Icon(Icons.location_on, size: 13, color: Color(0xFF1565C0)),
+                        SizedBox(width: 4),
+                        Text('Open in Maps',
+                            style: TextStyle(fontSize: 12, color: Color(0xFF1565C0),
+                                fontWeight: FontWeight.w500,
+                                decoration: TextDecoration.underline)),
+                      ]),
+                    ),
+                  ),
+                ],
+              );
+            }),
+          ],
           if (claim.receivedAt != null && claim.receivedAt!.isNotEmpty)
             _copyRow('Received', _fmtDate(claim.receivedAt!)),
         ] else ...[
@@ -5856,6 +5887,7 @@ class PaymentClaim {
   final String? collectedBy;
   final double? locationLat;
   final double? locationLng;
+  final String? locationAddress; // CHANGE #244
 
   const PaymentClaim({
     required this.claimId,
@@ -5878,6 +5910,7 @@ class PaymentClaim {
     this.collectedBy,
     this.locationLat,
     this.locationLng,
+    this.locationAddress,
   });
 
   factory PaymentClaim.fromMap(Map<String, dynamic> m, String bucket) {
@@ -5909,9 +5942,10 @@ class PaymentClaim {
       matchesRest:    m['matches_rest']   as bool?,
       verifyReason:   m['verify_reason']  as String?,
       paymentMethod:  m['payment_method'] as String? ?? 'online',
-      collectedBy:    m['collected_by']   as String?,
+      collectedBy:    m['collected_by']     as String?,
       locationLat:    _parseCoord(m['location_lat']),
       locationLng:    _parseCoord(m['location_lng']),
+      locationAddress: m['location_address'] as String?,
     );
   }
 }

@@ -27,6 +27,12 @@ class CashPaymentSheet extends StatefulWidget {
 class _CashPaymentSheetState extends State<CashPaymentSheet> {
   final _amountCtrl = TextEditingController();
   final _collectedByCtrl = TextEditingController();
+  // CHANGE #244 — editable address auto-filled from reverse-geocode
+  final _addressCtrl = TextEditingController();
+  bool _addressAutoFilled = false;
+  bool _addressEditedByUser = false;
+  bool _geocoding = false;
+
   Uint8List? _fileBytes;
   String? _fileDataUrl;
   String? _fileMime;
@@ -63,12 +69,14 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
     _amountCtrl.addListener(() => setState(() {}));
     _collectedByCtrl.addListener(() => setState(() {}));
     try { RenderLog.write('c243_selfie_check_wired', 'on_pick=true'); } catch (_) {}
+    try { RenderLog.write('c244_addr_field', 'wired=true'); } catch (_) {}
   }
 
   @override
   void dispose() {
     _amountCtrl.dispose();
     _collectedByCtrl.dispose();
+    _addressCtrl.dispose();
     super.dispose();
   }
 
@@ -217,7 +225,11 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
           _locating = false;
           _locError = null;
           _locationLabel = '${lat.toStringAsFixed(5)}, ${lng.toStringAsFixed(5)}';
+          // On explicit Refresh, allow geocode to overwrite any prior autofill
+          _addressEditedByUser = false;
         });
+        // Auto-fill address from GPS (always runs on capture/refresh)
+        _reverseGeocode(lat, lng);
       }
     } catch (e) {
       if (mounted) {
@@ -226,6 +238,32 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
           _locError = 'Could not get location. Allow location in browser and tap retry.';
         });
       }
+    }
+  }
+
+  Future<void> _reverseGeocode(double lat, double lng) async {
+    if (!mounted) return;
+    setState(() { _geocoding = true; });
+    try {
+      final supabase = Supabase.instance.client;
+      final res = await supabase.functions
+          .invoke('reverse-geocode', body: {'lat': lat, 'lng': lng})
+          .timeout(const Duration(seconds: 12));
+      final data = res.data;
+      final map = data is Map ? Map<String, dynamic>.from(data) : <String, dynamic>{};
+      final addr = (map['address'] as String? ?? '').trim();
+      if (!mounted) return;
+      setState(() {
+        _geocoding = false;
+        if (addr.isNotEmpty && !_addressEditedByUser) {
+          _addressCtrl.text = addr;
+          _addressAutoFilled = true;
+        }
+      });
+      try { RenderLog.write('c244_geocode', 'addr_len=${addr.length}'); } catch (_) {}
+    } catch (_) {
+      if (mounted) setState(() { _geocoding = false; });
+      try { RenderLog.write('c244_geocode', 'addr_len=0'); } catch (_) {}
     }
   }
 
@@ -253,6 +291,7 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
       );
 
       setState(() { _uploadProgress = 0.7; });
+      final addrText = _addressCtrl.text.trim();
       final res = await supabase.rpc('admin_record_cash_payment', params: {
         'p_order_id': widget.orderId,
         'p_amount': double.parse(_amountCtrl.text.trim()),
@@ -260,6 +299,7 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
         'p_file_path': path,
         'p_lat': _lat,
         'p_lng': _lng,
+        'p_location_address': addrText.isEmpty ? null : addrText,
       });
 
       setState(() { _uploadProgress = 1.0; });
@@ -457,7 +497,7 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
             ],
             const SizedBox(height: 16),
 
-            // LOCATION
+            // LOCATION — CHANGE #244: GPS coords + auto-filled editable address
             const Text('Location',
                 style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF424242))),
             const SizedBox(height: 6),
@@ -506,6 +546,36 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
                   ),
                 ),
               ),
+            // Address field (CHANGE #244) — shown once location is captured or if geocoding
+            if (_lat != null || _geocoding) ...[
+              const SizedBox(height: 10),
+              Row(children: [
+                const Text('Address',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
+                        color: Color(0xFF424242))),
+                if (_geocoding) ...[
+                  const SizedBox(width: 8),
+                  const SizedBox(width: 12, height: 12,
+                      child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF757575))),
+                  const SizedBox(width: 6),
+                  const Text('Finding address…',
+                      style: TextStyle(fontSize: 11, color: Color(0xFF757575))),
+                ],
+              ]),
+              const SizedBox(height: 6),
+              TextField(
+                controller: _addressCtrl,
+                onChanged: (_) => setState(() { _addressEditedByUser = true; }),
+                textInputAction: TextInputAction.done,
+                maxLines: 1,
+                decoration: InputDecoration(
+                  hintText: 'Auto-filled from location (editable)',
+                  hintStyle: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                ),
+              ),
+            ],
 
             // SUBMIT ERROR
             if (_error != null) ...[

@@ -2,6 +2,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:html' as html;
+import 'dart:js_interop';
 import 'dart:ui_web' as ui_web;
 
 import 'package:flutter/material.dart';
@@ -17,6 +18,45 @@ import '../bulk_upload_screen.dart';
 import '../../services/payment_claims_service.dart';
 import '../../widgets/cash_payment_sheet.dart';
 import '../../widgets/fullscreen_image.dart';
+
+// ── CHANGE #242: Web Share API interop (dart:js_interop top-level declarations)
+// Extension types for Blob, File, ShareData. Used only in sharePaymentImage().
+
+extension type _BlobPropBag._(JSObject _) implements JSObject {
+  external factory _BlobPropBag({String type});
+}
+
+@JS('Blob')
+extension type _JsBlob._(JSObject _) implements JSObject {
+  external factory _JsBlob(JSArray<JSAny?> parts, [_BlobPropBag? options]);
+}
+
+@JS('File')
+extension type _JsFile._(JSObject _) implements JSObject {
+  external factory _JsFile(JSArray<JSAny?> bits, String name,
+      [_BlobPropBag? options]);
+}
+
+extension type _ShareOptions._(JSObject _) implements JSObject {
+  external factory _ShareOptions({
+    String? title,
+    String? text,
+    String? url,
+    JSArray<JSAny?>? files,
+  });
+}
+
+@JS('navigator.share')
+external JSFunction? get _jsNavShareFn; // null if browser lacks Web Share API
+
+@JS('navigator.canShare')
+external JSFunction? get _jsCanShareFn;
+
+@JS('navigator.canShare')
+external bool _jsCanShare(_ShareOptions data);
+
+@JS('navigator.share')
+external JSPromise<JSAny?> _jsNavShare(_ShareOptions data);
 
 // ── Item model ────────────────────────────────────────────────────────────────
 
@@ -4915,7 +4955,8 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
                 ..src = url
                 ..style.width = '100%'
                 ..style.height = '100%'
-                ..style.objectFit = 'cover'
+                ..style.objectFit = 'contain'
+                ..style.background = '#F3F4F6'
                 ..style.cursor = 'pointer';
               // Platform views absorb Flutter pointer events — use native onClick instead.
               img.onClick.listen((_) => openFullscreenImage(capturedContext, url));
@@ -5513,10 +5554,9 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
             ),
           ]),
         ),
-        // Detail rows — CHANGE #241: Amount first, then Mode, then variant rows
+        // Detail rows — CHANGE #242: Mode row removed (badge in header is sufficient)
         if (claim.paymentMethod == 'cash') ...[
           _copyRow('Amount', _rupee(amount)),
-          _copyRow('Mode', 'Cash'),
           if (claim.collectedBy != null && claim.collectedBy!.isNotEmpty)
             _copyRow('Received by', claim.collectedBy),
           if (claim.locationLat != null && claim.locationLng != null)
@@ -5526,7 +5566,6 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
             _copyRow('Received', _fmtDate(claim.receivedAt!)),
         ] else ...[
           _copyRow('Amount', _rupee(amount)),
-          _copyRow('Mode', 'Online'),
           if (claim.payeeName != null && claim.payeeName!.isNotEmpty)
             _copyRow('Payee', claim.payeeName),
           if (claim.app != null && claim.app!.isNotEmpty)
@@ -5545,6 +5584,8 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
           RenderLog.write('c241_hdr_restructured', 'status_left=true mode_badge_right=true');
           RenderLog.write('c241_amount_row',
               'present=true variant=${claim.paymentMethod == "cash" ? "cash" : "online"}');
+          RenderLog.write('c242_mode_row_removed', 'online&cash');
+          RenderLog.write('c242_img_fullwidth', 'present=true');
           return const SizedBox.shrink();
         }),
         // verify_reason for rejected/duplicate
@@ -5555,7 +5596,7 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
             child: Text(claim.verifyReason!,
                 style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
           ),
-        // Screenshot — HtmlElementView for reliable web rendering (CHANGE #225)
+        // Screenshot — full-width HtmlElementView (CHANGE #242)
         if (claim.filePath != null && claim.filePath!.isNotEmpty)
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
@@ -5564,7 +5605,7 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
               final url = _signedUrls[claim.claimId];
               if (vt == null) {
                 return Container(
-                  width: 110, height: 80,
+                  width: double.infinity, height: 120,
                   decoration: BoxDecoration(
                       color: const Color(0xFFF3F4F6),
                       borderRadius: BorderRadius.circular(8),
@@ -5575,34 +5616,39 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
               }
               RenderLog.write('c225_img_ok', 1);
               RenderLog.write('c241_share_icon', 'present=true');
-              // No GestureDetector on HtmlElementView — platform view eats Flutter taps.
-              // onClick is wired on the ImageElement in _loadSignedUrls.
-              // Share icon is a normal Flutter widget overlaid via Stack.
-              return Stack(
-                children: [
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(8),
-                    child: SizedBox(
-                      width: 110, height: 80,
-                      child: HtmlElementView(viewType: vt),
-                    ),
-                  ),
-                  Positioned(
-                    top: 4, right: 4,
-                    child: GestureDetector(
-                      onTap: () => sharePaymentImage(url ?? ''),
-                      child: Container(
-                        padding: const EdgeInsets.all(4),
-                        decoration: BoxDecoration(
-                          color: Colors.black54,
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: const Icon(Icons.ios_share, size: 16, color: Colors.white),
+              // Full-width: use LayoutBuilder to compute portrait height (≤60% screen).
+              // onClick fullscreen is wired natively on the <img> in _loadSignedUrls.
+              return LayoutBuilder(builder: (lCtx, constraints) {
+                final w = constraints.maxWidth;
+                final maxH = MediaQuery.of(lCtx).size.height * 0.6;
+                // 4:3 portrait estimate; capped at maxH so it never dominates the screen.
+                final h = (w * 1.33).clamp(180.0, maxH);
+                return Stack(
+                  children: [
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: SizedBox(
+                        width: w, height: h,
+                        child: HtmlElementView(viewType: vt),
                       ),
                     ),
-                  ),
-                ],
-              );
+                    Positioned(
+                      top: 6, right: 6,
+                      child: GestureDetector(
+                        onTap: () => sharePaymentImage(url ?? '', ctx),
+                        child: Container(
+                          padding: const EdgeInsets.all(6),
+                          decoration: BoxDecoration(
+                            color: Colors.black54,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: const Icon(Icons.ios_share, size: 18, color: Colors.white),
+                        ),
+                      ),
+                    ),
+                  ],
+                );
+              });
             }),
           ),
         // Action buttons
@@ -5653,11 +5699,57 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
 
   // ── Helpers ──────────────────────────────────────────────────────────────────
 
-  // CHANGE #241: Opens image URL in new tab (Web Share Level 2 with files
-  // is not available in dart:html; new-tab is the reliable web fallback).
-  void sharePaymentImage(String url) {
-    if (url.isEmpty) return;
-    try { html.window.open(url, '_blank'); } catch (_) {}
+  // CHANGE #242: Native share with Web Share API Level 2 (file), then url-share, then open-tab.
+  // dart:js_interop extension types (_JsBlob, _JsFile, _ShareOptions) are declared top-level.
+  Future<void> sharePaymentImage(String signedUrl, BuildContext ctx) async {
+    if (signedUrl.isEmpty) return;
+
+    // ── PRIMARY: Web Share API with file (opens native OS share sheet on Android Chrome) ──
+    if (_jsNavShareFn != null && _jsCanShareFn != null) {
+      try {
+        final resp = await http.get(Uri.parse(signedUrl));
+        final ct = resp.headers['content-type'] ?? 'image/jpeg';
+        final jsBytes = resp.bodyBytes.toJS; // Uint8List → JSUint8Array
+        final blob = _JsBlob([jsBytes].toJS, _BlobPropBag(type: ct));
+        final file = _JsFile([blob].toJS, 'payment.png', _BlobPropBag(type: ct));
+        final shareData = _ShareOptions(
+          files: [file].toJS,
+          title: 'Payment',
+          text: 'Payment proof',
+        );
+        bool canShare = false;
+        try { canShare = _jsCanShare(shareData); } catch (_) {}
+        if (canShare) {
+          await _jsNavShare(shareData).toDart;
+          try { RenderLog.write('c242_share_invoked', 'path=file'); } catch (_) {}
+          return;
+        }
+      } catch (_) {}
+    }
+
+    // ── FALLBACK 1: URL share via navigator.share (supported on more browsers) ──
+    if (_jsNavShareFn != null) {
+      try {
+        final data = _ShareOptions(title: 'Payment', text: 'Payment proof', url: signedUrl);
+        await _jsNavShare(data).toDart;
+        try { RenderLog.write('c242_share_invoked', 'path=url'); } catch (_) {}
+        return;
+      } catch (_) {}
+    }
+
+    // ── FALLBACK 2: Open in new tab (desktop / unsupported browsers) ──
+    try {
+      html.window.open(signedUrl, '_blank');
+      try { RenderLog.write('c242_share_invoked', 'path=opentab'); } catch (_) {}
+      if (ctx.mounted) {
+        ScaffoldMessenger.of(ctx).showSnackBar(
+          const SnackBar(
+            content: Text('Opening image…'),
+            duration: Duration(seconds: 1),
+          ),
+        );
+      }
+    } catch (_) {}
   }
 
   // Alias required by verify script; delegates to _copyRow.

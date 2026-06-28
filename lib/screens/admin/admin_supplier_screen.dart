@@ -809,6 +809,8 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         RenderLog.write('supplier_meta_label_removed', 'true');
         // Single row: tabs scroll in Expanded area; controls pinned to the right.
         // No vertical stacking — everything on one line.
+        // CHANGE #251: on mobile (<700), controls move into a 3-dot overflow menu.
+        final isMobile = MediaQuery.of(context).size.width < 700;
         return Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
           // ── Scrollable tab pills ────────────────────────────────────────────
           Expanded(
@@ -829,118 +831,262 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
               ]),
             ),
           ),
-          // ── Pinned controls: compact sort or toggle, then refresh ───────────
-          if (_filter == _SupFilter.suppliers) ...[
-            const SizedBox(width: 8),
+          // ── MOBILE: 3-dot overflow menu holds all controls ─────────────────
+          if (isMobile) ...[
             Builder(builder: (_) {
-              RenderLog.write('sort_in_header_slot', 'true');
-              RenderLog.write('supplier_sort_compact_spn_n', 'true');
-              return Container(
-                height: 28,
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: const Color(0xFFE5E7EB)),
-                ),
-                child: DropdownButtonHideUnderline(
-                  child: DropdownButton<_SupSortMode>(
-                    value: _sortMode,
-                    isDense: true,
-                    icon: const Icon(Icons.unfold_more, size: 13, color: Color(0xFF6B7280)),
-                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
-                    items: const [
-                      DropdownMenuItem(value: _SupSortMode.spnDesc, child: Text('SPN')),
-                      DropdownMenuItem(value: _SupSortMode.nameAsc, child: Text('N')),
-                    ],
-                    onChanged: (mode) {
-                      if (mode == null || mode == _sortMode) return;
-                      setState(() { _sortMode = mode; _applySort(); });
-                      RenderLog.write('supplier_sort_mode',
-                          mode == _SupSortMode.spnDesc ? 'spn_desc' : 'name_asc');
-                    },
+              RenderLog.write('c251_overflow_built', 'filter=$_filter');
+              return _buildOverflowMenu();
+            }),
+          ]
+          // ── WEB/WIDE: pinned controls inline (unchanged) ───────────────────
+          else ...[
+            if (_filter == _SupFilter.suppliers) ...[
+              const SizedBox(width: 8),
+              Builder(builder: (_) {
+                RenderLog.write('sort_in_header_slot', 'true');
+                RenderLog.write('supplier_sort_compact_spn_n', 'true');
+                return Container(
+                  height: 28,
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: const Color(0xFFE5E7EB)),
                   ),
-                ),
-              );
-            }),
-          ] else if (_filter == _SupFilter.inquiry) ...[
-            const SizedBox(width: 4),
-            // Meta toggle
-            Builder(builder: (_) {
-              RenderLog.write('toggle_in_header_slot', 'true');
-              RenderLog.write('send_all_removed', 'true');
-              return _autoMetaLoading
-                  ? const SizedBox(width: 28, height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF1B7A43)))
-                  : Transform.scale(
-                      scale: 0.75,
-                      child: Switch(
-                        value: _autoMeta,
-                        onChanged: (v) => _saveAutoMeta(v),
-                        activeColor: const Color(0xFF1B7A43),
-                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      ),
-                    );
-            }),
-            const SizedBox(width: 4),
-            // Allocation toggle
-            Builder(builder: (_) {
-              RenderLog.write('allocation_toggle_rendered', _allocationMode);
-              final isOn = _allocationMode == 'fewest_baskets';
-              return Row(mainAxisSize: MainAxisSize.min, children: [
-                Text('Bundle', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF6B7280))),
-                const SizedBox(width: 2),
-                _allocationLoading
+                  child: DropdownButtonHideUnderline(
+                    child: DropdownButton<_SupSortMode>(
+                      value: _sortMode,
+                      isDense: true,
+                      icon: const Icon(Icons.unfold_more, size: 13, color: Color(0xFF6B7280)),
+                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
+                      items: const [
+                        DropdownMenuItem(value: _SupSortMode.spnDesc, child: Text('SPN')),
+                        DropdownMenuItem(value: _SupSortMode.nameAsc, child: Text('N')),
+                      ],
+                      onChanged: (mode) {
+                        if (mode == null || mode == _sortMode) return;
+                        setState(() { _sortMode = mode; _applySort(); });
+                        RenderLog.write('supplier_sort_mode',
+                            mode == _SupSortMode.spnDesc ? 'spn_desc' : 'name_asc');
+                      },
+                    ),
+                  ),
+                );
+              }),
+            ] else if (_filter == _SupFilter.inquiry) ...[
+              const SizedBox(width: 4),
+              // Meta toggle
+              Builder(builder: (_) {
+                RenderLog.write('toggle_in_header_slot', 'true');
+                RenderLog.write('send_all_removed', 'true');
+                RenderLog.write('c251_inline_built', 'toggle=auto_meta');
+                return _autoMetaLoading
                     ? const SizedBox(width: 28, height: 16,
                         child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF1B7A43)))
                     : Transform.scale(
                         scale: 0.75,
                         child: Switch(
-                          value: isOn,
-                          onChanged: _allocationLoading ? null : (v) => _applyAllocationMode(v),
+                          value: _autoMeta,
+                          onChanged: (v) => _saveAutoMeta(v),
                           activeColor: const Color(0xFF1B7A43),
                           materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                         ),
+                      );
+              }),
+              const SizedBox(width: 4),
+              // Allocation toggle
+              Builder(builder: (_) {
+                RenderLog.write('allocation_toggle_rendered', _allocationMode);
+                final isOn = _allocationMode == 'fewest_baskets';
+                return Row(mainAxisSize: MainAxisSize.min, children: [
+                  Text('Bundle', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF6B7280))),
+                  const SizedBox(width: 2),
+                  _allocationLoading
+                      ? const SizedBox(width: 28, height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF1B7A43)))
+                      : Transform.scale(
+                          scale: 0.75,
+                          child: Switch(
+                            value: isOn,
+                            onChanged: _allocationLoading ? null : (v) => _applyAllocationMode(v),
+                            activeColor: const Color(0xFF1B7A43),
+                            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                        ),
+                  if (isOn && !_allocationLoading) ...[
+                    GestureDetector(
+                      onTap: _reoptimize,
+                      child: const Tooltip(
+                        message: 'Re-optimize bundles',
+                        child: Icon(Icons.auto_fix_high_outlined, size: 16, color: Color(0xFF1B7A43)),
                       ),
-                if (isOn && !_allocationLoading) ...[
-                  GestureDetector(
-                    onTap: _reoptimize,
-                    child: const Tooltip(
-                      message: 'Re-optimize bundles',
-                      child: Icon(Icons.auto_fix_high_outlined, size: 16, color: Color(0xFF1B7A43)),
                     ),
-                  ),
-                ],
-              ]);
-            }),
-          ] else if (_filter == _SupFilter.orders) ...[
-            const SizedBox(width: 4),
-            Builder(builder: (_) {
-              RenderLog.write('order_auto_meta_toggle_rendered', 'true');
-              return _orderAutoMetaLoading
-                  ? const SizedBox(width: 28, height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF1B7A43)))
-                  : Transform.scale(
-                      scale: 0.75,
-                      child: Switch(
-                        value: _orderAutoMeta,
-                        onChanged: (v) => _saveOrderAutoMeta(v),
-                        activeColor: const Color(0xFF1B7A43),
-                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      ),
-                    );
-            }),
+                  ],
+                ]);
+              }),
+            ] else if (_filter == _SupFilter.orders) ...[
+              const SizedBox(width: 4),
+              Builder(builder: (_) {
+                RenderLog.write('order_auto_meta_toggle_rendered', 'true');
+                RenderLog.write('c251_inline_built', 'toggle=order_auto_meta');
+                return _orderAutoMetaLoading
+                    ? const SizedBox(width: 28, height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF1B7A43)))
+                    : Transform.scale(
+                        scale: 0.75,
+                        child: Switch(
+                          value: _orderAutoMeta,
+                          onChanged: (v) => _saveOrderAutoMeta(v),
+                          activeColor: const Color(0xFF1B7A43),
+                          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                      );
+              }),
+            ],
+            IconButton(
+              onPressed: _filter == _SupFilter.inquiry
+                  ? () { _fetchInquiryOverview(); _fetchUnassignedItems(); }
+                  : _load,
+              icon: const Icon(Icons.refresh_outlined, color: Color(0xFF6B7280), size: 20),
+              tooltip: 'Refresh',
+              visualDensity: VisualDensity.compact,
+            ),
           ],
-          IconButton(
-            onPressed: _filter == _SupFilter.inquiry
-                ? () { _fetchInquiryOverview(); _fetchUnassignedItems(); }
-                : _load,
-            icon: const Icon(Icons.refresh_outlined, color: Color(0xFF6B7280), size: 20),
-            tooltip: 'Refresh',
-            visualDensity: VisualDensity.compact,
-          ),
         ]);
       }),
+    );
+  }
+
+  // CHANGE #251: 3-dot overflow menu for mobile — contains all per-tab controls + Refresh.
+  Widget _buildOverflowMenu() {
+    return PopupMenuButton<String>(
+      icon: const Icon(Icons.more_vert, color: Color(0xFF6B7280)),
+      tooltip: 'More',
+      itemBuilder: (ctx) {
+        final items = <PopupMenuEntry<String>>[];
+        if (_filter == _SupFilter.inquiry) {
+          // Toggle 1: Auto Meta (unlabelled inline; labelled in menu)
+          items.add(PopupMenuItem<String>(
+            enabled: false,
+            child: StatefulBuilder(
+              builder: (c, setM) => Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text('Auto Meta', style: TextStyle(fontSize: 14, color: Color(0xFF374151))),
+                  Switch(
+                    value: _autoMeta,
+                    onChanged: _autoMetaLoading ? null : (v) {
+                      _saveAutoMeta(v);
+                      setState(() {});
+                      setM(() {});
+                      RenderLog.write('c251_toggle_menu', 'toggle=auto_meta;value=$v');
+                    },
+                    activeColor: const Color(0xFF1B7A43),
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                ],
+              ),
+            ),
+          ));
+          // Toggle 2: Bundle
+          items.add(PopupMenuItem<String>(
+            enabled: false,
+            child: StatefulBuilder(
+              builder: (c, setM) {
+                final isOn = _allocationMode == 'fewest_baskets';
+                return Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text('Bundle', style: TextStyle(fontSize: 14, color: Color(0xFF374151))),
+                    Switch(
+                      value: isOn,
+                      onChanged: _allocationLoading ? null : (v) {
+                        _applyAllocationMode(v);
+                        setState(() {});
+                        setM(() {});
+                        RenderLog.write('c251_toggle_menu', 'toggle=bundle;value=$v');
+                      },
+                      activeColor: const Color(0xFF1B7A43),
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                  ],
+                );
+              },
+            ),
+          ));
+          items.add(const PopupMenuDivider());
+        } else if (_filter == _SupFilter.orders) {
+          // Toggle: Order Auto Meta
+          items.add(PopupMenuItem<String>(
+            enabled: false,
+            child: StatefulBuilder(
+              builder: (c, setM) => Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text('Auto Meta', style: TextStyle(fontSize: 14, color: Color(0xFF374151))),
+                  Switch(
+                    value: _orderAutoMeta,
+                    onChanged: _orderAutoMetaLoading ? null : (v) {
+                      _saveOrderAutoMeta(v);
+                      setState(() {});
+                      setM(() {});
+                      RenderLog.write('c251_toggle_menu', 'toggle=order_auto_meta;value=$v');
+                    },
+                    activeColor: const Color(0xFF1B7A43),
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                ],
+              ),
+            ),
+          ));
+          items.add(const PopupMenuDivider());
+        } else if (_filter == _SupFilter.suppliers) {
+          // Sort options as radio items
+          for (final entry in const [
+            (_SupSortMode.spnDesc, 'Sort: SPN'),
+            (_SupSortMode.nameAsc, 'Sort: Name'),
+          ]) {
+            final mode = entry.$1;
+            final label = entry.$2;
+            items.add(PopupMenuItem<String>(
+              value: 'sort_${mode.name}',
+              child: Row(children: [
+                Icon(_sortMode == mode ? Icons.radio_button_checked : Icons.radio_button_unchecked,
+                    size: 18, color: const Color(0xFF1B7A43)),
+                const SizedBox(width: 10),
+                Text(label, style: const TextStyle(fontSize: 14)),
+              ]),
+            ));
+          }
+          items.add(const PopupMenuDivider());
+        }
+        items.add(PopupMenuItem<String>(
+          value: 'refresh',
+          child: Row(children: const [
+            Icon(Icons.refresh_outlined, size: 20, color: Color(0xFF6B7280)),
+            SizedBox(width: 10),
+            Text('Refresh', style: TextStyle(fontSize: 14)),
+          ]),
+        ));
+        return items;
+      },
+      onSelected: (v) {
+        if (v == 'refresh') {
+          RenderLog.write('c251_refresh_menu', 'filter=$_filter');
+          if (_filter == _SupFilter.inquiry) {
+            _fetchInquiryOverview();
+            _fetchUnassignedItems();
+          } else {
+            _load();
+          }
+        } else if (v == 'sort_${_SupSortMode.spnDesc.name}') {
+          setState(() { _sortMode = _SupSortMode.spnDesc; _applySort(); });
+          RenderLog.write('supplier_sort_mode', 'spn_desc');
+        } else if (v == 'sort_${_SupSortMode.nameAsc.name}') {
+          setState(() { _sortMode = _SupSortMode.nameAsc; _applySort(); });
+          RenderLog.write('supplier_sort_mode', 'name_asc');
+        }
+      },
     );
   }
 

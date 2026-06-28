@@ -271,55 +271,55 @@ class _BagScannerDialogState extends State<_BagScannerDialog> {
     super.dispose();
   }
 
-  // #256/#257: Upload QR from gallery — works on ALL platforms including web/PWA.
-  // Web path: ZXing.BrowserMultiFormatReader.decodeFromImageUrl (loaded by mobile_scanner).
-  // Mobile path: MobileScannerController.analyzeImage.
+  // #258 BUG1: Upload QR — separate picker try/catch from decode try/catch so a picker
+  // failure shows a distinct message and decode failures show "No QR found".
   Future<void> _pickAndDecodeQr(BuildContext ctx) async {
     if (_detected) return;
-    RenderLog.write('c256_upload_qr', 'started;isWeb=$kIsWeb');
+    // Step 1: open file picker — isolated try/catch so decode errors don't mask picker errors.
+    XFile? file;
     try {
-      final picker = ImagePicker();
-      final XFile? file = await picker.pickImage(source: ImageSource.gallery);
-      if (file == null) return;
+      file = await ImagePicker().pickImage(source: ImageSource.gallery);
+      RenderLog.write('c258_picker_opened', file == null ? 'cancelled' : 'ok');
+    } catch (e) {
+      RenderLog.write('c258_picker_opened', 'error;$e');
+      if (ctx.mounted) {
+        ScaffoldMessenger.of(ctx).showSnackBar(
+            const SnackBar(content: Text('Could not open image picker')));
+      }
+      return;
+    }
+    if (file == null) return; // user cancelled
 
-      String? code;
+    // Step 2: decode QR from the chosen image.
+    String? code;
+    try {
       if (kIsWeb) {
-        // analyzeImage() throws UnsupportedError on web; use ZXing JS (already loaded by camera).
-        try {
-          final reader = _ZXingBrowserReader(null, 300);
-          final jsResult = await reader.decodeFromImageUrl(file.path.toJS).toDart;
-          code = (_ZXingResult._(jsResult)).text;
-        } catch (_) {
-          // ZXing throws NotFoundException when no barcode found — treat as null.
-          code = null;
-        }
+        // analyzeImage() throws UnsupportedError on web; use ZXing JS (loaded by mobile_scanner camera).
+        final reader = _ZXingBrowserReader(null, 300);
+        final jsResult = await reader.decodeFromImageUrl(file.path.toJS).toDart;
+        code = (_ZXingResult._(jsResult)).text;
       } else {
         final BarcodeCapture? capture = await _ctrl.analyzeImage(file.path);
         code = (capture?.barcodes.isNotEmpty ?? false)
             ? capture!.barcodes.first.rawValue
             : null;
       }
+    } catch (_) {
+      code = null; // ZXing NotFoundException or analyzeImage error → no QR found
+    }
 
-      if (code == null || code.trim().isEmpty) {
-        RenderLog.write('c257_upload_decoded', 'fail;no_qr');
-        if (ctx.mounted) {
-          ScaffoldMessenger.of(ctx).showSnackBar(
-              const SnackBar(content: Text('No QR found in that image')));
-        }
-        return;
-      }
-      _detected = true;
-      try { _ctrl.stop(); } catch (_) {}
-      RenderLog.write('c257_upload_decoded', 'ok');
-      RenderLog.write('c256_upload_qr', 'success');
-      if (ctx.mounted && Navigator.of(ctx).canPop()) Navigator.of(ctx).pop(code.trim());
-    } catch (e) {
-      RenderLog.write('c256_upload_qr', 'error;$e');
+    if (code == null || code.trim().isEmpty) {
+      RenderLog.write('c258_upload_decoded', 'fail;no_qr');
       if (ctx.mounted) {
         ScaffoldMessenger.of(ctx).showSnackBar(
-            const SnackBar(content: Text('Could not read QR from image')));
+            const SnackBar(content: Text('No QR found in that image')));
       }
+      return;
     }
+    _detected = true;
+    try { _ctrl.stop(); } catch (_) {}
+    RenderLog.write('c258_upload_decoded', 'ok');
+    if (ctx.mounted && Navigator.of(ctx).canPop()) Navigator.of(ctx).pop(code.trim());
   }
 
   Widget _scannerActionBtn({required IconData icon, required String label, required VoidCallback onTap}) {
@@ -344,8 +344,7 @@ class _BagScannerDialogState extends State<_BagScannerDialog> {
 
   @override
   Widget build(BuildContext context) {
-    RenderLog.write('c256_scanner_controls', 'upload_qr=true;torch=true;isWeb=$kIsWeb');
-    RenderLog.write('c257_scanner_controls', 'buttons=2;upload=true;torch=true');
+    RenderLog.write('c258_scanner_controls', 'upload_qr=true;torch=false;isWeb=$kIsWeb');
     return Dialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: SizedBox(
@@ -398,13 +397,11 @@ class _BagScannerDialogState extends State<_BagScannerDialog> {
                     }
                   },
                 ),
-                // #256/#257: Bottom action bar — Upload QR (all platforms) + Torch.
-                // Upload QR uses ZXing JS interop on web (analyzeImage unsupported on web).
-                // No kIsWeb gate — PWA users need this too (kIsWeb == true on phone browsers).
+                // #258 BUG2: Upload QR only — Torch removed.
                 Positioned(
                   bottom: 20, left: 0, right: 0,
                   child: Builder(builder: (ctx) {
-                    RenderLog.write('c257_upload_btn', 'rendered;isWeb=$kIsWeb');
+                    RenderLog.write('c258_upload_btn', 'rendered;isWeb=$kIsWeb');
                     return Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
@@ -413,12 +410,6 @@ class _BagScannerDialogState extends State<_BagScannerDialog> {
                           label: 'Upload QR',
                           onTap: () => _pickAndDecodeQr(ctx),
                         ),
-                        const SizedBox(width: 40),
-                        _scannerActionBtn(
-                          icon: Icons.flashlight_on_outlined,
-                          label: 'Torch',
-                          onTap: () { try { _ctrl.toggleTorch(); } catch (_) {} },
-                        ),
                       ],
                     );
                   }),
@@ -426,6 +417,177 @@ class _BagScannerDialogState extends State<_BagScannerDialog> {
               ]),
             ),
           ),
+        ]),
+      ),
+    );
+  }
+}
+
+// ── CHANGE-BAG DIALOG (BUG 3 #258) ─────────────────────────────────────────
+// Color-coded 2-step modal: old bag RED→GREEN, new bag GREY→RED→GREEN.
+// Stays open across both scans; auto-closes and returns new bag data on success.
+
+enum _CBStep { needOld, detaching, needNew, attaching, done }
+
+class _ChangeBagDialog extends StatefulWidget {
+  final String supplier;
+  final Map<String, dynamic> currentBag;
+  const _ChangeBagDialog({required this.supplier, required this.currentBag});
+  @override State<_ChangeBagDialog> createState() => _ChangeBagDialogState();
+}
+
+class _ChangeBagDialogState extends State<_ChangeBagDialog> {
+  _CBStep _step = _CBStep.needOld;
+  String? _error;
+  Map<String, dynamic>? _newBagData;
+
+  static Map<String, dynamic> _norm(dynamic raw) {
+    if (raw is List && raw.isNotEmpty) return Map<String, dynamic>.from(raw.first as Map);
+    if (raw is Map) return Map<String, dynamic>.from(raw);
+    return {};
+  }
+
+  Future<void> _scanOld(BuildContext ctx) async {
+    setState(() => _error = null);
+    final currentNo = widget.currentBag['bag_no'];
+    final code = await showDialog<String>(
+      context: ctx,
+      builder: (_) => _BagScannerDialog(title: 'Scan Bag $currentNo to Detach'),
+    );
+    if (code == null || !mounted) return;
+    setState(() => _step = _CBStep.detaching);
+    try {
+      final raw = await Supabase.instance.client.rpc('bag_detach', params: {
+        'p_supplier_name': widget.supplier,
+        'p_bag_code': code,
+      });
+      final m = _norm(raw);
+      if (!mounted) return;
+      if (m['error'] != null) {
+        setState(() { _step = _CBStep.needOld; _error = m['error'].toString(); });
+        return;
+      }
+      RenderLog.write('c258_changebag_step', 'detached;bag=$currentNo');
+      setState(() => _step = _CBStep.needNew);
+    } catch (e) {
+      if (mounted) setState(() { _step = _CBStep.needOld; _error = 'Could not detach: $e'; });
+    }
+  }
+
+  Future<void> _scanNew(BuildContext ctx) async {
+    setState(() => _error = null);
+    final code = await showDialog<String>(
+      context: ctx,
+      builder: (_) => const _BagScannerDialog(title: 'Scan New Bag to Attach'),
+    );
+    if (code == null || !mounted) return;
+    setState(() => _step = _CBStep.attaching);
+    try {
+      final raw = await Supabase.instance.client.rpc('bag_attach', params: {
+        'p_supplier_name': widget.supplier,
+        'p_bag_code': code,
+      });
+      final m = _norm(raw);
+      if (!mounted) return;
+      if (m['error'] != null) {
+        setState(() { _step = _CBStep.needNew; _error = m['error'].toString(); });
+        return;
+      }
+      final bagData = m['bag'] is Map ? Map<String, dynamic>.from(m['bag'] as Map) : m;
+      RenderLog.write('c258_changebag_step', 'attached;bag=${bagData['bag_no']}');
+      setState(() { _step = _CBStep.done; _newBagData = bagData; });
+      await Future.delayed(const Duration(milliseconds: 700));
+      if (mounted && Navigator.of(context).canPop()) Navigator.of(context).pop(bagData);
+    } catch (e) {
+      if (mounted) setState(() { _step = _CBStep.needNew; _error = 'Could not attach: $e'; });
+    }
+  }
+
+  Widget _stepRow({required String label, required Color color, required IconData icon, required String subtitle}) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withValues(alpha: 0.35)),
+      ),
+      child: Row(children: [
+        Icon(icon, size: 20, color: color),
+        const SizedBox(width: 10),
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(label, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: color)),
+          Text(subtitle, style: const TextStyle(fontSize: 11, color: _kSub)),
+        ])),
+      ]),
+    );
+  }
+
+  @override
+  Widget build(BuildContext ctx) {
+    final oldDone = _step == _CBStep.needNew || _step == _CBStep.attaching || _step == _CBStep.done;
+    final newActive = _step == _CBStep.needNew || _step == _CBStep.attaching;
+    final newDone = _step == _CBStep.done;
+    final currentNo = widget.currentBag['bag_no'];
+    final newNo = _newBagData?['bag_no'];
+
+    const green = Color(0xFF1B7A43);
+    const red = Color(0xFFDC2626);
+    const grey = Color(0xFF9CA3AF);
+
+    final busy = _step == _CBStep.detaching || _step == _CBStep.attaching;
+
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Row(children: [
+            const Expanded(child: Text('Change Bag',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: _kText))),
+            IconButton(
+              onPressed: busy ? null : () => Navigator.of(ctx).pop(null),
+              icon: const Icon(Icons.close_rounded, color: _kSub),
+              padding: EdgeInsets.zero,
+            ),
+          ]),
+          const SizedBox(height: 20),
+          _stepRow(
+            label: 'Old Bag $currentNo',
+            color: oldDone ? green : red,
+            icon: oldDone ? Icons.check_circle_outline : Icons.qr_code_scanner_rounded,
+            subtitle: oldDone ? 'Detached' : 'Scan to detach',
+          ),
+          const SizedBox(height: 10),
+          _stepRow(
+            label: newNo != null ? 'New Bag $newNo' : 'New Bag',
+            color: newDone ? green : (newActive ? red : grey),
+            icon: newDone ? Icons.check_circle_outline : Icons.qr_code_scanner_rounded,
+            subtitle: newDone ? 'Attached' : (newActive ? 'Scan to attach' : 'Waiting…'),
+          ),
+          if (_error != null) ...[
+            const SizedBox(height: 12),
+            Text(_error!, style: const TextStyle(color: Color(0xFFDC2626), fontSize: 13)),
+          ],
+          const SizedBox(height: 20),
+          if (_step == _CBStep.needOld)
+            FilledButton.icon(
+              onPressed: () => _scanOld(ctx),
+              icon: const Icon(Icons.qr_code_scanner_rounded, size: 18),
+              label: const Text('Scan Old Bag'),
+              style: FilledButton.styleFrom(backgroundColor: red, minimumSize: const Size.fromHeight(44)),
+            ),
+          if (_step == _CBStep.detaching || _step == _CBStep.attaching)
+            const Center(child: Padding(
+              padding: EdgeInsets.symmetric(vertical: 8),
+              child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2),
+            )),
+          if (_step == _CBStep.needNew)
+            FilledButton.icon(
+              onPressed: () => _scanNew(ctx),
+              icon: const Icon(Icons.qr_code_scanner_rounded, size: 18),
+              label: const Text('Scan New Bag'),
+              style: FilledButton.styleFrom(backgroundColor: red, minimumSize: const Size.fromHeight(44)),
+            ),
         ]),
       ),
     );
@@ -2156,49 +2318,25 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     await _attachBagCode(supplier, code);
   }
 
-  // F7: Two-step change-bag flow — scan current bag to detach, then scan new bag to attach.
-  // On wrong_bag or error in step 1, the existing bag stays attached (no lock).
+  // #258 BUG3: Change-bag — single color-coded 2-step modal (old=RED→GREEN, new=GREY→RED→GREEN).
   Future<void> _changeActiveBag() async {
     final supplier = _selectedSupplier;
     final currentBag = _activeBag;
     if (supplier == null || currentBag == null) return;
-    final currentNo = currentBag['bag_no'];
-
-    // Step 1: scan current bag to confirm detach.
-    RenderLog.write('c254_change_step1', 'supplier=$supplier;current_bag=$currentNo');
-    final detachCode = await showDialog<String>(
+    RenderLog.write('c258_changebag_step', 'open;supplier=$supplier;bag=${currentBag['bag_no']}');
+    final newBag = await showDialog<Map<String, dynamic>>(
       context: context,
-      builder: (_) => _BagScannerDialog(title: 'Scan Bag $currentNo to Detach'),
+      builder: (_) => _ChangeBagDialog(supplier: supplier, currentBag: currentBag),
     );
-    if (detachCode == null || !mounted) return;
-
-    try {
-      final rawDetach = await Supabase.instance.client.rpc('bag_detach', params: {
-        'p_supplier_name': supplier,
-        'p_bag_code': detachCode,
-      });
-      final dm = _normRpc(rawDetach);
-      if (!mounted) return;
-      if (dm['error'] != null) {
-        _showSnack(_bagError(dm));
-        // wrong_bag → stay attached; do not clear _activeBag.
-        return;
-      }
-      setState(() => _activeBag = null);
-      RenderLog.write('c254_change_detached', 'bag=$currentNo;supplier=$supplier');
-    } catch (e) {
-      if (mounted) _showSnack('Could not detach bag: $e');
-      return;
-    }
-
-    // Step 2: scan new bag to attach.
     if (!mounted) return;
-    final attachCode = await showDialog<String>(
-      context: context,
-      builder: (_) => const _BagScannerDialog(title: 'Scan New Bag to Attach'),
-    );
-    if (attachCode == null || !mounted) return;
-    await _attachBagCode(supplier, attachCode);
+    if (newBag != null) {
+      setState(() => _activeBag = newBag);
+      await _reloadItemsFromDB();
+    } else {
+      // Dialog closed without completing — if old bag was detached, clear it.
+      // Re-read state from DB to stay in sync.
+      await _reloadItemsFromDB();
+    }
   }
 
   // Shared attach logic — calls bag_attach, normalizes result, updates state.
@@ -4116,6 +4254,22 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       receivedTotal: merged.receivedTotal,
       combinedState: merged.combinedState,
       existingDispute: existingDispute,
+      arrivals: widget.arrivals,
+      bagCountFn: widget.arrivals ? (pid, qty) async {
+        if (_activeBag == null) return 'Scan a bag first before counting';
+        try {
+          final raw = await Supabase.instance.client.rpc('bag_count_set', params: {
+            'p_supplier_name': supplier,
+            'p_product_id': pid,
+            'p_qty': qty,
+            'p_note': 'got_all #258',
+          });
+          final res = _normRpc(raw);
+          if (res['error'] != null) return _bagCountError(res);
+          return null;
+        } catch (e) { return 'Count error: $e'; }
+      } : null,
+      onReload: _reloadItemsFromDB,
     );
     if (isWide) {
       await showDialog<void>(
@@ -7467,7 +7621,11 @@ class _ProductReceiveSheet extends StatefulWidget {
   final int orderedTotal;
   final int receivedTotal;
   final String combinedState;
-  final DisputeItem? existingDispute; // proof/name from prior flag
+  final DisputeItem? existingDispute;
+  // #258 BUG4: arrivals mode — "Got all" calls bag_count_set instead of fw_product_action.
+  final bool arrivals;
+  final Future<String?> Function(int productId, double qty)? bagCountFn;
+  final VoidCallback? onReload;
 
   const _ProductReceiveSheet({
     required this.supplierName,
@@ -7479,6 +7637,9 @@ class _ProductReceiveSheet extends StatefulWidget {
     required this.receivedTotal,
     required this.combinedState,
     this.existingDispute,
+    this.arrivals = false,
+    this.bagCountFn,
+    this.onReload,
   });
 
   @override
@@ -7630,6 +7791,22 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
     if (_confirmingSimple) return;
     setState(() => _confirmingSimple = true);
     try {
+      if (widget.arrivals && widget.bagCountFn != null) {
+        // #258 BUG4: Arrivals "Got all" → bag_count_set (not fw_product_action which bypasses bag).
+        final err = await widget.bagCountFn!(widget.productId, _orderedTotal.toDouble());
+        if (!mounted) return;
+        if (err != null) {
+          setState(() => _confirmingSimple = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text(err), backgroundColor: const Color(0xFFDC2626)));
+          return;
+        }
+        RenderLog.write('c258_bag_count', 'got_all;product=${widget.productId};qty=$_orderedTotal');
+        setState(() { _localState = 'received'; _localReceived = _orderedTotal; _confirmingSimple = false; });
+        widget.onReload?.call();
+        if (mounted) Navigator.of(context).pop();
+        return;
+      }
       await _callProductAction('got_all');
       if (!mounted) return;
       setState(() { _localState = 'received'; _localReceived = _orderedTotal; _confirmingSimple = false; });

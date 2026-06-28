@@ -237,6 +237,22 @@ extension type _ZXingResult._(JSObject _) implements JSObject {
   external String? get text;
 }
 
+// Shared QR decode helper: FilePicker bytes → blob URL → ZXing JS → code string or null.
+// Used by both _BagScannerDialog and _ChangeBagScanner.
+Future<String?> _decodeQrFromBytesWeb(Uint8List bytes) async {
+  final blob = html.Blob([bytes], 'image/jpeg');
+  final url = html.Url.createObjectUrlFromBlob(blob);
+  try {
+    final reader = _ZXingBrowserReader(null, 300);
+    final jsResult = await reader.decodeFromImageUrl(url.toJS).toDart;
+    return (_ZXingResult._(jsResult)).text;
+  } catch (_) {
+    return null;
+  } finally {
+    html.Url.revokeObjectUrl(url);
+  }
+}
+
 // _BagScannerDialog — pops Navigator with the scanned code string (or null on cancel/error).
 // showDialog<String> callers read the return value directly; no callback needed.
 class _BagScannerDialog extends StatefulWidget {
@@ -271,54 +287,47 @@ class _BagScannerDialogState extends State<_BagScannerDialog> {
     super.dispose();
   }
 
-  // #258 BUG1: Upload QR — separate picker try/catch from decode try/catch so a picker
-  // failure shows a distinct message and decode failures show "No QR found".
+  // #259 BUG1: Use FilePicker (withData:true) so the native file chooser opens reliably on
+  // web PWA. image_picker.pickImage failed silently on some mobile Chrome contexts.
+  // Bytes → blob URL → ZXing JS (web) or analyzeImage (native).
   Future<void> _pickAndDecodeQr(BuildContext ctx) async {
     if (_detected) return;
-    // Step 1: open file picker — isolated try/catch so decode errors don't mask picker errors.
-    XFile? file;
+    FilePickerResult? result;
     try {
-      file = await ImagePicker().pickImage(source: ImageSource.gallery);
-      RenderLog.write('c258_picker_opened', file == null ? 'cancelled' : 'ok');
+      RenderLog.write('c259_picker_opened', 'started;isWeb=$kIsWeb');
+      result = await FilePicker.pickFiles(type: FileType.image, withData: true);
+      RenderLog.write('c259_picker_opened', result == null ? 'cancelled' : 'ok');
     } catch (e) {
-      RenderLog.write('c258_picker_opened', 'error;$e');
-      if (ctx.mounted) {
-        ScaffoldMessenger.of(ctx).showSnackBar(
-            const SnackBar(content: Text('Could not open image picker')));
-      }
+      RenderLog.write('c259_picker_opened', 'error;$e');
+      if (ctx.mounted) ScaffoldMessenger.of(ctx).showSnackBar(
+          const SnackBar(content: Text('Could not open file chooser')));
       return;
     }
-    if (file == null) return; // user cancelled
+    if (result == null || result.files.isEmpty) return;
 
-    // Step 2: decode QR from the chosen image.
+    final bytes = result.files.first.bytes;
     String? code;
-    try {
-      if (kIsWeb) {
-        // analyzeImage() throws UnsupportedError on web; use ZXing JS (loaded by mobile_scanner camera).
-        final reader = _ZXingBrowserReader(null, 300);
-        final jsResult = await reader.decodeFromImageUrl(file.path.toJS).toDart;
-        code = (_ZXingResult._(jsResult)).text;
-      } else {
-        final BarcodeCapture? capture = await _ctrl.analyzeImage(file.path);
-        code = (capture?.barcodes.isNotEmpty ?? false)
-            ? capture!.barcodes.first.rawValue
-            : null;
+    if (bytes != null && kIsWeb) {
+      code = await _decodeQrFromBytesWeb(bytes);
+    } else if (!kIsWeb) {
+      final path = result.files.first.path;
+      if (path != null) {
+        try {
+          final BarcodeCapture? capture = await _ctrl.analyzeImage(path);
+          code = (capture?.barcodes.isNotEmpty ?? false) ? capture!.barcodes.first.rawValue : null;
+        } catch (_) { code = null; }
       }
-    } catch (_) {
-      code = null; // ZXing NotFoundException or analyzeImage error → no QR found
     }
 
     if (code == null || code.trim().isEmpty) {
-      RenderLog.write('c258_upload_decoded', 'fail;no_qr');
-      if (ctx.mounted) {
-        ScaffoldMessenger.of(ctx).showSnackBar(
-            const SnackBar(content: Text('No QR found in that image')));
-      }
+      RenderLog.write('c259_upload_decoded', 'fail;no_qr');
+      if (ctx.mounted) ScaffoldMessenger.of(ctx).showSnackBar(
+          const SnackBar(content: Text('No QR found — try a clearer photo')));
       return;
     }
     _detected = true;
     try { _ctrl.stop(); } catch (_) {}
-    RenderLog.write('c258_upload_decoded', 'ok');
+    RenderLog.write('c259_upload_decoded', 'ok');
     if (ctx.mounted && Navigator.of(ctx).canPop()) Navigator.of(ctx).pop(code.trim());
   }
 
@@ -423,21 +432,25 @@ class _BagScannerDialogState extends State<_BagScannerDialog> {
   }
 }
 
-// ── CHANGE-BAG DIALOG (BUG 3 #258) ─────────────────────────────────────────
-// Color-coded 2-step modal: old bag RED→GREEN, new bag GREY→RED→GREEN.
-// Stays open across both scans; auto-closes and returns new bag data on success.
+// ── CHANGE-BAG SCANNER (#259 BUG2) ──────────────────────────────────────────
+// ONE single screen: live camera always running + Upload QR + two color status boxes.
+// Old bag RED→GREEN on detach; new bag GREY→RED→GREEN on attach; auto-closes.
+// No separate status dialog, no second camera screen.
 
 enum _CBStep { needOld, detaching, needNew, attaching, done }
 
-class _ChangeBagDialog extends StatefulWidget {
+class _ChangeBagScanner extends StatefulWidget {
   final String supplier;
   final Map<String, dynamic> currentBag;
-  const _ChangeBagDialog({required this.supplier, required this.currentBag});
-  @override State<_ChangeBagDialog> createState() => _ChangeBagDialogState();
+  const _ChangeBagScanner({required this.supplier, required this.currentBag});
+  @override State<_ChangeBagScanner> createState() => _ChangeBagScannerState();
 }
 
-class _ChangeBagDialogState extends State<_ChangeBagDialog> {
+class _ChangeBagScannerState extends State<_ChangeBagScanner> {
+  late final MobileScannerController _ctrl;
   _CBStep _step = _CBStep.needOld;
+  bool _detected = false;
+  bool _busy = false;
   String? _error;
   Map<String, dynamic>? _newBagData;
 
@@ -447,15 +460,28 @@ class _ChangeBagDialogState extends State<_ChangeBagDialog> {
     return {};
   }
 
-  Future<void> _scanOld(BuildContext ctx) async {
-    setState(() => _error = null);
-    final currentNo = widget.currentBag['bag_no'];
-    final code = await showDialog<String>(
-      context: ctx,
-      builder: (_) => _BagScannerDialog(title: 'Scan Bag $currentNo to Detach'),
-    );
-    if (code == null || !mounted) return;
-    setState(() => _step = _CBStep.detaching);
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = MobileScannerController(detectionSpeed: DetectionSpeed.noDuplicates);
+    RenderLog.write('c259_changebag_one_screen', 'init;bag=${widget.currentBag['bag_no']}');
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  // Routes a scanned/uploaded code to the current step's RPC.
+  void _onCodeResolved(String code) {
+    if (_step == _CBStep.needOld) _doDetach(code);
+    else if (_step == _CBStep.needNew) _doAttach(code);
+  }
+
+  Future<void> _doDetach(String code) async {
+    if (_busy) return;
+    setState(() { _busy = true; _error = null; });
     try {
       final raw = await Supabase.instance.client.rpc('bag_detach', params: {
         'p_supplier_name': widget.supplier,
@@ -464,24 +490,28 @@ class _ChangeBagDialogState extends State<_ChangeBagDialog> {
       final m = _norm(raw);
       if (!mounted) return;
       if (m['error'] != null) {
-        setState(() { _step = _CBStep.needOld; _error = m['error'].toString(); });
+        final errCode = m['error'].toString();
+        String msg = errCode == 'wrong_bag'
+            ? 'Scan Bag ${m['expected'] ?? widget.currentBag['bag_no']} — that was Bag ${m['scanned'] ?? '?'}'
+            : 'Bag error: $errCode';
+        setState(() { _busy = false; _detected = false; _error = msg; });
+        try { await _ctrl.start(); } catch (_) {}
         return;
       }
-      RenderLog.write('c258_changebag_step', 'detached;bag=$currentNo');
-      setState(() => _step = _CBStep.needNew);
+      RenderLog.write('c259_changebag_step', 'detached;bag=${widget.currentBag['bag_no']}');
+      setState(() { _busy = false; _step = _CBStep.needNew; _detected = false; _error = null; });
+      try { await _ctrl.start(); } catch (_) {}
     } catch (e) {
-      if (mounted) setState(() { _step = _CBStep.needOld; _error = 'Could not detach: $e'; });
+      if (mounted) {
+        setState(() { _busy = false; _detected = false; _error = 'Could not detach: $e'; });
+        try { await _ctrl.start(); } catch (_) {}
+      }
     }
   }
 
-  Future<void> _scanNew(BuildContext ctx) async {
-    setState(() => _error = null);
-    final code = await showDialog<String>(
-      context: ctx,
-      builder: (_) => const _BagScannerDialog(title: 'Scan New Bag to Attach'),
-    );
-    if (code == null || !mounted) return;
-    setState(() => _step = _CBStep.attaching);
+  Future<void> _doAttach(String code) async {
+    if (_busy) return;
+    setState(() { _busy = true; _error = null; });
     try {
       final raw = await Supabase.instance.client.rpc('bag_attach', params: {
         'p_supplier_name': widget.supplier,
@@ -490,26 +520,74 @@ class _ChangeBagDialogState extends State<_ChangeBagDialog> {
       final m = _norm(raw);
       if (!mounted) return;
       if (m['error'] != null) {
-        setState(() { _step = _CBStep.needNew; _error = m['error'].toString(); });
+        setState(() { _busy = false; _detected = false; _error = m['error'].toString(); });
+        try { await _ctrl.start(); } catch (_) {}
         return;
       }
       final bagData = m['bag'] is Map ? Map<String, dynamic>.from(m['bag'] as Map) : m;
-      RenderLog.write('c258_changebag_step', 'attached;bag=${bagData['bag_no']}');
-      setState(() { _step = _CBStep.done; _newBagData = bagData; });
+      RenderLog.write('c259_changebag_step', 'attached;bag=${bagData['bag_no']}');
+      setState(() { _busy = false; _step = _CBStep.done; _newBagData = bagData; });
       await Future.delayed(const Duration(milliseconds: 700));
       if (mounted && Navigator.of(context).canPop()) Navigator.of(context).pop(bagData);
     } catch (e) {
-      if (mounted) setState(() { _step = _CBStep.needNew; _error = 'Could not attach: $e'; });
+      if (mounted) {
+        setState(() { _busy = false; _detected = false; _error = 'Could not attach: $e'; });
+        try { await _ctrl.start(); } catch (_) {}
+      }
     }
   }
 
-  Widget _stepRow({required String label, required Color color, required IconData icon, required String subtitle}) {
+  // Upload QR: FilePicker (web-reliable) → bytes → blob URL → ZXing JS decode.
+  Future<void> _pickAndDecodeQr(BuildContext ctx) async {
+    if (_detected || _busy) return;
+    FilePickerResult? result;
+    try {
+      RenderLog.write('c259_picker_opened', 'started;step=${_step.name}');
+      result = await FilePicker.pickFiles(type: FileType.image, withData: true);
+      RenderLog.write('c259_picker_opened', result == null ? 'cancelled' : 'ok');
+    } catch (e) {
+      RenderLog.write('c259_picker_opened', 'error;$e');
+      if (ctx.mounted) ScaffoldMessenger.of(ctx).showSnackBar(
+          const SnackBar(content: Text('Could not open file chooser')));
+      return;
+    }
+    if (result == null || result.files.isEmpty) return;
+
+    final bytes = result.files.first.bytes;
+    String? code;
+    if (bytes != null && kIsWeb) {
+      code = await _decodeQrFromBytesWeb(bytes);
+    } else if (!kIsWeb) {
+      final path = result.files.first.path;
+      if (path != null) {
+        try {
+          final BarcodeCapture? capture = await _ctrl.analyzeImage(path);
+          code = (capture?.barcodes.isNotEmpty ?? false) ? capture!.barcodes.first.rawValue : null;
+        } catch (_) { code = null; }
+      }
+    }
+
+    if (code == null || code.trim().isEmpty) {
+      RenderLog.write('c259_upload_decoded', 'fail;no_qr;step=${_step.name}');
+      if (ctx.mounted) ScaffoldMessenger.of(ctx).showSnackBar(
+          const SnackBar(content: Text('No QR found — try a clearer photo')));
+      return;
+    }
+    RenderLog.write('c259_upload_decoded', 'ok;step=${_step.name}');
+    _detected = true;
+    try { _ctrl.stop(); } catch (_) {}
+    _onCodeResolved(code.trim());
+  }
+
+  Widget _statusBox({required String label, required String subtitle,
+      required Color color, required IconData icon}) {
     return Container(
+      width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.10),
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: color.withValues(alpha: 0.35)),
+        border: Border.all(color: color.withValues(alpha: 0.40)),
       ),
       child: Row(children: [
         Icon(icon, size: 20, color: color),
@@ -518,76 +596,134 @@ class _ChangeBagDialogState extends State<_ChangeBagDialog> {
           Text(label, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: color)),
           Text(subtitle, style: const TextStyle(fontSize: 11, color: _kSub)),
         ])),
+        if (_busy)
+          SizedBox(width: 14, height: 14,
+              child: CircularProgressIndicator(strokeWidth: 2, color: color)),
       ]),
     );
   }
 
   @override
-  Widget build(BuildContext ctx) {
-    final oldDone = _step == _CBStep.needNew || _step == _CBStep.attaching || _step == _CBStep.done;
-    final newActive = _step == _CBStep.needNew || _step == _CBStep.attaching;
-    final newDone = _step == _CBStep.done;
+  Widget build(BuildContext context) {
+    RenderLog.write('c259_changebag_one_screen', 'built;step=${_step.name}');
     final currentNo = widget.currentBag['bag_no'];
     final newNo = _newBagData?['bag_no'];
 
+    final oldDone = _step != _CBStep.needOld;
+    final newActive = _step == _CBStep.needNew || _step == _CBStep.attaching;
+    final newDone = _step == _CBStep.done;
+
+    const red = Color(0xFFD32F2F);
     const green = Color(0xFF1B7A43);
-    const red = Color(0xFFDC2626);
     const grey = Color(0xFF9CA3AF);
 
-    final busy = _step == _CBStep.detaching || _step == _CBStep.attaching;
-
     return Dialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 24),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          Row(children: [
-            const Expanded(child: Text('Change Bag',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: _kText))),
-            IconButton(
-              onPressed: busy ? null : () => Navigator.of(ctx).pop(null),
-              icon: const Icon(Icons.close_rounded, color: _kSub),
-              padding: EdgeInsets.zero,
-            ),
-          ]),
-          const SizedBox(height: 20),
-          _stepRow(
-            label: 'Old Bag $currentNo',
-            color: oldDone ? green : red,
-            icon: oldDone ? Icons.check_circle_outline : Icons.qr_code_scanner_rounded,
-            subtitle: oldDone ? 'Detached' : 'Scan to detach',
+      child: SizedBox(
+        width: 360,
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          // Header
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 8, 0),
+            child: Row(children: [
+              const Expanded(child: Text('Change Bag',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _kText))),
+              IconButton(
+                onPressed: _busy ? null : () => Navigator.of(context).pop(null),
+                icon: const Icon(Icons.close_rounded, size: 20, color: _kSub),
+              ),
+            ]),
           ),
-          const SizedBox(height: 10),
-          _stepRow(
-            label: newNo != null ? 'New Bag $newNo' : 'New Bag',
-            color: newDone ? green : (newActive ? red : grey),
-            icon: newDone ? Icons.check_circle_outline : Icons.qr_code_scanner_rounded,
-            subtitle: newDone ? 'Attached' : (newActive ? 'Scan to attach' : 'Waiting…'),
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            child: Text('Point camera at bag QR  •  or upload a photo',
+                style: TextStyle(fontSize: 13, color: _kSub)),
           ),
-          if (_error != null) ...[
-            const SizedBox(height: 12),
-            Text(_error!, style: const TextStyle(color: Color(0xFFDC2626), fontSize: 13)),
-          ],
-          const SizedBox(height: 20),
-          if (_step == _CBStep.needOld)
-            FilledButton.icon(
-              onPressed: () => _scanOld(ctx),
-              icon: const Icon(Icons.qr_code_scanner_rounded, size: 18),
-              label: const Text('Scan Old Bag'),
-              style: FilledButton.styleFrom(backgroundColor: red, minimumSize: const Size.fromHeight(44)),
+          // Live camera with Upload QR overlay
+          ClipRRect(
+            borderRadius: const BorderRadius.all(Radius.circular(8)),
+            child: SizedBox(
+              height: 230,
+              child: Stack(children: [
+                MobileScanner(
+                  controller: _ctrl,
+                  errorBuilder: (ctx, error, _) => Container(
+                    color: Colors.black12,
+                    child: Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+                      const Icon(Icons.camera_alt_outlined, size: 40, color: Color(0xFFD1D5DB)),
+                      const SizedBox(height: 8),
+                      const Text('Camera unavailable', style: TextStyle(color: _kSub, fontSize: 13)),
+                    ])),
+                  ),
+                  onDetect: (capture) {
+                    if (_detected || _busy) return;
+                    final code = capture.barcodes.isNotEmpty
+                        ? capture.barcodes.first.rawValue : null;
+                    if (code != null && code.isNotEmpty) {
+                      _detected = true;
+                      try { _ctrl.stop(); } catch (_) {}
+                      _onCodeResolved(code);
+                    }
+                  },
+                ),
+                // Upload QR button bottom-center
+                Positioned(
+                  bottom: 12, left: 0, right: 0,
+                  child: Builder(builder: (ctx) => Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      GestureDetector(
+                        onTap: () => _pickAndDecodeQr(ctx),
+                        child: Column(mainAxisSize: MainAxisSize.min, children: [
+                          Container(
+                            width: 46, height: 46,
+                            decoration: BoxDecoration(
+                              color: Colors.black.withValues(alpha: 0.45),
+                              shape: BoxShape.circle,
+                              border: Border.all(color: Colors.white.withValues(alpha: 0.25)),
+                            ),
+                            child: const Icon(Icons.photo_library_outlined,
+                                color: Colors.white, size: 22),
+                          ),
+                          const SizedBox(height: 4),
+                          const Text('Upload QR', style: TextStyle(
+                              color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600,
+                              shadows: [Shadow(color: Colors.black54, blurRadius: 4)])),
+                        ]),
+                      ),
+                    ],
+                  )),
+                ),
+              ]),
             ),
-          if (_step == _CBStep.detaching || _step == _CBStep.attaching)
-            const Center(child: Padding(
-              padding: EdgeInsets.symmetric(vertical: 8),
-              child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2),
-            )),
-          if (_step == _CBStep.needNew)
-            FilledButton.icon(
-              onPressed: () => _scanNew(ctx),
-              icon: const Icon(Icons.qr_code_scanner_rounded, size: 18),
-              label: const Text('Scan New Bag'),
-              style: FilledButton.styleFrom(backgroundColor: red, minimumSize: const Size.fromHeight(44)),
+          ),
+          // Status boxes
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
+            child: _statusBox(
+              label: 'Old Bag $currentNo',
+              subtitle: oldDone ? 'Detached ✓' : 'Scan to detach',
+              color: oldDone ? green : red,
+              icon: oldDone ? Icons.check_circle_outline : Icons.qr_code_scanner_rounded,
             ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
+            child: _statusBox(
+              label: newNo != null ? 'New Bag $newNo' : 'Scan new bag',
+              subtitle: newDone ? 'Attached ✓' : (newActive ? 'Scan empty bag to attach' : 'Waiting…'),
+              color: newDone ? green : (newActive ? red : grey),
+              icon: newDone ? Icons.check_circle_outline : Icons.qr_code_scanner_rounded,
+            ),
+          ),
+          if (_error != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
+              child: Text(_error!,
+                  style: const TextStyle(color: Color(0xFFD32F2F), fontSize: 12)),
+            ),
+          const SizedBox(height: 6),
         ]),
       ),
     );
@@ -2326,7 +2462,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c258_changebag_step', 'open;supplier=$supplier;bag=${currentBag['bag_no']}');
     final newBag = await showDialog<Map<String, dynamic>>(
       context: context,
-      builder: (_) => _ChangeBagDialog(supplier: supplier, currentBag: currentBag),
+      builder: (_) => _ChangeBagScanner(supplier: supplier, currentBag: currentBag),
     );
     if (!mounted) return;
     if (newBag != null) {

@@ -1868,6 +1868,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             ? ordQty.toDouble()
             : (qty != null ? qty.toDouble() : 1.0);
         final bagNo = _activeBag!['bag_no'];
+        RenderLog.write('c262_manual_set', 'bag=$bagNo;product=$productId;qty=$setQty');
         final rawCount = await Supabase.instance.client.rpc('bag_count_set', params: {
           'p_supplier_name': supplier,
           'p_product_id': productId,
@@ -2250,15 +2251,17 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     if (skipped > 0) RenderLog.write('84_skipped_no_qty', '$skipped');
 
     if (widget.arrivals) {
-      // #157: Arrivals uses SET (final count) via set_voice_received, not additive
+      // #262: Arrivals voice clips ADD per-clip qty (bag_count_add), not SET absolute.
+      // Clip 1: 5 -> bag holds 5; clip 2: 1 -> bag holds 6. bag_count_set overwrote.
       for (final entry in byProduct.entries) {
-        await _setVoiceReceived(
+        final ok = await _addVoiceBagQty(
           productId: entry.key,
           productName: entry.value.name,
-          qty: entry.value.qty.toDouble(),
+          qty: entry.value.qty,
           rawSegment: entry.value.heard,
         );
         if (!mounted) return;
+        if (!ok) break; // bag error (no_bag, locked) — stop this clip
       }
     } else {
       // Collect: ADD each product via receive_product_qty — partial mixed counts accumulate
@@ -2365,6 +2368,45 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
       // Update tally additively (not replace)
       setState(() { _tally[productId] = (_tally[productId] ?? 0) + qty; });
+      return true;
+    } catch (e) {
+      if (mounted) _showSnack('Commit error: $e');
+      return false;
+    }
+  }
+
+  // #262: Arrivals voice ADD — each clip adds its qty to the current active bag via bag_count_add.
+  // Returns true on success, false on error (no bag, locked, exceeds_ordered).
+  Future<bool> _addVoiceBagQty({
+    required int productId,
+    required String productName,
+    required int qty,
+    required String rawSegment,
+  }) async {
+    final supplier = _selectedSupplier;
+    if (supplier == null) return false;
+    if (_activeBag == null) {
+      _showSnack('Scan a bag first before counting');
+      return false;
+    }
+    try {
+      final rawCount = await Supabase.instance.client.rpc('bag_count_add', params: {
+        'p_supplier_name': supplier,
+        'p_product_id': productId,
+        'p_delta': qty,
+        'p_note': 'voice: $rawSegment',
+      });
+      final res = _normRpc(rawCount);
+      if (!mounted) return false;
+      if (res['error'] != null) {
+        _showSnack(_bagCountError(res));
+        RenderLog.write('c262_voice_add_err', 'product=$productId;error=${res['error']}');
+        return false;
+      }
+      final grandTotal = res['grand_total'];
+      RenderLog.write('c262_voice_add',
+          'product=$productId;delta=$qty;grand_total=$grandTotal');
+      setState(() { _tally[productId] = (grandTotal as num?)?.toInt() ?? qty; });
       return true;
     } catch (e) {
       if (mounted) _showSnack('Commit error: $e');

@@ -221,10 +221,11 @@ class _StepBtn extends StatelessWidget {
 
 // ── _BagScannerDialog — camera QR scan ────────────────────────────────────────
 
+// _BagScannerDialog — pops Navigator with the scanned code string (or null on cancel/error).
+// showDialog<String> callers read the return value directly; no callback needed.
 class _BagScannerDialog extends StatefulWidget {
   final String title;
-  final void Function(String code) onScanned;
-  const _BagScannerDialog({required this.title, required this.onScanned});
+  const _BagScannerDialog({required this.title});
 
   @override
   State<_BagScannerDialog> createState() => _BagScannerDialogState();
@@ -238,6 +239,14 @@ class _BagScannerDialogState extends State<_BagScannerDialog> {
   void initState() {
     super.initState();
     _ctrl = MobileScannerController(detectionSpeed: DetectionSpeed.noDuplicates);
+  }
+
+  void _close(BuildContext ctx, {String? code}) {
+    if (!_detected || code == null) {
+      // stop camera before closing to avoid use-after-dispose
+      try { _ctrl.stop(); } catch (_) {}
+    }
+    if (Navigator.of(ctx).canPop()) Navigator.of(ctx).pop(code);
   }
 
   @override
@@ -260,7 +269,7 @@ class _BagScannerDialogState extends State<_BagScannerDialog> {
               Expanded(child: Text(widget.title,
                   style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _kText))),
               IconButton(
-                onPressed: () => Navigator.pop(context),
+                onPressed: () => _close(context),
                 icon: const Icon(Icons.close_rounded, size: 20, color: _kSub),
               ),
             ]),
@@ -275,7 +284,7 @@ class _BagScannerDialogState extends State<_BagScannerDialog> {
               borderRadius: const BorderRadius.vertical(bottom: Radius.circular(16)),
               child: MobileScanner(
                 controller: _ctrl,
-                errorBuilder: (context, error, _) => Center(
+                errorBuilder: (ctx, error, _) => Center(
                   child: Padding(
                     padding: const EdgeInsets.all(24),
                     child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -285,18 +294,18 @@ class _BagScannerDialogState extends State<_BagScannerDialog> {
                       const SizedBox(height: 4),
                       Text(error.errorCode.name, style: const TextStyle(fontSize: 12, color: _kSub)),
                       const SizedBox(height: 16),
-                      TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close')),
+                      TextButton(onPressed: () => _close(ctx), child: const Text('Close')),
                     ]),
                   ),
                 ),
                 onDetect: (capture) {
                   if (_detected) return;
-                  final code = capture.barcodes.isEmpty ? null : capture.barcodes.first.rawValue;
+                  final code = capture.barcodes.isNotEmpty ? capture.barcodes.first.rawValue : null;
                   if (code != null && code.isNotEmpty) {
                     _detected = true;
                     _ctrl.stop();
-                    Navigator.pop(context);
-                    widget.onScanned(code);
+                    // Pop with the code value so showDialog<String> returns it correctly.
+                    if (mounted) Navigator.of(context).pop(code);
                   }
                 },
               ),
@@ -357,7 +366,13 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   bool _arrivalsLocked = false;
 
   // #253: active bag for warehouse counting
-  Map<String, dynamic>? _activeBag;
+  // F6: per-supplier bag map so bag state survives supplier switches.
+  final Map<String, Map<String, dynamic>?> _activeBagBySupplier = {};
+  Map<String, dynamic>? get _activeBag => _activeBagBySupplier[_selectedSupplier ?? ''];
+  set _activeBag(Map<String, dynamic>? v) {
+    final s = _selectedSupplier ?? '';
+    if (s.isNotEmpty) _activeBagBySupplier[s] = v;
+  }
   bool _confirmingAll = false;
   bool _submittingCollect = false; // #125: Z1 guard — disables both Collect submit buttons mid-flight
   bool _sendingShortReminder = false; // C171
@@ -1378,14 +1393,15 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             ? ordQty.toDouble()
             : (qty != null ? qty.toDouble() : 1.0);
         final bagNo = _activeBag!['bag_no'];
-        final res = await Supabase.instance.client.rpc('bag_count_set', params: {
+        final rawCount = await Supabase.instance.client.rpc('bag_count_set', params: {
           'p_supplier_name': supplier,
           'p_product_id': productId,
           'p_qty': setQty,
           'p_note': note ?? 'tap:$state',
-        }) as Map?;
+        });
+        final res = _normRpc(rawCount);
         if (!mounted) return;
-        if (res != null && res['error'] != null) {
+        if (res['error'] != null) {
           final msg = _bagCountError(res);
           if (mounted) setState(() => _recording = false);
           _showSnack(msg);
@@ -1804,29 +1820,31 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       return;
     }
     try {
-      final Map? res;
+      Map<String, dynamic>? res;
       if (widget.arrivals) {
         final bagNo = _activeBag!['bag_no'];
-        res = await Supabase.instance.client.rpc('bag_count_set', params: {
+        final rawCount = await Supabase.instance.client.rpc('bag_count_set', params: {
           'p_supplier_name': supplier,
           'p_product_id': productId,
           'p_qty': qty,
           'p_note': 'voice: $rawSegment',
-        }) as Map?;
+        });
+        res = _normRpc(rawCount);
         if (!mounted) return;
-        if (res != null && res['error'] != null) {
+        if (res['error'] != null) {
           _showSnack(_bagCountError(res));
           RenderLog.write('c254_gate_block', 'voice_count_error=${res['error']}');
           return;
         }
         RenderLog.write('c253_bag_count', 'bag=$bagNo;product=$productId;qty=$qty');
       } else {
-        res = await Supabase.instance.client.rpc('set_voice_received', params: {
+        final rawVoice = await Supabase.instance.client.rpc('set_voice_received', params: {
           'p_supplier_name': supplier,
           'p_product_id': productId,
           'p_qty': qty,
           'p_note': 'voice: $rawSegment',
-        }) as Map?;
+        });
+        res = rawVoice is Map ? Map<String, dynamic>.from(rawVoice) : null;
         if (!mounted) return;
         if (res != null && res['error'] != null) {
           _showSnack(res['error'] == 'received_locked' ? 'Already received — locked' : 'Error: ${res['error']}');
@@ -1955,6 +1973,13 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   // ── #253: Bag attach/detach helpers ─────────────────────────────────────────
 
+  // F13: Supabase RPCs returning jsonb sometimes wrap the result in a List.
+  static Map<String, dynamic> _normRpc(dynamic raw) {
+    if (raw is List && raw.isNotEmpty) return Map<String, dynamic>.from(raw.first as Map);
+    if (raw is Map) return Map<String, dynamic>.from(raw);
+    return {};
+  }
+
   // Maps bag attach/detach error codes to user-friendly messages.
   String _bagError(Map m) {
     final code = m['error']?.toString() ?? '';
@@ -2003,53 +2028,106 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     }
   }
 
+  // Attach a freshly scanned bag code to this supplier (initial attach — no existing bag).
   Future<void> _chooseBag() async {
     final supplier = _selectedSupplier;
     if (supplier == null) return;
-    RenderLog.write('c253_scanner_open', 'supplier=$supplier');
+    RenderLog.write('c253_scanner_open', 'supplier=$supplier;action=attach');
     final code = await showDialog<String>(
       context: context,
-      builder: (_) => _BagScannerDialog(
-        title: _activeBag == null ? 'Scan Bag' : 'Change Bag',
-        onScanned: (c) => Navigator.of(context).pop(c),
-      ),
+      builder: (_) => const _BagScannerDialog(title: 'Scan Bag to Attach'),
     );
     if (code == null || !mounted) return;
+    await _attachBagCode(supplier, code);
+  }
+
+  // F7: Two-step change-bag flow — scan current bag to detach, then scan new bag to attach.
+  // On wrong_bag or error in step 1, the existing bag stays attached (no lock).
+  Future<void> _changeActiveBag() async {
+    final supplier = _selectedSupplier;
+    final currentBag = _activeBag;
+    if (supplier == null || currentBag == null) return;
+    final currentNo = currentBag['bag_no'];
+
+    // Step 1: scan current bag to confirm detach.
+    RenderLog.write('c254_change_step1', 'supplier=$supplier;current_bag=$currentNo');
+    final detachCode = await showDialog<String>(
+      context: context,
+      builder: (_) => _BagScannerDialog(title: 'Scan Bag $currentNo to Detach'),
+    );
+    if (detachCode == null || !mounted) return;
+
     try {
-      final res = await Supabase.instance.client.rpc('bag_attach', params: {
+      final rawDetach = await Supabase.instance.client.rpc('bag_detach', params: {
         'p_supplier_name': supplier,
-        'p_bag_code': code,
-      }) as Map;
+        'p_bag_code': detachCode,
+      });
+      final dm = _normRpc(rawDetach);
       if (!mounted) return;
-      if (res['error'] != null) {
-        _showSnack(_bagError(res));
+      if (dm['error'] != null) {
+        _showSnack(_bagError(dm));
+        // wrong_bag → stay attached; do not clear _activeBag.
         return;
       }
-      final bagData = res['bag'] is Map ? Map<String, dynamic>.from(res['bag'] as Map) : null;
-      setState(() => _activeBag = bagData ?? Map<String, dynamic>.from(res));
+      setState(() => _activeBag = null);
+      RenderLog.write('c254_change_detached', 'bag=$currentNo;supplier=$supplier');
+    } catch (e) {
+      if (mounted) _showSnack('Could not detach bag: $e');
+      return;
+    }
+
+    // Step 2: scan new bag to attach.
+    if (!mounted) return;
+    final attachCode = await showDialog<String>(
+      context: context,
+      builder: (_) => const _BagScannerDialog(title: 'Scan New Bag to Attach'),
+    );
+    if (attachCode == null || !mounted) return;
+    await _attachBagCode(supplier, attachCode);
+  }
+
+  // Shared attach logic — calls bag_attach, normalizes result, updates state.
+  Future<void> _attachBagCode(String supplier, String code) async {
+    try {
+      final rawAttach = await Supabase.instance.client.rpc('bag_attach', params: {
+        'p_supplier_name': supplier,
+        'p_bag_code': code,
+      });
+      final m = _normRpc(rawAttach);
+      if (!mounted) return;
+      if (m['error'] != null) {
+        _showSnack(_bagError(m));
+        return;
+      }
+      final bagData = m['bag'] is Map ? Map<String, dynamic>.from(m['bag'] as Map) : null;
+      setState(() => _activeBag = bagData ?? m);
       RenderLog.write('c253_bag_attached', 'bag=${_activeBag?['bag_no']};supplier=$supplier');
+      await _reloadItemsFromDB();
     } catch (e) {
       if (mounted) _showSnack('Could not attach bag: $e');
     }
   }
 
+  // Detach active bag via the ✕ button (no scan required — uses stored bag_code).
   Future<void> _detachBag() async {
     final supplier = _selectedSupplier;
     if (supplier == null || _activeBag == null) return;
     try {
       final bagNo = _activeBag!['bag_no'];
       final bagCode = _activeBag!['bag_code']?.toString() ?? '';
-      final res = await Supabase.instance.client.rpc('bag_detach', params: {
+      final rawDetach = await Supabase.instance.client.rpc('bag_detach', params: {
         'p_supplier_name': supplier,
         'p_bag_code': bagCode,
-      }) as Map?;
+      });
+      final m = _normRpc(rawDetach);
       if (!mounted) return;
-      if (res != null && res['error'] != null) {
-        _showSnack(_bagError(res));
+      if (m['error'] != null) {
+        _showSnack(_bagError(m));
         return;
       }
       setState(() => _activeBag = null);
       RenderLog.write('c253_bag_detached', 'bag=$bagNo;supplier=$supplier');
+      await _reloadItemsFromDB();
     } catch (e) {
       if (mounted) _showSnack('Could not detach bag: $e');
     }
@@ -2092,7 +2170,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                     color: Color(0xFF065F46))),
           ),
           TextButton(
-            onPressed: _chooseBag,
+            onPressed: _changeActiveBag,
             style: TextButton.styleFrom(
               foregroundColor: _kGreen,
               padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -2665,26 +2743,28 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     }
     setState(() => _agentPhase = AgentPhase.thinking);
     try {
-      final dynamic res;
+      final Map<String, dynamic> res;
       if (widget.arrivals) {
         // #254: Arrivals agent commit → bag_count_set (no p_bag_no; backend uses active bag)
-        res = await Supabase.instance.client.rpc('bag_count_set', params: {
+        final rawAgent = await Supabase.instance.client.rpc('bag_count_set', params: {
           'p_supplier_name': supplier,
           'p_product_id': (action['product_id'] as num).toInt(),
           'p_qty': (action['qty'] as num).toDouble(),
           'p_note': 'voice-agent #253',
         });
+        res = _normRpc(rawAgent);
       } else {
-        res = await Supabase.instance.client.rpc('set_voice_received', params: {
+        final rawAgent = await Supabase.instance.client.rpc('set_voice_received', params: {
           'p_supplier_name': supplier,
           'p_product_id': (action['product_id'] as num).toInt(),
           'p_qty': (action['qty'] as num).toDouble(),
           'p_note': 'voice-agent #85',
         });
+        res = rawAgent is Map ? Map<String, dynamic>.from(rawAgent) : {};
       }
       if (!mounted) return;
-      if (res is Map && res['error'] != null) {
-        final errMsg = widget.arrivals ? _bagCountError(res as Map) : 'Save nahi hua, dobara.';
+      if (res['error'] != null) {
+        final errMsg = widget.arrivals ? _bagCountError(res) : 'Save nahi hua, dobara.';
         RenderLog.write(widget.arrivals ? 'c254_gate_block' : 'change_85_agent_commit_fail',
             widget.arrivals ? 'agent_commit_error=${res['error']}' : '1');
         setState(() { _agentReply = errMsg; _agentPhase = AgentPhase.speaking; });
@@ -3871,6 +3951,12 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // #197: open per-product receiving sheet
   Future<void> _showProductSheet(_MergedProduct merged) async {
     if (widget.arrivals ? _arrivalsLocked : _boxLocked) return;
+    // F5: Arrivals requires an active bag before opening the count sheet.
+    if (widget.arrivals && _activeBag == null) {
+      RenderLog.write('c254_gate_block', 'product_sheet_no_bag=${merged.productId}');
+      _showSnack('Scan a bag first before counting');
+      return;
+    }
     final supplier = _selectedSupplier ?? '';
     RenderLog.write('c197_product_sheet_opened',
         'surface=${widget.arrivals ? 'arrivals' : 'collect'};product_id=${merged.productId};ordered=${merged.orderedTotal}');
@@ -4427,7 +4513,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                     deskDispute ??= _disputeMap[oiid];
                   }
                   return InkWell(
-                    onTap: () => _showProductSheet(mp),
+                    onTap: (widget.arrivals && _activeBag == null) ? null : () => _showProductSheet(mp),
                     hoverColor: _kGreen.withValues(alpha: 0.04),
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),

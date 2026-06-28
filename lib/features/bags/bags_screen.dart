@@ -59,7 +59,7 @@ class _BagsScreenState extends State<BagsScreen> {
   }
 
   Future<void> _toggleStatus(int bagNo, String current) async {
-    final next = current == 'used' ? 'empty' : 'used';
+    final next = current == 'full' ? 'empty' : 'full';
     // optimistic update
     setState(() {
       for (final b in _bags) {
@@ -219,29 +219,29 @@ class _StatusBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isUsed = status == 'used';
+    final isFull = status == 'full';
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(20),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
         decoration: BoxDecoration(
-          color: isUsed ? const Color(0xFF1B7A43) : const Color(0xFFECECEC),
+          color: isFull ? const Color(0xFF1B7A43) : const Color(0xFFECECEC),
           borderRadius: BorderRadius.circular(20),
         ),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
           Icon(
-            isUsed ? Icons.check_circle : Icons.radio_button_unchecked,
+            isFull ? Icons.check_circle : Icons.radio_button_unchecked,
             size: 14,
-            color: isUsed ? Colors.white : const Color(0xFF6B7280),
+            color: isFull ? Colors.white : const Color(0xFF6B7280),
           ),
           const SizedBox(width: 5),
           Text(
-            isUsed ? 'Used' : 'Empty',
+            isFull ? 'Full' : 'Empty',
             style: TextStyle(
               fontSize: 12,
               fontWeight: FontWeight.w600,
-              color: isUsed ? Colors.white : const Color(0xFF374151),
+              color: isFull ? Colors.white : const Color(0xFF374151),
             ),
           ),
         ]),

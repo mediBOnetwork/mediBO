@@ -48,6 +48,11 @@ class _WaChatScreenState extends State<WaChatScreen>
   }
 
   // CHANGE #209: subscribe to live INSERTs for this conversation's phone.
+  // CHANGE #249: realtime is used as a TRIGGER only — raw payload is NOT trusted
+  // for rendering (field shapes differ from wa_thread RPC). Instead we debounce
+  // a full reload via _silentResync() so new messages always render correctly.
+  bool _reloadQueued = false;
+
   void _subscribeThread() {
     if (_waThreadChannel != null) return;
     final phone = widget.conversation.senderPhone;
@@ -62,30 +67,24 @@ class _WaChatScreenState extends State<WaChatScreen>
             column: 'sender_phone',
             value: phone,
           ),
-          callback: (payload) => _onThreadInsert(payload.newRecord),
+          callback: (payload) => _onRealtimeChange(),
         )
         .subscribe((status, [err]) => _onThreadChannelStatus(status, err));
   }
 
-  void _onThreadInsert(Map<String, dynamic> newRow) {
-    if (!mounted) return;
-    final msg = WaMessage.fromJson(Map<String, dynamic>.from(newRow));
-    // DEDUPE by id (covers optimistic outbound bubbles already appended).
-    if (msg.id.isNotEmpty && _messages.any((m) => m.id == msg.id)) return;
-    // CHANGE #211: list is reverse:true, so BOTTOM (newest) = offset near 0.
+  // CHANGE #249: debounced full-reload trigger. Called on every realtime INSERT.
+  // Snapshot scroll BEFORE async gap so pin-to-bottom works correctly.
+  Future<void> _onRealtimeChange() async {
+    if (!mounted || _reloadQueued) return;
+    _reloadQueued = true;
     final nearBottom = _scroll.hasClients && _scroll.position.pixels < 120;
-    setState(() {
-      _messages.add(msg);
-      // Keep chronological order (normally already sorted; cheap stable sort).
-      _messages.sort((a, b) {
-        final at = a.receivedAt;
-        final bt = b.receivedAt;
-        if (at == null || bt == null) return 0;
-        return at.compareTo(bt);
-      });
-    });
-    RenderLog.write('c209_wa_realtime_thread_insert', _messages.length);
-    if (nearBottom) {
+    await Future.delayed(const Duration(milliseconds: 250));
+    if (!mounted) { _reloadQueued = false; return; }
+    _reloadQueued = false;
+    RenderLog.write('c249_rt_reload', 'start');
+    await _silentResync();
+    RenderLog.write('c249_rt_atbottom', nearBottom ? 'yes' : 'no');
+    if (nearBottom && mounted) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
     }
   }

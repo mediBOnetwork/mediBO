@@ -563,18 +563,22 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
                 ],
               ]),
               const SizedBox(height: 6),
-              TextField(
-                controller: _addressCtrl,
-                onChanged: (_) => setState(() { _addressEditedByUser = true; }),
-                textInputAction: TextInputAction.done,
-                maxLines: 1,
-                decoration: InputDecoration(
-                  hintText: 'Auto-filled from location (editable)',
-                  hintStyle: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                ),
-              ),
+              Builder(builder: (ctx) {
+                RenderLog.write('c246_addr_readonly', 'readonly=true');
+                return TextField(
+                  controller: _addressCtrl,
+                  readOnly: true,
+                  showCursor: false,
+                  textInputAction: TextInputAction.done,
+                  maxLines: 1,
+                  decoration: InputDecoration(
+                    hintText: 'Auto-filled from location',
+                    hintStyle: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                  ),
+                );
+              }),
             ],
 
             // SUBMIT ERROR

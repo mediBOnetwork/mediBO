@@ -335,6 +335,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         RenderLog.write('screen_autoload_on_focus', 'customers_initial');
         RenderLog.write('tab_autoload_on_open_approvedCustomers', 'initial');
         RenderLog.write('counts_synced_no_manual_refresh', 'true');
+        RenderLog.write('c246_single_dropdown', 'single_open_enforced=true');
       }
     });
   }
@@ -1046,9 +1047,20 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       if (_expanded.contains(key)) {
         _expanded.remove(key);
       } else {
+        _expanded.clear();
+        _payOpen.clear();
         _expanded.add(key);
         onExpand?.call();
       }
+    });
+  }
+
+  void _togglePayOpen(String orderId) {
+    setState(() {
+      final wasOpen = _payOpen[orderId] == true;
+      _expanded.clear();
+      _payOpen.clear();
+      if (!wasOpen) _payOpen[orderId] = true;
     });
   }
 
@@ -1482,9 +1494,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                           onTap: () {},
                           child: _ViewPayBtn(
                             isOpen: _payOpen[row.orderId] == true,
-                            onTap: () => setState(() =>
-                                _payOpen[row.orderId!] =
-                                    !(_payOpen[row.orderId!] ?? false)),
+                            onTap: () => _togglePayOpen(row.orderId!),
                             onLongPress: () => showModalBottomSheet(
                               context: context,
                               isScrollControlled: true,
@@ -5142,7 +5152,46 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
           bottom: BorderSide(color: Color(0xFFE5E7EB)),
         ),
       ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      child: LayoutBuilder(builder: (context, constraints) {
+        final isWide = constraints.maxWidth >= 700;
+        VoidCallback addCashTap = () => showDialog(
+          context: context,
+          barrierDismissible: true,
+          builder: (_) => Dialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            child: SizedBox(
+              width: 400,
+              child: CashPaymentSheet(
+                orderId: widget.orderId,
+                onSuccess: () {
+                  widget.onStatusChanged?.call();
+                  _load();
+                },
+              ),
+            ),
+          ),
+        );
+        Widget addCashBtn({required bool compact}) {
+          if (compact) {
+            RenderLog.write('c246_addcash_inline', 'wide=true');
+          } else {
+            RenderLog.write('c246_addcash_full', 'wide=false');
+          }
+          return OutlinedButton.icon(
+            onPressed: addCashTap,
+            icon: const Icon(Icons.add, size: 16),
+            label: const Text('+ Add Cash Payment'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: const Color(0xFF2E7D32),
+              side: const BorderSide(color: Color(0xFF2E7D32)),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+              minimumSize: compact ? Size.zero : const Size(double.infinity, 36),
+            ),
+          );
+        }
+        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
           const Text('Payment',
               style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
@@ -5151,6 +5200,10 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
           if (_loading)
             const SizedBox(width: 13, height: 13,
                 child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF9CA3AF))),
+          if (!_loading && isWide) ...[
+            const SizedBox(width: 8),
+            addCashBtn(compact: true),
+          ],
         ]),
         const SizedBox(height: 8),
         const Divider(height: 1, color: Color(0xFFE5E7EB)),
@@ -5162,49 +5215,20 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
             TextButton(onPressed: _load, child: const Text('Retry')),
           ])
         else if (!_loading) ...[
-          // CHANGE #221 — Add Cash Payment button (web/desktop trigger)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: OutlinedButton.icon(
-              onPressed: () => showDialog(
-                context: context,
-                barrierDismissible: true,
-                builder: (_) => Dialog(
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16)),
-                  child: SizedBox(
-                    width: 400,
-                    child: CashPaymentSheet(
-                      orderId: widget.orderId,
-                      onSuccess: () {
-                        widget.onStatusChanged?.call();
-                        _load();
-                      },
-                    ),
-                  ),
-                ),
-              ),
-              icon: const Icon(Icons.add, size: 16),
-              label: const Text('Add Cash Payment'),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: const Color(0xFF2E7D32),
-                side: const BorderSide(color: Color(0xFF2E7D32)),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8)),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                textStyle: const TextStyle(
-                    fontSize: 12, fontWeight: FontWeight.w600),
-              ),
+          // CHANGE #246 — full-width button only on narrow (mobile); inline on wide (above)
+          if (!isWide)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: addCashBtn(compact: false),
             ),
-          ),
           if (_claims.isNotEmpty) ...[
             _buildChipRow(),
             const SizedBox(height: 12),
           ],
           _buildBody(),
         ],
-      ]),
+      ]);
+      }), // close LayoutBuilder
     );
   }
 
@@ -5355,9 +5379,33 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
           border: Border.all(color: const Color(0xFFE5E7EB)),
         ),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('Advance payment',
-              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500,
-                  color: Color(0xFF9CA3AF))),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              const Text('Advance payment',
+                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w500,
+                      color: Color(0xFF9CA3AF))),
+              if (d.advExpected > 0 && advShown >= d.advExpected)
+                Builder(builder: (_) {
+                  RenderLog.write('c246_advance_badge', 'shown=true');
+                  return Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1B7A3E),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: const [
+                      Icon(Icons.check_circle, size: 14, color: Colors.white),
+                      SizedBox(width: 5),
+                      Text('Ready to accept order',
+                        style: TextStyle(color: Colors.white, fontSize: 12,
+                            fontWeight: FontWeight.w600)),
+                    ]),
+                  );
+                }),
+            ],
+          ),
           const SizedBox(height: 4),
           Text('${_rupee(advShown)} / ${_rupee(d.advExpected)}',
               style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700,
@@ -5561,9 +5609,10 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
           if (claim.collectedBy != null && claim.collectedBy!.isNotEmpty)
             _copyRow('Received by', claim.collectedBy),
           if (claim.locationLat != null && claim.locationLng != null) ...[
-            // CHANGE #244: show address if available, else coords; add Open-in-Maps button
+            // CHANGE #246: View in Maps (left) + Copy (right) row
             Builder(builder: (mCtx) {
               RenderLog.write('c244_card_maplink', 'present=true');
+              RenderLog.write('c246_loc_row', 'present=true');
               final locAddr = (claim.locationAddress != null &&
                       claim.locationAddress!.isNotEmpty)
                   ? claim.locationAddress!
@@ -5575,19 +5624,50 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
                 children: [
                   _copyRow('Location', locAddr),
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(12, 2, 12, 0),
-                    child: GestureDetector(
-                      onTap: () {
-                        try { html.window.open(mapsUrl, '_blank'); } catch (_) {}
-                      },
-                      child: Row(mainAxisSize: MainAxisSize.min, children: const [
-                        Icon(Icons.location_on, size: 13, color: Color(0xFF1565C0)),
-                        SizedBox(width: 4),
-                        Text('Open in Maps',
-                            style: TextStyle(fontSize: 12, color: Color(0xFF1565C0),
-                                fontWeight: FontWeight.w500,
-                                decoration: TextDecoration.underline)),
-                      ]),
+                    padding: const EdgeInsets.fromLTRB(12, 6, 12, 4),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        InkWell(
+                          onTap: () {
+                            try { html.window.open(mapsUrl, '_blank'); } catch (_) {}
+                          },
+                          borderRadius: BorderRadius.circular(8),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 10),
+                            child: Row(mainAxisSize: MainAxisSize.min, children: const [
+                              Icon(Icons.location_on, size: 18, color: Color(0xFF1A73E8)),
+                              SizedBox(width: 6),
+                              Text('View in Maps',
+                                style: TextStyle(color: Color(0xFF1A73E8),
+                                    fontWeight: FontWeight.w600, fontSize: 14)),
+                            ]),
+                          ),
+                        ),
+                        InkWell(
+                          onTap: () {
+                            Clipboard.setData(ClipboardData(text: locAddr));
+                            ScaffoldMessenger.of(mCtx).showSnackBar(
+                              const SnackBar(content: Text('Address copied'),
+                                  duration: Duration(seconds: 1)),
+                            );
+                          },
+                          borderRadius: BorderRadius.circular(8),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFE8F5E9),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Row(mainAxisSize: MainAxisSize.min, children: const [
+                              Icon(Icons.copy_rounded, size: 16, color: Color(0xFF1B7A43)),
+                              SizedBox(width: 6),
+                              Text('Copy', style: TextStyle(color: Color(0xFF1B7A43),
+                                  fontWeight: FontWeight.w600, fontSize: 13)),
+                            ]),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ],
@@ -5856,9 +5936,16 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
   String _fmtDate(String raw) {
     try {
       final dt = DateTime.parse(raw).toLocal();
-      final h  = dt.hour.toString().padLeft(2, '0');
-      final m  = dt.minute.toString().padLeft(2, '0');
-      return '${dt.day}/${dt.month} $h:$m';
+      final dd = dt.day.toString().padLeft(2, '0');
+      final mm = dt.month.toString().padLeft(2, '0');
+      final yy = (dt.year % 100).toString().padLeft(2, '0');
+      int h = dt.hour;
+      final ampm = h >= 12 ? 'pm' : 'am';
+      h = h % 12; if (h == 0) h = 12;
+      final min = dt.minute.toString().padLeft(2, '0');
+      final stamp = '$dd/$mm/$yy $h:$min $ampm';
+      RenderLog.write('c246_received_compact', stamp);
+      return stamp;
     } catch (_) {
       return raw.length > 16 ? raw.substring(0, 16) : raw;
     }

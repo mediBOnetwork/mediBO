@@ -13,6 +13,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:audioplayers/audioplayers.dart';
 import 'dart:convert';
 import '../../utils/render_log.dart';
 import '../../widgets/dispute_state.dart';
@@ -6100,8 +6101,11 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
   List<Map<String, dynamic>>? _mentions;
   String? _error;
 
-  // Web audio player — dart:html AudioElement (web-only; this file already imports dart:html)
-  html.AudioElement? _audio;
+  // #266: audioplayers (web-supported) — replaces raw html.AudioElement which
+  // played voice clips unreliably. Signed URL fed to a managed AudioPlayer.
+  final AudioPlayer _player = AudioPlayer();
+  StreamSubscription<void>? _completeSub;
+  final Map<String, String> _signedUrlCache = {}; // clip_path -> signed URL (cached per tap)
   String? _playingClip;   // clip_path of currently-playing recording
   int? _playingSeq;       // #119: recording_seq of playing clip (drives green state)
   int? _selectedClipSeq;  // #119: clip last tapped (drives reorder; null = default order)
@@ -6118,6 +6122,16 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
   void initState() {
     super.initState();
     _chipScrollCtrl.addListener(_onChipScroll);
+    // #266: natural playback completion → clear state + return to All view.
+    // stop()/pause() do NOT emit onPlayerComplete, so interruptions are excluded.
+    _completeSub = _player.onPlayerComplete.listen((_) {
+      if (!mounted) return;
+      final playedSeq = _playingSeq;
+      setState(() { _playingClip = null; _playingSeq = null; });
+      RenderLog.write('c119_play_state', 'playing_seq=none;is_playing=false');
+      _newClipSeq = null;
+      _resetToAllAfterPlayback(playedSeq: playedSeq);
+    });
     _fetchMentions();
     // #110: compute initial overflow state after first layout
     WidgetsBinding.instance.addPostFrameCallback((_) => _updateChipOverflow());
@@ -6140,8 +6154,8 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
 
   @override
   void dispose() {
-    _audio?.pause();
-    _audio = null;
+    _completeSub?.cancel();
+    _player.dispose();
     _chipScrollCtrl.removeListener(_onChipScroll);
     _chipScrollCtrl.dispose();
     super.dispose();
@@ -6201,7 +6215,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
       _showSnackMsg('Audio unavailable for this clip');
       return;
     }
-    _audio?.pause();
+    await _player.stop(); // #266: stop any current playback (does not emit onPlayerComplete)
     if (mounted) setState(() { _playingClip = null; _playingSeq = null; });
 
     // #124: log the path used for THIS clip BEFORE fetching URL (proves per-clip routing)
@@ -6209,43 +6223,32 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
     RenderLog.write('c124_clip_play', 'recording_seq=$recordingSeq;clip_path_tail=$tail');
 
     try {
-      final url = await Supabase.instance.client.storage
-          .from('voice-clips')
-          .createSignedUrl(clipPath, 3600);
+      // #266: signed URL required — voice-clips bucket is PRIVATE. Cache per clip.
+      String? url = _signedUrlCache[clipPath];
+      if (url == null) {
+        url = await Supabase.instance.client.storage
+            .from('voice-clips')
+            .createSignedUrl(clipPath, 3600);
+        _signedUrlCache[clipPath] = url;
+      }
       if (!mounted) return;
 
       RenderLog.write('c124_signed_url', 'clip_path_tail=$tail;ok=y');
 
-      final a = html.AudioElement(url);
-      _audio = a;
-      if (mounted) setState(() { _playingClip = clipPath; _playingSeq = recordingSeq; });
+      // #266: managed AudioPlayer (audioplayers) — reliable web webm/opus playback.
+      await _player.play(UrlSource(url));
+      if (!mounted) return;
+      setState(() { _playingClip = clipPath; _playingSeq = recordingSeq; });
 
-      a.onEnded.listen((_) {
-        if (!mounted || _audio != a) return;
-        setState(() { _playingClip = null; _playingSeq = null; });
-        RenderLog.write('c119_play_state', 'playing_seq=none;is_playing=false');
-        // #131: ANY clip's natural playback end → return to All.
-        // Interruption guard: _audio != a (above) handles tap-another-clip / tap-All / new-recording.
-        _newClipSeq = null; // clear just-recorded marker (no longer needed as a gate)
-        _resetToAllAfterPlayback(playedSeq: recordingSeq);
-      });
-
-      // #124: handle audio load/decode errors (missing onError was causing silent failures)
-      a.onError.listen((_) {
-        if (!mounted || _audio != a) return;
-        setState(() { _playingClip = null; _playingSeq = null; });
-        _showSnackMsg('Playback unavailable');
-        RenderLog.write('c124_signed_url', 'clip_path_tail=$tail;ok=n;reason=audio_error');
-      });
-
-      a.play();
       RenderLog.write('c117_clip_play', 'clip=${clipPath.split('/').last};recording_seq=$recordingSeq');
       RenderLog.write('c119_play_state', 'playing_seq=$recordingSeq;is_playing=true');
+      RenderLog.write('c266_clip_play', 'seq=$recordingSeq;status=ok');
     } catch (e) {
       if (mounted) {
         setState(() { _playingClip = null; _playingSeq = null; });
-        _showSnackMsg('Playback unavailable');
+        _showSnackMsg("Couldn't play this clip");
         RenderLog.write('c124_signed_url', 'clip_path_tail=$tail;ok=n;reason=exception');
+        RenderLog.write('c266_clip_play', 'seq=$recordingSeq;status=fail');
       }
     }
   }
@@ -6264,7 +6267,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
   }
 
   void _stopAudio() {
-    _audio?.pause();
+    _player.stop();
     if (mounted) setState(() { _playingClip = null; _playingSeq = null; });
   }
 

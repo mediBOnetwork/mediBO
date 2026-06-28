@@ -49,6 +49,7 @@ dependencies:
   mobile_scanner: ^5.2.3
   qr_flutter: ^4.1.0
   record: ^5.1.2
+  audioplayers: ^6.0.0
   image: ^4.0.0
   zxing2: ^0.2.3
 

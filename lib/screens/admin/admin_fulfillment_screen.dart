@@ -352,6 +352,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   // #156: arrivals lock state
   bool _arrivalsLocked = false;
+
+  // #253: active bag for warehouse counting
+  Map<String, dynamic>? _activeBag;
   bool _confirmingAll = false;
   bool _submittingCollect = false; // #125: Z1 guard — disables both Collect submit buttons mid-flight
   bool _sendingShortReminder = false; // C171
@@ -940,6 +943,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       _voiceCallsDuringRecord = 0; _voiceCallsAfterStop = 0;
       _latestClipPath = null; // #115: reset clip state per supplier (#125: no local seq — comes from RPC)
       _arrivalsLocked = false; // #156: reset per-supplier lock when opening a new supplier
+      _activeBag = null; // #253: reset active bag per supplier
     });
 
     // #127 BUG1 FIX: Arrivals uses fw_get_state(supplier,'arrivals') items directly.
@@ -979,6 +983,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         final confirmed = stateRes['arrivals_confirmed'] == true ||
             stateRes['supplier_fully_locked'] == true;
         final parsedMode = supplierModeOf(stateRes); // B5: top-level, not per-item
+        final activeBagRaw = stateRes['active_bag'];
+        final activeBag = activeBagRaw is Map ? Map<String, dynamic>.from(activeBagRaw) : null;
         setState(() {
           _items = stateItems;
           _focusIdx = firstPending >= 0 ? firstPending : 0;
@@ -986,6 +992,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           _showListView = false;
           _arrivalsLocked = confirmed;
           _supplierMode = parsedMode;
+          _activeBag = activeBag;
           _sessionVoiceCount = 0; // B8: reset on box open
         });
         RenderLog.write('c127_arrivals_filter_removed', 'true');
@@ -1344,9 +1351,37 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     if (itemId == null) return;
     setState(() => _recording = true);
     try {
-      // B2/c168: Collect 'received'/'short' → receive_product_qty (correct lock check,
-      // correct Collect write path). 'wrong'/'not_coming' and all Arrivals → set_item_receiving.
-      if (!widget.arrivals && (state == 'received' || state == 'short')) {
+      // B2/c168: Collect 'received'/'short' → receive_product_qty.
+      // #253: Arrivals 'received'/'short' → bag_count_set (requires active bag).
+      // 'wrong'/'not_coming' and other Arrivals states → set_item_receiving.
+      if (widget.arrivals && (state == 'received' || state == 'short')) {
+        if (_activeBag == null) {
+          if (mounted) setState(() => _recording = false);
+          _showSnack('Scan a bag first before counting');
+          return;
+        }
+        final productId = (item['product_id'] as num?)?.toInt();
+        final supplier = _selectedSupplier ?? '';
+        if (productId == null) throw Exception('missing product_id');
+        final ordQty = ordQtyOf(item);
+        final curRec = recQtyOf(item);
+        final setQty = state == 'received'
+            ? ordQty.toDouble()
+            : (qty != null ? qty.toDouble() : 1.0);
+        final bagNo = (_activeBag!['bag_no'] as num).toInt();
+        final res = await Supabase.instance.client.rpc('bag_count_set', params: {
+          'p_supplier_name': supplier,
+          'p_product_id': productId,
+          'p_bag_no': bagNo,
+          'p_qty': setQty,
+          'p_note': note ?? 'tap:$state',
+        }) as Map?;
+        if (!mounted) return;
+        if (res != null && res['error'] != null) throw Exception(res['error'].toString());
+        RenderLog.write('c253_bag_count', 'bag=$bagNo;product=$productId;qty=$setQty');
+        await _reloadItemsFromDB();
+        if (mounted) setState(() => _recording = false);
+      } else if (!widget.arrivals && (state == 'received' || state == 'short')) {
         final productId = (item['product_id'] as num?)?.toInt();
         final supplier = _selectedSupplier ?? '';
         if (productId == null) throw Exception('missing product_id');
@@ -1367,7 +1402,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         await _reloadItemsFromDB();
         if (mounted) setState(() => _recording = false);
       } else {
-        // Arrivals tap, or Collect wrong/not_coming (no Collect-specific RPC)
+        // Arrivals wrong/not_coming or Collect wrong/not_coming
         final res = await Supabase.instance.client.rpc('set_item_receiving', params: {
           'p_order_item_id': itemId,
           'p_state': state,
@@ -1750,13 +1785,30 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   }) async {
     final supplier = _selectedSupplier;
     if (supplier == null) return;
+    if (widget.arrivals && _activeBag == null) {
+      _showSnack('Scan a bag first before counting');
+      return;
+    }
     try {
-      final res = await Supabase.instance.client.rpc('set_voice_received', params: {
-        'p_supplier_name': supplier,
-        'p_product_id': productId,
-        'p_qty': qty,
-        'p_note': 'voice: $rawSegment',
-      }) as Map?;
+      final Map? res;
+      if (widget.arrivals) {
+        final bagNo = (_activeBag!['bag_no'] as num).toInt();
+        res = await Supabase.instance.client.rpc('bag_count_set', params: {
+          'p_supplier_name': supplier,
+          'p_product_id': productId,
+          'p_bag_no': bagNo,
+          'p_qty': qty,
+          'p_note': 'voice: $rawSegment',
+        }) as Map?;
+        RenderLog.write('c253_bag_count', 'bag=$bagNo;product=$productId;qty=$qty');
+      } else {
+        res = await Supabase.instance.client.rpc('set_voice_received', params: {
+          'p_supplier_name': supplier,
+          'p_product_id': productId,
+          'p_qty': qty,
+          'p_note': 'voice: $rawSegment',
+        }) as Map?;
+      }
       if (!mounted) return;
       if (res != null && res['error'] == 'received_locked') {
         _showSnack('Already received — locked');
@@ -1842,10 +1894,13 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         final confirmed = stateRes['arrivals_confirmed'] == true ||
             stateRes['supplier_fully_locked'] == true;
         final reloadedMode = supplierModeOf(stateRes); // B6: top-level, not per-item
+        final reloadActiveBagRaw = stateRes['active_bag'];
+        final reloadActiveBag = reloadActiveBagRaw is Map ? Map<String, dynamic>.from(reloadActiveBagRaw) : null;
         setState(() {
           _items = stateItems;
           if (confirmed != _arrivalsLocked) _arrivalsLocked = confirmed;
           if (reloadedMode != _supplierMode) _supplierMode = reloadedMode;
+          _activeBag = reloadActiveBag;
         });
       } catch (e) {
         final errMsg = e.toString();
@@ -1876,6 +1931,123 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         }
       });
     } catch (_) {}
+  }
+
+  // ── #253: Bag attach/detach helpers ─────────────────────────────────────────
+
+  String _bagError(Map m) {
+    final code = m['error']?.toString() ?? '';
+    return switch (code) {
+      'bag_not_found' => 'Bag not found — scan again',
+      'bag_in_use' => 'Bag already in use by another supplier',
+      'bag_not_attached' => 'No bag attached',
+      'bag_wrong_supplier' => 'Bag belongs to a different supplier',
+      _ => code.isNotEmpty ? 'Bag error: $code' : 'Unknown bag error',
+    };
+  }
+
+  Future<void> _chooseBag() async {
+    final supplier = _selectedSupplier;
+    if (supplier == null) return;
+    RenderLog.write('c253_scanner_open', 'supplier=$supplier');
+    final code = await showDialog<String>(
+      context: context,
+      builder: (_) => _BagScannerDialog(
+        title: _activeBag == null ? 'Scan Bag' : 'Change Bag',
+        onScanned: (c) => Navigator.of(context).pop(c),
+      ),
+    );
+    if (code == null || !mounted) return;
+    try {
+      final res = await Supabase.instance.client.rpc('bag_attach', params: {
+        'p_supplier_name': supplier,
+        'p_bag_code': code,
+      }) as Map;
+      if (!mounted) return;
+      if (res['error'] != null) {
+        _showSnack(_bagError(res));
+        return;
+      }
+      final bagData = res['bag'] is Map ? Map<String, dynamic>.from(res['bag'] as Map) : null;
+      setState(() => _activeBag = bagData ?? Map<String, dynamic>.from(res));
+      RenderLog.write('c253_bag_attached', 'bag=${_activeBag?['bag_no']};supplier=$supplier');
+    } catch (e) {
+      if (mounted) _showSnack('Could not attach bag: $e');
+    }
+  }
+
+  Future<void> _detachBag() async {
+    final supplier = _selectedSupplier;
+    if (supplier == null || _activeBag == null) return;
+    try {
+      final bagNo = (_activeBag!['bag_no'] as num).toInt();
+      await Supabase.instance.client.rpc('bag_detach', params: {
+        'p_supplier_name': supplier,
+        'p_bag_no': bagNo,
+      });
+      if (!mounted) return;
+      setState(() => _activeBag = null);
+      RenderLog.write('c253_bag_detached', 'bag=$bagNo;supplier=$supplier');
+    } catch (e) {
+      if (mounted) _showSnack('Could not detach bag: $e');
+    }
+  }
+
+  Widget _buildBagControl() {
+    final bag = _activeBag;
+    if (bag == null) {
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+        child: OutlinedButton.icon(
+          onPressed: _chooseBag,
+          icon: const Icon(Icons.qr_code_scanner_rounded, size: 18),
+          label: const Text('Scan bag to start counting'),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: _kGreen,
+            side: const BorderSide(color: _kGreen),
+            minimumSize: const Size.fromHeight(44),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          ),
+        ),
+      );
+    }
+    final bagNo = bag['bag_no'];
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: const Color(0xFFD1FAE5),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: const Color(0xFF065F46).withValues(alpha: 0.3)),
+        ),
+        child: Row(children: [
+          const Icon(Icons.shopping_bag_outlined, size: 18, color: Color(0xFF065F46)),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text('Bag $bagNo active',
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
+                    color: Color(0xFF065F46))),
+          ),
+          TextButton(
+            onPressed: _chooseBag,
+            style: TextButton.styleFrom(
+              foregroundColor: _kGreen,
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              minimumSize: Size.zero,
+            ),
+            child: const Text('Change', style: TextStyle(fontSize: 12)),
+          ),
+          const SizedBox(width: 4),
+          IconButton(
+            onPressed: _detachBag,
+            icon: const Icon(Icons.close_rounded, size: 16, color: Color(0xFF065F46)),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+          ),
+        ]),
+      ),
+    );
   }
 
   // ── #91: Confirm count lock / unlock ─────────────────────────────────────────
@@ -1927,7 +2099,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
               backgroundColor: _kGreen,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
             ),
-            onPressed: _confirmingAll ? null : _fw_confirmAllReceived,
+            onPressed: (_confirmingAll || (widget.arrivals && _activeBag == null)) ? null : _fw_confirmAllReceived,
             child: _confirmingAll
                 ? const SizedBox(
                     width: 18,
@@ -3203,7 +3375,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // Tally badge moved to _buildNarrowProgressRow.
   Widget _buildNarrowVoiceBar(bool isAdmin) {
     final countingDisabled = _agentPhase != AgentPhase.idle ||
-        (widget.arrivals && _arrivalsLocked); // #156: locked after confirm-all
+        (widget.arrivals && _arrivalsLocked) || // #156: locked after confirm-all
+        (widget.arrivals && _activeBag == null); // #253: must have active bag
     final agentDisabled = _voiceListening || _voiceProcessing;
     final agentPhase = _agentPhase;
     final bool agentBusy = agentPhase == AgentPhase.thinking || agentPhase == AgentPhase.speaking;
@@ -4929,6 +5102,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('81_progress', '${_items.length - _pendingCount}/${_items.length}');
 
     return Column(children: [
+      if (widget.arrivals) _buildBagControl(),
       Expanded(
         child: ListView.separated(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
@@ -4944,6 +5118,17 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             final imageUrl = item['image_url']?.toString();
             if (state == 'wrong' || state == 'not_coming') {
               RenderLog.write('c177_wh_states', 'state=$state;idx=$i');
+            }
+
+            // #253: bag_breakdown per item (Arrivals only)
+            final breakdownRaw = item['bag_breakdown'];
+            final breakdown = breakdownRaw is List
+                ? breakdownRaw.cast<Map>()
+                    .map((b) => 'Bag ${b['bag_no']}: ${b['qty']}')
+                    .join(', ')
+                : null;
+            if (widget.arrivals && breakdown != null && breakdown.isNotEmpty) {
+              RenderLog.write('c253_breakdown_render', 'idx=$i;bags=$breakdown');
             }
 
             return GestureDetector(
@@ -4968,6 +5153,12 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                       const SizedBox(height: 2),
                       Text('$recQty/$ordQty${packType.isNotEmpty ? ' $packType' : ''}',
                           style: const TextStyle(fontSize: 12, color: _kSub)),
+                      if (widget.arrivals && breakdown != null && breakdown.isNotEmpty) ...[
+                        const SizedBox(height: 2),
+                        Text(breakdown,
+                            style: const TextStyle(fontSize: 11, color: Color(0xFF065F46)),
+                            maxLines: 2, overflow: TextOverflow.ellipsis),
+                      ],
                     ]),
                   ),
                   const SizedBox(width: 8),
@@ -4985,6 +5176,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // Desktop (≥900px) → Dialog; Mobile → ModalBottomSheet.
   Future<void> _showItemSheet(Map<String, dynamic> item) async {
     if (widget.arrivals ? _arrivalsLocked : _boxLocked) return;
+    if (widget.arrivals && _activeBag == null) {
+      RenderLog.write('c253_bag_gate_locked', 'no_active_bag');
+      _showSnack('Scan a bag first before counting items');
+      return;
+    }
     final idx = _items.indexOf(item);
     if (idx >= 0) _focusItem(idx);
     final itemId      = item['order_item_id']?.toString();

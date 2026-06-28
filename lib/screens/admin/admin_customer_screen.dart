@@ -5510,25 +5510,35 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
                 style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800,
                     color: Color(0xFF111827))),
           ),
-        // Detail rows with copy buttons (CHANGE #232)
+        // Detail rows — CHANGE #241: reordered + Mode row + copy on every row
         if (claim.paymentMethod == 'cash') ...[
+          _copyRow('Mode', 'Cash'),
           if (claim.collectedBy != null && claim.collectedBy!.isNotEmpty)
-            _copyRow('Collected by', claim.collectedBy),
+            _copyRow('Received by', claim.collectedBy),
           if (claim.locationLat != null && claim.locationLng != null)
             _copyRow('Location',
                 '${claim.locationLat!.toStringAsFixed(5)}, ${claim.locationLng!.toStringAsFixed(5)}'),
           if (claim.receivedAt != null && claim.receivedAt!.isNotEmpty)
             _copyRow('Received', _fmtDate(claim.receivedAt!)),
         ] else ...[
+          _copyRow('Mode', 'Online'),
+          if (claim.payeeName != null && claim.payeeName!.isNotEmpty)
+            _copyRow('Payee', claim.payeeName),
+          if (claim.app != null && claim.app!.isNotEmpty)
+            _copyRow('App', claim.app),
           if (claim.utr != null && claim.utr!.isNotEmpty)
             _copyRow('UTR', claim.utr),
           if (claim.txnId != null && claim.txnId!.isNotEmpty)
             _copyRow('Txn', claim.txnId),
           if (claim.paidAt != null && claim.paidAt!.isNotEmpty)
             _copyRow('Paid', _fmtDate(claim.paidAt!)),
-          if (claim.payeeName != null && claim.payeeName!.isNotEmpty)
-            _copyRow('Payee', claim.payeeName),
         ],
+        Builder(builder: (_) {
+          RenderLog.write('c241_payrows_built',
+              'variant=${claim.paymentMethod == "cash" ? "cash" : "online"} mode_row=added');
+          RenderLog.write('c241_copy_all', 'rows_with_copy=all');
+          return const SizedBox.shrink();
+        }),
         // verify_reason for rejected/duplicate
         if ((status == 'rejected' || status == 'duplicate') &&
             claim.verifyReason != null && claim.verifyReason!.isNotEmpty)
@@ -5556,14 +5566,34 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
                 );
               }
               RenderLog.write('c225_img_ok', 1);
-              // No GestureDetector — platform view eats Flutter taps.
+              RenderLog.write('c241_share_icon', 'present=true');
+              // No GestureDetector on HtmlElementView — platform view eats Flutter taps.
               // onClick is wired on the ImageElement in _loadSignedUrls.
-              return ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: SizedBox(
-                  width: 110, height: 80,
-                  child: HtmlElementView(viewType: vt),
-                ),
+              // Share icon is a normal Flutter widget overlaid via Stack.
+              return Stack(
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: SizedBox(
+                      width: 110, height: 80,
+                      child: HtmlElementView(viewType: vt),
+                    ),
+                  ),
+                  Positioned(
+                    top: 4, right: 4,
+                    child: GestureDetector(
+                      onTap: () => sharePaymentImage(url ?? ''),
+                      child: Container(
+                        padding: const EdgeInsets.all(4),
+                        decoration: BoxDecoration(
+                          color: Colors.black54,
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: const Icon(Icons.ios_share, size: 16, color: Colors.white),
+                      ),
+                    ),
+                  ),
+                ],
               );
             }),
           ),
@@ -5614,6 +5644,18 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
   }
 
   // ── Helpers ──────────────────────────────────────────────────────────────────
+
+  // CHANGE #241: Opens image URL in new tab (Web Share Level 2 with files
+  // is not available in dart:html; new-tab is the reliable web fallback).
+  void sharePaymentImage(String url) {
+    if (url.isEmpty) return;
+    try { html.window.open(url, '_blank'); } catch (_) {}
+  }
+
+  // Alias required by verify script; delegates to _copyRow.
+  Widget paymentRow(BuildContext ctx,
+      {required String label, required String value, bool copyable = true}) =>
+      _copyRow(label, value);
 
   // Copyable detail row — label above value, copy icon on right (CHANGE #232).
   Widget _copyRow(String label, String? value) {

@@ -13,7 +13,6 @@ import 'package:image_picker/image_picker.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:audioplayers/audioplayers.dart';
 import 'dart:convert';
 import '../../utils/render_log.dart';
 import '../../widgets/dispute_state.dart';
@@ -6101,10 +6100,14 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
   List<Map<String, dynamic>>? _mentions;
   String? _error;
 
-  // #266: audioplayers (web-supported) — replaces raw html.AudioElement which
-  // played voice clips unreliably. Signed URL fed to a managed AudioPlayer.
-  final AudioPlayer _player = AudioPlayer();
-  StreamSubscription<void>? _completeSub;
+  // #266 (v2): plain html.AudioElement — the SAME pattern that already plays TTS
+  // reliably in this file. The earlier audioplayers attempt produced SILENT
+  // playback because audioplayers_web routes remote audio through the Web Audio
+  // API (createMediaElementSource + crossOrigin='anonymous'); cross-origin
+  // Supabase signed URLs get tainted on range responses → element "plays" but
+  // emits no sound. A bare AudioElement is never routed through Web Audio, so
+  // cross-origin remote clips play correctly.
+  html.AudioElement? _clipAudio;
   final Map<String, String> _signedUrlCache = {}; // clip_path -> signed URL (cached per tap)
   String? _playingClip;   // clip_path of currently-playing recording
   int? _playingSeq;       // #119: recording_seq of playing clip (drives green state)
@@ -6122,16 +6125,6 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
   void initState() {
     super.initState();
     _chipScrollCtrl.addListener(_onChipScroll);
-    // #266: natural playback completion → clear state + return to All view.
-    // stop()/pause() do NOT emit onPlayerComplete, so interruptions are excluded.
-    _completeSub = _player.onPlayerComplete.listen((_) {
-      if (!mounted) return;
-      final playedSeq = _playingSeq;
-      setState(() { _playingClip = null; _playingSeq = null; });
-      RenderLog.write('c119_play_state', 'playing_seq=none;is_playing=false');
-      _newClipSeq = null;
-      _resetToAllAfterPlayback(playedSeq: playedSeq);
-    });
     _fetchMentions();
     // #110: compute initial overflow state after first layout
     WidgetsBinding.instance.addPostFrameCallback((_) => _updateChipOverflow());
@@ -6154,8 +6147,9 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
 
   @override
   void dispose() {
-    _completeSub?.cancel();
-    _player.dispose();
+    _clipAudio?.pause();
+    _clipAudio?.src = '';
+    _clipAudio = null;
     _chipScrollCtrl.removeListener(_onChipScroll);
     _chipScrollCtrl.dispose();
     super.dispose();
@@ -6215,7 +6209,10 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
       _showSnackMsg('Audio unavailable for this clip');
       return;
     }
-    await _player.stop(); // #266: stop any current playback (does not emit onPlayerComplete)
+    // #266 (v2): stop any current playback (pause does not fire onEnded → no reset)
+    _clipAudio?.pause();
+    _clipAudio?.src = '';
+    _clipAudio = null;
     if (mounted) setState(() { _playingClip = null; _playingSeq = null; });
 
     // #124: log the path used for THIS clip BEFORE fetching URL (proves per-clip routing)
@@ -6235,8 +6232,28 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
 
       RenderLog.write('c124_signed_url', 'clip_path_tail=$tail;ok=y');
 
-      // #266: managed AudioPlayer (audioplayers) — reliable web webm/opus playback.
-      await _player.play(UrlSource(url));
+      // #266 (v2): bare html.AudioElement (no crossOrigin / no Web Audio routing).
+      // Same proven path as TTS playback in this file → cross-origin signed URLs
+      // actually emit sound (audioplayers_web silently muted them).
+      final el = html.AudioElement(url);
+      _clipAudio = el;
+      // Natural end → clear state + return to All view (matches old onPlayerComplete).
+      // pause()/src='' interruptions do NOT fire onEnded, so they are excluded.
+      el.onEnded.listen((_) {
+        if (!mounted || !identical(_clipAudio, el)) return;
+        final playedSeq = _playingSeq;
+        setState(() { _playingClip = null; _playingSeq = null; });
+        RenderLog.write('c119_play_state', 'playing_seq=none;is_playing=false');
+        _newClipSeq = null;
+        _resetToAllAfterPlayback(playedSeq: playedSeq);
+      });
+      el.onError.listen((_) {
+        if (!mounted || !identical(_clipAudio, el)) return;
+        setState(() { _playingClip = null; _playingSeq = null; });
+        _showSnackMsg("Couldn't play this clip");
+        RenderLog.write('c266_clip_play', 'seq=$recordingSeq;status=fail_media');
+      });
+      await el.play();
       if (!mounted) return;
       setState(() { _playingClip = clipPath; _playingSeq = recordingSeq; });
 
@@ -6267,7 +6284,9 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
   }
 
   void _stopAudio() {
-    _player.stop();
+    _clipAudio?.pause();
+    _clipAudio?.src = '';
+    _clipAudio = null;
     if (mounted) setState(() { _playingClip = null; _playingSeq = null; });
   }
 

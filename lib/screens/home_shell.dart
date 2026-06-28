@@ -24,6 +24,7 @@ import 'admin/admin_pending_bills_screen.dart';
 import 'admin/admin_alert_overlay.dart';
 import 'admin/admin_shell.dart';
 import '../features/whatsapp/ui/wa_home_screen.dart';
+import '../features/bags/bags_screen.dart';
 import 'admin/admin_supplier_screen.dart';
 import 'admin/admin_fulfillment_screen.dart';
 import 'admin/admin_upi_screen.dart';
@@ -965,6 +966,15 @@ class _MobileProfileAvatar extends StatelessWidget {
               icon: Icons.delivery_dining_outlined,
               label: 'Delivery Partners',
               onTap: () { Navigator.pop(context); nav('delivery_partners'); },
+            ),
+            _SheetTile(
+              icon: Icons.qr_code_2,
+              label: 'Bags',
+              onTap: () {
+                RenderLog.write('c250_bags_menu', 'tapped');
+                Navigator.pop(context);
+                Navigator.push(context, MaterialPageRoute(builder: (_) => const BagsScreen()));
+              },
             ),
             const Divider(),
             _SheetTile(

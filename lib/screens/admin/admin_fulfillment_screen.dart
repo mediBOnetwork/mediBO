@@ -8092,7 +8092,6 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
   // ── #187: Realtime channels ───────────────────────────────────────────────
   final List<RealtimeChannel> _rtChannels = [];
   Timer? _collectDebounce;
-  Timer? _packDebounce;
   Timer? _disputeDebounce;
 
   void _scheduleCollectReload() {
@@ -8101,14 +8100,6 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
       if (!mounted) return;
       _collectKey.currentState?._loadSuppliers();
       _collectKey.currentState?._loadCollectModes();
-    });
-  }
-
-  void _schedulePackReload() {
-    _packDebounce?.cancel();
-    _packDebounce = Timer(const Duration(milliseconds: 400), () {
-      if (!mounted) return;
-      _packKey.currentState?._load();
     });
   }
 
@@ -8144,7 +8135,6 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
     }
 
     addChannel('fulfill_collect_187',   ['order_items'],                               _scheduleCollectReload);
-    addChannel('fulfill_pack_187',      ['orders', 'order_items'],                     _schedulePackReload);
     addChannel('fulfill_disputes_188',  ['supplier_disputes', 'order_items'],          () {
       RenderLog.write('c188_realtime_subscribed', 'supplier_disputes+order_items');
       _scheduleDisputeReload();
@@ -8175,9 +8165,9 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
   void _setDisputeCount(int n) {
     if (mounted && n != _disputeCount) setState(() => _disputeCount = n);
   }
-  // #132B: open Disputes tab from item popup "View dispute".
+  // #132B: open Disputes tab from item popup "View dispute". (#250: was 3, now 2)
   void _openDisputesTab() {
-    if (mounted) setState(() => _tab = 3);
+    if (mounted) setState(() => _tab = 2);
   }
 
   // C174/B6+B15: single refresh point — call after any dispute-state-changing action.
@@ -8187,7 +8177,6 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
     RenderLog.write('c174_dispute_refresh', 'load_disputes=true;disputes_tab_reloaded=true');
   }
   final _arrivalsKey = GlobalKey<_ArrivalsScreenState>();
-  final _packKey     = GlobalKey<_PackScreenState>();
 
   @override
   void initState() {
@@ -8205,7 +8194,6 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed && mounted) {
       _scheduleCollectReload();
-      _schedulePackReload();
       _scheduleDisputeReload();
       _arrivalsKey.currentState?.refresh();
     }
@@ -8215,7 +8203,6 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _collectDebounce?.cancel();
-    _packDebounce?.cancel();
     _disputeDebounce?.cancel();
     for (final ch in _rtChannels) {
       try { Supabase.instance.client.removeChannel(ch); } catch (_) {}
@@ -8262,15 +8249,10 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
                 });
               }),
               const SizedBox(width: 6),
-              _TabBtn('Pack', _tab == 2, () {
-                setState(() => _tab = 2);
-                _schedulePackReload();
-              }),
-              const SizedBox(width: 6),
-              // #132C: Disputes tab with open-count badge
+              // #132C: Disputes tab with open-count badge (#250: Pack removed, Disputes is now index 2)
               Stack(clipBehavior: Clip.none, children: [
-                _TabBtn('Disputes', _tab == 3, () {
-                  setState(() => _tab = 3);
+                _TabBtn('Disputes', _tab == 2, () {
+                  setState(() => _tab = 2);
                   WidgetsBinding.instance.addPostFrameCallback((_) {
                     _disputesKey.currentState?._load();
                   });
@@ -8297,16 +8279,18 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
         ]),
       ),
       Expanded(
-        child: IndexedStack(
-          index: _tab,
-          children: [
-            _PickToLightScreen(key: _collectKey),
-            _ArrivalsScreen(key: _arrivalsKey, onVoiceCount: _openVoiceInCollect),
-            _PackScreen(key: _packKey),
-            _DisputesScreen(key: _disputesKey, onCountChanged: _setDisputeCount,
-                onRefreshCollect: _refreshCollect, onRefreshArrivals: _refreshArrivals),
-          ],
-        ),
+        child: Builder(builder: (context) {
+          RenderLog.write('c250_pack_removed', '3tabs=SupplierShop,Warehouse,Disputes');
+          return IndexedStack(
+            index: _tab,
+            children: [
+              _PickToLightScreen(key: _collectKey),
+              _ArrivalsScreen(key: _arrivalsKey, onVoiceCount: _openVoiceInCollect),
+              _DisputesScreen(key: _disputesKey, onCountChanged: _setDisputeCount,
+                  onRefreshCollect: _refreshCollect, onRefreshArrivals: _refreshArrivals),
+            ],
+          );
+        }),
       ),
     ]);
   }

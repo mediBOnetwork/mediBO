@@ -424,6 +424,8 @@ class _AppRootState extends State<_AppRoot> {
                 'change:238,service_worker:disabled,sw_unregister_on_load:true,network_first:true'); } catch (_) {}
             try { RenderLog.write('c239_sw_killed',
                 'change:239,sw_file_deleted:true,no_registration:true'); } catch (_) {}
+            try { RenderLog.write('c240_killsw_restored',
+                'change:240,killsw_served:true,self_unregister:true,bootstrap_sw_null:true'); } catch (_) {}
           });
         }
         return const HomeShell();

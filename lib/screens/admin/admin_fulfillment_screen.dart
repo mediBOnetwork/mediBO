@@ -27,6 +27,8 @@ import 'voice_receive.dart';
 import '../../widgets/pinned_footer_list.dart';
 import '../../widgets/fulfill_item_sheet.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:image/image.dart' as img;
+import 'package:zxing2/qrcode.dart';
 
 // #93: JS interop — mediboCheckLoudness is defined in web/index.html
 @JS('mediboCheckLoudness')
@@ -223,33 +225,56 @@ class _StepBtn extends StatelessWidget {
 
 // ── _BagScannerDialog — camera QR scan + gallery upload ──────────────────────
 
-// JS interop for ZXing QR decode from image URL on web.
-// ZXing is already loaded by mobile_scanner's camera widget on web (no extra script needed).
-// analyzeImage() throws UnsupportedError on web in mobile_scanner 5.2.3, so we use this instead.
-@JS('ZXing.BrowserMultiFormatReader')
-extension type _ZXingBrowserReader._(JSObject _) implements JSObject {
-  external factory _ZXingBrowserReader(JSAny? hints, int timeBetweenScansMillis);
-  external JSPromise<JSObject> decodeFromImageUrl(JSString imageUrl);
-}
-
-// Extension type to read .text from a ZXing Result JSObject.
-extension type _ZXingResult._(JSObject _) implements JSObject {
-  external String? get text;
-}
-
-// Shared QR decode helper: FilePicker bytes → blob URL → ZXing JS → code string or null.
+// Shared QR decode helper: FilePicker bytes → pure-Dart zxing2 → code string or null.
 // Used by both _BagScannerDialog and _ChangeBagScanner.
+// ZXing JS blob-URL approach (CHANGE #259) failed on clean QR images in PWA context.
 Future<String?> _decodeQrFromBytesWeb(Uint8List bytes) async {
-  final blob = html.Blob([bytes], 'image/jpeg');
-  final url = html.Url.createObjectUrlFromBlob(blob);
   try {
-    final reader = _ZXingBrowserReader(null, 300);
-    final jsResult = await reader.decodeFromImageUrl(url.toJS).toDart;
-    return (_ZXingResult._(jsResult)).text;
-  } catch (_) {
+    img.Image? image = img.decodeImage(bytes);
+    if (image == null) {
+      RenderLog.write('c260_decode_fail', 'img_decode_null');
+      return null;
+    }
+    // Downscale large images to ≤1000px for performance
+    if (image.width > 1000 || image.height > 1000) {
+      image = img.copyResize(image, width: image.width > image.height ? 1000 : -1,
+          height: image.width <= image.height ? 1000 : -1);
+    }
+    final w = image.width;
+    final h = image.height;
+    // Build ARGB Int32List expected by RGBLuminanceSource
+    final pixels = Int32List(w * h);
+    for (int y = 0; y < h; y++) {
+      for (int x = 0; x < w; x++) {
+        final px = image.getPixel(x, y);
+        final r = px.r.toInt();
+        final g = px.g.toInt();
+        final b = px.b.toInt();
+        pixels[y * w + x] = (0xFF << 24) | (r << 16) | (g << 8) | b;
+      }
+    }
+    final source = RGBLuminanceSource(w, h, pixels);
+    final bitmap = BinaryBitmap(HybridBinarizer(source));
+    try {
+      final result = QRCodeReader().decode(bitmap);
+      RenderLog.write('c260_decode_ok', 'code=${result.text}');
+      return result.text;
+    } catch (_) {
+      // Retry with tryHarder hint
+      try {
+        final hints = DecodeHints();
+        hints.put(DecodeHintType.tryHarder);
+        final result = QRCodeReader().decode(bitmap, hints: hints);
+        RenderLog.write('c260_decode_ok', 'harder;code=${result.text}');
+        return result.text;
+      } catch (_) {
+        RenderLog.write('c260_decode_fail', 'no_qr_found');
+        return null;
+      }
+    }
+  } catch (e) {
+    RenderLog.write('c260_decode_fail', 'exception;$e');
     return null;
-  } finally {
-    html.Url.revokeObjectUrl(url);
   }
 }
 
@@ -4248,6 +4273,19 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                 Text(merged.packType.isNotEmpty ? merged.packType : '—',
                     style: const TextStyle(fontSize: 11, color: _kSub),
                     maxLines: 1, overflow: TextOverflow.ellipsis),
+                // #260: per-bag breakdown (Arrivals only, mobile tile)
+                if (widget.arrivals && merged.bagBreakdown != null && merged.bagBreakdown!.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Builder(builder: (_) {
+                    final bd = merged.bagBreakdown!
+                        .map((b) => '${b['bag_no']}:${(b['qty'] as num).toInt().toString().padLeft(2, '0')}')
+                        .join(', ');
+                    RenderLog.write('c260_breakdown_painted', 'mobile;prod=${merged.productId};bags=$bd');
+                    return Text(bd,
+                        style: const TextStyle(fontSize: 10, color: Color(0xFF065F46)),
+                        maxLines: 2, overflow: TextOverflow.ellipsis);
+                  }),
+                ],
                 // #203: proof thumbnail from dispute
                 if (disputeItem != null && (disputeItem.proofUrl ?? '').isNotEmpty) ...[
                   const SizedBox(height: 4),
@@ -4971,7 +5009,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                                     final bd = mp.bagBreakdown!
                                         .map((b) => '${b['bag_no']}:${(b['qty'] as num).toInt().toString().padLeft(2, '0')}')
                                         .join(' ');
-                                    RenderLog.write('c254_breakdown_ok', 'desktop;bags=$bd');
+                                    RenderLog.write('c260_breakdown_painted', 'desktop;bags=$bd');
                                     return Text(bd,
                                         style: const TextStyle(fontSize: 11, color: Color(0xFF065F46)),
                                         maxLines: 1, overflow: TextOverflow.ellipsis);

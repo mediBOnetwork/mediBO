@@ -11,6 +11,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'app_state.dart';
 import 'url_sync_web.dart' show captureInitialPath;
+import 'services/version_watcher.dart';
 import 'utils/render_log.dart';
 import 'view_as_state.dart';
 import 'models/cart_model.dart';
@@ -304,6 +305,7 @@ class _PharmaB2BAppState extends State<PharmaB2BApp> {
           child: MaterialApp(
             title: 'mediBO',
             debugShowCheckedModeBanner: false,
+            scaffoldMessengerKey: VersionWatcher.instance.messengerKey,
             theme: buildTheme(),
             scrollBehavior: const SmoothScrollBehavior(),
             // Belt-and-suspenders: clear any stray text decoration on Flutter web.
@@ -416,7 +418,7 @@ class _AppRootState extends State<_AppRoot> {
         // that the app successfully rendered its first content screen.
         if (!_didWriteBootSuccess) {
           _didWriteBootSuccess = true;
-          WidgetsBinding.instance.addPostFrameCallback((_) {
+          WidgetsBinding.instance.addPostFrameCallback((_) async {
             try { RenderLog.write('boot_status', 'painted'); } catch (_) {}
             try { RenderLog.write('c237_cache_bust',
                 'change:237,no_cache_headers:true,sw_kill_script:true,sw_reload_guard:true'); } catch (_) {}
@@ -426,6 +428,12 @@ class _AppRootState extends State<_AppRoot> {
                 'change:239,sw_file_deleted:true,no_registration:true'); } catch (_) {}
             try { RenderLog.write('c240_killsw_restored',
                 'change:240,killsw_served:true,self_unregister:true,bootstrap_sw_null:true'); } catch (_) {}
+            try { RenderLog.write('c241_autoupdate',
+                'change:241,version_watcher:enabled,poll_interval:45s'); } catch (_) {}
+            try {
+              await VersionWatcher.instance.init();
+              VersionWatcher.instance.start();
+            } catch (_) {}
           });
         }
         return const HomeShell();

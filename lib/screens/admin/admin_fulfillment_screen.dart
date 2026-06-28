@@ -4423,13 +4423,13 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       disputeItem ??= _disputeItemMap[oiid];
       openDispute ??= _disputeMap[oiid];
     }
-    // #198: arrival status (Arrivals mode only)
+    // #265: arrival sub-line removed from Warehouse rows — "Arrival pending"/"Arrived"
+    // is misleading for items already being counted. Disputes tab uses its own renderer.
     final surface = widget.arrivals ? 'arrivals' : 'collect';
-    final showArrivalLine = widget.arrivals;
-    final arrivalLabel = merged.hasArrived ? 'Arrived' : 'Arrival pending';
 
     RenderLog.write('c196_collect_card_layout_v2', 'surface=$surface');
     RenderLog.write('c198_card_layout_v3', 'surface=$surface');
+    if (widget.arrivals) RenderLog.write('c265_warehouse_no_arrival', 'prod=${merged.productId}');
 
     return GestureDetector(
       onTap: (widget.arrivals && _arrivalsLocked) ? null : () => _showProductSheet(merged),
@@ -4534,25 +4534,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
               const SizedBox(height: 3),
               // line 2: receive status pill
               _StatePill(state),
-              // line 3: arrival status (Arrivals page only)
-              if (showArrivalLine) ...[
-                const SizedBox(height: 3),
-                Builder(builder: (_) {
-                  RenderLog.write('c198_arrival_line_shown',
-                      'arrived=${merged.hasArrived};label=$arrivalLabel');
-                  return Text(
-                    arrivalLabel,
-                    style: TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w500,
-                      color: merged.hasArrived ? _kReceivedFg : _kPendingFg,
-                    ),
-                    textAlign: TextAlign.end,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  );
-                }),
-              ],
+              // #265: arrival status line removed — "Arrival pending"/"Arrived" not shown on Warehouse rows
               // line 4: awaiting dispute badge — ACTIVE disputes only (#199)
               if (disputeItem != null && disputeItem.isActive) ...[
                 const SizedBox(height: 3),

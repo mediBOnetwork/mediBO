@@ -430,6 +430,8 @@ class _AppRootState extends State<_AppRoot> {
                 'change:240,killsw_served:true,self_unregister:true,bootstrap_sw_null:true'); } catch (_) {}
             try { RenderLog.write('c241_autoupdate',
                 'change:241,version_watcher:enabled,poll_interval:45s'); } catch (_) {}
+            try { RenderLog.write('c245_ordercode_sites', '5'); } catch (_) {}
+            try { RenderLog.write('c245_orders_query_patched', '0'); } catch (_) {}
             try {
               await VersionWatcher.instance.init();
               VersionWatcher.instance.start();

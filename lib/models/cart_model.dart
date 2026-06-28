@@ -10,6 +10,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'product.dart';
 import '../util.dart';
+import '../utils/order_code.dart';
 import '../utils/render_log.dart';
 
 /// A single line in the cart: a product plus the ordered quantity (packs).
@@ -367,7 +368,7 @@ class CartModel extends ChangeNotifier {
         final rawStatus = (row['status'] as String?) ?? 'pending';
         final status = rawStatus[0].toUpperCase() + rawStatus.substring(1);
         loaded.add(Order(
-          number: (row['payment_id'] as String?) ?? (row['id'] as String),
+          number: orderDisplayId(row),
           placedAt: DateTime.parse(row['created_at'] as String),
           lines: lines,
           grandTotal: total,
@@ -870,7 +871,7 @@ class CartModel extends ChangeNotifier {
     final orderLines =
         _lines.values.map((l) => CartLine(l.product, l.quantity)).toList();
     final order = Order(
-      number: 'PO-${_orderSeq++}',
+      number: orderDisplayId({'id': 'seq${_orderSeq++}', 'created_at': DateTime.now().toIso8601String()}),
       placedAt: DateTime.now(),
       lines: orderLines,
       grandTotal: grandTotal,

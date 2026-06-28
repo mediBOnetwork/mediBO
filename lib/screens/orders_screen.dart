@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../util.dart';
+import '../utils/order_code.dart';
 import '../utils/render_log.dart';
 import '../widgets/animations.dart';
 
@@ -28,7 +29,6 @@ class _DbOrder {
 
   factory _DbOrder.fromRow(Map<String, dynamic> row) {
     final id = row['id'] as String;
-    final paymentId = (row['payment_id'] as String?) ?? '';
     final items = (row['items'] as List<dynamic>?) ?? [];
     final rawStatus = ((row['status'] as String?) ?? 'pending').trim();
     final status = rawStatus.isNotEmpty
@@ -36,7 +36,7 @@ class _DbOrder {
         : 'Pending';
     return _DbOrder(
       id: id,
-      number: paymentId.isNotEmpty ? paymentId : '—',
+      number: orderDisplayId(row),
       placedAt: DateTime.parse(row['created_at'] as String).toLocal(),
       lines: items
           .map((item) => _DbLine.fromJson(item as Map<String, dynamic>))

@@ -13,6 +13,7 @@ import 'package:pharma_b2b/utils/toast.dart';
 
 import '../../config/api_keys.dart';
 import '../../util.dart';
+import '../../utils/order_code.dart';
 import '../../utils/render_log.dart';
 import '../bulk_upload_screen.dart';
 import '../../services/payment_claims_service.dart';
@@ -458,7 +459,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
           phone:         _phone(up, pp, mo),
           source:        mo['source'] as String? ?? 'website',
           orderId:       mo['id'] as String?,
-          orderNumber:   mo['payment_id'] as String?,
+          orderNumber:   orderDisplayId(mo),
           orderStatus:   mo['status'] as String? ?? 'unknown',
           items:         _parseItems(mo['items']),
           total:         (mo['total_amount'] as num?)?.toDouble(),

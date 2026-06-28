@@ -223,6 +223,20 @@ class _StepBtn extends StatelessWidget {
   }
 }
 
+// ── Bag breakdown formatter ───────────────────────────────────────────────────
+// #261: format "B{bag}:{qty}{packInitial}" e.g. "B1:07P", "B38:05S"
+String _fmtBreakdown(List? bd, String? packType) {
+  if (bd == null || bd.isEmpty) return '';
+  final pl = (packType ?? '').trim().isNotEmpty
+      ? packType!.trim()[0].toUpperCase()
+      : '';
+  final sorted = List.from(bd)
+    ..sort((a, b) => (a['bag_no'] as num).compareTo(b['bag_no'] as num));
+  return sorted
+      .map((e) => 'B${e['bag_no']}:${(e['qty'] as num).toInt().toString().padLeft(2, '0')}$pl')
+      .join(', ');
+}
+
 // ── _BagScannerDialog — camera QR scan + gallery upload ──────────────────────
 
 // Shared QR decode helper: FilePicker bytes → pure-Dart zxing2 → code string or null.
@@ -467,13 +481,19 @@ enum _CBStep { needOld, detaching, needNew, attaching, done }
 class _ChangeBagScanner extends StatefulWidget {
   final String supplier;
   final Map<String, dynamic> currentBag;
-  const _ChangeBagScanner({required this.supplier, required this.currentBag});
+  // #261: allow reopening into need_new when old bag was already detached
+  final _CBStep initialStep;
+  const _ChangeBagScanner({
+    required this.supplier,
+    required this.currentBag,
+    this.initialStep = _CBStep.needOld,
+  });
   @override State<_ChangeBagScanner> createState() => _ChangeBagScannerState();
 }
 
 class _ChangeBagScannerState extends State<_ChangeBagScanner> {
   late final MobileScannerController _ctrl;
-  _CBStep _step = _CBStep.needOld;
+  late _CBStep _step;
   bool _detected = false;
   bool _busy = false;
   String? _error;
@@ -488,8 +508,10 @@ class _ChangeBagScannerState extends State<_ChangeBagScanner> {
   @override
   void initState() {
     super.initState();
+    _step = widget.initialStep;
     _ctrl = MobileScannerController(detectionSpeed: DetectionSpeed.noDuplicates);
-    RenderLog.write('c259_changebag_one_screen', 'init;bag=${widget.currentBag['bag_no']}');
+    RenderLog.write('c259_changebag_one_screen',
+        'init;bag=${widget.currentBag['bag_no']};initialStep=${widget.initialStep.name}');
   }
 
   @override
@@ -655,7 +677,17 @@ class _ChangeBagScannerState extends State<_ChangeBagScanner> {
               const Expanded(child: Text('Change Bag',
                   style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _kText))),
               IconButton(
-                onPressed: _busy ? null : () => Navigator.of(context).pop(null),
+                onPressed: _busy ? null : () {
+                  // #261: if old bag was already detached, emit partial so parent saves progress
+                  if (_step == _CBStep.needNew || _step == _CBStep.attaching) {
+                    Navigator.of(context).pop({
+                      '_partial': true,
+                      'old_bag_no': widget.currentBag['bag_no'],
+                    });
+                  } else {
+                    Navigator.of(context).pop(null);
+                  }
+                },
                 icon: const Icon(Icons.close_rounded, size: 20, color: _kSub),
               ),
             ]),
@@ -806,6 +838,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // #253: active bag for warehouse counting
   // F6: per-supplier bag map so bag state survives supplier switches.
   final Map<String, Map<String, dynamic>?> _activeBagBySupplier = {};
+  // #261: change-bag progress — keyed by supplier, value = old bag that was detached.
+  // Cleared on attach success. Allows reopen to restore "scan new bag" step.
+  final Map<String, Map<String, dynamic>> _changeProgressBySupplier = {};
   Map<String, dynamic>? get _activeBag => _activeBagBySupplier[_selectedSupplier ?? ''];
   set _activeBag(Map<String, dynamic>? v) {
     final s = _selectedSupplier ?? '';
@@ -2482,22 +2517,57 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // #258 BUG3: Change-bag — single color-coded 2-step modal (old=RED→GREEN, new=GREY→RED→GREEN).
   Future<void> _changeActiveBag() async {
     final supplier = _selectedSupplier;
+    if (supplier == null) return;
+
+    // #261: restore step from saved progress if old bag was already detached in a prior open
+    final savedProgress = _changeProgressBySupplier[supplier];
     final currentBag = _activeBag;
-    if (supplier == null || currentBag == null) return;
-    RenderLog.write('c258_changebag_step', 'open;supplier=$supplier;bag=${currentBag['bag_no']}');
-    final newBag = await showDialog<Map<String, dynamic>>(
+
+    _CBStep initialStep;
+    Map<String, dynamic> bagForModal;
+
+    if (currentBag != null) {
+      // Normal start: active bag present → scan old first
+      initialStep = _CBStep.needOld;
+      bagForModal = currentBag;
+    } else if (savedProgress != null) {
+      // Reopen after prior detach: skip to scan-new step
+      initialStep = _CBStep.needNew;
+      bagForModal = savedProgress;
+      RenderLog.write('c261_changebag_reopen',
+          'supplier=$supplier;old_bag=${savedProgress['bag_no']};step=need_new');
+    } else {
+      return; // no active bag and no in-progress change — nothing to do
+    }
+
+    RenderLog.write('c258_changebag_step',
+        'open;supplier=$supplier;bag=${bagForModal['bag_no']};initialStep=${initialStep.name}');
+
+    final result = await showDialog<Map<String, dynamic>>(
       context: context,
-      builder: (_) => _ChangeBagScanner(supplier: supplier, currentBag: currentBag),
+      builder: (_) => _ChangeBagScanner(
+        supplier: supplier,
+        currentBag: bagForModal,
+        initialStep: initialStep,
+      ),
     );
     if (!mounted) return;
-    if (newBag != null) {
-      setState(() => _activeBag = newBag);
-      await _reloadItemsFromDB();
-    } else {
-      // Dialog closed without completing — if old bag was detached, clear it.
-      // Re-read state from DB to stay in sync.
-      await _reloadItemsFromDB();
+
+    if (result != null && result['_partial'] == true) {
+      // Old bag detached, modal closed before new bag scanned — save progress
+      setState(() {
+        _activeBag = null;
+        _changeProgressBySupplier[supplier] = {'bag_no': result['old_bag_no']};
+      });
+    } else if (result != null && result['_partial'] != true) {
+      // Attach succeeded — clear progress and update active bag
+      setState(() {
+        _activeBag = result;
+        _changeProgressBySupplier.remove(supplier);
+      });
     }
+    // null return: modal closed with no action taken
+    await _reloadItemsFromDB();
   }
 
   // Shared attach logic — calls bag_attach, normalizes result, updates state.
@@ -2566,6 +2636,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       );
     }
     final bagNo = bag['bag_no'];
+    RenderLog.write('c261_bar_in_use', 'bag=$bagNo;in_use=true;yellow_pill=true;no_x=true');
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
       child: Container(
@@ -2579,25 +2650,27 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           const Icon(Icons.shopping_bag_outlined, size: 18, color: Color(0xFF065F46)),
           const SizedBox(width: 8),
           Expanded(
-            child: Text('Bag $bagNo active',
+            child: Text('Bag $bagNo in Use',
                 style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
                     color: Color(0xFF065F46))),
           ),
-          TextButton(
-            onPressed: _changeActiveBag,
-            style: TextButton.styleFrom(
-              foregroundColor: _kGreen,
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              minimumSize: Size.zero,
+          // #261: yellow pill "Change Bag" button; X removed
+          GestureDetector(
+            onTap: _changeActiveBag,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFC107),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                Icon(Icons.swap_horiz_rounded, size: 16, color: Color(0xFF5D4037)),
+                SizedBox(width: 4),
+                Text('Change Bag',
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700,
+                        color: Color(0xFF5D4037))),
+              ]),
             ),
-            child: const Text('Change', style: TextStyle(fontSize: 12)),
-          ),
-          const SizedBox(width: 4),
-          IconButton(
-            onPressed: _detachBag,
-            icon: const Icon(Icons.close_rounded, size: 16, color: Color(0xFF065F46)),
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
           ),
         ]),
       ),
@@ -4273,14 +4346,12 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                 Text(merged.packType.isNotEmpty ? merged.packType : '—',
                     style: const TextStyle(fontSize: 11, color: _kSub),
                     maxLines: 1, overflow: TextOverflow.ellipsis),
-                // #260: per-bag breakdown (Arrivals only, mobile tile)
+                // #261: per-bag breakdown (Arrivals only, mobile tile) — B#:##P format
                 if (widget.arrivals && merged.bagBreakdown != null && merged.bagBreakdown!.isNotEmpty) ...[
                   const SizedBox(height: 2),
                   Builder(builder: (_) {
-                    final bd = merged.bagBreakdown!
-                        .map((b) => '${b['bag_no']}:${(b['qty'] as num).toInt().toString().padLeft(2, '0')}')
-                        .join(', ');
-                    RenderLog.write('c260_breakdown_painted', 'mobile;prod=${merged.productId};bags=$bd');
+                    final bd = _fmtBreakdown(merged.bagBreakdown, merged.packType);
+                    RenderLog.write('c261_breakdown_fmt', 'mobile;prod=${merged.productId};bd=$bd');
                     return Text(bd,
                         style: const TextStyle(fontSize: 10, color: Color(0xFF065F46)),
                         maxLines: 2, overflow: TextOverflow.ellipsis);
@@ -4442,6 +4513,17 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           if (res['error'] != null) return _bagCountError(res);
           return null;
         } catch (e) { return 'Count error: $e'; }
+      } : null,
+      // #261: clear breakdown on undo — calls bag_count_clear then reloads
+      bagCountClearFn: widget.arrivals ? (pid) async {
+        try {
+          await Supabase.instance.client.rpc('bag_count_clear', params: {
+            'p_supplier_name': supplier,
+            'p_product_id': pid,
+            'p_bag_no': null,
+          });
+        } catch (_) {}
+        _reloadItemsFromDB();
       } : null,
       onReload: _reloadItemsFromDB,
     );
@@ -5002,14 +5084,12 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                                 Text(mp.productName,
                                     style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _kText),
                                     maxLines: 1, overflow: TextOverflow.ellipsis),
-                                // #254: bag breakdown (Arrivals only, desktop)
+                                // #261: bag breakdown (Arrivals only, desktop) — B#:##P format
                                 if (widget.arrivals && mp.bagBreakdown != null && mp.bagBreakdown!.isNotEmpty) ...[
                                   const SizedBox(height: 2),
                                   Builder(builder: (_) {
-                                    final bd = mp.bagBreakdown!
-                                        .map((b) => '${b['bag_no']}:${(b['qty'] as num).toInt().toString().padLeft(2, '0')}')
-                                        .join(' ');
-                                    RenderLog.write('c260_breakdown_painted', 'desktop;bags=$bd');
+                                    final bd = _fmtBreakdown(mp.bagBreakdown, mp.packType);
+                                    RenderLog.write('c261_breakdown_fmt', 'desktop;prod=${mp.productId};bd=$bd');
                                     return Text(bd,
                                         style: const TextStyle(fontSize: 11, color: Color(0xFF065F46)),
                                         maxLines: 1, overflow: TextOverflow.ellipsis);
@@ -7799,6 +7879,8 @@ class _ProductReceiveSheet extends StatefulWidget {
   // #258 BUG4: arrivals mode — "Got all" calls bag_count_set instead of fw_product_action.
   final bool arrivals;
   final Future<String?> Function(int productId, double qty)? bagCountFn;
+  // #261: undo clears bag breakdown — called by snackbar UNDO handler
+  final Future<void> Function(int productId)? bagCountClearFn;
   final VoidCallback? onReload;
 
   const _ProductReceiveSheet({
@@ -7813,6 +7895,7 @@ class _ProductReceiveSheet extends StatefulWidget {
     this.existingDispute,
     this.arrivals = false,
     this.bagCountFn,
+    this.bagCountClearFn,
     this.onReload,
   });
 
@@ -7977,6 +8060,21 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
         }
         RenderLog.write('c258_bag_count', 'got_all;product=${widget.productId};qty=$_orderedTotal');
         setState(() { _localState = 'received'; _localReceived = _orderedTotal; _confirmingSimple = false; });
+        // #261: show UNDO snackbar (before pop) so undo can clear the breakdown immediately
+        final sup = widget.supplierName;
+        final pid = widget.productId;
+        final clearFn = widget.bagCountClearFn;
+        final reloadFn = widget.onReload;
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Got all ${_orderedTotal}$_unitLabel — marked received'),
+          action: SnackBarAction(label: 'UNDO', onPressed: () async {
+            await Supabase.instance.client.rpc('fw_product_undo',
+                params: {'p_supplier_name': sup, 'p_product_id': pid});
+            if (clearFn != null) await clearFn(pid);
+            RenderLog.write('c261_undo_cleared', 'product=$pid;supplier=$sup');
+            reloadFn?.call();
+          }),
+        ));
         widget.onReload?.call();
         if (mounted) Navigator.of(context).pop();
         return;

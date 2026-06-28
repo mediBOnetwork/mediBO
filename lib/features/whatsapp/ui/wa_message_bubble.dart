@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
+import 'package:pharma_b2b/utils/wa_markdown.dart';
 import '../data/wa_repository.dart';
 import '../models/wa_message.dart';
 
@@ -235,23 +236,54 @@ class _WaMessageBubbleState extends State<WaMessageBubble> {
       );
     }
 
+    // ── CHANGE #247: WA markdown rendering ───────────────────────────────────
+    const bodyStyle = TextStyle(fontSize: 14, color: textColor, height: 1.4);
+    const captionStyle = TextStyle(fontSize: 13, color: Color(0xFF374151), height: 1.4);
+
+    final bodyText = msg.text ?? '';
+    final captionText = msg.caption ?? '';
+    final hasBodyText = bodyText.isNotEmpty;
+    final hasCaptionText = captionText.isNotEmpty;
+
+    final bodySpans = hasBodyText ? WaMarkdown.spans(bodyText, bodyStyle) : <TextSpan>[];
+    final captionSpans = hasCaptionText ? WaMarkdown.spans(captionText, captionStyle) : <TextSpan>[];
+
+    // Determine if any markdown was actually parsed (span count > 1 means markdown present).
+    final hasMarkdown = bodySpans.length > 1 || captionSpans.length > 1;
+
+    // Image-above-text logging.
+    final isImage = type == 'image' || (msg.hasMedia && msg.mediaKind == 'image');
+    if (isImage && body != null) {
+      if (hasBodyText || hasCaptionText) {
+        RenderLog.write('c247_img_above_text', 'img+text');
+      } else {
+        RenderLog.write('c247_img_only', 'img_only');
+      }
+    }
+    if (hasMarkdown) {
+      final cnt = bodySpans.length + captionSpans.length;
+      RenderLog.write('c247_md_render', 'spans=$cnt');
+    } else if (!isImage && body == null) {
+      RenderLog.write('c247_plain', '1');
+    }
+
+    Widget _richText(List<TextSpan> spans) => RichText(
+          text: TextSpan(children: spans),
+        );
+
     final bubbleContent = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
         if (body != null) body,
-        if (msg.text != null && msg.text!.isNotEmpty)
-          Text(
-            msg.text!,
-            style: const TextStyle(fontSize: 14, color: textColor, height: 1.4),
-          ),
-        if (msg.caption != null && msg.caption!.isNotEmpty)
+        if (hasBodyText) ...[
+          if (body != null) const SizedBox(height: 6),
+          _richText(bodySpans),
+        ],
+        if (hasCaptionText)
           Padding(
             padding: const EdgeInsets.only(top: 4),
-            child: Text(
-              msg.caption!,
-              style: const TextStyle(fontSize: 13, color: Color(0xFF374151)),
-            ),
+            child: _richText(captionSpans),
           ),
         const SizedBox(height: 4),
         Row(

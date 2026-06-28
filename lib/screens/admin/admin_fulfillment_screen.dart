@@ -221,7 +221,21 @@ class _StepBtn extends StatelessWidget {
   }
 }
 
-// ── _BagScannerDialog — camera QR scan ────────────────────────────────────────
+// ── _BagScannerDialog — camera QR scan + gallery upload ──────────────────────
+
+// JS interop for ZXing QR decode from image URL on web.
+// ZXing is already loaded by mobile_scanner's camera widget on web (no extra script needed).
+// analyzeImage() throws UnsupportedError on web in mobile_scanner 5.2.3, so we use this instead.
+@JS('ZXing.BrowserMultiFormatReader')
+extension type _ZXingBrowserReader._(JSObject _) implements JSObject {
+  external factory _ZXingBrowserReader(JSAny? hints, int timeBetweenScansMillis);
+  external JSPromise<JSObject> decodeFromImageUrl(JSString imageUrl);
+}
+
+// Extension type to read .text from a ZXing Result JSObject.
+extension type _ZXingResult._(JSObject _) implements JSObject {
+  external String? get text;
+}
 
 // _BagScannerDialog — pops Navigator with the scanned code string (or null on cancel/error).
 // showDialog<String> callers read the return value directly; no callback needed.
@@ -257,29 +271,48 @@ class _BagScannerDialogState extends State<_BagScannerDialog> {
     super.dispose();
   }
 
-  // #256: Upload QR from gallery — decodes with analyzeImage (mobile only; web hides the button).
+  // #256/#257: Upload QR from gallery — works on ALL platforms including web/PWA.
+  // Web path: ZXing.BrowserMultiFormatReader.decodeFromImageUrl (loaded by mobile_scanner).
+  // Mobile path: MobileScannerController.analyzeImage.
   Future<void> _pickAndDecodeQr(BuildContext ctx) async {
     if (_detected) return;
-    RenderLog.write('c256_upload_qr', 'started');
+    RenderLog.write('c256_upload_qr', 'started;isWeb=$kIsWeb');
     try {
       final picker = ImagePicker();
       final XFile? file = await picker.pickImage(source: ImageSource.gallery);
       if (file == null) return;
-      final BarcodeCapture? result = await _ctrl.analyzeImage(file.path);
-      final codes = result?.barcodes ?? const [];
-      final v = codes.isNotEmpty ? codes.first.rawValue : null;
-      if (v == null || v.isEmpty) {
-        RenderLog.write('c256_upload_qr', 'no_qr_found');
+
+      String? code;
+      if (kIsWeb) {
+        // analyzeImage() throws UnsupportedError on web; use ZXing JS (already loaded by camera).
+        try {
+          final reader = _ZXingBrowserReader(null, 300);
+          final jsResult = await reader.decodeFromImageUrl(file.path.toJS).toDart;
+          code = (_ZXingResult._(jsResult)).text;
+        } catch (_) {
+          // ZXing throws NotFoundException when no barcode found — treat as null.
+          code = null;
+        }
+      } else {
+        final BarcodeCapture? capture = await _ctrl.analyzeImage(file.path);
+        code = (capture?.barcodes.isNotEmpty ?? false)
+            ? capture!.barcodes.first.rawValue
+            : null;
+      }
+
+      if (code == null || code.trim().isEmpty) {
+        RenderLog.write('c257_upload_decoded', 'fail;no_qr');
         if (ctx.mounted) {
           ScaffoldMessenger.of(ctx).showSnackBar(
-              const SnackBar(content: Text('No QR found in that image — try the live camera')));
+              const SnackBar(content: Text('No QR found in that image')));
         }
         return;
       }
       _detected = true;
       try { _ctrl.stop(); } catch (_) {}
-      RenderLog.write('c256_upload_qr', 'success;code=$v');
-      if (ctx.mounted && Navigator.of(ctx).canPop()) Navigator.of(ctx).pop(v);
+      RenderLog.write('c257_upload_decoded', 'ok');
+      RenderLog.write('c256_upload_qr', 'success');
+      if (ctx.mounted && Navigator.of(ctx).canPop()) Navigator.of(ctx).pop(code.trim());
     } catch (e) {
       RenderLog.write('c256_upload_qr', 'error;$e');
       if (ctx.mounted) {
@@ -311,7 +344,8 @@ class _BagScannerDialogState extends State<_BagScannerDialog> {
 
   @override
   Widget build(BuildContext context) {
-    RenderLog.write('c256_scanner_controls', 'upload_qr=${!kIsWeb};torch=true');
+    RenderLog.write('c256_scanner_controls', 'upload_qr=true;torch=true;isWeb=$kIsWeb');
+    RenderLog.write('c257_scanner_controls', 'buttons=2;upload=true;torch=true');
     return Dialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: SizedBox(
@@ -364,27 +398,30 @@ class _BagScannerDialogState extends State<_BagScannerDialog> {
                     }
                   },
                 ),
-                // #256: Bottom action bar — Upload QR (mobile only) + Torch toggle
+                // #256/#257: Bottom action bar — Upload QR (all platforms) + Torch.
+                // Upload QR uses ZXing JS interop on web (analyzeImage unsupported on web).
+                // No kIsWeb gate — PWA users need this too (kIsWeb == true on phone browsers).
                 Positioned(
                   bottom: 20, left: 0, right: 0,
-                  child: Builder(builder: (ctx) => Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      if (!kIsWeb) ...[
+                  child: Builder(builder: (ctx) {
+                    RenderLog.write('c257_upload_btn', 'rendered;isWeb=$kIsWeb');
+                    return Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
                         _scannerActionBtn(
                           icon: Icons.photo_library_outlined,
                           label: 'Upload QR',
                           onTap: () => _pickAndDecodeQr(ctx),
                         ),
                         const SizedBox(width: 40),
+                        _scannerActionBtn(
+                          icon: Icons.flashlight_on_outlined,
+                          label: 'Torch',
+                          onTap: () { try { _ctrl.toggleTorch(); } catch (_) {} },
+                        ),
                       ],
-                      _scannerActionBtn(
-                        icon: Icons.flashlight_on_outlined,
-                        label: 'Torch',
-                        onTap: () { try { _ctrl.toggleTorch(); } catch (_) {} },
-                      ),
-                    ],
-                  )),
+                    );
+                  }),
                 ),
               ]),
             ),

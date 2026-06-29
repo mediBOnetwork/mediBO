@@ -1961,7 +1961,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _recording = false);
-      _showSnack('Error: $e');
+      // CHANGE #276 — translate check_violation / no-bag backend rejections to friendly message
+      _showSnack(widget.arrivals ? _noBagFriendlyMessage(e) : 'Error: $e');
     }
   }
 
@@ -2582,7 +2583,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   String _bagCountError(Map m) {
     final code = m['error']?.toString() ?? '';
     switch (code) {
-      case 'no_bag_selected': return 'Scan a bag first before counting';
+      case 'no_bag_selected': return 'Count items into a bag first — scan a bag to begin.';
       case 'received_locked': return 'Already locked — cannot change count';
       case 'bad_qty': return 'Invalid quantity';
       case 'product_not_for_supplier': return 'Product not in this supplier\'s order';
@@ -2602,6 +2603,19 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         return 'Quantity exceeds ordered amount. Count not saved.';
       default: return code.isNotEmpty ? 'Count error: $code' : 'Unknown count error';
     }
+  }
+
+  // CHANGE #276 — friendly message for any backend check_violation / no-bag rejection
+  String _noBagFriendlyMessage(Object e) {
+    final s = e.toString().toLowerCase();
+    if (s.contains('no bag') || s.contains('bag total') || s.contains('check_violation') ||
+        s.contains('no_bag_selected') || s.contains('must equal')) {
+      RenderLog.write('c276_nobag_error_shown', 'error=${e.toString().substring(0, e.toString().length.clamp(0, 80))}');
+      return 'Count items into a bag first — scan a bag to begin.';
+    }
+    if (s.contains('supplier_confirmed')) return 'This supplier is already received.';
+    if (s.contains('bag_already_used_by_supplier')) return 'Bag was already used for this supplier — scan a different bag.';
+    return e.toString().substring(0, e.toString().length.clamp(0, 100));
   }
 
   // Attach a freshly scanned bag code to this supplier (initial attach — no existing bag).
@@ -4246,6 +4260,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     final countingDisabled = _agentPhase != AgentPhase.idle ||
         (widget.arrivals && _arrivalsLocked) || // #156: locked after confirm-all
         (widget.arrivals && _activeBag == null); // #253: must have active bag
+    // CHANGE #276 — log when counting is gated because no active bag
+    if (widget.arrivals && _activeBag == null && !_loadingBox && _selectedSupplier != null) {
+      RenderLog.write('c276_count_gated_no_bag', 'supplier=$_selectedSupplier');
+    }
     final agentDisabled = _voiceListening || _voiceProcessing;
     final agentPhase = _agentPhase;
     final bool agentBusy = agentPhase == AgentPhase.thinking || agentPhase == AgentPhase.speaking;
@@ -6147,6 +6165,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         onViewDispute: () {
           context.findAncestorStateOfType<_AdminFulfillmentScreenState>()?._openDisputesTab();
         },
+        arrivals: widget.arrivals, // CHANGE #276 — hides got-all in Warehouse
       );
     } catch (e) {
       final short = e.toString().substring(0, e.toString().length.clamp(0, 80));
@@ -8998,8 +9017,8 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
           const SizedBox(height: 12),
         ],
 
-        // Action: Got all (#200: hidden when fully received)
-        if (showGotAll && !anyPanelOpen) ...[
+        // Action: Got all — hidden in Warehouse arrivals (#276: count via voice+bag only)
+        if (showGotAll && !anyPanelOpen && !widget.arrivals) ...[
           SizedBox(
             width: double.infinity,
             child: _buildActionBtn(
@@ -9010,6 +9029,12 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
             ),
           ),
           const SizedBox(height: 8),
+        ],
+        if (widget.arrivals && !anyPanelOpen) ...[
+          Builder(builder: (_) {
+            RenderLog.write('c276_no_getall_warehouse', 'product_sheet;product=${widget.productId}');
+            return const SizedBox.shrink();
+          }),
         ],
 
         // Action: Report missing (#200: hidden when T == 1)

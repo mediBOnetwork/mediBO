@@ -47,6 +47,8 @@ Future<void> showFulfillItemSheet({
   required Future<void> Function(String state, {int? qty, String? note}) onRecord,
   required void Function(String itemId, Map<String, dynamic> dispute) onDisputeCreated,
   required void Function() onViewDispute,
+  // CHANGE #276 — Warehouse hides got-all/mark-received; all counting via voice+bag only
+  bool arrivals = false,
 }) {
   final isDesktop = MediaQuery.of(context).size.width >= 900;
 
@@ -67,6 +69,7 @@ Future<void> showFulfillItemSheet({
               onRecord: onRecord,
               onDisputeCreated: onDisputeCreated,
               onViewDispute: onViewDispute,
+              arrivals: arrivals,
             ),
           ),
         ),
@@ -97,6 +100,7 @@ Future<void> showFulfillItemSheet({
               onRecord: onRecord,
               onDisputeCreated: onDisputeCreated,
               onViewDispute: onViewDispute,
+              arrivals: arrivals,
             ),
           ],
         ),
@@ -115,6 +119,8 @@ class FulfillItemSheet extends StatefulWidget {
   final Future<void> Function(String state, {int? qty, String? note}) onRecord;
   final void Function(String itemId, Map<String, dynamic> dispute) onDisputeCreated;
   final void Function() onViewDispute;
+  // CHANGE #276 — Warehouse mode: hide got-all/mark-received; count via voice+bag only
+  final bool arrivals;
 
   const FulfillItemSheet({
     super.key,
@@ -125,6 +131,7 @@ class FulfillItemSheet extends StatefulWidget {
     required this.onRecord,
     required this.onDisputeCreated,
     required this.onViewDispute,
+    this.arrivals = false,
   });
 
   @override
@@ -954,19 +961,27 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
               return const SizedBox.shrink();
             }),
 
-            // Got all (N) — unchanged
-            _ActionRow(
-              label: 'Got all ($_ordQty)',
-              color: _kGreen,
-              icon: Icons.check_rounded,
-              filled: true,
-              loading: false,
-              onTap: widget.recording ? null : () async {
-                await _doRecord('received', qty: _ordQty);
-                if (mounted) Navigator.of(context).pop();
-              },
-            ),
-            const SizedBox(height: 8),
+            // Got all — hidden in Warehouse (arrivals); counting is via voice+bag only (#276)
+            if (!widget.arrivals) ...[
+              _ActionRow(
+                label: 'Got all ($_ordQty)',
+                color: _kGreen,
+                icon: Icons.check_rounded,
+                filled: true,
+                loading: false,
+                onTap: widget.recording ? null : () async {
+                  await _doRecord('received', qty: _ordQty);
+                  if (mounted) Navigator.of(context).pop();
+                },
+              ),
+              const SizedBox(height: 8),
+            ],
+            if (widget.arrivals) ...[
+              Builder(builder: (_) {
+                RenderLog.write('c276_no_getall_warehouse', 'arrivals_sheet;item=${widget.item['product_name'] ?? ''}');
+                return const SizedBox.shrink();
+              }),
+            ],
 
             // Report missing (#193 two-half, unchanged)
             if (!_showMissingInline)
@@ -1324,7 +1339,8 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
                 widget.onViewDispute();
               },
             ),
-            if (disputeStatus == 'accepted_missing') ...[
+            // Mark received — hidden in Warehouse (arrivals); count via voice+bag only (#276)
+            if (disputeStatus == 'accepted_missing' && !widget.arrivals) ...[
               const SizedBox(height: 8),
               _ActionRow(
                 label: 'Mark received (stock arrived)',

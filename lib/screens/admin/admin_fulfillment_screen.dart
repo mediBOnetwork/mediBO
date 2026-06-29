@@ -2760,34 +2760,39 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   Widget _buildBagControl() {
     final bag = _activeBag;
     final supplier = _selectedSupplier ?? '';
+    // CHANGE #274 — disable all bag scanning when supplier is fully confirmed/locked
+    final locked = _arrivalsLocked;
+
     // CHANGE #271 FIX: check intent FIRST, before active_bag.
-    // Previously midChange was nested inside `if (bag == null)` — if backend reload set
-    // _activeBag to non-null, the change-bag panel was invisible. Now intent wins.
     if (_changeBagPendingOldBag.containsKey(supplier)) {
       final oldBagNo = _changeBagPendingOldBag[supplier];
       RenderLog.write('c271_changebag_persist', 'rendered;supplier=$supplier;old_bag=$oldBagNo');
-      // CHANGE #272 — no Cancel: once detached the only exit is scanning a new bag.
       RenderLog.write('c272_no_cancel', 'bag_no=$oldBagNo');
+      if (locked) RenderLog.write('c274_scan_disabled_locked', 'supplier=$supplier;state=detached');
       return GestureDetector(
-        onTap: _openBagFlow,
+        onTap: locked ? null : _openBagFlow,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             decoration: BoxDecoration(
-              color: const Color(0xFFFEF3C7),
+              color: locked ? const Color(0xFFF3F4F6) : const Color(0xFFFEF3C7),
               borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: const Color(0xFFD97706).withValues(alpha: 0.5)),
+              border: Border.all(color: locked
+                  ? const Color(0xFFE5E7EB)
+                  : const Color(0xFFD97706).withValues(alpha: 0.5)),
             ),
             child: Row(children: [
-              const Icon(Icons.swap_horiz_rounded, size: 18, color: Color(0xFF92400E)),
+              Icon(Icons.swap_horiz_rounded, size: 18,
+                  color: locked ? const Color(0xFF9CA3AF) : const Color(0xFF92400E)),
               const SizedBox(width: 8),
               Expanded(
                 child: Text('Bag $oldBagNo detached — tap to scan new bag',
-                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
-                        color: Color(0xFF92400E))),
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
+                        color: locked ? const Color(0xFF9CA3AF) : const Color(0xFF92400E))),
               ),
-              const Icon(Icons.chevron_right_rounded, size: 18, color: Color(0xFF92400E)),
+              Icon(Icons.chevron_right_rounded, size: 18,
+                  color: locked ? const Color(0xFF9CA3AF) : const Color(0xFF92400E)),
             ]),
           ),
         ),
@@ -2795,15 +2800,16 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     }
 
     if (bag == null) {
+      if (locked) RenderLog.write('c274_scan_disabled_locked', 'supplier=$supplier;state=no_bag');
       return Padding(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
         child: OutlinedButton.icon(
-          onPressed: _openBagFlow,
+          onPressed: locked ? null : _openBagFlow,
           icon: const Icon(Icons.qr_code_scanner_rounded, size: 18),
           label: const Text('Scan bag to start counting'),
           style: OutlinedButton.styleFrom(
-            foregroundColor: _kGreen,
-            side: const BorderSide(color: _kGreen),
+            foregroundColor: locked ? const Color(0xFF9CA3AF) : _kGreen,
+            side: BorderSide(color: locked ? const Color(0xFFE5E7EB) : _kGreen),
             minimumSize: const Size.fromHeight(44),
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
           ),
@@ -2812,6 +2818,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     }
     final bagNo = bag['bag_no'];
     RenderLog.write('c261_bar_in_use', 'bag=$bagNo;in_use=true;yellow_pill=true;no_x=true');
+    if (locked) RenderLog.write('c274_scan_disabled_locked', 'supplier=$supplier;state=in_use');
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
       child: Container(
@@ -2829,21 +2836,22 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                 style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
                     color: Color(0xFF065F46))),
           ),
-          // #261: yellow pill "Change Bag" button; X removed; both buttons → _openBagFlow
+          // #261: yellow pill "Change Bag" button; disabled when locked (#274)
           GestureDetector(
-            onTap: _openBagFlow,
+            onTap: locked ? null : _openBagFlow,
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
               decoration: BoxDecoration(
-                color: const Color(0xFFFFC107),
+                color: locked ? const Color(0xFFE5E7EB) : const Color(0xFFFFC107),
                 borderRadius: BorderRadius.circular(20),
               ),
-              child: const Row(mainAxisSize: MainAxisSize.min, children: [
-                Icon(Icons.swap_horiz_rounded, size: 16, color: Color(0xFF5D4037)),
-                SizedBox(width: 4),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                Icon(Icons.swap_horiz_rounded, size: 16,
+                    color: locked ? const Color(0xFF9CA3AF) : const Color(0xFF5D4037)),
+                const SizedBox(width: 4),
                 Text('Change Bag',
                     style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700,
-                        color: Color(0xFF5D4037))),
+                        color: locked ? const Color(0xFF9CA3AF) : const Color(0xFF5D4037))),
               ]),
             ),
           ),
@@ -4541,6 +4549,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                     RenderLog.write('c261_breakdown_fmt', 'mobile;prod=${merged.productId};bd=$bd');
                     // CHANGE #269 — black-on-grey badge style
                     RenderLog.write('c269_bag_badge', 'mobile;$bd');
+                    // CHANGE #274 — confirm breakdown renders even after confirm-all (locked)
+                    if (_arrivalsLocked) RenderLog.write('c274_breakdown_after_lock', 'mobile;prod=${merged.productId};bd=$bd');
                     return Container(
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                       decoration: BoxDecoration(
@@ -8280,21 +8290,9 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
         }
         RenderLog.write('c258_bag_count', 'got_all;product=${widget.productId};qty=$_orderedTotal');
         setState(() { _localState = 'received'; _localReceived = _orderedTotal; _confirmingSimple = false; });
-        // #261: show UNDO snackbar (before pop) so undo can clear the breakdown immediately
-        final sup = widget.supplierName;
+        // CHANGE #274 — removed "Got all N — marked received" snackbar; per-item undo is in the card
         final pid = widget.productId;
-        final clearFn = widget.bagCountClearFn;
-        final reloadFn = widget.onReload;
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Got all ${_orderedTotal}$_unitLabel — marked received'),
-          action: SnackBarAction(label: 'UNDO', onPressed: () async {
-            await Supabase.instance.client.rpc('fw_product_undo',
-                params: {'p_supplier_name': sup, 'p_product_id': pid});
-            if (clearFn != null) await clearFn(pid);
-            RenderLog.write('c261_undo_cleared', 'product=$pid;supplier=$sup');
-            reloadFn?.call();
-          }),
-        ));
+        RenderLog.write('c274_no_snackbar', 'got_all_bag;product=$pid');
         widget.onReload?.call();
         if (mounted) Navigator.of(context).pop();
         return;
@@ -8302,21 +8300,9 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
       await _callProductAction('got_all');
       if (!mounted) return;
       setState(() { _localState = 'received'; _localReceived = _orderedTotal; _confirmingSimple = false; });
-      final sup = widget.supplierName;
+      // CHANGE #274 — removed "Got all N — marked received" snackbar; per-item undo is in the card
       final pid = widget.productId;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Got all ${_orderedTotal}$_unitLabel — marked received'),
-        action: SnackBarAction(label: 'UNDO', onPressed: () async {
-          final res = await Supabase.instance.client.rpc('fw_product_undo',
-              params: {'p_supplier_name': sup, 'p_product_id': pid}) as Map;
-          RenderLog.write('c199_undo_called', 'product_id=$pid;supplier=$sup;from=snackbar');
-          final e = res['error']?.toString();
-          if (e == 'nothing_to_undo') {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Nothing to undo (already confirmed or re-sourced)')));
-          }
-        }),
-      ));
+      RenderLog.write('c274_no_snackbar', 'got_all_nonfn;product=$pid');
       Navigator.of(context).pop();
     } catch (e) {
       if (!mounted) return;

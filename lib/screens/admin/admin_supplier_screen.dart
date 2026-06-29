@@ -222,6 +222,10 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   bool _orderAutoMeta = false;
   bool _orderAutoMetaLoading = false;
 
+  // ── CHANGE #277: current-holder filter ───────────────────────────────────
+  // Keys: "supplier_name_lower|product_id" for live order_items
+  Set<String> _liveOrderItemKeys = {};
+
   // ── Allocation mode toggle ────────────────────────────────────────────────
   String _allocationMode = 'first_available'; // 'first_available' | 'fewest_baskets'
   bool _allocationLoading = false;
@@ -451,6 +455,11 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         client.from('supplier_company').select('supplier_id')
             .catchError((_) => <dynamic>[]),
         client.rpc('get_supplier_inquiry_overview').catchError((_) => <dynamic>[]),
+        // CHANGE #277: live order_items for current-holder filter
+        client.from('order_items')
+            .select('assigned_supplier, product_id, fulfillment_state')
+            .not('fulfillment_state', 'in', '("shipped","cancelled")')
+            .catchError((_) => <dynamic>[]),
       ]);
 
       final profRows   = results[0] as List;
@@ -459,6 +468,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       final deletedR   = results[3] as List;
       final countRows  = results[4] as List;
       final inquiryRaw = results[5] as List;
+      final liveItems  = results[6] as List; // CHANGE #277
 
       final newCounts = <String, int>{};
       for (final r in countRows) {
@@ -510,6 +520,15 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           return (a['supplier_name'] as String? ?? '').compareTo(b['supplier_name'] as String? ?? '');
         });
 
+      // CHANGE #277: build live-holder Set from order_items
+      final liveKeys = <String>{};
+      for (final r in liveItems) {
+        final m = r as Map;
+        final sup = (m['assigned_supplier'] as String?)?.trim().toLowerCase() ?? '';
+        final pid = (m['product_id'] as num?)?.toInt();
+        if (sup.isNotEmpty && pid != null) liveKeys.add('$sup|$pid');
+      }
+
       if (mounted) {
         setState(() {
           _suppliers      = approved;
@@ -521,6 +540,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           _companyCounts
             ..clear()
             ..addAll(newCounts);
+          _liveOrderItemKeys = liveKeys; // CHANGE #277
           _loading        = false;
           _applySort();
         });
@@ -1858,15 +1878,31 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
 
   Future<void> _refetchOrders() async {
     try {
-      final rows = await Supabase.instance.client
-          .from('supplier_orders')
-          .select()
-          .order('created_at', ascending: false) as List;
+      final client = Supabase.instance.client;
+      final results = await Future.wait<dynamic>([
+        client.from('supplier_orders').select().order('created_at', ascending: false)
+            .catchError((_) => <dynamic>[]),
+        // CHANGE #277: refresh live keys alongside orders
+        client.from('order_items')
+            .select('assigned_supplier, product_id, fulfillment_state')
+            .not('fulfillment_state', 'in', '("shipped","cancelled")')
+            .catchError((_) => <dynamic>[]),
+      ]);
+      final rows = results[0] as List;
+      final liveItems = results[1] as List;
       final raw = rows.map((r) => _OrderRow.fromMap(Map<String, dynamic>.from(r as Map))).toList();
       final enriched = await _enrichOrderItems(raw);
+      final liveKeys = <String>{};
+      for (final r in liveItems) {
+        final m = r as Map;
+        final sup = (m['assigned_supplier'] as String?)?.trim().toLowerCase() ?? '';
+        final pid = (m['product_id'] as num?)?.toInt();
+        if (sup.isNotEmpty && pid != null) liveKeys.add('$sup|$pid');
+      }
       if (mounted) {
         setState(() {
           _orders = enriched;
+          _liveOrderItemKeys = liveKeys; // CHANGE #277
         });
         RenderLog.write('supplier_orders_refreshed', _orders.length);
       }
@@ -3480,12 +3516,34 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     Overlay.of(context).insert(entry!);
   }
 
+  // CHANGE #277: filter order items to only those still held by this supplier
+  List<Map<String, dynamic>> _currentItemsFor(_OrderRow row) {
+    if (_liveOrderItemKeys.isEmpty) return row.items;
+    final supKey = (row.supplierName ?? '').trim().toLowerCase();
+    return row.items.where((item) {
+      final pid = (item['product_id'] as num?)?.toInt();
+      return pid != null && _liveOrderItemKeys.contains('$supKey|$pid');
+    }).toList();
+  }
+
   Widget _buildOrdersView(bool isDesktop) {
+    // CHANGE #277: split into active (has current items) vs superseded
+    final activeOrders = <_OrderRow>[];
+    int supersededCount = 0;
+    for (final r in _orders) {
+      if (_currentItemsFor(r).isNotEmpty) {
+        activeOrders.add(r);
+      } else {
+        supersededCount++;
+        RenderLog.write('c277_superseded_hidden', 'order=${r.id.substring(0, 8)};supplier=${r.supplierName ?? ''}');
+      }
+    }
+    RenderLog.write('c277_supplier_current_filter', 'active=${activeOrders.length};hidden=$supersededCount');
     RenderLog.write('c108_admin_suporders_list_built', _orders.length);
-    if (_orders.isEmpty) return _emptyState('0 supplier orders');
+    if (activeOrders.isEmpty) return _emptyState('0 supplier orders');
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       if (isDesktop) _ordersTableHeader(),
-      ..._orders.map((r) => isDesktop ? _desktopOrderRow(r) : _mobileOrderCard(r)),
+      ...activeOrders.map((r) => isDesktop ? _desktopOrderRow(r) : _mobileOrderCard(r)),
       const SizedBox(height: 32),
     ]);
   }
@@ -3513,6 +3571,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         ? '${row.createdAt!.day.toString().padLeft(2,'0')}/${row.createdAt!.month.toString().padLeft(2,'0')}/${row.createdAt!.year}'
         : '—';
     final isExpanded = _expandedOrderId == row.id;
+    final currentItems = _currentItemsFor(row); // CHANGE #277
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       GestureDetector(
         behavior: HitTestBehavior.opaque,
@@ -3540,7 +3599,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           ]),
         ),
       ),
-      if (isExpanded) _buildOrderItemsPanel(row.items, padH: 28),
+      if (isExpanded) _buildOrderItemsPanel(currentItems, padH: 28), // CHANGE #277: show current items only
     ]);
   }
 
@@ -3549,6 +3608,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         ? '${row.createdAt!.day.toString().padLeft(2,'0')}/${row.createdAt!.month.toString().padLeft(2,'0')}/${row.createdAt!.year}'
         : '';
     final isExpanded = _expandedOrderId == row.id;
+    final currentItems = _currentItemsFor(row); // CHANGE #277
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: () {
@@ -3588,7 +3648,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
               ]),
             ]),
           ),
-          if (isExpanded) _buildOrderItemsPanel(row.items, padH: 14),
+          if (isExpanded) _buildOrderItemsPanel(currentItems, padH: 14), // CHANGE #277: show current items only
         ]),
       ),
     );

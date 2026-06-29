@@ -153,6 +153,9 @@ class _WaMessageBubbleState extends State<WaMessageBubble> {
     final isLocation = type == 'location';
     final isContact = type == 'contacts' || type == 'contact';
 
+    // CHANGE #280: log every rendered bubble type for observability.
+    RenderLog.write('c277_wa_all_types', type);
+
     Widget? body;
     try {
       if (isLocation) {
@@ -225,12 +228,32 @@ class _WaMessageBubbleState extends State<WaMessageBubble> {
       } else if ((msg.text == null || msg.text!.isEmpty) &&
           type != 'text' &&
           !msg.hasMedia) {
-        // Unknown / unsupported type fallback.
-        body = Text(
-          '[${msg.msgType}] message',
-          style: const TextStyle(
-              fontSize: 14, color: Color(0xFF6B7280), height: 1.4),
-        );
+        // CHANGE #280: document/file types with no media path — show a static
+        // DocumentCard (no download URL) so the bubble is recognisable.
+        const _docTypes = {
+          'document', 'file', 'pdf', 'audio', 'voice', 'video', 'sticker',
+        };
+        if (_docTypes.contains(type)) {
+          RenderLog.write('c277_wa_doc_bubble', type);
+          final label = msg.fileName?.isNotEmpty == true
+              ? msg.fileName!
+              : (type == 'audio' || type == 'voice')
+                  ? 'Audio message'
+                  : type == 'video'
+                      ? 'Video'
+                      : 'Document';
+          body = _DocumentCard(
+            fileName: label,
+            onOpen: () {},
+          );
+        } else {
+          // Truly unknown type.
+          body = Text(
+            '[${msg.msgType}] message',
+            style: const TextStyle(
+                fontSize: 14, color: Color(0xFF6B7280), height: 1.4),
+          );
+        }
       }
     } catch (_) {
       body = Text(

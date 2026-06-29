@@ -140,6 +140,7 @@ class _ConversationListViewState extends State<_ConversationListView>
       if (!_listFirstSubscribed) {
         _listFirstSubscribed = true;
         RenderLog.write('c209_wa_realtime_list_subscribed', 1);
+        RenderLog.write('c277_wa_realtime_list', 1);
       }
       if (_listHadError) {
         _listHadError = false;

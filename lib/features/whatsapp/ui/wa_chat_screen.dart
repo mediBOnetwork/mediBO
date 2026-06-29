@@ -69,6 +69,18 @@ class _WaChatScreenState extends State<WaChatScreen>
           ),
           callback: (payload) => _onRealtimeChange(),
         )
+        // CHANGE #280: also catch UPDATEs (e.g. status changes, read receipts).
+        .onPostgresChanges(
+          event: PostgresChangeEvent.update,
+          schema: 'public',
+          table: 'whatsapp_messages',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'sender_phone',
+            value: phone,
+          ),
+          callback: (payload) => _onRealtimeChange(),
+        )
         .subscribe((status, [err]) => _onThreadChannelStatus(status, err));
   }
 
@@ -95,6 +107,7 @@ class _WaChatScreenState extends State<WaChatScreen>
       if (!_threadFirstSubscribed) {
         _threadFirstSubscribed = true;
         RenderLog.write('c209_wa_realtime_thread_subscribed', 1);
+        RenderLog.write('c277_wa_realtime_chat', 1);
       }
       // Reconnect after a prior error/close → silent re-sync.
       if (_threadHadError) {

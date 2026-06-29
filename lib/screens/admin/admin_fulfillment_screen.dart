@@ -4702,10 +4702,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // #197: open per-product receiving sheet
   Future<void> _showProductSheet(_MergedProduct merged) async {
     if (widget.arrivals ? _arrivalsLocked : _boxLocked) return;
-    // F5: Arrivals requires an active bag before opening the count sheet.
+    // CHANGE #277: silent gate (rows already block; this is a safety fallback)
     if (widget.arrivals && _activeBag == null) {
-      RenderLog.write('c254_gate_block', 'product_sheet_no_bag=${merged.productId}');
-      _showSnack('Scan a bag first before counting');
+      RenderLog.write('c277_item_gate_no_bag', 'productSheet_fallback=${merged.productId}');
       return;
     }
     final supplier = _selectedSupplier ?? '';
@@ -4729,6 +4728,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       combinedState: merged.combinedState,
       existingDispute: existingDispute,
       arrivals: widget.arrivals,
+      // CHANGE #277: pass bag context for dynamic Got all
+      activeBagNo: widget.arrivals ? (_activeBag?['bag_no'] as num?)?.toInt() : null,
+      bagBreakdown: merged.bagBreakdown,
       bagCountFn: widget.arrivals ? (pid, qty) async {
         if (_activeBag == null) return 'Scan a bag first before counting';
         try {
@@ -8158,6 +8160,9 @@ class _ProductReceiveSheet extends StatefulWidget {
   final DisputeItem? existingDispute;
   // #258 BUG4: arrivals mode — "Got all" calls bag_count_set instead of fw_product_action.
   final bool arrivals;
+  // CHANGE #277: dynamic Got all — show only when bag attached and item uncounted
+  final int? activeBagNo;
+  final List<Map>? bagBreakdown;
   final Future<String?> Function(int productId, double qty)? bagCountFn;
   // #261: undo clears bag breakdown — called by snackbar UNDO handler
   final Future<void> Function(int productId)? bagCountClearFn;
@@ -8174,6 +8179,8 @@ class _ProductReceiveSheet extends StatefulWidget {
     required this.combinedState,
     this.existingDispute,
     this.arrivals = false,
+    this.activeBagNo,
+    this.bagBreakdown,
     this.bagCountFn,
     this.bagCountClearFn,
     this.onReload,
@@ -9048,7 +9055,7 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
           const SizedBox(height: 12),
         ],
 
-        // Action: Got all — hidden in Warehouse arrivals (#276: count via voice+bag only)
+        // Action: Got all — CHANGE #277: dynamic in Warehouse (show when bag+uncounted)
         if (showGotAll && !anyPanelOpen && !widget.arrivals) ...[
           SizedBox(
             width: double.infinity,
@@ -9060,10 +9067,38 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
             ),
           ),
           const SizedBox(height: 8),
-        ],
-        if (widget.arrivals && !anyPanelOpen) ...[
+        ] else if (showGotAll && !anyPanelOpen && widget.arrivals && widget.activeBagNo != null) ...[
+          // Warehouse + active bag: show Got all only if item not yet counted into this bag
           Builder(builder: (_) {
-            RenderLog.write('c276_no_getall_warehouse', 'product_sheet;product=${widget.productId}');
+            final bagNo = widget.activeBagNo!;
+            final bd = widget.bagBreakdown;
+            final itemCounted = bd != null && bd.any((b) =>
+              (b['bag_no'] as num?)?.toInt() == bagNo &&
+              ((b['qty'] as num?)?.toDouble() ?? 0.0) > 0);
+            if (itemCounted) {
+              RenderLog.write('c277_got_all_hidden', 'bag=$bagNo;product=${widget.productId}');
+              return const SizedBox.shrink();
+            }
+            RenderLog.write('c277_got_all_shown', 'bag=$bagNo;product=${widget.productId}');
+            return Column(children: [
+              SizedBox(
+                width: double.infinity,
+                child: _buildActionBtn(
+                  label: 'Got all ($ord)',
+                  onTap: isBusy ? null : () {
+                    RenderLog.write('c277_got_all_action', 'bag=$bagNo;qty=$ord;product=${widget.productId}');
+                    _doGotAll();
+                  },
+                  loading: _confirmingSimple,
+                  bg: _kGreen,
+                ),
+              ),
+              const SizedBox(height: 8),
+            ]);
+          }),
+        ] else if (widget.arrivals && !anyPanelOpen && widget.activeBagNo == null) ...[
+          Builder(builder: (_) {
+            RenderLog.write('c276_no_getall_warehouse', 'product_sheet_no_bag;product=${widget.productId}');
             return const SizedBox.shrink();
           }),
         ],

@@ -81,7 +81,8 @@ class _OrderPaymentSectionState extends State<OrderPaymentSection> {
     if (reason.isEmpty) return;
     setState(() => _actingOnClaim = claimId);
     try {
-      await PaymentClaimsService.rejectClaim(claimId, reason);
+      await PaymentClaimsService.rejectClaim(claimId, reason, orderId: widget.orderId);
+      RenderLog.write('c267_reject_with_order', 'claim_id=$claimId,order_id=${widget.orderId}');
       RenderLog.write('c212_claim_rejected', 1);
       _rejectCtrl.clear();
       await _load();

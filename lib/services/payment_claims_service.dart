@@ -24,9 +24,15 @@ class PaymentClaimsService {
     });
   }
 
-  static Future<void> rejectClaim(String claimId, String reason) async {
+  // CHANGE #267 — 3-arg form stamps order_id on the rejected claim
+  static Future<void> rejectClaim(String claimId, String reason, {String? orderId}) async {
+    if (claimId.isEmpty) {
+      RenderLog.write('c267_bad_id', 'claimId empty');
+      throw Exception('Empty claim_id — cannot reject');
+    }
     await _client.rpc('reject_payment_claim', params: {
       'p_claim_id': claimId,
+      'p_order_id': orderId?.isEmpty == true ? null : orderId,
       'p_reason': reason,
     });
   }

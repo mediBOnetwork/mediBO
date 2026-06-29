@@ -5118,7 +5118,8 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
     if (reason == null || reason.isEmpty || !mounted) return;
     setState(() => _acting.add(claimId));
     try {
-      await PaymentClaimsService.rejectClaim(claimId, reason);
+      await PaymentClaimsService.rejectClaim(claimId, reason, orderId: widget.orderId);
+      RenderLog.write('c267_reject_with_order', 'claim_id=$claimId,order_id=${widget.orderId}');
       RenderLog.write('c217_reject_ok', 1);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

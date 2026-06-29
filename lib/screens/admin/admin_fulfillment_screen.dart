@@ -9800,10 +9800,16 @@ class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
           child: Column(crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               for (int i = 0; i < items.length; i++) ...[
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
-                  child: _buildPackItemTile(items[i]),
-                ),
+                Builder(builder: (_) {
+                  if (i == 0) {
+                    RenderLog.write('c279_pack_tab_warehouse_rows', items.length);
+                    RenderLog.write('c279_pack_item_row_widget', 1);
+                  }
+                  return Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
+                    child: _buildPackItemTile(items[i]),
+                  );
+                }),
                 if (i < items.length - 1) const SizedBox(height: 4),
               ],
             ]),
@@ -9911,6 +9917,14 @@ class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
     final qty      = (item['quantity']     as num?)?.toInt() ?? 0;
     final recQty   = (item['received_qty'] as num?)?.toInt() ?? 0;
     final state    = item['fulfillment_state']?.toString() ?? 'pending';
+    final bagNo    = (item['bag_no'] as num?)?.toInt();
+
+    String? bagChipText;
+    if (bagNo != null) {
+      final bd = [{'bag_no': bagNo, 'qty': recQty}];
+      bagChipText = _fmtBreakdown(bd, packType);
+      RenderLog.write('c279_pack_bag_chip', 'bag=$bagNo;chip=$bagChipText');
+    }
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -9919,29 +9933,43 @@ class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
         borderRadius: BorderRadius.circular(10),
         border: Border.all(color: state == 'pending' ? _kBorder : (_stateBgMap[state] ?? _kBorder)),
       ),
-      child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
         _FulfilImageTile(imageUrl, size: 40),
         const SizedBox(width: 10),
         Expanded(
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-            Text(name, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
-                maxLines: 2, overflow: TextOverflow.ellipsis),
-            const SizedBox(height: 1),
-            Text(packType.isNotEmpty ? packType : '—',
-                style: const TextStyle(fontSize: 11, color: _kSub),
-                maxLines: 1, overflow: TextOverflow.ellipsis),
-          ]),
+          child: Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+              Text(name, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
+                  maxLines: 2, overflow: TextOverflow.ellipsis),
+              const SizedBox(height: 2),
+              Text(packType.isNotEmpty ? packType : '—',
+                  style: const TextStyle(fontSize: 11, color: _kSub),
+                  maxLines: 1, overflow: TextOverflow.ellipsis),
+              if (bagChipText != null && bagChipText.isNotEmpty) ...[
+                const SizedBox(height: 2),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFEEEEEE),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(bagChipText,
+                      style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: Colors.black87),
+                      maxLines: 2, overflow: TextOverflow.ellipsis),
+                ),
+              ],
+            ]),
+          ),
         ),
         const SizedBox(width: 8),
         ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 120),
           child: Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
-            Row(mainAxisSize: MainAxisSize.min, children: [
-              Text('$recQty/$qty',
-                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText)),
-              const SizedBox(width: 6),
-              _StatePill(state),
-            ]),
+            Text('$recQty/$qty',
+                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText)),
+            const SizedBox(height: 3),
+            _StatePill(state),
           ]),
         ),
       ]),

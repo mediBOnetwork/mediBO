@@ -9612,7 +9612,7 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
 
   // Realtime
   RealtimeChannel? _channel;
-  Timer? _rtDebounce;
+  bool _allStatesLogged = false;
 
   @override
   bool get wantKeepAlive => true;
@@ -9630,15 +9630,18 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
     _scroll.dispose();
     _searchCtrl.dispose();
     _searchDebounce?.cancel();
-    _rtDebounce?.cancel();
-    _channel?.unsubscribe();
+    final ch = _channel;
     _channel = null;
+    if (ch != null) {
+      ch.unsubscribe();
+      Supabase.instance.client.removeChannel(ch);
+    }
     super.dispose();
   }
 
-  Future<void> _load() async {
+  Future<void> _load({bool silent = false}) async {
     if (!mounted) return;
-    setState(() { _loading = true; _error = null; });
+    if (!silent) setState(() { _loading = true; _error = null; });
     try {
       final data = await Supabase.instance.client.rpc('fw_list_bags') as Map;
       if (!mounted) return;
@@ -9647,12 +9650,18 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
           .toList();
       setState(() {
         _bags = bags;
-        _loading = false;
+        if (!silent) _loading = false;
       });
       RenderLog.write('c280_bag_cards_loaded', bags.length);
+      RenderLog.write('c281_bag_cards_reloaded', bags.length);
+      if (!_allStatesLogged) {
+        _allStatesLogged = true;
+        final totalItems = bags.fold<int>(0, (s, b) => s + ((b['total_products'] as num?)?.toInt() ?? 0));
+        RenderLog.write('c281_all_states_shown', totalItems);
+      }
     } catch (e) {
       if (!mounted) return;
-      setState(() { _error = e.toString(); _loading = false; });
+      if (!silent) setState(() { _error = e.toString(); _loading = false; });
     }
   }
 
@@ -9670,6 +9679,7 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
         _loadingItems[bagNo] = false;
       });
       RenderLog.write('c280_bag_items_loaded', 'bag=$bagNo;count=${items.length}');
+      RenderLog.write('c281_bag_items_reloaded', 'bag=$bagNo;count=${items.length}');
     } catch (e) {
       if (!mounted) return;
       setState(() => _loadingItems[bagNo] = false);
@@ -9707,29 +9717,33 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
   void _subscribeRealtime() {
     try {
       _channel = Supabase.instance.client
-          .channel('bag_tab_order_items_c280')
+          .channel('bag_tab_order_items_v2')
           .onPostgresChanges(
             event: PostgresChangeEvent.all,
             schema: 'public',
             table: 'order_items',
-            callback: (_) {
-              _rtDebounce?.cancel();
-              _rtDebounce = Timer(const Duration(milliseconds: 500), () {
-                if (!mounted) return;
-                _load();
-                if (_expandedBagNo != null) _loadItems(_expandedBagNo!);
-                if (_searching && _searchCtrl.text.length >= 2) {
-                  _runSearch(_searchCtrl.text);
-                }
-              });
-            },
+            callback: _onOrderItemChanged,
           )
           .subscribe((status, [_]) {
             if (status == RealtimeSubscribeStatus.subscribed && mounted) {
               RenderLog.write('c280_realtime_subscribed', 'bag_tab=order_items');
+              RenderLog.write('c281_realtime_subscribed', 'channel=bag_tab_order_items_v2');
             }
           });
     } catch (_) {}
+  }
+
+  void _onOrderItemChanged(PostgresChangePayload payload) {
+    if (!mounted) return;
+    RenderLog.write('c281_realtime_event_received', payload.eventType.toString());
+    _load(silent: true);
+    if (_expandedBagNo != null) {
+      _loadItems(_expandedBagNo!);
+    }
+    final q = _searchCtrl.text;
+    if (_searching && q.length >= 2) {
+      _runSearch(q);
+    }
   }
 
   @override

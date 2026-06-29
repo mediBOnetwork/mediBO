@@ -9356,6 +9356,7 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
   int _disputeCount = 0; // #132C: open dispute count for tab badge
   final _collectKey   = GlobalKey<_PickToLightScreenState>();
   final _disputesKey  = GlobalKey<_DisputesScreenState>();
+  final _packTabKey   = GlobalKey<_PackTabState>();
 
   // ── #187: Realtime channels ───────────────────────────────────────────────
   final List<RealtimeChannel> _rtChannels = [];
@@ -9433,9 +9434,9 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
   void _setDisputeCount(int n) {
     if (mounted && n != _disputeCount) setState(() => _disputeCount = n);
   }
-  // #132B: open Disputes tab from item popup "View dispute". (#250: was 3, now 2)
+  // #132B: open Disputes tab from item popup "View dispute". (#278: Pack is index 2, Disputes is 3)
   void _openDisputesTab() {
-    if (mounted) setState(() => _tab = 2);
+    if (mounted) setState(() => _tab = 3);
   }
 
   // C174/B6+B15: single refresh point — call after any dispute-state-changing action.
@@ -9517,10 +9518,18 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
                 });
               }),
               const SizedBox(width: 6),
-              // #132C: Disputes tab with open-count badge (#250: Pack removed, Disputes is now index 2)
+              // CHANGE #278: Pack tab (customer-wise) — index 2
+              _TabBtn('Pack', _tab == 2, () {
+                setState(() => _tab = 2);
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  _packTabKey.currentState?._load();
+                });
+              }),
+              const SizedBox(width: 6),
+              // #132C: Disputes tab with open-count badge (#278: Disputes is now index 3)
               Stack(clipBehavior: Clip.none, children: [
-                _TabBtn('Disputes', _tab == 2, () {
-                  setState(() => _tab = 2);
+                _TabBtn('Disputes', _tab == 3, () {
+                  setState(() => _tab = 3);
                   WidgetsBinding.instance.addPostFrameCallback((_) {
                     _disputesKey.currentState?._load();
                   });
@@ -9548,12 +9557,13 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
       ),
       Expanded(
         child: Builder(builder: (context) {
-          RenderLog.write('c250_pack_removed', '3tabs=SupplierShop,Warehouse,Disputes');
+          RenderLog.write('c278_fulfill_tabs', 4);
           return IndexedStack(
             index: _tab,
             children: [
               _PickToLightScreen(key: _collectKey),
               _ArrivalsScreen(key: _arrivalsKey, onVoiceCount: _openVoiceInCollect),
+              _PackTab(key: _packTabKey),
               _DisputesScreen(key: _disputesKey, onCountChanged: _setDisputeCount,
                   onRefreshCollect: _refreshCollect, onRefreshArrivals: _refreshArrivals),
             ],
@@ -9561,6 +9571,411 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
         }),
       ),
     ]);
+  }
+}
+
+// ── CHANGE #278: Pack tab — customer-wise packing view ───────────────────────
+
+class _PackTab extends StatefulWidget {
+  const _PackTab({super.key});
+  @override
+  State<_PackTab> createState() => _PackTabState();
+}
+
+class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
+  List<Map<String, dynamic>> _customers = [];
+  bool _loading = true;
+  String? _error;
+  String? _expandedOrderId;
+  // items + medicine data per order_id
+  final Map<String, List<Map<String, dynamic>>> _itemsByOrder = {};
+  final Map<String, bool> _loadingItems = {};
+  final ScrollController _scroll = ScrollController();
+  final Map<String, GlobalKey> _rowKeys = {};
+  double _savedScrollOffset = 0.0;
+
+  @override
+  bool get wantKeepAlive => true;
+
+  @override
+  void initState() {
+    super.initState();
+    RenderLog.write('c278_pack_tab_mounted', 1);
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    if (!mounted) return;
+    setState(() { _loading = true; _error = null; });
+    try {
+      final data = await Supabase.instance.client.rpc('get_customer_pack_status') as List;
+      if (!mounted) return;
+      setState(() {
+        _customers = data.map((r) => Map<String, dynamic>.from(r as Map)).toList();
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() { _error = e.toString(); _loading = false; });
+    }
+  }
+
+  Future<void> _loadItems(String orderId) async {
+    if (_loadingItems[orderId] == true) return;
+    if (!mounted) return;
+    setState(() => _loadingItems[orderId] = true);
+    try {
+      // Step 1: fetch order_items for this order
+      final rows = await Supabase.instance.client
+          .from('order_items')
+          .select('id, product_id, product_name, quantity, received_qty, fulfillment_state, bag_no, at_warehouse')
+          .eq('order_id', orderId) as List;
+      final items = rows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
+
+      // Step 2: fetch image_url + pack_type from MEDICINE for distinct product_ids
+      final pids = items.map((r) => r['product_id']).whereType<int>().toSet().toList();
+      Map<int, Map<String, dynamic>> medMap = {};
+      if (pids.isNotEmpty) {
+        try {
+          final meds = await Supabase.instance.client
+              .from('MEDICINE')
+              .select('id, image_url_1, pack_type')
+              .inFilter('id', pids) as List;
+          for (final m in meds) {
+            final mid = (m['id'] as num?)?.toInt();
+            if (mid != null) medMap[mid] = Map<String, dynamic>.from(m as Map);
+          }
+        } catch (_) {}
+      }
+
+      // Step 3: merge medicine data into items
+      final merged = items.map((item) {
+        final pid = (item['product_id'] as num?)?.toInt();
+        final med = pid != null ? medMap[pid] : null;
+        return {
+          ...item,
+          'image_url': med?['image_url_1']?.toString(),
+          'pack_type': med?['pack_type']?.toString() ?? '',
+        };
+      }).toList();
+
+      // Sort A-Z by product_name (same as Supplier Shop)
+      merged.sort((a, b) => (a['product_name'] ?? '').toString().toLowerCase()
+          .compareTo((b['product_name'] ?? '').toString().toLowerCase()));
+
+      if (!mounted) return;
+      setState(() {
+        _itemsByOrder[orderId] = merged;
+        _loadingItems[orderId] = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _loadingItems[orderId] = false);
+    }
+  }
+
+  String _dot(Map<String, dynamic> c) {
+    final s = c['fulfillment_status']?.toString() ?? '';
+    if (s == 'ready') return 'green';
+    if (s == 'partial_ready' || s == 'in_transit') return 'light_yellow';
+    return 'yellow';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2));
+    }
+    if (_error != null) {
+      return Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+        const Icon(Icons.error_outline, size: 40, color: _kSub),
+        const SizedBox(height: 12),
+        const Text('Could not load pack status', style: TextStyle(color: _kSub, fontSize: 14)),
+        const SizedBox(height: 16),
+        OutlinedButton(
+          onPressed: _load,
+          style: OutlinedButton.styleFrom(side: const BorderSide(color: _kGreen), foregroundColor: _kGreen,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
+          child: const Text('Retry'),
+        ),
+      ]));
+    }
+    if (_customers.isEmpty) {
+      return const Center(child: Text('No accepted orders to pack',
+          style: TextStyle(color: _kSub, fontSize: 15)));
+    }
+    return LayoutBuilder(builder: (_, constraints) {
+      final maxW = constraints.maxWidth >= 900 ? 700.0 : double.infinity;
+      return Align(
+        alignment: Alignment.topCenter,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: maxW),
+          child: ListView.builder(
+            controller: _scroll,
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+            itemCount: _customers.length,
+            itemBuilder: (_, i) => _buildCustomerRow(_customers[i]),
+          ),
+        ),
+      );
+    });
+  }
+
+  Widget _buildCustomerRow(Map<String, dynamic> c) {
+    final orderId = c['order_id']?.toString() ?? '';
+    final name = c['customer']?.toString() ?? 'Unknown';
+    final isExpanded = _expandedOrderId == orderId;
+    final rowKey = _rowKeys.putIfAbsent(orderId, () => GlobalKey());
+
+    return _SupplierAccordionShell(
+      name: name,
+      dot: _dot(c),
+      isExpanded: isExpanded,
+      anyExpanded: _expandedOrderId != null,
+      rowKey: rowKey,
+      onTap: () {
+        if (isExpanded) {
+          setState(() => _expandedOrderId = null);
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted || !_scroll.hasClients) return;
+            _scroll.animateTo(_savedScrollOffset,
+                duration: const Duration(milliseconds: 280), curve: Curves.easeInOutCubic);
+          });
+        } else {
+          RenderLog.write('c278_pack_card_open', name);
+          _savedScrollOffset = _scroll.hasClients ? _scroll.offset : 0.0;
+          setState(() => _expandedOrderId = orderId);
+          _loadItems(orderId);
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted || !_scroll.hasClients) return;
+            _scroll.animateTo(0.0,
+                duration: const Duration(milliseconds: 280), curve: Curves.easeInOutCubic);
+          });
+        }
+      },
+      expandedContent: isExpanded ? _buildExpandedBody(c) : const SizedBox.shrink(),
+      mode: null,
+      showPending: false,
+    );
+  }
+
+  Widget _buildExpandedBody(Map<String, dynamic> c) {
+    final orderId = c['order_id']?.toString() ?? '';
+    final total   = (c['total_items']  as num?)?.toInt() ?? 0;
+    final ready   = (c['ready_items']  as num?)?.toInt() ?? 0;
+    final status  = c['fulfillment_status']?.toString() ?? '';
+    final isLoading = _loadingItems[orderId] == true;
+    final items  = _itemsByOrder[orderId] ?? [];
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      const Divider(height: 1, color: _kBorder),
+
+      // Voice bar — identical layout, permanently disabled in Pack
+      _buildPackVoiceBar(),
+
+      // Progress row — driven by ready_items / total_items
+      if (total > 0) _buildPackProgressRow(ready, total),
+
+      // Item list
+      if (isLoading)
+        const Center(child: Padding(
+          padding: EdgeInsets.all(24),
+          child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2),
+        ))
+      else if (items.isEmpty)
+        const Padding(
+          padding: EdgeInsets.fromLTRB(16, 12, 16, 16),
+          child: Text('No items found', style: TextStyle(color: _kSub, fontSize: 14)),
+        )
+      else
+        Padding(
+          padding: const EdgeInsets.fromLTRB(0, 4, 0, 0),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (int i = 0; i < items.length; i++) ...[
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
+                  child: _buildPackItemTile(items[i]),
+                ),
+                if (i < items.length - 1) const SizedBox(height: 4),
+              ],
+            ]),
+        ),
+
+      // Footer
+      if (!isLoading) ...[
+        const SizedBox(height: 12),
+        const Divider(height: 1, color: _kBorder),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+          child: _buildPackFooter(status, ready, total),
+        ),
+      ] else
+        const SizedBox(height: 8),
+    ]);
+  }
+
+  // Voice bar: pixel-identical to Supplier Shop's _buildNarrowVoiceBar, always disabled.
+  Widget _buildPackVoiceBar() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+      child: Row(children: [
+        Expanded(child: SizedBox(
+          height: 44,
+          child: _packPill(Icons.mic_none_rounded, 'Count items'),
+        )),
+        const SizedBox(width: 12),
+        Expanded(child: SizedBox(
+          height: 44,
+          child: _packPill(Icons.record_voice_over_rounded, 'Ask mediBO'),
+        )),
+      ]),
+    );
+  }
+
+  // Disabled pill — same visual as _buildWidePill(disabled:true)
+  Widget _packPill(IconData icon, String label) {
+    return IgnorePointer(
+      child: Opacity(
+        opacity: 0.40,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(color: _kBorder),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.max,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, size: 16, color: _kGreen),
+              const SizedBox(width: 6),
+              Flexible(child: Text(label, style: const TextStyle(
+                  fontSize: 13, fontWeight: FontWeight.w600, color: _kText),
+                  overflow: TextOverflow.ellipsis, maxLines: 1)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // Progress row: identical layout to _buildNarrowProgressRow, driven by ready/total.
+  Widget _buildPackProgressRow(int ready, int total) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+        SizedBox(
+          width: 100,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: _kGreen,
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Text('$ready spoken',
+                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Colors.white),
+                maxLines: 1, overflow: TextOverflow.ellipsis, textAlign: TextAlign.center),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: LinearProgressIndicator(
+            value: total == 0 ? 0 : ready / total,
+            backgroundColor: _kBorder,
+            color: _kGreen,
+            minHeight: 6,
+            borderRadius: BorderRadius.circular(4),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Text('$ready/$total',
+            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText)),
+      ]),
+    );
+  }
+
+  // Item row: identical to _buildItemTile in Supplier Shop.
+  Widget _buildPackItemTile(Map<String, dynamic> item) {
+    final name     = item['product_name']?.toString() ?? '—';
+    final packType = item['pack_type']?.toString() ?? '';
+    final imageUrl = item['image_url']?.toString();
+    final qty      = (item['quantity']     as num?)?.toInt() ?? 0;
+    final recQty   = (item['received_qty'] as num?)?.toInt() ?? 0;
+    final state    = item['fulfillment_state']?.toString() ?? 'pending';
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: _kCard,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: state == 'pending' ? _kBorder : (_stateBgMap[state] ?? _kBorder)),
+      ),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+        _FulfilImageTile(imageUrl, size: 40),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+            Text(name, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
+                maxLines: 2, overflow: TextOverflow.ellipsis),
+            const SizedBox(height: 1),
+            Text(packType.isNotEmpty ? packType : '—',
+                style: const TextStyle(fontSize: 11, color: _kSub),
+                maxLines: 1, overflow: TextOverflow.ellipsis),
+          ]),
+        ),
+        const SizedBox(width: 8),
+        ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 120),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
+            Row(mainAxisSize: MainAxisSize.min, children: [
+              Text('$recQty/$qty',
+                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText)),
+              const SizedBox(width: 6),
+              _StatePill(state),
+            ]),
+          ]),
+        ),
+      ]),
+    );
+  }
+
+  // Footer: same container shape as Supplier Shop's confirm footer.
+  Widget _buildPackFooter(String status, int ready, int total) {
+    final isReady = status == 'ready' || (total > 0 && ready >= total);
+    return Container(
+      height: 44,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      decoration: BoxDecoration(
+        color: isReady ? _kReceivedBg : const Color(0xFFFEF3C7),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: isReady
+              ? _kReceivedFg.withValues(alpha: 0.3)
+              : const Color(0xFFFFB300).withValues(alpha: 0.5),
+        ),
+      ),
+      child: Row(children: [
+        Icon(isReady ? Icons.check_circle_outline_rounded : Icons.hourglass_top_rounded,
+            size: 15, color: isReady ? _kReceivedFg : const Color(0xFF92400E)),
+        const SizedBox(width: 8),
+        Expanded(child: Text(
+          isReady
+              ? 'Ready to pack ✓'
+              : 'Packing in progress — $ready/$total items at warehouse',
+          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
+              color: isReady ? _kReceivedFg : const Color(0xFF92400E)),
+        )),
+      ]),
+    );
   }
 }
 

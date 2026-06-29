@@ -993,12 +993,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         bagBreakdown: bagBreakdown,
       ));
     }
-    merged.sort((a, b) {
-      final aPend = a.combinedState == 'pending' ? 0 : 1;
-      final bPend = b.combinedState == 'pending' ? 0 : 1;
-      if (aPend != bPend) return aPend - bPend;
-      return a.productName.compareTo(b.productName);
-    });
+    // CHANGE #269 — strict A-Z, no status grouping
+    merged.sort((a, b) => a.productName.toLowerCase().compareTo(b.productName.toLowerCase()));
+    RenderLog.write('c269_alpha_sort', 'merged;count=${merged.length}');
     return merged;
   }
 
@@ -1489,13 +1486,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         final stateItems = (rawItems is List ? rawItems : <dynamic>[])
             .map((r) => Map<String, dynamic>.from(r as Map))
             .toList();
-        stateItems.sort((a, b) {
-          final aPending = stateOf(a) == 'pending' ? 0 : 1;
-          final bPending = stateOf(b) == 'pending' ? 0 : 1;
-          if (aPending != bPending) return aPending - bPending;
-          return (a['product_name'] ?? '').toString()
-              .compareTo((b['product_name'] ?? '').toString());
-        });
+        // CHANGE #269 — strict A-Z, no status grouping
+        stateItems.sort((a, b) => (a['product_name'] ?? '').toString().toLowerCase()
+            .compareTo((b['product_name'] ?? '').toString().toLowerCase()));
+        RenderLog.write('c269_alpha_sort', 'arrivals;count=${stateItems.length}');
         final firstPending = stateItems.indexWhere((i) => stateOf(i) == 'pending');
         final confirmed = stateRes['arrivals_confirmed'] == true ||
             stateRes['supplier_fully_locked'] == true;
@@ -1542,15 +1536,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           .rpc('get_receiving_box', params: {'p_supplier_name': supplier}) as List;
       if (!mounted) return;
       final items = res.map((r) => Map<String, dynamic>.from(r as Map)).toList();
-      items.sort((a, b) {
-        final aPending = stateOf(a) == 'pending' ? 0 : 1;
-        final bPending = stateOf(b) == 'pending' ? 0 : 1;
-        if (aPending != bPending) return aPending - bPending;
-        final bagA = (a['bag_no'] as num?)?.toInt() ?? 0;
-        final bagB = (b['bag_no'] as num?)?.toInt() ?? 0;
-        if (bagA != bagB) return bagA - bagB;
-        return (a['product_name'] ?? '').toString().compareTo((b['product_name'] ?? '').toString());
-      });
+      // CHANGE #269 — strict A-Z, no status or bag grouping
+      items.sort((a, b) => (a['product_name'] ?? '').toString().toLowerCase()
+          .compareTo((b['product_name'] ?? '').toString().toLowerCase()));
+      RenderLog.write('c269_alpha_sort', 'collect;count=${items.length}');
       final firstPending = items.indexWhere((i) => stateOf(i) == 'pending');
       // B7: fetch a fresh mode so _supplierMode is never stale mid-session
       String? freshMode = _collectModeMap[supplier];
@@ -4489,9 +4478,18 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                   Builder(builder: (_) {
                     final bd = _fmtBreakdown(merged.bagBreakdown, merged.packType);
                     RenderLog.write('c261_breakdown_fmt', 'mobile;prod=${merged.productId};bd=$bd');
-                    return Text(bd,
-                        style: const TextStyle(fontSize: 10, color: Color(0xFF065F46)),
-                        maxLines: 2, overflow: TextOverflow.ellipsis);
+                    // CHANGE #269 — black-on-grey badge style
+                    RenderLog.write('c269_bag_badge', 'mobile;$bd');
+                    return Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: Color(0xFFEEEEEE),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(bd,
+                          style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: Colors.black87),
+                          maxLines: 2, overflow: TextOverflow.ellipsis),
+                    );
                   }),
                 ],
                 // #203: proof thumbnail from dispute
@@ -5209,9 +5207,18 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                                   Builder(builder: (_) {
                                     final bd = _fmtBreakdown(mp.bagBreakdown, mp.packType);
                                     RenderLog.write('c261_breakdown_fmt', 'desktop;prod=${mp.productId};bd=$bd');
-                                    return Text(bd,
-                                        style: const TextStyle(fontSize: 11, color: Color(0xFF065F46)),
-                                        maxLines: 1, overflow: TextOverflow.ellipsis);
+                                    // CHANGE #269 — black-on-grey badge style
+                                    RenderLog.write('c269_bag_badge', 'desktop;$bd');
+                                    return Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                      decoration: BoxDecoration(
+                                        color: Color(0xFFEEEEEE),
+                                        borderRadius: BorderRadius.circular(6),
+                                      ),
+                                      child: Text(bd,
+                                          style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Colors.black87),
+                                          maxLines: 1, overflow: TextOverflow.ellipsis),
+                                    );
                                   }),
                                 ],
                                 if (deskDisputeItem != null) ...[
@@ -6008,9 +6015,20 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                           style: const TextStyle(fontSize: 12, color: _kSub)),
                       if (widget.arrivals && breakdown != null && breakdown.isNotEmpty) ...[
                         const SizedBox(height: 2),
-                        Text(breakdown,
-                            style: const TextStyle(fontSize: 11, color: Color(0xFF065F46)),
-                            maxLines: 2, overflow: TextOverflow.ellipsis),
+                        // CHANGE #269 — black-on-grey badge style
+                        Builder(builder: (_) {
+                          RenderLog.write('c269_bag_badge', 'list;$breakdown');
+                          return Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                            decoration: BoxDecoration(
+                              color: Color(0xFFEEEEEE),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(breakdown!,
+                                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Colors.black87),
+                                maxLines: 2, overflow: TextOverflow.ellipsis),
+                          );
+                        }),
                       ],
                     ]),
                   ),

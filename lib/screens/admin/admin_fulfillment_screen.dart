@@ -567,11 +567,24 @@ class _ChangeBagScannerState extends State<_ChangeBagScanner> {
       final m = _norm(raw);
       if (!mounted) return;
       if (m['error'] != null) {
-        setState(() { _busy = false; _detected = false; _error = m['error'].toString(); });
+        // CHANGE #268 — friendly message for same-supplier reuse attempt
+        final errCode = m['error'].toString();
+        String msg;
+        if (errCode == 'bag_already_used_by_supplier') {
+          msg = m['hint']?.toString() ?? 'This bag was already used for this supplier — use a different bag.';
+          RenderLog.write('c268_already_used', 'bag=${m['bag_no']?.toString() ?? code}');
+        } else {
+          msg = 'Bag error: $errCode';
+        }
+        setState(() { _busy = false; _detected = false; _error = msg; });
         try { await _ctrl.start(); } catch (_) {}
         return;
       }
       final bagData = m['bag'] is Map ? Map<String, dynamic>.from(m['bag'] as Map) : m;
+      // CHANGE #268 — log reuse when a full bag attaches successfully (different supplier)
+      if ((bagData['status']?.toString() ?? '') == 'full') {
+        RenderLog.write('c268_reuse_ok', 'bag=${bagData['bag_no']}');
+      }
       RenderLog.write('c259_changebag_step', 'attached;bag=${bagData['bag_no']}');
       setState(() { _busy = false; _step = _CBStep.done; _newBagData = bagData; });
       await Future.delayed(const Duration(milliseconds: 700));
@@ -769,7 +782,7 @@ class _ChangeBagScannerState extends State<_ChangeBagScanner> {
             padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
             child: _statusBox(
               label: newNo != null ? 'New Bag $newNo' : 'Scan new bag',
-              subtitle: newDone ? 'Attached ✓' : (newActive ? 'Scan empty bag to attach' : 'Waiting…'),
+              subtitle: newDone ? 'Attached ✓' : (newActive ? 'Scan bag to attach' : 'Waiting…'),
               color: newDone ? green : (newActive ? red : grey),
               icon: newDone ? Icons.check_circle_outline : Icons.qr_code_scanner_rounded,
             ),
@@ -2533,7 +2546,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       case 'bad_code': return 'Invalid QR — scan a valid BAG-xxx code';
       case 'no_such_bag': return 'Bag not found — check the QR and retry';
       case 'bag_not_found': return 'Bag not found — check the QR and retry';
-      case 'bag_full': return 'Bag is already full — use an empty bag';
+      // CHANGE #268 — bag_already_used_by_supplier: same supplier re-scanning their filled bag
+      case 'bag_already_used_by_supplier':
+        return m['hint']?.toString() ?? 'This bag was already used for this supplier — use a different bag.';
+      case 'bag_full': return 'Bag is full'; // kept as fallback; attach no longer returns this
       case 'bag_in_use':
         final held = m['held_by']?.toString() ?? '';
         return held.isNotEmpty ? 'Bag in use by $held' : 'Bag already in use by another supplier';
@@ -2662,11 +2678,19 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       final m = _normRpc(rawAttach);
       if (!mounted) return;
       if (m['error'] != null) {
+        // CHANGE #268 — log bag_already_used_by_supplier before showing snack
+        if (m['error'].toString() == 'bag_already_used_by_supplier') {
+          RenderLog.write('c268_already_used', 'bag=${m['bag_no']?.toString() ?? code}');
+        }
         _showSnack(_bagError(m));
         return;
       }
       final bagData = m['bag'] is Map ? Map<String, dynamic>.from(m['bag'] as Map) : null;
       setState(() => _activeBag = bagData ?? m);
+      // CHANGE #268 — log reuse when a full bag attaches successfully (different supplier)
+      if ((_activeBag?['status']?.toString() ?? '') == 'full') {
+        RenderLog.write('c268_reuse_ok', 'bag=${_activeBag?['bag_no']};supplier=$supplier');
+      }
       RenderLog.write('c253_bag_attached', 'bag=${_activeBag?['bag_no']};supplier=$supplier');
       await _reloadItemsFromDB();
     } catch (e) {

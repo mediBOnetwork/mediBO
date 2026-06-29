@@ -2745,42 +2745,31 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     if (_changeBagPendingOldBag.containsKey(supplier)) {
       final oldBagNo = _changeBagPendingOldBag[supplier];
       RenderLog.write('c271_changebag_persist', 'rendered;supplier=$supplier;old_bag=$oldBagNo');
-      return Padding(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          GestureDetector(
-            onTap: _openBagFlow,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              decoration: BoxDecoration(
-                color: const Color(0xFFFEF3C7),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: const Color(0xFFD97706).withValues(alpha: 0.5)),
-              ),
-              child: Row(children: [
-                const Icon(Icons.swap_horiz_rounded, size: 18, color: Color(0xFF92400E)),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text('Bag $oldBagNo detached — tap to scan new bag',
-                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
-                          color: Color(0xFF92400E))),
-                ),
-                const Icon(Icons.chevron_right_rounded, size: 18, color: Color(0xFF92400E)),
-              ]),
+      // CHANGE #272 — no Cancel: once detached the only exit is scanning a new bag.
+      RenderLog.write('c272_no_cancel', 'bag_no=$oldBagNo');
+      return GestureDetector(
+        onTap: _openBagFlow,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFEF3C7),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: const Color(0xFFD97706).withValues(alpha: 0.5)),
             ),
+            child: Row(children: [
+              const Icon(Icons.swap_horiz_rounded, size: 18, color: Color(0xFF92400E)),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text('Bag $oldBagNo detached — tap to scan new bag',
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
+                        color: Color(0xFF92400E))),
+              ),
+              const Icon(Icons.chevron_right_rounded, size: 18, color: Color(0xFF92400E)),
+            ]),
           ),
-          TextButton(
-            onPressed: () async {
-              setState(() {
-                _changeBagPendingOldBag.remove(supplier);
-                _changeProgressBySupplier.remove(supplier);
-              });
-              await _reloadItemsFromDB();
-            },
-            child: const Text('Cancel change bag',
-                style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
-          ),
-        ]),
+        ),
       );
     }
 
@@ -3765,25 +3754,37 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       if (_items.isNotEmpty) _buildNarrowProgressRow(),
       // #255: Bag control appears directly above the item list (mobile accordion).
       if (widget.arrivals && !_loadingBox) _buildBagControl(),
-      // #255: "Scan a bag to begin" banner + dimmed list when no bag attached.
+      // #255: Sub-text banner when no bag is attached.
+      // CHANGE #272: detached state shows bag-specific copy; fresh-start shows generic copy.
       if (noBagInArrivals && _items.isNotEmpty)
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-            decoration: BoxDecoration(
-              color: const Color(0xFFFFF8E1),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: const Color(0xFFFFB300).withValues(alpha: 0.5)),
+        Builder(builder: (context) {
+          final sup = _selectedSupplier ?? '';
+          final isDetached = _changeBagPendingOldBag.containsKey(sup);
+          final detachedBagNo = _changeBagPendingOldBag[sup];
+          final subText = isDetached
+              ? 'Bag $detachedBagNo detached — scan a new bag to keep counting'
+              : 'Scan a bag to begin counting';
+          if (isDetached) {
+            RenderLog.write('c272_detached_subtext', 'bag_no=$detachedBagNo;text=$subText');
+          }
+          return Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFF8E1),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFFFFB300).withValues(alpha: 0.5)),
+              ),
+              child: Row(children: [
+                const Icon(Icons.info_outline_rounded, size: 15, color: Color(0xFF92400E)),
+                const SizedBox(width: 6),
+                Expanded(child: Text(subText,
+                    style: const TextStyle(fontSize: 12, color: Color(0xFF92400E)))),
+              ]),
             ),
-            child: const Row(children: [
-              Icon(Icons.info_outline_rounded, size: 15, color: Color(0xFF92400E)),
-              SizedBox(width: 6),
-              Expanded(child: Text('Scan a bag to begin counting',
-                  style: TextStyle(fontSize: 12, color: Color(0xFF92400E)))),
-            ]),
-          ),
-        ),
+          );
+        }),
       if (_loadingBox)
         const Center(
           child: Padding(

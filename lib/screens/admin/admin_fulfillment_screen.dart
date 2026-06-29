@@ -2470,23 +2470,23 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         final stateItems = (rawItems is List ? rawItems : <dynamic>[])
             .map((r) => Map<String, dynamic>.from(r as Map))
             .toList();
-        stateItems.sort((a, b) {
-          final aPend = stateOf(a) == 'pending' ? 0 : 1;
-          final bPend = stateOf(b) == 'pending' ? 0 : 1;
-          if (aPend != bPend) return aPend - bPend;
-          return (a['product_name'] ?? '').toString()
-              .compareTo((b['product_name'] ?? '').toString());
-        });
+        // CHANGE #269 A-Z sort (fixes missed reload path)
+        stateItems.sort((a, b) => (a['product_name'] ?? '').toString().toLowerCase()
+            .compareTo((b['product_name'] ?? '').toString().toLowerCase()));
         final confirmed = stateRes['arrivals_confirmed'] == true ||
             stateRes['supplier_fully_locked'] == true;
         final reloadedMode = supplierModeOf(stateRes); // B6: top-level, not per-item
         final reloadActiveBagRaw = stateRes['active_bag'];
         final reloadActiveBag = reloadActiveBagRaw is Map ? Map<String, dynamic>.from(reloadActiveBagRaw) : null;
+        // CHANGE #270 — backend is source of truth: clear stale mid-change progress when
+        // active_bag is null (detach completed; no new bag required to exit the flow).
+        RenderLog.write('c270_state_from_backend', 'active_bag=${reloadActiveBag?['bag_no'] ?? 'null'};supplier=$supplier');
         setState(() {
           _items = stateItems;
           if (confirmed != _arrivalsLocked) _arrivalsLocked = confirmed;
           if (reloadedMode != _supplierMode) _supplierMode = reloadedMode;
           _activeBag = reloadActiveBag;
+          if (reloadActiveBag == null) _changeProgressBySupplier.remove(supplier);
         });
       } catch (e) {
         final errMsg = e.toString();
@@ -2624,8 +2624,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       ),
     );
     if (!mounted) return;
+    // CHANGE #270 — log every close; _reloadItemsFromDB clears mid-change when backend says null
+    RenderLog.write('c270_scanner_closed', 'supplier=$supplier;result=${result == null ? 'null' : (result['_partial'] == true ? 'partial' : 'done')}');
     if (result != null && result['_partial'] == true) {
-      // Old bag detached, modal closed before new bag — save progress for resume
+      // Old bag detached, modal closed before new bag — parent saves partial flag but
+      // _reloadItemsFromDB below will clear it if backend confirms active_bag=null.
       setState(() {
         _activeBag = null;
         _changeProgressBySupplier[supplier] = {
@@ -2643,6 +2646,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       });
     }
     // null: modal closed with no action (e.g. X before any scan) — keep state as-is
+    // In all cases, reload from backend. If active_bag=null, _changeProgressBySupplier is
+    // also cleared there, preventing the stuck "Bag X detached — tap to scan new bag" loop.
     await _reloadItemsFromDB();
   }
 
@@ -2653,7 +2658,13 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       context: context,
       builder: (_) => const _BagScannerDialog(title: 'Scan Bag to Attach'),
     );
-    if (code == null || !mounted) return;
+    if (!mounted) return;
+    if (code == null) {
+      // CHANGE #270 — X closed without scanning; reload backend state and clear any stale progress
+      RenderLog.write('c270_scanner_closed', 'supplier=$supplier;result=null');
+      await _reloadItemsFromDB();
+      return;
+    }
     await _attachBagCode(supplier, code);
   }
 

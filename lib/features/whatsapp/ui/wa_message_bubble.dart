@@ -27,15 +27,32 @@ class _WaMessageBubbleState extends State<WaMessageBubble> {
   @override
   void initState() {
     super.initState();
+    _initSignedUrl();
+    // CHANGE #208: log first render of a non-text INCOMING bubble.
+    if (!widget.message.isOut && widget.message.isNonText) {
+      RenderLog.write('c208_incoming_media_render', 1);
+    }
+  }
+
+  @override
+  void didUpdateWidget(WaMessageBubble old) {
+    super.didUpdateWidget(old);
+    // Re-fetch signed URL when the message's media path changes (e.g. realtime
+    // delivers a new message into the same list position before the key fix
+    // takes effect, or the path is updated).
+    if (widget.message.filePath != old.message.filePath) {
+      _initSignedUrl();
+    }
+  }
+
+  void _initSignedUrl() {
     if (widget.message.hasMedia) {
       _signedUrlFuture = widget.repo.signedUrl(
         widget.message.effectiveBucket,
         widget.message.filePath!,
       );
-    }
-    // CHANGE #208: log first render of a non-text INCOMING bubble.
-    if (!widget.message.isOut && widget.message.isNonText) {
-      RenderLog.write('c208_incoming_media_render', 1);
+    } else {
+      _signedUrlFuture = null;
     }
   }
 

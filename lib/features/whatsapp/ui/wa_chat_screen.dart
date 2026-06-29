@@ -923,6 +923,7 @@ class _WaChatScreenState extends State<WaChatScreen>
                       final showSep =
                           _isNewDay(older?.receivedAt, m.receivedAt);
                       final bubble = WaMessageBubble(
+                        key: ValueKey(m.id),
                         message: m,
                         repo: _repo,
                       );

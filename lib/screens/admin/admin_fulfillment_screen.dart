@@ -854,6 +854,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // #261: change-bag progress — keyed by supplier, value = old bag that was detached.
   // Cleared on attach success. Allows reopen to restore "scan new bag" step.
   final Map<String, Map<String, dynamic>> _changeProgressBySupplier = {};
+  // CHANGE #271 — intent flag: supplier entered change-bag flow + old bag was detached.
+  // Keyed by supplier → old_bag_no string. NOT cleared by _reloadItemsFromDB so it survives
+  // the backend refresh that #270 added (backend active_bag=null is expected here).
+  final Map<String, String?> _changeBagPendingOldBag = {};
   Map<String, dynamic>? get _activeBag => _activeBagBySupplier[_selectedSupplier ?? ''];
   set _activeBag(Map<String, dynamic>? v) {
     final s = _selectedSupplier ?? '';
@@ -2589,16 +2593,17 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     final supplier = _selectedSupplier;
     if (supplier == null) return;
 
-    final prog = _changeProgressBySupplier[supplier];
     final active = _activeBag;
+    // CHANGE #271 — intent flag takes precedence; survives backend reload
+    final pendingOldBag = _changeBagPendingOldBag[supplier];
 
-    if (prog != null && prog['old_detached'] == true) {
-      // RESUME: old bag was detached in a prior session; open directly at need_new
+    if (_changeBagPendingOldBag.containsKey(supplier)) {
+      // RESUME: change-bag intent still live; old bag detached, scan new bag
       RenderLog.write('c261_resume_need_new',
-          'supplier=$supplier;old_bag=${prog['old_bag']}');
+          'supplier=$supplier;old_bag=$pendingOldBag');
       await _openChangeBagModal(supplier,
           initialStep: _CBStep.needNew,
-          currentBag: {'bag_no': prog['old_bag']});
+          currentBag: {'bag_no': pendingOldBag ?? '?'});
     } else if (active != null) {
       // CHANGE: active bag present → start at need_old
       await _openChangeBagModal(supplier,
@@ -2627,24 +2632,31 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     // CHANGE #270 — log every close; _reloadItemsFromDB clears mid-change when backend says null
     RenderLog.write('c270_scanner_closed', 'supplier=$supplier;result=${result == null ? 'null' : (result['_partial'] == true ? 'partial' : 'done')}');
     if (result != null && result['_partial'] == true) {
-      // Old bag detached, modal closed before new bag — parent saves partial flag but
-      // _reloadItemsFromDB below will clear it if backend confirms active_bag=null.
+      // Old bag detached, modal closed before new bag.
+      // _changeProgressBySupplier gets cleared by _reloadItemsFromDB (#270), but
+      // _changeBagPendingOldBag persists so card stays in change-bag mode (#271).
+      final oldBagNo = result['old_bag_no']?.toString();
       setState(() {
         _activeBag = null;
         _changeProgressBySupplier[supplier] = {
-          'old_bag': result['old_bag_no'],
+          'old_bag': oldBagNo,
           'old_detached': true,
         };
+        _changeBagPendingOldBag[supplier] = oldBagNo; // CHANGE #271
       });
+      RenderLog.write('c271_changebag_persist', 'supplier=$supplier;old_bag=$oldBagNo');
     } else if (result != null && result['_partial'] != true) {
-      // Attach succeeded — clear progress, update active bag
+      // Attach succeeded — clear ALL progress and intent
       RenderLog.write('c261_change_attach_done',
           'supplier=$supplier;new_bag=${result['bag_no']}');
+      RenderLog.write('c271_changebag_attach', 'supplier=$supplier;bag=${result['bag_no']}'); // CHANGE #271
       setState(() {
         _activeBag = result;
         _changeProgressBySupplier.remove(supplier);
+        _changeBagPendingOldBag.remove(supplier); // CHANGE #271
       });
     }
+    // null: X before scanning old bag — keep active bag as-is; intent not set
     // null: modal closed with no action (e.g. X before any scan) — keep state as-is
     // In all cases, reload from backend. If active_bag=null, _changeProgressBySupplier is
     // also cleared there, preventing the stuck "Bag X detached — tap to scan new bag" loop.
@@ -2660,8 +2672,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     );
     if (!mounted) return;
     if (code == null) {
-      // CHANGE #270 — X closed without scanning; reload backend state and clear any stale progress
+      // CHANGE #270/#271 — X closed without scanning; reload backend state and clear stale progress
       RenderLog.write('c270_scanner_closed', 'supplier=$supplier;result=null');
+      RenderLog.write('c271_freshstart_close', 'supplier=$supplier'); // CHANGE #271
       await _reloadItemsFromDB();
       return;
     }
@@ -2726,35 +2739,51 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   Widget _buildBagControl() {
     final bag = _activeBag;
     final supplier = _selectedSupplier ?? '';
-    final midChange = bag == null && (_changeProgressBySupplier[supplier]?['old_detached'] == true);
+    // CHANGE #271 — intent flag drives mid-change, not _changeProgressBySupplier (which #270 clears)
+    final midChange = _changeBagPendingOldBag.containsKey(supplier);
 
     if (bag == null) {
-      // Show "mid-change resume" bar when old bag detached but new not yet scanned
+      // Show "mid-change resume" panel when change-bag intent is live (old bag detached, new bag not yet scanned)
       if (midChange) {
-        final oldBagNo = _changeProgressBySupplier[supplier]?['old_bag'];
+        final oldBagNo = _changeBagPendingOldBag[supplier];
+        RenderLog.write('c271_changebag_persist', 'rendered;supplier=$supplier;old_bag=$oldBagNo');
         return Padding(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-          child: GestureDetector(
-            onTap: _openBagFlow,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              decoration: BoxDecoration(
-                color: const Color(0xFFFEF3C7),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: const Color(0xFFD97706).withValues(alpha: 0.5)),
-              ),
-              child: Row(children: [
-                const Icon(Icons.swap_horiz_rounded, size: 18, color: Color(0xFF92400E)),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text('Bag $oldBagNo detached — tap to scan new bag',
-                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
-                          color: Color(0xFF92400E))),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            GestureDetector(
+              onTap: _openBagFlow,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFEF3C7),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: const Color(0xFFD97706).withValues(alpha: 0.5)),
                 ),
-                const Icon(Icons.chevron_right_rounded, size: 18, color: Color(0xFF92400E)),
-              ]),
+                child: Row(children: [
+                  const Icon(Icons.swap_horiz_rounded, size: 18, color: Color(0xFF92400E)),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text('Bag $oldBagNo detached — tap to scan new bag',
+                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
+                            color: Color(0xFF92400E))),
+                  ),
+                  const Icon(Icons.chevron_right_rounded, size: 18, color: Color(0xFF92400E)),
+                ]),
+              ),
             ),
-          ),
+            // CHANGE #271 — explicit Cancel exits change-bag cleanly (camera X must NOT exit)
+            TextButton(
+              onPressed: () async {
+                setState(() {
+                  _changeBagPendingOldBag.remove(supplier);
+                  _changeProgressBySupplier.remove(supplier);
+                });
+                await _reloadItemsFromDB();
+              },
+              child: const Text('Cancel change bag',
+                  style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+            ),
+          ]),
         );
       }
       return Padding(

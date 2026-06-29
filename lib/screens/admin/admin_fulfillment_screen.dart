@@ -2632,9 +2632,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     // CHANGE #270 — log every close; _reloadItemsFromDB clears mid-change when backend says null
     RenderLog.write('c270_scanner_closed', 'supplier=$supplier;result=${result == null ? 'null' : (result['_partial'] == true ? 'partial' : 'done')}');
     if (result != null && result['_partial'] == true) {
-      // Old bag detached, modal closed before new bag.
-      // _changeProgressBySupplier gets cleared by _reloadItemsFromDB (#270), but
-      // _changeBagPendingOldBag persists so card stays in change-bag mode (#271).
+      // Old bag detached, X pressed before new bag scanned — keep change-bag intent alive.
+      // CHANGE #271 FIX: skip _reloadItemsFromDB() here; a backend reload can race and set
+      // _activeBag to the old bag (consistency lag), which would bury the change-bag panel.
+      // The render selector now checks intent FIRST (before active_bag), so even if a later
+      // realtime event triggers a reload, the panel stays visible until explicit Cancel/attach.
       final oldBagNo = result['old_bag_no']?.toString();
       setState(() {
         _activeBag = null;
@@ -2642,24 +2644,22 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           'old_bag': oldBagNo,
           'old_detached': true,
         };
-        _changeBagPendingOldBag[supplier] = oldBagNo; // CHANGE #271
+        _changeBagPendingOldBag[supplier] = oldBagNo;
       });
       RenderLog.write('c271_changebag_persist', 'supplier=$supplier;old_bag=$oldBagNo');
+      return; // NO reload — intent must not be overwritten by backend state
     } else if (result != null && result['_partial'] != true) {
-      // Attach succeeded — clear ALL progress and intent
+      // Attach succeeded — clear ALL progress and intent, then reload to sync items
       RenderLog.write('c261_change_attach_done',
           'supplier=$supplier;new_bag=${result['bag_no']}');
-      RenderLog.write('c271_changebag_attach', 'supplier=$supplier;bag=${result['bag_no']}'); // CHANGE #271
+      RenderLog.write('c271_changebag_attach', 'supplier=$supplier;bag=${result['bag_no']}');
       setState(() {
         _activeBag = result;
         _changeProgressBySupplier.remove(supplier);
-        _changeBagPendingOldBag.remove(supplier); // CHANGE #271
+        _changeBagPendingOldBag.remove(supplier);
       });
     }
-    // null: X before scanning old bag — keep active bag as-is; intent not set
-    // null: modal closed with no action (e.g. X before any scan) — keep state as-is
-    // In all cases, reload from backend. If active_bag=null, _changeProgressBySupplier is
-    // also cleared there, preventing the stuck "Bag X detached — tap to scan new bag" loop.
+    // null: X before scanning old bag — reload restores "Bag in Use" from backend.
     await _reloadItemsFromDB();
   }
 
@@ -2739,53 +2739,52 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   Widget _buildBagControl() {
     final bag = _activeBag;
     final supplier = _selectedSupplier ?? '';
-    // CHANGE #271 — intent flag drives mid-change, not _changeProgressBySupplier (which #270 clears)
-    final midChange = _changeBagPendingOldBag.containsKey(supplier);
+    // CHANGE #271 FIX: check intent FIRST, before active_bag.
+    // Previously midChange was nested inside `if (bag == null)` — if backend reload set
+    // _activeBag to non-null, the change-bag panel was invisible. Now intent wins.
+    if (_changeBagPendingOldBag.containsKey(supplier)) {
+      final oldBagNo = _changeBagPendingOldBag[supplier];
+      RenderLog.write('c271_changebag_persist', 'rendered;supplier=$supplier;old_bag=$oldBagNo');
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          GestureDetector(
+            onTap: _openBagFlow,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFEF3C7),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: const Color(0xFFD97706).withValues(alpha: 0.5)),
+              ),
+              child: Row(children: [
+                const Icon(Icons.swap_horiz_rounded, size: 18, color: Color(0xFF92400E)),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text('Bag $oldBagNo detached — tap to scan new bag',
+                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
+                          color: Color(0xFF92400E))),
+                ),
+                const Icon(Icons.chevron_right_rounded, size: 18, color: Color(0xFF92400E)),
+              ]),
+            ),
+          ),
+          TextButton(
+            onPressed: () async {
+              setState(() {
+                _changeBagPendingOldBag.remove(supplier);
+                _changeProgressBySupplier.remove(supplier);
+              });
+              await _reloadItemsFromDB();
+            },
+            child: const Text('Cancel change bag',
+                style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+          ),
+        ]),
+      );
+    }
 
     if (bag == null) {
-      // Show "mid-change resume" panel when change-bag intent is live (old bag detached, new bag not yet scanned)
-      if (midChange) {
-        final oldBagNo = _changeBagPendingOldBag[supplier];
-        RenderLog.write('c271_changebag_persist', 'rendered;supplier=$supplier;old_bag=$oldBagNo');
-        return Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            GestureDetector(
-              onTap: _openBagFlow,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFEF3C7),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: const Color(0xFFD97706).withValues(alpha: 0.5)),
-                ),
-                child: Row(children: [
-                  const Icon(Icons.swap_horiz_rounded, size: 18, color: Color(0xFF92400E)),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text('Bag $oldBagNo detached — tap to scan new bag',
-                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
-                            color: Color(0xFF92400E))),
-                  ),
-                  const Icon(Icons.chevron_right_rounded, size: 18, color: Color(0xFF92400E)),
-                ]),
-              ),
-            ),
-            // CHANGE #271 — explicit Cancel exits change-bag cleanly (camera X must NOT exit)
-            TextButton(
-              onPressed: () async {
-                setState(() {
-                  _changeBagPendingOldBag.remove(supplier);
-                  _changeProgressBySupplier.remove(supplier);
-                });
-                await _reloadItemsFromDB();
-              },
-              child: const Text('Cancel change bag',
-                  style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
-            ),
-          ]),
-        );
-      }
       return Padding(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
         child: OutlinedButton.icon(

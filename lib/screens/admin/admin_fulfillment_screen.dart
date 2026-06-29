@@ -2910,6 +2910,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       // #256: "Send supplier reminder" removed from Warehouse — disputes are raised automatically
       // by fw_confirm_all_received and handled in the Disputes tab.
       RenderLog.write('c256_reminder_removed', 'warehouse_footer_built_without_reminder');
+      // CHANGE #277: log when confirm-all is gated by missing bag
+      if (widget.arrivals && _activeBag == null) {
+        RenderLog.write('c277_confirm_gate_no_bag', 'supplier=$_selectedSupplier');
+      }
       return Column(mainAxisSize: MainAxisSize.min, children: [
         SizedBox(
           height: 44,
@@ -4257,12 +4261,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // ── #90: Narrow voice bar — two Expanded equal-width pills, no overflow ─────
   // Tally badge moved to _buildNarrowProgressRow.
   Widget _buildNarrowVoiceBar(bool isAdmin) {
+    // CHANGE #277: bag-missing is a silent noop (no opacity/grey), not a disabled state
     final countingDisabled = _agentPhase != AgentPhase.idle ||
-        (widget.arrivals && _arrivalsLocked) || // #156: locked after confirm-all
-        (widget.arrivals && _activeBag == null); // #253: must have active bag
-    // CHANGE #276 — log when counting is gated because no active bag
+        (widget.arrivals && _arrivalsLocked); // #156: locked after confirm-all
     if (widget.arrivals && _activeBag == null && !_loadingBox && _selectedSupplier != null) {
-      RenderLog.write('c276_count_gated_no_bag', 'supplier=$_selectedSupplier');
+      RenderLog.write('c277_voice_gate_no_bag', 'narrow;supplier=$_selectedSupplier');
     }
     final agentDisabled = _voiceListening || _voiceProcessing;
     final agentPhase = _agentPhase;
@@ -4294,7 +4297,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
               activeColor: _kWrongFg,
               disabled: countingDisabled && !_voiceListening,
               spinning: _voiceProcessing,
-              onTap: _toggleRecording,
+              // CHANGE #277: silent noop when no bag; no visual disabled state
+              onTap: () {
+                if (widget.arrivals && _activeBag == null) return;
+                _toggleRecording();
+              },
             ),
           ),
         ),
@@ -4324,7 +4331,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                   activeColor: _kAgentAccent,
                   disabled: agentDisabled && !agentListening,
                   spinning: agentBusy,
+                  // CHANGE #277: silent noop when no bag
                   onTap: () {
+                    if (widget.arrivals && _activeBag == null) return;
                     if (agentBusy) return;
                     if (agentListening) {
                       _stopAgentRecording();
@@ -4434,7 +4443,14 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c196_collect_card_layout_v2',
         'surface=${widget.arrivals ? 'arrivals' : 'collect'}');
     return GestureDetector(
-      onTap: (widget.arrivals && _arrivalsLocked) ? null : () => _showItemSheet(item),
+      onTap: (widget.arrivals && _arrivalsLocked) ? null : () {
+        // CHANGE #277: silent noop when no bag in Warehouse
+        if (widget.arrivals && _activeBag == null) {
+          RenderLog.write('c277_item_gate_no_bag', 'narrow;product=${item['product_name'] ?? ''}');
+          return;
+        }
+        _showItemSheet(item);
+      },
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
@@ -4532,7 +4548,14 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     if (widget.arrivals) RenderLog.write('c265_warehouse_no_arrival', 'prod=${merged.productId}');
 
     return GestureDetector(
-      onTap: (widget.arrivals && _arrivalsLocked) ? null : () => _showProductSheet(merged),
+      onTap: (widget.arrivals && _arrivalsLocked) ? null : () {
+        // CHANGE #277: silent noop when no bag in Warehouse
+        if (widget.arrivals && _activeBag == null) {
+          RenderLog.write('c277_item_gate_no_bag', 'merged;product=${merged.productId}');
+          return;
+        }
+        _showProductSheet(merged);
+      },
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
@@ -4980,8 +5003,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c114_progress_expanded', 'desktop');
     final doneCount = _items.length - _pendingCount;
     final total = _items.length;
-    final countingDisabled = _agentPhase != AgentPhase.idle ||
-        (widget.arrivals && _activeBag == null); // #254: bag gate on desktop too
+    // CHANGE #277: bag-missing is a silent noop, not a disabled state
+    final countingDisabled = _agentPhase != AgentPhase.idle;
     final agentDisabled = _voiceListening || _voiceProcessing;
     final agentPhase = _agentPhase;
     final bool agentBusy = agentPhase == AgentPhase.thinking || agentPhase == AgentPhase.speaking;
@@ -5080,7 +5103,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
               activeColor: _kWrongFg,
               disabled: countingDisabled && !_voiceListening,
               spinning: _voiceProcessing,
-              onTap: _toggleRecording,
+              // CHANGE #277: silent noop when no bag; no visual disabled state
+              onTap: () {
+                if (widget.arrivals && _activeBag == null) return;
+                _toggleRecording();
+              },
             ),
           ),
         ],
@@ -5110,7 +5137,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                 activeColor: _kAgentAccent,
                 disabled: agentDisabled && !agentListening,
                 spinning: agentBusy,
+                // CHANGE #277: silent noop when no bag
                 onTap: () {
+                  if (widget.arrivals && _activeBag == null) return;
                   if (agentBusy) return;
                   if (agentListening) {
                     _stopAgentRecording();
@@ -6136,9 +6165,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // Desktop (≥900px) → Dialog; Mobile → ModalBottomSheet.
   Future<void> _showItemSheet(Map<String, dynamic> item) async {
     if (widget.arrivals ? _arrivalsLocked : _boxLocked) return;
+    // CHANGE #277: silent gate — rows already block tap; this is a safety fallback
     if (widget.arrivals && _activeBag == null) {
-      RenderLog.write('c253_bag_gate_locked', 'no_active_bag');
-      _showSnack('Scan a bag first before counting items');
+      RenderLog.write('c277_item_gate_no_bag', 'showItemSheet_fallback');
       return;
     }
     final idx = _items.indexOf(item);
@@ -6166,6 +6195,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           context.findAncestorStateOfType<_AdminFulfillmentScreenState>()?._openDisputesTab();
         },
         arrivals: widget.arrivals, // CHANGE #276 — hides got-all in Warehouse
+        // CHANGE #277: pass active bag_no so sheet can show Got all when uncounted
+        activeBagNo: widget.arrivals ? (_activeBag?['bag_no'] as num?)?.toInt() : null,
       );
     } catch (e) {
       final short = e.toString().substring(0, e.toString().length.clamp(0, 80));

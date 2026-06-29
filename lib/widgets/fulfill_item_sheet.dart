@@ -49,6 +49,8 @@ Future<void> showFulfillItemSheet({
   required void Function() onViewDispute,
   // CHANGE #276 — Warehouse hides got-all/mark-received; all counting via voice+bag only
   bool arrivals = false,
+  // CHANGE #277 — active bag_no for dynamic Got all visibility
+  int? activeBagNo,
 }) {
   final isDesktop = MediaQuery.of(context).size.width >= 900;
 
@@ -70,6 +72,7 @@ Future<void> showFulfillItemSheet({
               onDisputeCreated: onDisputeCreated,
               onViewDispute: onViewDispute,
               arrivals: arrivals,
+              activeBagNo: activeBagNo,
             ),
           ),
         ),
@@ -101,6 +104,7 @@ Future<void> showFulfillItemSheet({
               onDisputeCreated: onDisputeCreated,
               onViewDispute: onViewDispute,
               arrivals: arrivals,
+              activeBagNo: activeBagNo,
             ),
           ],
         ),
@@ -121,6 +125,8 @@ class FulfillItemSheet extends StatefulWidget {
   final void Function() onViewDispute;
   // CHANGE #276 — Warehouse mode: hide got-all/mark-received; count via voice+bag only
   final bool arrivals;
+  // CHANGE #277 — active bag_no; null = no bag or Collect mode
+  final int? activeBagNo;
 
   const FulfillItemSheet({
     super.key,
@@ -132,6 +138,7 @@ class FulfillItemSheet extends StatefulWidget {
     required this.onDisputeCreated,
     required this.onViewDispute,
     this.arrivals = false,
+    this.activeBagNo,
   });
 
   @override
@@ -142,6 +149,9 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
   late String _localFsState;
   late int _localRecQty;
   late Map<String, dynamic>? _dispute;
+
+  // CHANGE #277: Got all loading state
+  bool _gotAllLoading = false;
 
   // #193: Report missing inline (unchanged)
   bool _showMissingInline = false;
@@ -961,7 +971,7 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
               return const SizedBox.shrink();
             }),
 
-            // Got all — hidden in Warehouse (arrivals); counting is via voice+bag only (#276)
+            // CHANGE #277: Got all — dynamic in Warehouse based on bag + itemCounted
             if (!widget.arrivals) ...[
               _ActionRow(
                 label: 'Got all ($_ordQty)',
@@ -975,10 +985,51 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
                 },
               ),
               const SizedBox(height: 8),
-            ],
-            if (widget.arrivals) ...[
+            ] else if (widget.activeBagNo != null) ...[
+              // Warehouse with active bag: show Got all only if item not yet counted into this bag
               Builder(builder: (_) {
-                RenderLog.write('c276_no_getall_warehouse', 'arrivals_sheet;item=${widget.item['product_name'] ?? ''}');
+                final bagNo = widget.activeBagNo!;
+                final rawBd = widget.item['bag_breakdown'];
+                final itemCounted = rawBd is List && (rawBd as List).any((b) {
+                  final bm = b as Map;
+                  return (bm['bag_no'] as num?)?.toInt() == bagNo &&
+                      ((bm['qty'] as num?)?.toDouble() ?? 0.0) > 0;
+                });
+                if (itemCounted) {
+                  RenderLog.write('c277_got_all_hidden', 'bag=$bagNo;item=${widget.item['product_name'] ?? ''}');
+                  return const SizedBox.shrink();
+                }
+                RenderLog.write('c277_got_all_shown', 'bag=$bagNo;item=${widget.item['product_name'] ?? ''}');
+                return Column(children: [
+                  _ActionRow(
+                    label: 'Got all ($_ordQty)',
+                    color: _kGreen,
+                    icon: Icons.check_rounded,
+                    filled: true,
+                    loading: _gotAllLoading,
+                    onTap: (_gotAllLoading || widget.recording) ? null : () async {
+                      setState(() => _gotAllLoading = true);
+                      RenderLog.write('c277_got_all_action', 'bag=$bagNo;qty=$_ordQty;item=${widget.item['product_name'] ?? ''}');
+                      try {
+                        await _doRecord('received', qty: _ordQty);
+                        if (mounted) Navigator.of(context).pop();
+                      } catch (e) {
+                        if (mounted) {
+                          setState(() => _gotAllLoading = false);
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text(e.toString().substring(0, e.toString().length.clamp(0, 120)))),
+                          );
+                        }
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 8),
+                ]);
+              }),
+            ] else ...[
+              // Safety: no bag in Warehouse — should not happen (rows gated), show nothing
+              Builder(builder: (_) {
+                RenderLog.write('c276_no_getall_warehouse', 'arrivals_sheet_no_bag;item=${widget.item['product_name'] ?? ''}');
                 return const SizedBox.shrink();
               }),
             ],

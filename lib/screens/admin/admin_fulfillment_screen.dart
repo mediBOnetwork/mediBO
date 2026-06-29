@@ -1500,6 +1500,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         final parsedMode = supplierModeOf(stateRes); // B5: top-level, not per-item
         final activeBagRaw = stateRes['active_bag'];
         final activeBag = activeBagRaw is Map ? Map<String, dynamic>.from(activeBagRaw) : null;
+        // CHANGE #273 — restore detached state from backend across refresh/reopen
+        final bagFlow = stateRes['bag_flow']?.toString();
+        final awaitingBagNo = stateRes['awaiting_new_after_bag'];
+        RenderLog.write('c273_flow_from_backend', 'bag_flow=${bagFlow ?? 'null'};supplier=$supplier');
         RenderLog.write('c254_per_supplier_bag',
             'supplier=$supplier;bag=${activeBag != null ? activeBag['bag_no'] : 'none'}');
         setState(() {
@@ -1512,6 +1516,14 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           _activeBag = activeBag;
           _sessionVoiceCount = 0;
           _voiceMentions = []; // clear stale mentions; fresh fetch below
+          // Sync change-bag intent from backend — makes detached state survive refresh/reopen
+          if (bagFlow == 'awaiting_new') {
+            _changeBagPendingOldBag[supplier] = awaitingBagNo?.toString();
+            RenderLog.write('c273_restore_awaiting', 'bag_no=$awaitingBagNo;supplier=$supplier');
+          } else if (bagFlow != null) {
+            // 'active' or 'none' — clear any stale in-RAM intent
+            _changeBagPendingOldBag.remove(supplier);
+          }
         });
         _refreshVoiceMentions(); // #263: load today's mentions for distinct-product spoken count
         RenderLog.write('c127_arrivals_filter_removed', 'true');
@@ -2482,15 +2494,24 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         final reloadedMode = supplierModeOf(stateRes); // B6: top-level, not per-item
         final reloadActiveBagRaw = stateRes['active_bag'];
         final reloadActiveBag = reloadActiveBagRaw is Map ? Map<String, dynamic>.from(reloadActiveBagRaw) : null;
-        // CHANGE #270 — backend is source of truth: clear stale mid-change progress when
-        // active_bag is null (detach completed; no new bag required to exit the flow).
+        // CHANGE #273 — sync bag_flow from backend on every reload (realtime, tab-switch, etc.)
+        final reloadBagFlow = stateRes['bag_flow']?.toString();
+        final reloadAwaitingBagNo = stateRes['awaiting_new_after_bag'];
         RenderLog.write('c270_state_from_backend', 'active_bag=${reloadActiveBag?['bag_no'] ?? 'null'};supplier=$supplier');
+        RenderLog.write('c273_flow_from_backend', 'bag_flow=${reloadBagFlow ?? 'null'};supplier=$supplier');
         setState(() {
           _items = stateItems;
           if (confirmed != _arrivalsLocked) _arrivalsLocked = confirmed;
           if (reloadedMode != _supplierMode) _supplierMode = reloadedMode;
           _activeBag = reloadActiveBag;
           if (reloadActiveBag == null) _changeProgressBySupplier.remove(supplier);
+          // Sync change-bag intent from backend on every reload
+          if (reloadBagFlow == 'awaiting_new') {
+            _changeBagPendingOldBag[supplier] = reloadAwaitingBagNo?.toString();
+          } else if (reloadBagFlow != null) {
+            // 'active' or 'none' — clear stale intent (new bag was attached or flow was reset)
+            _changeBagPendingOldBag.remove(supplier);
+          }
         });
       } catch (e) {
         final errMsg = e.toString();

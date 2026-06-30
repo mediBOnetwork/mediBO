@@ -10527,67 +10527,80 @@ class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
     }
   }
 
+  // #291 — _fetchPackStatus: parse response as Map (jsonb object), with
+  // String fallback. On error, stores empty map so the button stays visible.
+  // Never removes the key — that was causing the infinite-spinner bug in #290.
   Future<void> _fetchPackStatus(String orderId) async {
-    if (_packStatus.containsKey(orderId) && _packStatus[orderId] != null) return;
-    _packStatus[orderId] = null; // mark as in-progress
+    // Skip if already have a populated result (packed/total present)
+    final existing = _packStatus[orderId];
+    if (existing != null && existing.containsKey('total')) return;
+    // Mark as in-progress (null = fetching)
+    if (!_packStatus.containsKey(orderId)) {
+      _packStatus[orderId] = null;
+    }
     try {
-      final res = await Supabase.instance.client
+      final dynamic raw = await Supabase.instance.client
           .rpc('pack_get_queue', params: {'p_order_id': orderId});
-      final m = Map<String, dynamic>.from(res as Map);
+      // pack_get_queue returns a jsonb OBJECT, not a table row list.
+      // Supabase Dart client may deliver it as a Map or as a JSON String.
+      final Map<String, dynamic> m = raw is String
+          ? (jsonDecode(raw) as Map).cast<String, dynamic>()
+          : Map<String, dynamic>.from(raw as Map);
       final total  = (m['total_items']  as num?)?.toInt() ?? 0;
       final packed = (m['packed_count'] as num?)?.toInt() ?? 0;
+      try {
+        RenderLog.write('c291_pack_counts',
+            'order=${orderId.substring(0, orderId.length.clamp(0, 8))};total=$total;packed=$packed;parsed=${raw is String ? "string" : "map"}');
+      } catch (_) {}
       if (mounted) setState(() => _packStatus[orderId] = {'packed': packed, 'total': total});
-    } catch (_) {
-      // leave as null so next build can retry
-      if (mounted) setState(() => _packStatus.remove(orderId));
+    } catch (e) {
+      // On any parse/network error keep the key so the button stays visible
+      // as "Start Packing"; do NOT remove the key (that was the #290 bug).
+      if (mounted) setState(() => _packStatus[orderId] = {'packed': 0, 'total': -1});
     }
   }
 
+  // #291 — Button is ALWAYS rendered (never gated by fetch/parse/total>0).
+  // Default label is "Start Packing"; refined after _fetchPackStatus resolves.
+  // The presence of the button does NOT depend on async state.
   Widget _buildPackingButton(Map<String, dynamic> c) {
     final orderId = c['order_id']?.toString() ?? '';
     if (orderId.isEmpty) return const SizedBox.shrink();
 
-    // trigger fetch if not yet cached
-    if (!_packStatus.containsKey(orderId)) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => _fetchPackStatus(orderId));
-      return const Padding(
-        padding: EdgeInsets.fromLTRB(16, 10, 16, 0),
-        child: SizedBox(height: 44, child: Center(
-            child: SizedBox(width: 20, height: 20,
-                child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2)))),
-      );
-    }
+    // Kick off background fetch if not already in progress or done.
+    // We do this unconditionally each build — _fetchPackStatus guards re-entry.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _fetchPackStatus(orderId);
+    });
 
+    // Determine label from cached status (if available).
     final status = _packStatus[orderId];
-    if (status == null) {
-      // still fetching
-      return const Padding(
-        padding: EdgeInsets.fromLTRB(16, 10, 16, 0),
-        child: SizedBox(height: 44, child: Center(
-            child: SizedBox(width: 20, height: 20,
-                child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2)))),
-      );
-    }
-
-    final packed = status['packed'] ?? 0;
-    final total  = status['total']  ?? 0;
-    if (total == 0) return const SizedBox.shrink();
+    final int packed = status?['packed'] ?? 0;
+    final int total  = status?['total']  ?? 0;
 
     final String label;
     final String logLabel;
-    if (packed == 0) {
-      label = 'Start Packing';
+    if (status == null || total <= 0) {
+      // Not yet fetched or fetch in progress — show default immediately.
+      label    = 'Start Packing';
+      logLabel = 'Start';
+    } else if (packed == 0) {
+      label    = 'Start Packing';
       logLabel = 'Start';
     } else if (packed >= total) {
-      label = 'Packed ✓ — View';
+      label    = 'Packed ✓ — View';
       logLabel = 'Packed';
     } else {
-      label = 'Resume Packing ($packed/$total)';
+      label    = 'Resume Packing ($packed/$total)';
       logLabel = 'Resume';
     }
 
-    RenderLog.write('c290_pack_btn',
-        'order=${orderId.substring(0, orderId.length.clamp(0, 8))};packed=$packed;total=$total;label=$logLabel');
+    // c291_pack_btn_build fires every time this widget builds — proves the
+    // button is in the real Pack-tab card renderer.
+    try {
+      RenderLog.write('c291_pack_btn_build',
+          'order=${orderId.substring(0, orderId.length.clamp(0, 8))};branch=narrow;shown=true;label=$logLabel');
+    } catch (_) {}
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
@@ -10604,7 +10617,7 @@ class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
               context,
               MaterialPageRoute(builder: (_) => _PackingScreen(orderId: orderId)),
             );
-            // refresh status after returning
+            // Refresh label after returning from packing screen.
             _packStatus.remove(orderId);
             if (mounted) _fetchPackStatus(orderId);
           },
@@ -11030,10 +11043,13 @@ class _PackingScreenState extends State<_PackingScreen> {
     if (!mounted) return;
     setState(() { _loading = true; _error = null; });
     try {
-      final res = await Supabase.instance.client
+      final dynamic raw = await Supabase.instance.client
           .rpc('pack_get_queue', params: {'p_order_id': widget.orderId});
-      final m     = Map<String, dynamic>.from(res as Map);
-      final items = (m['items'] as List)
+      // #291 fix: parse jsonb object response as Map (with String fallback)
+      final Map<String, dynamic> m = raw is String
+          ? (jsonDecode(raw) as Map).cast<String, dynamic>()
+          : Map<String, dynamic>.from(raw as Map);
+      final items = ((m['items'] as List?) ?? const [])
           .map((i) => Map<String, dynamic>.from(i as Map))
           .toList();
       final packed  = (m['packed_count'] as num?)?.toInt() ?? 0;
@@ -11053,7 +11069,7 @@ class _PackingScreenState extends State<_PackingScreen> {
         _loading      = false;
       });
       try {
-        RenderLog.write('c290_pack_open',
+        RenderLog.write('c291_pack_open',
             'cust=${m['customer']};total=$total;bags=${m['bag_count']};startIdx=${allDone ? "done" : startIdx}');
         if (allDone) RenderLog.write('c290_pack_done', 'cust=${m['customer']};total=$total');
       } catch (_) {}

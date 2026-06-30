@@ -9874,16 +9874,14 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
   }
 
   Widget _buildBagCard(Map<String, dynamic> bag) {
-    final bagNo     = (bag['bag_no'] as num?)?.toInt() ?? 0;
-    final dot       = bag['dot']?.toString() ?? 'yellow';
-    final total     = (bag['total_products'] as num?)?.toInt() ?? 0;
-    final received  = (bag['received_products'] as num?)?.toInt() ?? 0;
+    final bagNo      = (bag['bag_no'] as num?)?.toInt() ?? 0;
+    final total      = (bag['total_products'] as num?)?.toInt() ?? 0;
     final isExpanded = _expandedBagNo == bagNo;
-    final rowKey = _rowKeys.putIfAbsent(bagNo, () => GlobalKey());
+    final rowKey     = _rowKeys.putIfAbsent(bagNo, () => GlobalKey());
 
-    return _SupplierAccordionShell(
-      name: 'Bag $bagNo',
-      dot: dot,
+    return _BagAccordionShell(
+      bagNo: bagNo,
+      totalProducts: total,
       isExpanded: isExpanded,
       anyExpanded: _expandedBagNo != null,
       rowKey: rowKey,
@@ -9910,71 +9908,45 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
         }
       },
       expandedContent: isExpanded ? _buildBagExpandedBody(bag) : const SizedBox.shrink(),
-      mode: null,
-      showPending: false,
     );
   }
 
   Widget _buildBagExpandedBody(Map<String, dynamic> bag) {
-    final bagNo    = (bag['bag_no'] as num?)?.toInt() ?? 0;
-    final total    = (bag['total_products'] as num?)?.toInt() ?? 0;
-    final received = (bag['received_products'] as num?)?.toInt() ?? 0;
+    final bagNo     = (bag['bag_no'] as num?)?.toInt() ?? 0;
     final isLoading = _loadingItems[bagNo] == true;
-    final items = _itemsByBag[bagNo] ?? [];
+    final items     = _itemsByBag[bagNo] ?? [];
 
-    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      const Divider(height: 1, color: _kBorder),
-      Padding(
-        padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
-        child: Builder(builder: (ctx) {
-          RenderLog.write('c285_bag_header_badge', 'bag=$bagNo;items=${items.length}');
-          return Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-            decoration: BoxDecoration(
-              color: _kReceivedBg,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: _kReceivedFg.withValues(alpha: 0.3)),
-            ),
-            child: Text('Bag $bagNo · ${items.length} items',
-                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _kReceivedFg)),
-          );
-        }),
-      ),
-      if (isLoading)
-        const Center(child: Padding(
-          padding: EdgeInsets.all(24),
-          child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2),
-        ))
-      else if (items.isEmpty)
-        const Padding(
-          padding: EdgeInsets.fromLTRB(16, 12, 16, 16),
-          child: Text('No items in this bag', style: TextStyle(color: _kSub, fontSize: 14)),
-        )
-      else
-        Padding(
-          padding: const EdgeInsets.fromLTRB(0, 4, 0, 0),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            for (int i = 0; i < items.length; i++) ...[
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
-                child: _buildBagItemTile(items[i]),
-              ),
-              if (i < items.length - 1) const SizedBox(height: 4),
-            ],
-          ]),
-        ),
-      const SizedBox(height: 8),
-      const Divider(height: 1, color: _kBorder),
-      Padding(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-        child: Row(children: [
-          const Icon(Icons.inventory_2_outlined, size: 14, color: _kSub),
-          const SizedBox(width: 6),
-          Text('$received of $total items received',
-              style: const TextStyle(fontSize: 12, color: _kSub, fontWeight: FontWeight.w500)),
-        ]),
-      ),
-    ]);
+    return Builder(builder: (ctx) {
+      RenderLog.write('c286_no_inner_strip', 'strip=removed');
+      RenderLog.write('c286_no_received_footer', 'footer=removed');
+      return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        const Divider(height: 1, color: _kBorder),
+        if (isLoading)
+          const Center(child: Padding(
+            padding: EdgeInsets.all(24),
+            child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2),
+          ))
+        else if (items.isEmpty)
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 12, 16, 16),
+            child: Text('No items in this bag', style: TextStyle(color: _kSub, fontSize: 14)),
+          )
+        else
+          Padding(
+            padding: const EdgeInsets.fromLTRB(0, 8, 0, 0),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              for (int i = 0; i < items.length; i++) ...[
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
+                  child: _buildBagItemTile(items[i]),
+                ),
+                if (i < items.length - 1) const SizedBox(height: 4),
+              ],
+            ]),
+          ),
+        const SizedBox(height: 12),
+      ]);
+    });
   }
 
   Widget _buildBagProgressRow(int received, int total) {
@@ -10015,10 +9987,11 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
     final imageUrl         = item['image_url']?.toString();
     final recQty           = (item['received_qty'] as num?)?.toInt() ?? 0;
     final assignedSupplier = item['assigned_supplier']?.toString() ?? '';
+    final packLabel        = packType.isNotEmpty ? '$recQty $packType' : '$recQty';
 
     return Builder(builder: (ctx) {
-      RenderLog.write('c285_bag_row_v2',
-          'name=${name.substring(0, name.length.clamp(0, 8))};qty=$recQty;has_S=${assignedSupplier.isNotEmpty};has_C=${customer.isNotEmpty}');
+      RenderLog.write('c286_bag_row_pack_brown',
+          'qty=$recQty;pack=$packType;brown=true');
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
@@ -10034,10 +10007,8 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
               Text(name,
                   style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
                   maxLines: 2, overflow: TextOverflow.ellipsis),
-              const SizedBox(height: 3),
-              Text('$recQty ${packType.isNotEmpty ? packType : "—"}',
-                  style: const TextStyle(fontSize: 12, color: _kSub),
-                  maxLines: 1, overflow: TextOverflow.ellipsis),
+              const SizedBox(height: 4),
+              _brownBadge(packLabel),
               if (assignedSupplier.isNotEmpty) ...[
                 const SizedBox(height: 4),
                 Container(
@@ -10046,7 +10017,7 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
                     color: _kReceivedBg,
                     borderRadius: BorderRadius.circular(20),
                   ),
-                  child: Text('S · $assignedSupplier',
+                  child: Text('S • $assignedSupplier',
                       style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: _kReceivedFg),
                       maxLines: 1, overflow: TextOverflow.ellipsis),
                 ),
@@ -10059,7 +10030,7 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
                     color: const Color(0xFFFFF3CD),
                     borderRadius: BorderRadius.circular(20),
                   ),
-                  child: Text('C · $customer',
+                  child: Text('C • $customer',
                       style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: Color(0xFF8A6D00)),
                       maxLines: 1, overflow: TextOverflow.ellipsis),
                 ),
@@ -10071,6 +10042,17 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
     });
   }
 
+  Widget _brownBadge(String text) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+    decoration: BoxDecoration(
+      color: const Color(0xFFEFE2D0),
+      borderRadius: BorderRadius.circular(20),
+    ),
+    child: Text(text,
+        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: Color(0xFF6B4E2E)),
+        maxLines: 1, overflow: TextOverflow.ellipsis),
+  );
+
   Widget _buildSearchResultTile(Map<String, dynamic> item) {
     final name             = item['product_name']?.toString() ?? '—';
     final customer         = item['customer']?.toString() ?? '';
@@ -10079,9 +10061,12 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
     final recQty           = (item['received_qty'] as num?)?.toInt() ?? 0;
     final bagNo            = (item['bag_no'] as num?)?.toInt();
     final assignedSupplier = item['assigned_supplier']?.toString() ?? '';
+    final bagLabel         = bagNo != null
+        ? (packType.isNotEmpty ? 'Bag $bagNo • $recQty $packType' : 'Bag $bagNo • $recQty')
+        : (packType.isNotEmpty ? '$recQty $packType' : '$recQty');
 
     return Builder(builder: (ctx) {
-      RenderLog.write('c285_search_row_v2', 'bag=$bagNo;qty=$recQty');
+      RenderLog.write('c286_search_row_v3', 'bag=$bagNo;qty=$recQty;combined_badge=true');
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
@@ -10097,10 +10082,17 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
               Text(name,
                   style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
                   maxLines: 2, overflow: TextOverflow.ellipsis),
-              const SizedBox(height: 3),
-              Text('$recQty ${packType.isNotEmpty ? packType : "—"}',
-                  style: const TextStyle(fontSize: 12, color: _kSub),
-                  maxLines: 1, overflow: TextOverflow.ellipsis),
+              const SizedBox(height: 4),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF3F4F6),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(bagLabel,
+                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: _kSub),
+                    maxLines: 1, overflow: TextOverflow.ellipsis),
+              ),
               if (assignedSupplier.isNotEmpty) ...[
                 const SizedBox(height: 4),
                 Container(
@@ -10109,7 +10101,7 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
                     color: _kReceivedBg,
                     borderRadius: BorderRadius.circular(20),
                   ),
-                  child: Text('S · $assignedSupplier',
+                  child: Text('S • $assignedSupplier',
                       style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: _kReceivedFg),
                       maxLines: 1, overflow: TextOverflow.ellipsis),
                 ),
@@ -10122,21 +10114,8 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
                     color: const Color(0xFFFFF3CD),
                     borderRadius: BorderRadius.circular(20),
                   ),
-                  child: Text('C · $customer',
+                  child: Text('C • $customer',
                       style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: Color(0xFF8A6D00)),
-                      maxLines: 1, overflow: TextOverflow.ellipsis),
-                ),
-              ],
-              if (bagNo != null) ...[
-                const SizedBox(height: 4),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFF3F4F6),
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Text('Bag $bagNo',
-                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: _kSub),
                       maxLines: 1, overflow: TextOverflow.ellipsis),
                 ),
               ],
@@ -10145,6 +10124,83 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
         ]),
       );
     });
+  }
+}
+
+// ── CHANGE #286: Bag-specific accordion header (no arrow, no dot, brown "N items" pill) ──
+
+class _BagAccordionShell extends StatelessWidget {
+  final int bagNo;
+  final int totalProducts;
+  final bool isExpanded;
+  final bool anyExpanded;
+  final GlobalKey rowKey;
+  final VoidCallback onTap;
+  final Widget expandedContent;
+
+  const _BagAccordionShell({
+    required this.bagNo,
+    required this.totalProducts,
+    required this.isExpanded,
+    required this.anyExpanded,
+    required this.rowKey,
+    required this.onTap,
+    required this.expandedContent,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final bottomGap = anyExpanded ? 16.0 : 8.0;
+    return Padding(
+      key: rowKey,
+      padding: EdgeInsets.only(bottom: bottomGap),
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: _kBorder),
+          boxShadow: [BoxShadow(
+              color: Colors.black.withValues(alpha: 0.04),
+              blurRadius: 6, offset: const Offset(0, 2))],
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          InkWell(
+            borderRadius: BorderRadius.vertical(
+              top: const Radius.circular(12),
+              bottom: Radius.circular(isExpanded ? 0 : 12),
+            ),
+            onTap: onTap,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              child: Builder(builder: (ctx) {
+                RenderLog.write('c286_bag_header_v2',
+                    'bag=$bagNo;items=$totalProducts;arrow=removed;dot=removed');
+                return Row(children: [
+                  Text('Bag $bagNo',
+                      style: TextStyle(
+                        fontSize: 15, fontWeight: FontWeight.w600,
+                        color: isExpanded ? _kGreen : _kText,
+                      )),
+                  const Spacer(),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFEFE2D0),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text('$totalProducts items',
+                        style: const TextStyle(
+                            fontSize: 11, fontWeight: FontWeight.w500,
+                            color: Color(0xFF6B4E2E))),
+                  ),
+                ]);
+              }),
+            ),
+          ),
+          _sharedSmoothReveal(isExpanded, expandedContent),
+        ]),
+      ),
+    );
   }
 }
 

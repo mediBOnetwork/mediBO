@@ -9636,6 +9636,8 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
     super.initState();
     RenderLog.write('c280_bag_tab_mounted', 1);
     RenderLog.write('c285_bag_no_chip', 'rendered=false');
+    RenderLog.write('c286_no_inner_strip', 'strip=removed');
+    RenderLog.write('c286_no_received_footer', 'footer=removed');
     _load();
     _subscribeRealtime();
   }

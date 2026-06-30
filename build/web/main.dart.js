@@ -155655,6 +155655,8 @@ grZ(){return!0},
 aa(){this.aIn()
 A.e("c280_bag_tab_mounted",1)
 A.e("c285_bag_no_chip","rendered=false")
+A.e("c286_no_inner_strip","strip=removed")
+A.e("c286_no_received_footer","footer=removed")
 this.hj()
 this.GZ()},
 m(){var s,r,q=this

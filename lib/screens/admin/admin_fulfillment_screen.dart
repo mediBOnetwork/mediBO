@@ -11012,14 +11012,13 @@ class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
   }
 }
 
-// ── CHANGE #295: Packing — nested PageViews fix swipe, name above img, #295 ──
+// ── CHANGE #296: Packing — red full-width bag band, tap-thirds image, brown dots ─
 
-// WHY OLD SWIPE WAS DEAD (#294): two competing GestureDetector(onHorizontalDragEnd)
-// widgets — one on the image area, one on the name area — failed to reliably win
-// Flutter's gesture arena on Flutter web (canvas). Fix: OUTER PageView.builder over
-// items[] (the only item-switcher) + INNER PageView.builder inside the image box for
-// multi-image products. Flutter routes a drag starting inside the inner PageView to it;
-// everything else goes to the outer. All old competing GestureDetectors are removed.
+// Architecture (from #295, retained):
+// • OUTER PageView.builder over items[] — horizontal SWIPE = switch items.
+// • _ItemImageView (replaces _ItemImagePager) — no inner PageView; TAP LEFT/RIGHT
+//   THIRD of the image cycles images; middle-third does nothing. Brown dots.
+// • Both gestures coexist because tap recognizer and drag recognizer don't conflict.
 
 class _PackingScreen extends StatefulWidget {
   final String orderId;
@@ -11041,8 +11040,6 @@ class _PackingScreenState extends State<_PackingScreen> {
   bool _marking     = false;
   bool _allPacked   = false;
 
-  // OUTER item PageView controller — created fresh after data loads so
-  // initialPage matches the first unpacked item index.
   PageController? _itemPageController;
 
   @override
@@ -11079,8 +11076,6 @@ class _PackingScreenState extends State<_PackingScreen> {
       final allDone  = startIdx == -1;
       final startPage = allDone ? 0 : startIdx;
       if (!mounted) return;
-      // Dispose old controller, create fresh with the correct initial page
-      // (PageView hasn't built yet because _loading==true, so initialPage works).
       _itemPageController?.dispose();
       _itemPageController = PageController(initialPage: startPage);
       setState(() {
@@ -11105,7 +11100,6 @@ class _PackingScreenState extends State<_PackingScreen> {
     }
   }
 
-  // Toggle: pack if unpacked, unpack if packed (#293 behaviour retained)
   Future<void> _toggleItem(int index) async {
     if (_marking || index < 0 || index >= _items.length) return;
     final item   = _items[index];
@@ -11130,9 +11124,8 @@ class _PackingScreenState extends State<_PackingScreen> {
         _marking = false;
       });
       try {
-        final wasStr = packed ? 'packed' : 'unpacked';
-        final nowStr = packed ? 'unpacked' : 'packed';
-        RenderLog.write('c293_btn_toggle', 'was=$wasStr;now=$nowStr;idx=$index');
+        RenderLog.write('c293_btn_toggle',
+            'was=${packed ? "packed" : "unpacked"};now=${packed ? "unpacked" : "packed"};idx=$index');
       } catch (_) {}
     } catch (e) {
       if (mounted) {
@@ -11251,7 +11244,6 @@ class _PackingScreenState extends State<_PackingScreen> {
     );
   }
 
-  // #294 retained: "Packed" header (not ✓) in all list-sheet popups
   void _showListSheet(String title, List<Map<String, dynamic>> items,
       {required bool showTick}) {
     showModalBottomSheet<void>(
@@ -11371,10 +11363,14 @@ class _PackingScreenState extends State<_PackingScreen> {
         backgroundColor: Colors.white,
         elevation: 0,
         surfaceTintColor: Colors.transparent,
-        leading: IconButton(
-          icon: const Icon(Icons.close, color: _kText),
-          onPressed: () => Navigator.pop(context),
-        ),
+        // CHANGE 6: professional back chevron replaces "X" (#296)
+        leading: Builder(builder: (ctx) {
+          try { RenderLog.write('c296_back_icon', 'icon=back_chevron'); } catch (_) {}
+          return IconButton(
+            icon: const Icon(Icons.arrow_back_ios_new, color: _kText, size: 20),
+            onPressed: () => Navigator.pop(ctx),
+          );
+        }),
         title: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(customer.isNotEmpty ? customer : 'Packing',
               style: const TextStyle(
@@ -11442,7 +11438,7 @@ class _PackingScreenState extends State<_PackingScreen> {
     ),
   );
 
-  // ── OUTER item PageView — the ONLY item switcher (#295 fix) ─────────────────
+  // ── OUTER item PageView — horizontal SWIPE switches items (#295 retained) ───
   Widget _buildItemView() {
     final ctrl = _itemPageController;
     if (ctrl == null) return const SizedBox.shrink();
@@ -11453,7 +11449,6 @@ class _PackingScreenState extends State<_PackingScreen> {
         color: _kGreen,
         minHeight: 4,
       ),
-      // OUTER PageView: one page per item — horizontal swipe switches items
       Expanded(
         child: PageView.builder(
           controller: ctrl,
@@ -11465,17 +11460,19 @@ class _PackingScreenState extends State<_PackingScreen> {
             try {
               RenderLog.write('c295_item_page',
                   'idx=$i/${_items.length};bag=$bagNo');
+              // #296 item-swipe render-log
+              RenderLog.write('c296_item_swipe',
+                  'dir=${i > _currentIndex ? "next" : "prev"};idx=$i/${_items.length}');
             } catch (_) {}
           },
           itemBuilder: (ctx, index) => _buildItemPage(index),
         ),
       ),
-      // Packed button is OUTSIDE the PageView — stays pinned at bottom
       _buildPackedButton(),
     ]);
   }
 
-  // One page of the outer PageView — order: counter / bag badge / name / image / (button outside)
+  // ── Per-item card page ───────────────────────────────────────────────────────
   Widget _buildItemPage(int index) {
     if (index >= _items.length) return const SizedBox.shrink();
     final item      = _items[index];
@@ -11483,10 +11480,11 @@ class _PackingScreenState extends State<_PackingScreen> {
     final packType  = item['pack_type']?.toString() ?? '';
     final qty       = (item['qty'] as num?)?.toInt() ?? 0;
     final bagNo     = (item['bag_no'] as num?)?.toInt() ?? 0;
-    final qtyLabel  = packType.isNotEmpty ? '$qty $packType' : '$qty';
+    // CHANGE 3: "x<qty> <packType>" format
+    final qtyLabel  = packType.isNotEmpty ? 'x$qty $packType' : 'x$qty';
     final itemId    = item['order_item_id']?.toString() ?? '';
 
-    // Defensively read images[] with fallback to image_url (#295 spec)
+    // Defensively read images[] with fallback to image_url (#295 spec retained)
     var imgs = ((item['images'] as List?)?.cast<String>() ?? const <String>[])
         .where((s) => s.isNotEmpty).toList();
     if (imgs.isEmpty) {
@@ -11495,21 +11493,17 @@ class _PackingScreenState extends State<_PackingScreen> {
     }
     final imgCount = imgs.length;
 
-    // CHANGE 3: per-bag position (all derived from _items, no backend call)
-    final bagItems     = _items.where(
+    // Per-bag position (#295 retained)
+    final bagItems    = _items.where(
         (i) => (i['bag_no'] as num?)?.toInt() == bagNo).toList();
-    final posInBag     = bagItems.indexWhere(
+    final posInBag    = bagItems.indexWhere(
         (i) => i['order_item_id']?.toString() == itemId) + 1;
-    final itemsInBag   = bagItems.length;
-    final packedInBag  = bagItems.where((i) => i['packed'] == true).length;
+    final itemsInBag  = bagItems.length;
+    final packedInBag = bagItems.where((i) => i['packed'] == true).length;
 
     try {
       RenderLog.write('c295_card_v4',
           'nameAbove=true;imgs=$imgCount;dots=${imgCount > 1 ? imgCount : 0}');
-    } catch (_) {}
-    try {
-      RenderLog.write('c295_counter_row',
-          'left=${index + 1}/$_totalItems;mid=$posInBag/$itemsInBag;right=$packedInBag/$itemsInBag;suffix=none');
     } catch (_) {}
 
     return Padding(
@@ -11518,62 +11512,66 @@ class _PackingScreenState extends State<_PackingScreen> {
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           const SizedBox(height: 10),
-          // CHANGE 3: three x/x counters, no "in bag" text, evenly spaced
+          // Three x/x counters — no "in bag" text (#295 retained)
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              // LEFT: overall position
               Text('${index + 1}/$_totalItems',
                   style: const TextStyle(fontSize: 13, color: _kSub,
                       fontWeight: FontWeight.w600)),
-              // MIDDLE: current item's position within its bag
               Text('$posInBag/$itemsInBag',
                   style: const TextStyle(fontSize: 13, color: _kSub,
                       fontWeight: FontWeight.w600)),
-              // RIGHT: packed items in this bag
               Text('$packedInBag/$itemsInBag',
                   style: const TextStyle(fontSize: 13, color: _kSub,
                       fontWeight: FontWeight.w600)),
             ],
           ),
           const SizedBox(height: 8),
-          // CHANGE 2: BIG yellow "Bag N" badge
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-            decoration: BoxDecoration(
-                color: const Color(0xFFFFF3CD),
-                borderRadius: BorderRadius.circular(28),
-                border: Border.all(color: const Color(0xFFFFCA28), width: 1.5)),
-            child: Text('Bag $bagNo',
-                style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900,
-                    color: Color(0xFF8A6D00)),
-                textAlign: TextAlign.center),
-          ),
-          const SizedBox(height: 8),
-          // CHANGE 1: product NAME above the image
+          // CHANGE 1: full-width RED bag band (#296)
+          Builder(builder: (ctx) {
+            try {
+              RenderLog.write('c296_bag_band',
+                  'bag=$bagNo;fullwidth=true;red=true;white_bold=true');
+            } catch (_) {}
+            return Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 10),
+              decoration: BoxDecoration(
+                  color: const Color(0xFFDC2626),   // app red
+                  borderRadius: BorderRadius.circular(14)),
+              child: Text('Bag $bagNo',
+                  style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800,
+                      color: Colors.white),
+                  textAlign: TextAlign.center),
+            );
+          }),
+          // CHANGE 2: clear gap badge→name (#296)
+          const SizedBox(height: 16),
+          // Product name above the image (#295 retained)
           Text(name,
               style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700,
                   color: _kText),
               textAlign: TextAlign.center,
               maxLines: 2,
               overflow: TextOverflow.ellipsis),
-          const SizedBox(height: 8),
-          // IMAGE — INNER PageView for multi-image cycling (#295 primary fix)
-          // Keyed by itemId so Flutter remounts and resets image index on item change.
+          // CHANGE 4a: reduced gap name→image to nudge image up (#296)
+          const SizedBox(height: 6),
+          // IMAGE — TAP-THIRDS for image cycling; SWIPE (outer PageView) for items
           Expanded(
-            child: _ItemImagePager(
+            child: _ItemImageView(
               key: ValueKey(itemId),
               images: imgs,
               qtyLabel: qtyLabel,
             ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 6),
         ],
       ),
     );
   }
 
-  // Toggle Packed button — green when unpacked, grey when packed (#295 CHANGE 7: no ✓)
+  // Toggle Packed button — green=unpacked, grey=packed; plain "Packed" label (#295)
   Widget _buildPackedButton() {
     final item     = (_currentIndex < _items.length) ? _items[_currentIndex] : null;
     final isPacked = item?['packed'] == true;
@@ -11596,8 +11594,7 @@ class _PackingScreenState extends State<_PackingScreen> {
                   width: 24, height: 24,
                   child: CircularProgressIndicator(
                       color: isPacked ? _kGreen : Colors.white, strokeWidth: 2.5))
-              : Text(
-                  'Packed', // CHANGE 7: no ✓ suffix
+              : Text('Packed',
                   style: TextStyle(
                       fontSize: 18, fontWeight: FontWeight.w700,
                       color: isPacked ? _kSub : Colors.white)),
@@ -11665,114 +11662,127 @@ class _PackingScreenState extends State<_PackingScreen> {
   }
 }
 
-// ── Inner image pager — owns its own PageController, keyed by item id ─────────
-// When the outer item PageView navigates to a new item, Flutter remounts this
-// widget (new ValueKey) so _imageIdx resets to 0 and a fresh controller is used.
-// The INNER PageView is strictly bounded to the image box; drags starting outside
-// it (e.g. on the product name above, or below in the button area) fall through
-// to the outer item PageView. This is standard Flutter nested-scrollable behaviour
-// — no manual GestureDetector intervention required.
+// ── #296: Image view — TAP LEFT/RIGHT THIRD = cycle images; no inner PageView ─
+// WHY THIS WORKS WITH THE OUTER PageView:
+// • The outer PageView registers a HorizontalDragGestureRecognizer for every
+//   pointer event in its subtree.
+// • This GestureDetector registers a TapGestureRecognizer.
+// • For a true TAP (minimal movement, quick), the TapGestureRecognizer wins the
+//   arena and fires onTapUp — image cycles.
+// • For a SWIPE (significant horizontal movement), the outer PageView's drag
+//   recognizer wins — item changes. The tap recognizer loses and onTapUp doesn't
+//   fire.
+// This is standard Flutter tap-vs-scroll arena resolution; no conflict.
 
-class _ItemImagePager extends StatefulWidget {
+class _ItemImageView extends StatefulWidget {
   final List<String> images;
   final String qtyLabel;
-  const _ItemImagePager({super.key, required this.images, required this.qtyLabel});
+  const _ItemImageView({super.key, required this.images, required this.qtyLabel});
   @override
-  State<_ItemImagePager> createState() => _ItemImagePagerState();
+  State<_ItemImageView> createState() => _ItemImageViewState();
 }
 
-class _ItemImagePagerState extends State<_ItemImagePager> {
-  late PageController _ctrl;
+class _ItemImageViewState extends State<_ItemImageView> {
   int _imageIdx = 0;
-
-  @override
-  void initState() {
-    super.initState();
-    _ctrl = PageController();
-  }
-
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    super.dispose();
-  }
 
   @override
   Widget build(BuildContext context) {
     final imgs     = widget.images;
     final imgCount = imgs.length;
+    final safeIdx  = imgCount == 0 ? 0 : _imageIdx.clamp(0, imgCount - 1);
+    final curImg   = imgCount > 0 ? imgs[safeIdx] : null;
+
+    // Brown colours for dots (#296 CHANGE 5)
+    const dotActive   = Color(0xFF6D4C41);   // dark brown
+    const dotInactive = Color(0xFF6D4C41);   // same hue, low alpha below
 
     return LayoutBuilder(builder: (ctx, constraints) {
       final size = constraints.maxHeight.clamp(0.0, constraints.maxWidth);
+
+      if (imgCount > 1) {
+        try {
+          RenderLog.write('c296_dots_brown',
+              'n=$imgCount;brown=true');
+        } catch (_) {}
+      }
+      try {
+        RenderLog.write('c296_qty_pill',
+            'text=${widget.qtyLabel};lightgreen=true;flat=true');
+      } catch (_) {}
+
       return Center(
         child: Stack(
           alignment: Alignment.center,
           children: [
-            // Image area: inner PageView when multiple images, plain Image when single
-            ClipRRect(
-              borderRadius: BorderRadius.circular(16),
-              child: SizedBox(
-                width: size, height: size,
-                child: imgCount > 1
-                    // INNER horizontal PageView — resolves gesture conflict because
-                    // Flutter routes drags starting inside this widget to this PageView,
-                    // while drags starting outside (above or below) go to the outer one.
-                    ? PageView.builder(
-                        controller: _ctrl,
-                        physics: const AlwaysScrollableScrollPhysics(),
-                        itemCount: imgCount,
-                        onPageChanged: (i) {
-                          setState(() => _imageIdx = i);
-                          try {
-                            RenderLog.write('c295_image_page',
-                                'img=$i/$imgCount');
-                          } catch (_) {}
-                        },
-                        itemBuilder: (_, i) => Image.network(
-                          imgs[i],
+            // Tap detector + image (#296 CHANGE 4b)
+            // HitTestBehavior.opaque: captures taps fully; the outer PageView still
+            // receives horizontal drag events because it is an ancestor that adds its
+            // recognizer regardless of descendant hit-test behaviour.
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTapUp: imgCount <= 1 ? null : (TapUpDetails details) {
+                final x     = details.localPosition.dx;
+                final third = size / 3;
+                String tapped;
+                if (x < third) {
+                  // left third → previous image (clamp, no wrap)
+                  tapped = 'left';
+                  if (safeIdx > 0) setState(() => _imageIdx = safeIdx - 1);
+                } else if (x > third * 2) {
+                  // right third → next image (clamp, no wrap)
+                  tapped = 'right';
+                  if (safeIdx < imgCount - 1) setState(() => _imageIdx = safeIdx + 1);
+                } else {
+                  tapped = 'mid'; // middle: nothing
+                }
+                try {
+                  RenderLog.write('c296_img_tap',
+                      'third=$tapped;img=$_imageIdx/$imgCount');
+                } catch (_) {}
+              },
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(16),
+                child: SizedBox(
+                  width: size, height: size,
+                  child: curImg != null && curImg.isNotEmpty
+                      ? Image.network(curImg,
                           fit: BoxFit.cover,
-                          errorBuilder: (_, __, ___) => _placeholder(size),
-                        ),
-                      )
-                    // Single image — no inner PageView; outer item-swipe works everywhere
-                    : (imgCount == 1
-                        ? Image.network(imgs[0],
-                            width: size, height: size, fit: BoxFit.cover,
-                            errorBuilder: (_, __, ___) => _placeholder(size))
-                        : _placeholder(size)),
+                          errorBuilder: (_, __, ___) => _placeholder(size))
+                      : _placeholder(size),
+                ),
               ),
             ),
-            // CHANGE 9: flat qty pill — top-right, NO boxShadow (#295)
+            // CHANGE 3: light-green flat qty pill, "x<qty> <pack_type>" (#296)
             Positioned(
               top: 10, right: 10,
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                 decoration: BoxDecoration(
-                    color: const Color(0xFFFFF3CD),
+                    color: _kReceivedBg,          // light green: Color(0xFFE1F5EE)
                     borderRadius: BorderRadius.circular(16)),
                 child: Text(widget.qtyLabel,
                     style: const TextStyle(
                         fontSize: 13, fontWeight: FontWeight.w700,
-                        color: Color(0xFF8A6D00))),
+                        color: _kReceivedFg)),    // dark green text
               ),
             ),
-            // CHANGE 8: dots overlay — current dot bigger+white, others small+faded
+            // CHANGE 5: BROWN dots — current enlarged dark brown, others faded (#296)
             if (imgCount > 1)
               Positioned(
                 bottom: 10, left: 0, right: 0,
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: List.generate(imgCount, (i) {
-                    final active = i == _imageIdx;
+                    final active = i == safeIdx;
                     return Container(
-                      width:  active ? 8 : 5,
-                      height: active ? 8 : 5,
+                      width:  active ? 9 : 5,
+                      height: active ? 9 : 5,
                       margin: const EdgeInsets.symmetric(horizontal: 3),
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
                         color: active
-                            ? Colors.white
-                            : Colors.white.withValues(alpha: 0.50),
+                            ? dotActive
+                            : dotInactive.withValues(alpha: 0.30),
                       ),
                     );
                   }),
@@ -11793,6 +11803,7 @@ class _ItemImagePagerState extends State<_ItemImagePager> {
         size: 64, color: Color(0xFFD1D5DB)),
   );
 }
+
 
 // ── CHANGE #294 retained: Bag quick-view sheet — no Bag col, Packed header ────
 

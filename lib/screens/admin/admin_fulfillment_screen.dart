@@ -10173,8 +10173,8 @@ class _BagAccordionShell extends StatelessWidget {
               child: Builder(builder: (ctx) {
                 RenderLog.write('c286_bag_header_v2',
                     'bag=$bagNo;items=$totalProducts;arrow=removed;dot=removed');
-                RenderLog.write('c288_items_badge_grey',
-                    'items=$totalProducts;grey=true;fixedw=true');
+                RenderLog.write('c289_items_badge_green',
+                    'items=$totalProducts;green=true;fixedw=true');
                 return Row(children: [
                   Text('Bag $bagNo',
                       style: TextStyle(
@@ -10187,14 +10187,14 @@ class _BagAccordionShell extends StatelessWidget {
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                       decoration: BoxDecoration(
-                        color: const Color(0xFFF3F4F6),
+                        color: _kReceivedBg,
                         borderRadius: BorderRadius.circular(20),
                       ),
                       child: Text('$totalProducts items',
                           textAlign: TextAlign.center,
                           style: const TextStyle(
                               fontSize: 11, fontWeight: FontWeight.w500,
-                              color: _kSub)),
+                              color: _kReceivedFg)),
                     ),
                   ),
                 ]);

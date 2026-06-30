@@ -4040,6 +4040,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     if (widget.arrivals) {
       RenderLog.write('c133_arrivals_filter_removed', 'true');
       RenderLog.write('c133_arrivals_item_count', '${visibleItems.length}');
+      RenderLog.write('c283_warehouse_rows_render',
+          'count=${visibleItems.length};ts=${DateTime.now().millisecondsSinceEpoch}');
     }
 
     return Container(
@@ -9621,8 +9623,6 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
   void initState() {
     super.initState();
     RenderLog.write('c280_bag_tab_mounted', 1);
-    RenderLog.write('c282_bag_picker_chip_mounted', 1); // confirms #282 picker chip code is active in BagTab
-    RenderLog.write('c282_warehouse_unchanged', false); // showBagPicker is false at Warehouse call site — architectural guarantee
     _load();
     _subscribeRealtime();
   }
@@ -10131,12 +10131,6 @@ class _BagPickerChip extends StatefulWidget {
 class _BagPickerChipState extends State<_BagPickerChip> {
   bool _busy = false;
 
-  @override
-  void initState() {
-    super.initState();
-    RenderLog.write('c282_bag_picker_chip_mounted', 1);
-  }
-
   Future<void> _openPicker() async {
     if (_busy) return;
     RenderLog.write('c282_bag_picker_opened', 1);
@@ -10228,6 +10222,8 @@ class _BagPickerChipState extends State<_BagPickerChip> {
 
   @override
   Widget build(BuildContext context) {
+    RenderLog.write('c282_bag_picker_chip_mounted',
+        'bag_no=${widget.currentBagNo};ts=${DateTime.now().millisecondsSinceEpoch}');
     final label = widget.currentBagNo != null ? 'Bag ${widget.currentBagNo}' : 'No bag';
     return GestureDetector(
       onTap: _openPicker,

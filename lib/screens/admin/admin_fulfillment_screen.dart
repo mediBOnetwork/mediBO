@@ -10487,6 +10487,8 @@ class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
   final ScrollController _scroll = ScrollController();
   final Map<String, GlobalKey> _rowKeys = {};
   double _savedScrollOffset = 0.0;
+  // #290: pack_get_queue status cache — null value means fetch in progress or failed
+  final Map<String, Map<String, int>?> _packStatus = {};
 
   @override
   bool get wantKeepAlive => true;
@@ -10514,10 +10516,103 @@ class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
         _customers = data.map((r) => Map<String, dynamic>.from(r as Map)).toList();
         _loading = false;
       });
+      // prefetch packing status for all orders in background
+      for (final c in _customers) {
+        final oid = c['order_id']?.toString() ?? '';
+        if (oid.isNotEmpty) _fetchPackStatus(oid);
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() { _error = e.toString(); _loading = false; });
     }
+  }
+
+  Future<void> _fetchPackStatus(String orderId) async {
+    if (_packStatus.containsKey(orderId) && _packStatus[orderId] != null) return;
+    _packStatus[orderId] = null; // mark as in-progress
+    try {
+      final res = await Supabase.instance.client
+          .rpc('pack_get_queue', params: {'p_order_id': orderId});
+      final m = Map<String, dynamic>.from(res as Map);
+      final total  = (m['total_items']  as num?)?.toInt() ?? 0;
+      final packed = (m['packed_count'] as num?)?.toInt() ?? 0;
+      if (mounted) setState(() => _packStatus[orderId] = {'packed': packed, 'total': total});
+    } catch (_) {
+      // leave as null so next build can retry
+      if (mounted) setState(() => _packStatus.remove(orderId));
+    }
+  }
+
+  Widget _buildPackingButton(Map<String, dynamic> c) {
+    final orderId = c['order_id']?.toString() ?? '';
+    if (orderId.isEmpty) return const SizedBox.shrink();
+
+    // trigger fetch if not yet cached
+    if (!_packStatus.containsKey(orderId)) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _fetchPackStatus(orderId));
+      return const Padding(
+        padding: EdgeInsets.fromLTRB(16, 10, 16, 0),
+        child: SizedBox(height: 44, child: Center(
+            child: SizedBox(width: 20, height: 20,
+                child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2)))),
+      );
+    }
+
+    final status = _packStatus[orderId];
+    if (status == null) {
+      // still fetching
+      return const Padding(
+        padding: EdgeInsets.fromLTRB(16, 10, 16, 0),
+        child: SizedBox(height: 44, child: Center(
+            child: SizedBox(width: 20, height: 20,
+                child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2)))),
+      );
+    }
+
+    final packed = status['packed'] ?? 0;
+    final total  = status['total']  ?? 0;
+    if (total == 0) return const SizedBox.shrink();
+
+    final String label;
+    final String logLabel;
+    if (packed == 0) {
+      label = 'Start Packing';
+      logLabel = 'Start';
+    } else if (packed >= total) {
+      label = 'Packed ✓ — View';
+      logLabel = 'Packed';
+    } else {
+      label = 'Resume Packing ($packed/$total)';
+      logLabel = 'Resume';
+    }
+
+    RenderLog.write('c290_pack_btn',
+        'order=${orderId.substring(0, orderId.length.clamp(0, 8))};packed=$packed;total=$total;label=$logLabel');
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+      child: SizedBox(
+        width: double.infinity,
+        height: 44,
+        child: FilledButton(
+          style: FilledButton.styleFrom(
+            backgroundColor: _kGreen,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          ),
+          onPressed: () async {
+            await Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => _PackingScreen(orderId: orderId)),
+            );
+            // refresh status after returning
+            _packStatus.remove(orderId);
+            if (mounted) _fetchPackStatus(orderId);
+          },
+          child: Text(label, style: const TextStyle(
+              fontWeight: FontWeight.w700, fontSize: 15, color: Colors.white)),
+        ),
+      ),
+    );
   }
 
   Future<void> _loadItems(String orderId) async {
@@ -10670,6 +10765,9 @@ class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
 
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       const Divider(height: 1, color: _kBorder),
+
+      // #290: Start/Resume/Packed packing button
+      _buildPackingButton(c),
 
       // Voice bar — identical layout, permanently disabled in Pack
       _buildPackVoiceBar(),
@@ -10896,6 +10994,511 @@ class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
           style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
               color: isReady ? _kReceivedFg : const Color(0xFF92400E)),
         )),
+      ]),
+    );
+  }
+}
+
+// ── CHANGE #290: Packing flow — full-screen packing screen ───────────────────
+
+class _PackingScreen extends StatefulWidget {
+  final String orderId;
+  const _PackingScreen({required this.orderId});
+  @override
+  State<_PackingScreen> createState() => _PackingScreenState();
+}
+
+class _PackingScreenState extends State<_PackingScreen> {
+  bool _loading = true;
+  String? _error;
+  Map<String, dynamic>? _queue;
+  List<Map<String, dynamic>> _items = [];
+  int _currentIndex = 0;
+  int _packedCount = 0;
+  int _totalItems  = 0;
+  int _leftCount   = 0;
+  bool _marking    = false;
+  bool _allPacked  = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadQueue();
+  }
+
+  Future<void> _loadQueue() async {
+    if (!mounted) return;
+    setState(() { _loading = true; _error = null; });
+    try {
+      final res = await Supabase.instance.client
+          .rpc('pack_get_queue', params: {'p_order_id': widget.orderId});
+      final m     = Map<String, dynamic>.from(res as Map);
+      final items = (m['items'] as List)
+          .map((i) => Map<String, dynamic>.from(i as Map))
+          .toList();
+      final packed  = (m['packed_count'] as num?)?.toInt() ?? 0;
+      final total   = (m['total_items']  as num?)?.toInt() ?? 0;
+      final left    = (m['left_count']   as num?)?.toInt() ?? 0;
+      final startIdx = items.indexWhere((i) => i['packed'] != true);
+      final allDone  = startIdx == -1;
+      if (!mounted) return;
+      setState(() {
+        _queue        = m;
+        _items        = items;
+        _currentIndex = allDone ? 0 : startIdx;
+        _packedCount  = packed;
+        _totalItems   = total;
+        _leftCount    = left;
+        _allPacked    = allDone;
+        _loading      = false;
+      });
+      try {
+        RenderLog.write('c290_pack_open',
+            'cust=${m['customer']};total=$total;bags=${m['bag_count']};startIdx=${allDone ? "done" : startIdx}');
+        if (allDone) RenderLog.write('c290_pack_done', 'cust=${m['customer']};total=$total');
+      } catch (_) {}
+    } catch (e) {
+      if (mounted) setState(() { _error = e.toString(); _loading = false; });
+    }
+  }
+
+  Future<void> _onPacked() async {
+    if (_marking || _currentIndex >= _items.length) return;
+    setState(() => _marking = true);
+    final item   = _items[_currentIndex];
+    final itemId = item['order_item_id']?.toString() ?? '';
+    try {
+      await Supabase.instance.client
+          .rpc('pack_mark_item', params: {'p_order_item_id': itemId, 'p_packed': true});
+      if (!mounted) return;
+      setState(() {
+        _items[_currentIndex] = {...item, 'packed': true};
+        _packedCount++;
+        _leftCount = (_leftCount - 1).clamp(0, _totalItems);
+        final next = _items.indexWhere((i) => i['packed'] != true);
+        if (next == -1) {
+          _allPacked = true;
+        } else {
+          _currentIndex = next;
+        }
+        _marking = false;
+      });
+      try {
+        RenderLog.write('c290_pack_mark',
+            'item=${itemId.substring(0, itemId.length.clamp(0, 8))};packed_now=$_packedCount;left=$_leftCount');
+        if (_allPacked) {
+          RenderLog.write('c290_pack_done', 'cust=${_queue?['customer']};total=$_totalItems');
+        }
+      } catch (_) {}
+    } catch (e) {
+      if (mounted) {
+        setState(() => _marking = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Error: $e'), duration: const Duration(seconds: 3)));
+      }
+    }
+  }
+
+  void _showBagQuickView() {
+    try { RenderLog.write('c290_bag_quickview', 'bags=${_queue?['bag_count'] ?? 0}'); } catch (_) {}
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (_) => _BagQuickViewSheet(items: _items),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final customer     = _queue?['customer']?.toString() ?? '';
+    final customerCode = _queue?['customer_code']?.toString() ?? '';
+    final bagCount     = (_queue?['bag_count']    as num?)?.toInt() ?? 0;
+    final uniqueItems  = (_queue?['unique_items']  as num?)?.toInt() ?? 0;
+
+    return Scaffold(
+      backgroundColor: _kBg,
+      appBar: AppBar(
+        backgroundColor: Colors.white,
+        elevation: 0,
+        surfaceTintColor: Colors.transparent,
+        leading: IconButton(
+          icon: const Icon(Icons.close, color: _kText),
+          onPressed: () => Navigator.pop(context),
+        ),
+        title: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(customer.isNotEmpty ? customer : 'Packing',
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _kText)),
+          if (customerCode.isNotEmpty)
+            Text(customerCode, style: const TextStyle(fontSize: 12, color: _kSub)),
+        ]),
+        actions: [
+          if (!_loading && _queue != null)
+            TextButton.icon(
+              icon: const Icon(Icons.inventory_2_outlined, size: 16, color: _kGreen),
+              label: const Text('Bags',
+                  style: TextStyle(color: _kGreen, fontWeight: FontWeight.w600, fontSize: 13)),
+              onPressed: _showBagQuickView,
+            ),
+        ],
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(36),
+          child: _loading
+              ? const SizedBox.shrink()
+              : _buildStatRow(uniqueItems, bagCount),
+        ),
+      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2))
+          : _error != null
+              ? Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  const Icon(Icons.error_outline, size: 40, color: _kSub),
+                  const SizedBox(height: 12),
+                  Padding(padding: const EdgeInsets.symmetric(horizontal: 24),
+                      child: Text(_error!, style: const TextStyle(color: _kSub, fontSize: 14),
+                          textAlign: TextAlign.center)),
+                  const SizedBox(height: 16),
+                  OutlinedButton(
+                    onPressed: _loadQueue,
+                    style: OutlinedButton.styleFrom(
+                        side: const BorderSide(color: _kGreen),
+                        foregroundColor: _kGreen,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
+                    child: const Text('Retry'),
+                  ),
+                ]))
+              : _allPacked
+                  ? _buildAllPackedScreen(customer, bagCount)
+                  : _buildItemFlasher(),
+    );
+  }
+
+  Widget _buildStatRow(int uniqueItems, int bagCount) {
+    return Container(
+      color: Colors.white,
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+      child: Row(children: [
+        _statPill('$uniqueItems items'),
+        const SizedBox(width: 8),
+        _statPill('$bagCount bags'),
+        const SizedBox(width: 8),
+        _statPill('$_packedCount packed'),
+        const SizedBox(width: 8),
+        _statPill('$_leftCount left'),
+      ]),
+    );
+  }
+
+  Widget _statPill(String text) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+    decoration: BoxDecoration(
+        color: const Color(0xFFF3F4F6), borderRadius: BorderRadius.circular(20)),
+    child: Text(text,
+        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: _kSub)),
+  );
+
+  Widget _buildItemFlasher() {
+    if (_currentIndex >= _items.length) return const SizedBox.shrink();
+    final item     = _items[_currentIndex];
+    final name     = item['product_name']?.toString() ?? '—';
+    final imageUrl = item['image_url']?.toString();
+    final packType = item['pack_type']?.toString() ?? '';
+    final qty      = (item['qty'] as num?)?.toInt() ?? 0;
+    final bagNo    = (item['bag_no'] as num?)?.toInt();
+    final qtyLabel = packType.isNotEmpty ? '$qty $packType' : '$qty';
+
+    return Column(children: [
+      LinearProgressIndicator(
+        value: _totalItems == 0 ? 0 : _packedCount / _totalItems,
+        backgroundColor: _kBorder,
+        color: _kGreen,
+        minHeight: 4,
+      ),
+      Expanded(child: SingleChildScrollView(child: Padding(
+        padding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.center, children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(16),
+            child: imageUrl != null && imageUrl.isNotEmpty
+                ? Image.network(imageUrl, width: 220, height: 220, fit: BoxFit.contain,
+                    errorBuilder: (_, __, ___) => _imgPlaceholder(220))
+                : _imgPlaceholder(220),
+          ),
+          const SizedBox(height: 20),
+          Text(name,
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: _kText),
+              textAlign: TextAlign.center, maxLines: 3, overflow: TextOverflow.ellipsis),
+          const SizedBox(height: 8),
+          Text(qtyLabel,
+              style: const TextStyle(fontSize: 16, color: _kSub, fontWeight: FontWeight.w500),
+              textAlign: TextAlign.center),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+                color: _kReceivedBg, borderRadius: BorderRadius.circular(20)),
+            child: Text(bagNo != null ? 'Bag $bagNo' : 'No bag',
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: _kReceivedFg)),
+          ),
+          const SizedBox(height: 12),
+          Text('$_packedCount / $_totalItems packed',
+              style: const TextStyle(fontSize: 12, color: _kSub)),
+        ]),
+      ))),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(24, 8, 24, 32),
+        child: SizedBox(
+          width: double.infinity,
+          height: 56,
+          child: FilledButton(
+            style: FilledButton.styleFrom(
+                backgroundColor: _kGreen,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
+            onPressed: _marking ? null : _onPacked,
+            child: _marking
+                ? const SizedBox(width: 24, height: 24,
+                    child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2.5))
+                : const Text('Packed ✓',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: Colors.white)),
+          ),
+        ),
+      ),
+    ]);
+  }
+
+  Widget _imgPlaceholder(double size) => Container(
+    width: size, height: size,
+    decoration: BoxDecoration(
+        color: const Color(0xFFF3F4F6), borderRadius: BorderRadius.circular(16)),
+    child: const Icon(Icons.medication_outlined, size: 64, color: Color(0xFFD1D5DB)),
+  );
+
+  Widget _buildAllPackedScreen(String customer, int bagCount) {
+    return Center(child: Padding(
+      padding: const EdgeInsets.all(32),
+      child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.center, children: [
+        Container(
+          width: 80, height: 80,
+          decoration: const BoxDecoration(color: _kReceivedBg, shape: BoxShape.circle),
+          child: const Icon(Icons.check_circle_outline_rounded, size: 48, color: _kReceivedFg),
+        ),
+        const SizedBox(height: 20),
+        const Text('All Packed', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w700, color: _kText)),
+        const SizedBox(height: 8),
+        Text('$_totalItems items · $bagCount bags packed for $customer',
+            style: const TextStyle(fontSize: 14, color: _kSub),
+            textAlign: TextAlign.center),
+        const SizedBox(height: 32),
+        SizedBox(
+          width: double.infinity,
+          height: 48,
+          child: FilledButton(
+            style: FilledButton.styleFrom(
+                backgroundColor: _kGreen,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Done',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Colors.white)),
+          ),
+        ),
+      ]),
+    ));
+  }
+}
+
+// ── CHANGE #290: Bag quick-view sheet (mirrors "Counted items / Clip x" style) ─
+
+class _BagQuickViewSheet extends StatefulWidget {
+  final List<Map<String, dynamic>> items;
+  const _BagQuickViewSheet({required this.items});
+  @override
+  State<_BagQuickViewSheet> createState() => _BagQuickViewSheetState();
+}
+
+class _BagQuickViewSheetState extends State<_BagQuickViewSheet> {
+  int? _selectedBag;
+
+  List<int> get _bags {
+    final seen = <int>{};
+    for (final item in widget.items) {
+      final bn = (item['bag_no'] as num?)?.toInt();
+      if (bn != null) seen.add(bn);
+    }
+    return seen.toList()..sort();
+  }
+
+  List<Map<String, dynamic>> get _filtered {
+    if (_selectedBag == null) return widget.items;
+    return widget.items
+        .where((i) => (i['bag_no'] as num?)?.toInt() == _selectedBag)
+        .toList();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bags     = _bags;
+    final filtered = _filtered;
+    final showBag  = _selectedBag == null;
+
+    return Container(
+      constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.75),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        // Header (mirrors "Counted items" sheet header exactly)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(14, 10, 4, 6),
+          child: Row(children: [
+            const Text('Bags',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _kText)),
+            const Spacer(),
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => Navigator.pop(context),
+              child: SizedBox(width: 44, height: 44, child: Center(
+                child: Container(
+                  width: 28, height: 28,
+                  decoration: const BoxDecoration(color: Color(0xFFE0E0E0), shape: BoxShape.circle),
+                  alignment: Alignment.center,
+                  child: const Icon(Icons.close, size: 18, color: Color(0xFF000000)),
+                ),
+              )),
+            ),
+          ]),
+        ),
+        // Chip row: "All" + one chip per bag (mirrors "All / Clip 1 / Clip 2")
+        Padding(
+          padding: const EdgeInsets.fromLTRB(0, 0, 0, 8),
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            child: Row(children: [
+              GestureDetector(
+                onTap: () => setState(() => _selectedBag = null),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: _selectedBag == null ? _kGreen : const Color(0xFFE8F5E9),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: _kGreen),
+                  ),
+                  child: Text('All', style: TextStyle(
+                      fontSize: 12, fontWeight: FontWeight.w600,
+                      color: _selectedBag == null ? Colors.white : _kGreen)),
+                ),
+              ),
+              ...bags.map((bn) => Padding(
+                padding: const EdgeInsets.only(left: 8),
+                child: GestureDetector(
+                  onTap: () => setState(() => _selectedBag = bn),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: _selectedBag == bn ? _kGreen : const Color(0xFFE8F5E9),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: _kGreen),
+                    ),
+                    child: Text('Bag $bn', style: TextStyle(
+                        fontSize: 12, fontWeight: FontWeight.w600,
+                        color: _selectedBag == bn ? Colors.white : _kGreen)),
+                  ),
+                ),
+              )),
+            ]),
+          ),
+        ),
+        const Divider(height: 1, color: _kBorder),
+        // Table header
+        Container(
+          color: const Color(0xFFF5F6F8),
+          child: Row(children: [
+            Expanded(child: Padding(
+                padding: const EdgeInsets.fromLTRB(10, 6, 4, 6),
+                child: const Text('Product',
+                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _kSub)))),
+            SizedBox(width: 90, child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                child: const Text('Qty',
+                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _kSub)))),
+            if (showBag)
+              SizedBox(width: 52, child: Padding(
+                  padding: const EdgeInsets.fromLTRB(4, 6, 10, 6),
+                  child: const Text('Bag',
+                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _kSub),
+                      textAlign: TextAlign.right))),
+          ]),
+        ),
+        // Table body
+        Flexible(child: SingleChildScrollView(child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: _buildTableRows(filtered, bags, showBag),
+        ))),
+      ]),
+    );
+  }
+
+  List<Widget> _buildTableRows(
+      List<Map<String, dynamic>> items, List<int> bags, bool showBag) {
+    if (!showBag) {
+      return items.map(_buildTableRow).toList();
+    }
+    // Group by bag (smallest first, null last)
+    final grouped = <int?, List<Map<String, dynamic>>>{};
+    for (final item in items) {
+      final bn = (item['bag_no'] as num?)?.toInt();
+      grouped.putIfAbsent(bn, () => []).add(item);
+    }
+    final List<Widget> rows = [];
+    for (final bn in [...bags, null]) {
+      final group = grouped[bn];
+      if (group == null || group.isEmpty) continue;
+      rows.add(Container(
+        color: const Color(0xFFF5F6F8),
+        padding: const EdgeInsets.fromLTRB(10, 4, 10, 4),
+        child: Text(bn != null ? 'Bag $bn' : 'No bag',
+            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _kSub)),
+      ));
+      rows.addAll(group.map(_buildTableRow));
+    }
+    return rows;
+  }
+
+  Widget _buildTableRow(Map<String, dynamic> item) {
+    final name     = item['product_name']?.toString() ?? '—';
+    final packType = item['pack_type']?.toString() ?? '';
+    final qty      = (item['qty'] as num?)?.toInt() ?? 0;
+    final bagNo    = (item['bag_no'] as num?)?.toInt();
+    final qtyLabel = packType.isNotEmpty ? '$qty $packType' : '$qty';
+    final showBag  = _selectedBag == null;
+
+    return Container(
+      decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: _kBorder))),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+        Expanded(child: Padding(
+          padding: const EdgeInsets.fromLTRB(10, 8, 4, 8),
+          child: Text(name,
+              style: const TextStyle(fontSize: 12, color: _kText),
+              overflow: TextOverflow.ellipsis, maxLines: 2),
+        )),
+        SizedBox(width: 90, child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+            decoration: BoxDecoration(
+                color: const Color(0xFFF5F6F8),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: _kBorder)),
+            child: Text(qtyLabel,
+                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText)),
+          ),
+        )),
+        if (showBag)
+          SizedBox(width: 52, child: Padding(
+            padding: const EdgeInsets.fromLTRB(4, 8, 10, 8),
+            child: Text(bagNo != null ? '$bagNo' : '—',
+                style: const TextStyle(fontSize: 12, color: _kSub),
+                textAlign: TextAlign.right),
+          )),
       ]),
     );
   }

@@ -11012,7 +11012,7 @@ class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
   }
 }
 
-// ── CHANGE #293: Packing flow — redesigned card, two-zone swipe, bag colours ─
+// ── CHANGE #294: Packing — pure-swipe, in-image multi-image, reordered card ──
 
 class _PackingScreen extends StatefulWidget {
   final String orderId;
@@ -11022,11 +11022,12 @@ class _PackingScreen extends StatefulWidget {
 }
 
 class _PackingScreenState extends State<_PackingScreen> {
-  bool _loading = true;
+  bool _loading    = true;
   String? _error;
   Map<String, dynamic>? _queue;
   List<Map<String, dynamic>> _items = [];
   int _currentIndex = 0;
+  int _imageIndex   = 0;   // current image index within the current item
   int _packedCount  = 0;
   int _totalItems   = 0;
   int _leftCount    = 0;
@@ -11065,6 +11066,7 @@ class _PackingScreenState extends State<_PackingScreen> {
         _queue        = m;
         _items        = items;
         _currentIndex = allDone ? 0 : startIdx;
+        _imageIndex   = 0;
         _packedCount  = packed;
         _totalItems   = total;
         _leftCount    = left;
@@ -11083,12 +11085,27 @@ class _PackingScreenState extends State<_PackingScreen> {
     }
   }
 
+  // Switch to a different item, always resetting image index (#294 CHANGE 6)
   void _goToItem(int index) {
     if (index < 0 || index >= _items.length) return;
-    setState(() => _currentIndex = index);
+    setState(() { _currentIndex = index; _imageIndex = 0; });
   }
 
-  // Toggle: pack if unpacked, unpack if packed (CHANGE 3 — simple tap both ways, no hold)
+  // Extract the images array for a given item (#294 CHANGE 6)
+  List<String> _imagesOf(Map<String, dynamic> item) {
+    final raw = item['images'];
+    if (raw is List && raw.isNotEmpty) {
+      final urls = raw
+          .map((e) => e?.toString() ?? '')
+          .where((s) => s.isNotEmpty)
+          .toList();
+      if (urls.isNotEmpty) return urls;
+    }
+    final single = item['image_url']?.toString() ?? '';
+    return single.isNotEmpty ? [single] : [];
+  }
+
+  // Toggle: pack if unpacked, unpack if packed
   Future<void> _toggleItem(int index) async {
     if (_marking || index < 0 || index >= _items.length) return;
     final item   = _items[index];
@@ -11104,12 +11121,10 @@ class _PackingScreenState extends State<_PackingScreen> {
       setState(() {
         _items[index] = {...item, 'packed': !packed};
         if (!packed) {
-          // packing
           _packedCount++;
           _leftCount = (_leftCount - 1).clamp(0, _totalItems);
           if (_leftCount == 0) _allPacked = true;
         } else {
-          // unpacking
           _packedCount = (_packedCount - 1).clamp(0, _totalItems);
           _leftCount++;
           _allPacked = false;
@@ -11128,7 +11143,7 @@ class _PackingScreenState extends State<_PackingScreen> {
     }
   }
 
-  // ── Per-bag rollup helpers (#293 CHANGE 4) ──────────────────────────────────
+  // ── Per-bag rollup (#293 retained) ──────────────────────────────────────────
 
   Map<int, Map<String, int>> _computeBagStats() {
     final result = <int, Map<String, int>>{};
@@ -11154,13 +11169,13 @@ class _PackingScreenState extends State<_PackingScreen> {
     return 0;
   }
 
-  Color _bagBg(int status)     => status == 2 ? _kReceivedBg
+  Color _bagBg(int status)  => status == 2 ? _kReceivedBg
       : status == 1 ? const Color(0xFFFFF3CD)
       : const Color(0xFFF3F4F6);
-  Color _bagBorder(int status) => status == 2 ? _kGreen
+  Color _bagBorderC(int status) => status == 2 ? _kGreen
       : status == 1 ? const Color(0xFFFFCA28)
       : _kBorder;
-  Color _bagFg(int status)     => status == 2 ? _kReceivedFg
+  Color _bagFg(int status)  => status == 2 ? _kReceivedFg
       : status == 1 ? const Color(0xFF8A6D00)
       : _kSub;
 
@@ -11237,6 +11252,7 @@ class _PackingScreenState extends State<_PackingScreen> {
     );
   }
 
+  // #294 CHANGE 3: ✓ HEADER → "Packed" in all list-sheet popups
   void _showListSheet(String title, List<Map<String, dynamic>> items,
       {required bool showTick}) {
     showModalBottomSheet<void>(
@@ -11257,15 +11273,18 @@ class _PackingScreenState extends State<_PackingScreen> {
                 child: Text('Product', style: TextStyle(
                     fontSize: 11, fontWeight: FontWeight.w600, color: _kSub)),
               )),
-              const SizedBox(width: 80, child: Padding(
+              // Qty header — centered (#294 CHANGE 2)
+              const SizedBox(width: 72, child: Padding(
                 padding: EdgeInsets.symmetric(vertical: 6),
-                child: Text('Qty', style: TextStyle(
-                    fontSize: 11, fontWeight: FontWeight.w600, color: _kSub)),
+                child: Text('Qty', textAlign: TextAlign.center,
+                    style: TextStyle(
+                        fontSize: 11, fontWeight: FontWeight.w600, color: _kSub)),
               )),
+              // "Packed" header (#294 CHANGE 3)
               if (showTick)
-                const SizedBox(width: 32, child: Padding(
-                  padding: EdgeInsets.fromLTRB(0, 6, 10, 6),
-                  child: Text('✓', textAlign: TextAlign.center,
+                const SizedBox(width: 52, child: Padding(
+                  padding: EdgeInsets.fromLTRB(0, 6, 8, 6),
+                  child: Text('Packed', textAlign: TextAlign.center,
                       style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
                           color: _kGreen)),
                 )),
@@ -11288,12 +11307,14 @@ class _PackingScreenState extends State<_PackingScreen> {
                     child: Text(name, style: const TextStyle(fontSize: 12, color: _kText),
                         overflow: TextOverflow.ellipsis, maxLines: 2),
                   )),
-                  SizedBox(width: 80, child: Padding(
+                  // Qty value — centered (#294 CHANGE 2)
+                  SizedBox(width: 72, child: Center(child: Padding(
                     padding: const EdgeInsets.symmetric(vertical: 6),
-                    child: Text(qtyLabel, style: const TextStyle(fontSize: 12, color: _kSub)),
-                  )),
+                    child: Text(qtyLabel, textAlign: TextAlign.center,
+                        style: const TextStyle(fontSize: 12, color: _kSub)),
+                  ))),
                   if (showTick)
-                    SizedBox(width: 32, child: Center(
+                    SizedBox(width: 52, child: Center(
                       child: isPacked
                           ? const Text('✓', style: TextStyle(fontSize: 14,
                               fontWeight: FontWeight.w700, color: _kGreen))
@@ -11393,7 +11414,6 @@ class _PackingScreenState extends State<_PackingScreen> {
     );
   }
 
-  // ── Header stat pills — no chevron (#293 CHANGE 2) ──────────────────────────
   Widget _buildStatRow() {
     String s(int n, String sg, String pl) => '$n ${n == 1 ? sg : pl}';
     try { RenderLog.write('c293_no_chevron', 'chevron=removed'); } catch (_) {}
@@ -11415,7 +11435,6 @@ class _PackingScreenState extends State<_PackingScreen> {
     );
   }
 
-  // No chevron icon — CHANGE 2
   Widget _tappablePill(String text, VoidCallback onTap) => GestureDetector(
     onTap: onTap,
     child: Container(
@@ -11428,26 +11447,31 @@ class _PackingScreenState extends State<_PackingScreen> {
     ),
   );
 
-  // ── Main item view — new layout with two-zone gestures (#293 CHANGES 5,6,7) ─
+  // ── Main item card — #294 order: top row / bag badge / image / name / button ─
   Widget _buildItemView() {
     if (_currentIndex >= _items.length) return const SizedBox.shrink();
     final item      = _items[_currentIndex];
     final name      = item['product_name']?.toString() ?? '—';
-    final imageUrl  = item['image_url']?.toString();
     final packType  = item['pack_type']?.toString() ?? '';
     final qty       = (item['qty'] as num?)?.toInt() ?? 0;
     final bagNo     = (item['bag_no'] as num?)?.toInt() ?? 0;
     final qtyLabel  = packType.isNotEmpty ? '$qty $packType' : '$qty';
 
-    // Per-bag packing count for current bag
+    // Multi-image support (#294 CHANGE 6)
+    final images     = _imagesOf(item);
+    final imgCount   = images.length;
+    final safeImgIdx = imgCount == 0 ? 0 : _imageIndex.clamp(0, imgCount - 1);
+    final currentImg = imgCount > 0 ? images[safeImgIdx] : null;
+
+    // Per-bag packing count
     final bagStats  = _computeBagStats();
     final bagSt     = bagStats[bagNo];
     final bagPacked = bagSt?['packed'] ?? 0;
     final bagTotal  = bagSt?['total']  ?? 0;
 
     try {
-      RenderLog.write('c293_card_v2',
-          'idx=$_currentIndex;bag=$bagNo;inbag=$bagPacked/$bagTotal;img_overlay=true');
+      RenderLog.write('c294_card_v3',
+          'idx=$_currentIndex;bag=$bagNo;imgs=$imgCount;order=bag,img,name,btn');
     } catch (_) {}
 
     return Column(children: [
@@ -11458,93 +11482,79 @@ class _PackingScreenState extends State<_PackingScreen> {
         color: _kGreen,
         minHeight: 4,
       ),
-      Expanded(child: Stack(children: [
-        // ── Card content ──────────────────────────────────────────────────────
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              const SizedBox(height: 10),
-              // Top row: overall position (left) + per-bag count (right)
-              Row(children: [
-                Text('${_currentIndex + 1} / $_totalItems',
-                    style: const TextStyle(fontSize: 13, color: _kSub,
-                        fontWeight: FontWeight.w500)),
-                const Spacer(),
-                Text('$bagPacked / $bagTotal in bag',
-                    style: const TextStyle(fontSize: 13, color: _kSub,
-                        fontWeight: FontWeight.w500)),
-              ]),
-              const SizedBox(height: 10),
-              // Bottom zone: swipe left/right on this area switches items (CHANGE 7)
-              GestureDetector(
+      Expanded(child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            const SizedBox(height: 10),
+            // 1. Top row: overall left, per-bag right
+            Row(children: [
+              Text('${_currentIndex + 1} / $_totalItems',
+                  style: const TextStyle(fontSize: 13, color: _kSub,
+                      fontWeight: FontWeight.w500)),
+              const Spacer(),
+              Text('$bagPacked / $bagTotal in bag',
+                  style: const TextStyle(fontSize: 13, color: _kSub,
+                      fontWeight: FontWeight.w500)),
+            ]),
+            const SizedBox(height: 8),
+            // 2. Big YELLOW "Bag N" badge — directly above the image (#294 CHANGE 5)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 5),
+              decoration: BoxDecoration(
+                  color: const Color(0xFFFFF3CD),
+                  borderRadius: BorderRadius.circular(24),
+                  border: Border.all(color: const Color(0xFFFFCA28), width: 1.5)),
+              child: Text('Bag $bagNo',
+                  style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800,
+                      color: Color(0xFF8A6D00)),
+                  textAlign: TextAlign.center),
+            ),
+            const SizedBox(height: 8),
+            // 3. IMAGE — dominant element, ~55-60% of available space
+            //    Swipe inside image = cycle images (#294 CHANGE 6+7)
+            Expanded(
+              flex: 60,
+              child: GestureDetector(
                 behavior: HitTestBehavior.opaque,
                 onHorizontalDragEnd: (details) {
+                  if (imgCount <= 1) return;
                   final v = details.primaryVelocity ?? 0;
-                  if (v < -300 && _currentIndex < _items.length - 1) {
-                    _goToItem(_currentIndex + 1);
-                    try { RenderLog.write('c293_two_zone',
-                        'zone=bottom;dir=next;action=item'); } catch (_) {}
-                  } else if (v > 300 && _currentIndex > 0) {
-                    _goToItem(_currentIndex - 1);
-                    try { RenderLog.write('c293_two_zone',
-                        'zone=bottom;dir=prev;action=item'); } catch (_) {}
+                  if (v < -200) {
+                    final nextIdx = (safeImgIdx + 1) % imgCount;
+                    setState(() => _imageIndex = nextIdx);
+                    try {
+                      RenderLog.write('c294_img_swipe',
+                          'item=$bagNo;imgIdx=$nextIdx/$imgCount');
+                    } catch (_) {}
+                  } else if (v > 200) {
+                    final prevIdx = (safeImgIdx - 1 + imgCount) % imgCount;
+                    setState(() => _imageIndex = prevIdx);
+                    try {
+                      RenderLog.write('c294_img_swipe',
+                          'item=$bagNo;imgIdx=$prevIdx/$imgCount');
+                    } catch (_) {}
                   }
                 },
-                child: Column(crossAxisAlignment: CrossAxisAlignment.center, children: [
-                  // Big YELLOW "Bag N" badge (CHANGE 6)
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
-                    decoration: BoxDecoration(
-                        color: const Color(0xFFFFF3CD),
-                        borderRadius: BorderRadius.circular(24),
-                        border: Border.all(color: const Color(0xFFFFCA28), width: 1.5)),
-                    child: Text('Bag $bagNo',
-                        style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800,
-                            color: Color(0xFF8A6D00)),
-                        textAlign: TextAlign.center),
-                  ),
-                  const SizedBox(height: 10),
-                  // Product name
-                  Text(name,
-                      style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700,
-                          color: _kText),
-                      textAlign: TextAlign.center,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis),
-                ]),
-              ),
-              const SizedBox(height: 10),
-              // Top zone: image area — swipe here cycles images (CHANGE 7)
-              // Only one image exposed by pack_get_queue (image_url only),
-              // so image cycling is a no-op; zone logs the gesture.
-              Expanded(
-                child: GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onHorizontalDragEnd: (details) {
-                    final v = details.primaryVelocity ?? 0;
-                    final dir = v < 0 ? 'next' : 'prev';
-                    try {
-                      RenderLog.write('c293_two_zone',
-                          'zone=top;dir=$dir;action=image');
-                    } catch (_) {}
-                    // Single image — no cycling needed; gesture captured to prevent
-                    // conflict with bottom-zone item switch.
-                  },
-                  child: LayoutBuilder(builder: (ctx, constraints) {
-                    final size = constraints.maxHeight.clamp(0.0, constraints.maxWidth);
-                    return Center(
-                      child: Stack(alignment: Alignment.topRight, children: [
+                child: LayoutBuilder(builder: (ctx, constraints) {
+                  final size = constraints.maxHeight
+                      .clamp(0.0, constraints.maxWidth);
+                  return Center(
+                    child: Stack(
+                      alignment: Alignment.topRight,
+                      children: [
+                        // Image with rounded corners
                         ClipRRect(
                           borderRadius: BorderRadius.circular(16),
-                          child: imageUrl != null && imageUrl.isNotEmpty
-                              ? Image.network(imageUrl,
+                          child: currentImg != null && currentImg.isNotEmpty
+                              ? Image.network(currentImg,
                                   width: size, height: size, fit: BoxFit.cover,
-                                  errorBuilder: (_, __, ___) => _imgPlaceholder(size))
+                                  errorBuilder: (_, __, ___) =>
+                                      _imgPlaceholder(size))
                               : _imgPlaceholder(size),
                         ),
-                        // Qty overlay pill — top-right corner of image (CHANGE 6)
+                        // Qty pill overlaid top-right
                         Positioned(
                           top: 10, right: 10,
                           child: Container(
@@ -11562,58 +11572,72 @@ class _PackingScreenState extends State<_PackingScreen> {
                                     color: Color(0xFF8A6D00))),
                           ),
                         ),
-                      ]),
-                    );
-                  }),
-                ),
-              ),
-              const SizedBox(height: 8),
-            ],
-          ),
-        ),
-        // ── Invisible left tap zone — prev item (CHANGE 5) ───────────────────
-        Positioned.fill(
-          child: Row(children: [
-            Expanded(
-              flex: 28,
-              child: GestureDetector(
-                behavior: HitTestBehavior.translucent,
-                onTap: () {
-                  if (_currentIndex > 0) {
-                    _goToItem(_currentIndex - 1);
-                    try {
-                      RenderLog.write('c293_two_zone',
-                          'zone=bottom;dir=prev;action=item');
-                    } catch (_) {}
-                  }
-                },
+                        // Page dots when multiple images (#294 CHANGE 6)
+                        if (imgCount > 1)
+                          Positioned(
+                            bottom: 10,
+                            left: 0, right: 0,
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: List.generate(imgCount, (i) => Container(
+                                width: 6, height: 6,
+                                margin: const EdgeInsets.symmetric(horizontal: 3),
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: i == safeImgIdx
+                                      ? Colors.white
+                                      : Colors.white.withValues(alpha: 0.50),
+                                ),
+                              )),
+                            ),
+                          ),
+                      ],
+                    ),
+                  );
+                }),
               ),
             ),
-            const Expanded(flex: 44, child: SizedBox()),
-            Expanded(
-              flex: 28,
-              child: GestureDetector(
-                behavior: HitTestBehavior.translucent,
-                onTap: () {
-                  if (_currentIndex < _items.length - 1) {
-                    _goToItem(_currentIndex + 1);
-                    try {
-                      RenderLog.write('c293_two_zone',
-                          'zone=bottom;dir=next;action=item');
-                    } catch (_) {}
-                  }
-                },
+            const SizedBox(height: 10),
+            // 4. Product name BELOW image — swipe here switches items (#294 CHANGE 5+7)
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onHorizontalDragEnd: (details) {
+                final v = details.primaryVelocity ?? 0;
+                if (v < -300 && _currentIndex < _items.length - 1) {
+                  _goToItem(_currentIndex + 1);
+                  try {
+                    RenderLog.write('c294_item_swipe',
+                        'dir=next;idx=${_currentIndex + 1}');
+                  } catch (_) {}
+                } else if (v > 300 && _currentIndex > 0) {
+                  _goToItem(_currentIndex - 1);
+                  try {
+                    RenderLog.write('c294_item_swipe',
+                        'dir=prev;idx=${_currentIndex - 1}');
+                  } catch (_) {}
+                }
+              },
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                child: Text(name,
+                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700,
+                        color: _kText),
+                    textAlign: TextAlign.center,
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis),
               ),
             ),
-          ]),
+            // Spacer before button
+            const SizedBox(height: 6),
+          ],
         ),
-      ])),
-      // Packed button — simple toggle, no 2s hold (CHANGE 3)
+      )),
+      // 5. Submit / Packed button pinned at bottom
       _buildPackedButton(),
     ]);
   }
 
-  // ── Toggle Packed button — GREEN if unpacked, GREY if packed (CHANGE 3) ─────
+  // Toggle Packed button — GREEN if unpacked, GREY if already packed
   Widget _buildPackedButton() {
     final item     = (_currentIndex < _items.length) ? _items[_currentIndex] : null;
     final isPacked = item?['packed'] == true;
@@ -11716,7 +11740,7 @@ class _PackingScreenState extends State<_PackingScreen> {
   }
 }
 
-// ── CHANGE #293: Bag quick-view sheet — bag-colour chips (green/yellow/grey) ─
+// ── CHANGE #294: Bag quick-view sheet — drop Bag col, Packed header, Qty center ─
 
 class _BagQuickViewSheet extends StatefulWidget {
   final List<Map<String, dynamic>> items;
@@ -11771,7 +11795,12 @@ class _BagQuickViewSheetState extends State<_BagQuickViewSheet> {
   Widget build(BuildContext context) {
     final bags     = _bags;
     final filtered = _filtered;
-    final showBag  = _selectedBag == null;
+
+    // #294 CHANGE 4 — log bags sheet build with key changes
+    try {
+      RenderLog.write('c294_bags_sheet',
+          'bagColRemoved=true;header=Packed;qtyCentered=true');
+    } catch (_) {}
 
     return Container(
       constraints:
@@ -11799,14 +11828,13 @@ class _BagQuickViewSheetState extends State<_BagQuickViewSheet> {
             ),
           ]),
         ),
-        // Bag chips coloured by status (CHANGE 4)
+        // Bag chips coloured by status (green/yellow/grey — #293 retained)
         Padding(
           padding: const EdgeInsets.fromLTRB(0, 0, 0, 8),
           child: SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             padding: const EdgeInsets.symmetric(horizontal: 14),
             child: Row(children: [
-              // "All" chip — neutral
               GestureDetector(
                 onTap: () => setState(() => _selectedBag = null),
                 child: Container(
@@ -11821,11 +11849,9 @@ class _BagQuickViewSheetState extends State<_BagQuickViewSheet> {
                       color: _selectedBag == null ? Colors.white : _kGreen)),
                 ),
               ),
-              // Per-bag chips coloured green/yellow/grey
               ...bags.map((bn) {
                 final st         = _status(bn);
                 final isSelected = _selectedBag == bn;
-                // When selected: keep selected colour; when not: show status colour
                 final bgColor    = isSelected ? _kGreen : _bg(st);
                 final bdColor    = isSelected ? _kGreen : _border(st);
                 final txtColor   = isSelected ? Colors.white : _fg(st);
@@ -11854,29 +11880,26 @@ class _BagQuickViewSheetState extends State<_BagQuickViewSheet> {
           ),
         ),
         const Divider(height: 1, color: _kBorder),
+        // Table header: Product | Qty(centered) | Packed — NO Bag column (#294 CHANGE 1,2,3)
         Container(
           color: const Color(0xFFF5F6F8),
           child: Row(children: [
-            Expanded(child: Padding(
-              padding: const EdgeInsets.fromLTRB(10, 6, 4, 6),
-              child: const Text('Product', style: TextStyle(
+            const Expanded(child: Padding(
+              padding: EdgeInsets.fromLTRB(10, 6, 4, 6),
+              child: Text('Product', style: TextStyle(
                   fontSize: 11, fontWeight: FontWeight.w600, color: _kSub)),
             )),
-            const SizedBox(width: 80, child: Padding(
+            // Qty — centered
+            const SizedBox(width: 72, child: Padding(
               padding: EdgeInsets.symmetric(vertical: 6),
-              child: Text('Qty', style: TextStyle(
-                  fontSize: 11, fontWeight: FontWeight.w600, color: _kSub)),
+              child: Text('Qty', textAlign: TextAlign.center,
+                  style: TextStyle(
+                      fontSize: 11, fontWeight: FontWeight.w600, color: _kSub)),
             )),
-            if (showBag)
-              const SizedBox(width: 44, child: Padding(
-                padding: EdgeInsets.fromLTRB(4, 6, 4, 6),
-                child: Text('Bag', textAlign: TextAlign.right,
-                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
-                        color: _kSub)),
-              )),
-            const SizedBox(width: 32, child: Padding(
-              padding: EdgeInsets.fromLTRB(0, 6, 10, 6),
-              child: Text('✓', textAlign: TextAlign.center,
+            // "Packed" header (replaces ✓) — centered
+            const SizedBox(width: 52, child: Padding(
+              padding: EdgeInsets.fromLTRB(0, 6, 8, 6),
+              child: Text('Packed', textAlign: TextAlign.center,
                   style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
                       color: _kGreen)),
             )),
@@ -11884,17 +11907,15 @@ class _BagQuickViewSheetState extends State<_BagQuickViewSheet> {
         ),
         Flexible(child: SingleChildScrollView(child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: _buildTableRows(filtered, bags, showBag),
+          children: _buildTableRows(filtered, bags),
         ))),
       ]),
     );
   }
 
+  // #294 CHANGE 1: no showBag param; Bag column removed entirely
   List<Widget> _buildTableRows(
-      List<Map<String, dynamic>> items, List<int> bags, bool showBag) {
-    if (!showBag) {
-      return items.map(_buildTableRow).toList();
-    }
+      List<Map<String, dynamic>> items, List<int> bags) {
     final grouped = <int?, List<Map<String, dynamic>>>{};
     for (final item in items) {
       final bn = (item['bag_no'] as num?)?.toInt();
@@ -11907,6 +11928,10 @@ class _BagQuickViewSheetState extends State<_BagQuickViewSheet> {
       }
     } catch (_) {}
     final List<Widget> rows = [];
+    // When a single bag is filtered, items show directly (no subheader needed)
+    if (_selectedBag != null) {
+      return items.map(_buildTableRow).toList();
+    }
     for (final bn in [...bags, null]) {
       final group = grouped[bn];
       if (group == null || group.isEmpty) continue;
@@ -11922,14 +11947,13 @@ class _BagQuickViewSheetState extends State<_BagQuickViewSheet> {
     return rows;
   }
 
+  // Row: Product (expanded) | Qty (centered, 72px) | ✓ (centered, 52px) — NO Bag col
   Widget _buildTableRow(Map<String, dynamic> item) {
     final name     = item['product_name']?.toString() ?? '—';
     final packType = item['pack_type']?.toString() ?? '';
     final qty      = (item['qty'] as num?)?.toInt() ?? 0;
-    final bagNo    = (item['bag_no'] as num?)?.toInt();
     final isPacked = item['packed'] == true;
     final qtyLabel = packType.isNotEmpty ? '$qty $packType' : '$qty';
-    final showBag  = _selectedBag == null;
 
     return Container(
       decoration: const BoxDecoration(
@@ -11940,7 +11964,8 @@ class _BagQuickViewSheetState extends State<_BagQuickViewSheet> {
           child: Text(name, style: const TextStyle(fontSize: 12, color: _kText),
               overflow: TextOverflow.ellipsis, maxLines: 2),
         )),
-        SizedBox(width: 80, child: Padding(
+        // Qty centered under header (#294 CHANGE 2)
+        SizedBox(width: 72, child: Center(child: Padding(
           padding: const EdgeInsets.symmetric(vertical: 6),
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
@@ -11948,18 +11973,13 @@ class _BagQuickViewSheetState extends State<_BagQuickViewSheet> {
                 color: const Color(0xFFF5F6F8),
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(color: _kBorder)),
-            child: Text(qtyLabel, style: const TextStyle(
-                fontSize: 12, fontWeight: FontWeight.w600, color: _kText)),
+            child: Text(qtyLabel, textAlign: TextAlign.center,
+                style: const TextStyle(
+                    fontSize: 12, fontWeight: FontWeight.w600, color: _kText)),
           ),
-        )),
-        if (showBag)
-          SizedBox(width: 44, child: Padding(
-            padding: const EdgeInsets.fromLTRB(4, 8, 4, 8),
-            child: Text(bagNo != null ? '$bagNo' : '—',
-                style: const TextStyle(fontSize: 12, color: _kSub),
-                textAlign: TextAlign.right),
-          )),
-        SizedBox(width: 32, child: Center(
+        ))),
+        // Packed column — green ✓ if packed (#294 CHANGE 3: row tick stays as ✓)
+        SizedBox(width: 52, child: Center(
           child: isPacked
               ? const Text('✓', style: TextStyle(
                   fontSize: 14, fontWeight: FontWeight.w700, color: _kGreen))
@@ -11969,6 +11989,7 @@ class _BagQuickViewSheetState extends State<_BagQuickViewSheet> {
     );
   }
 }
+
 
 class _TabBtn extends StatelessWidget {
   final String label;

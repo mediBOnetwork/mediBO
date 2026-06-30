@@ -9,8 +9,12 @@ import 'package:http/http.dart' as http;
 import '../utils/render_log.dart';
 
 /// Polls /version.json every 45 s and, when a newer build is detected,
-/// shows a top MaterialBanner and auto-reloads — but never while a text
-/// field is focused (so mid-entry cash-payment data is never destroyed).
+/// shows a MaterialBanner and auto-reloads after 6 s — no service worker.
+///
+/// FIX (#287): Previously read map['change'] and parsed it as int, but the
+/// 'change' value is "#286" (with a '#' prefix) so int.tryParse returns null,
+/// causing boot=null and live=null forever. Now reads map['commit'] (e.g.
+/// "18bb68a") which is a clean string that changes on every deploy.
 class VersionWatcher {
   VersionWatcher._();
   static final VersionWatcher instance = VersionWatcher._();
@@ -20,40 +24,48 @@ class VersionWatcher {
   final GlobalKey<ScaffoldMessengerState> messengerKey =
       GlobalKey<ScaffoldMessengerState>();
 
-  int? _bootChange;
+  String? _bootCommit;
   bool _handled = false;
   Timer? _firstPoll;
   Timer? _pollTimer;
-  Timer? _reloadLoop;
+  Timer? _reloadTimer;
 
   static const Duration _firstDelay = Duration(seconds: 5);
   static const Duration _interval   = Duration(seconds: 45);
-  static const Duration _idleStep   = Duration(seconds: 5);
+  static const Duration _autoReload = Duration(seconds: 6);
 
-  Future<int?> _fetchChange() async {
+  Future<String?> _fetchCommit() async {
     try {
-      final url = '/version.json?cb=${DateTime.now().millisecondsSinceEpoch}';
+      final ts = DateTime.now().millisecondsSinceEpoch;
+      final url = '/version.json?t=$ts';
       final resp = await http.get(
         Uri.parse(url),
-        headers: const {'cache-control': 'no-cache'},
+        headers: const {'Cache-Control': 'no-cache', 'Pragma': 'no-cache'},
       );
+      try {
+        RenderLog.write('c287_vw_fetch',
+            'url=version.json?t=...;cachebust=true;status=${resp.statusCode}');
+      } catch (_) {}
       if (resp.statusCode != 200) return null;
       final map = jsonDecode(resp.body) as Map<String, dynamic>;
-      final c = map['change'];
-      if (c is int) return c;
-      if (c is String) return int.tryParse(c);
-      return null;
+      final commit = map['commit']?.toString();
+      final cleaned = (commit != null && commit.isNotEmpty && commit != 'dev')
+          ? commit
+          : null;
+      try {
+        RenderLog.write('c287_vw_field', 'reads=commit;sample=${cleaned ?? "null"}');
+      } catch (_) {}
+      return cleaned;
     } catch (_) {
       return null;
     }
   }
 
-  /// Call once after first paint (in _AppRootState postFrameCallback).
-  /// Seeds the baseline change number so the first poll never false-fires.
+  /// Call once after first paint to seed the boot commit hash.
   Future<void> init() async {
-    _bootChange = await _fetchChange();
+    _bootCommit = await _fetchCommit();
     try {
-      RenderLog.write('c241_vw_init', 'boot=${_bootChange ?? "null"}');
+      RenderLog.write('c241_vw_init', 'boot=${_bootCommit ?? "null"}');
     } catch (_) {}
   }
 
@@ -68,54 +80,37 @@ class VersionWatcher {
 
   Future<void> _check() async {
     if (_handled) return;
-    final live = await _fetchChange();
+    final live = await _fetchCommit();
     try {
       RenderLog.write(
-          'c241_vw_poll', 'live=${live ?? "null"} boot=${_bootChange ?? "null"}');
+          'c241_vw_poll', 'live=${live ?? "null"} boot=${_bootCommit ?? "null"}');
     } catch (_) {}
     if (live == null) return;
-    if (_bootChange == null) {
-      _bootChange = live;
+    if (_bootCommit == null) {
+      _bootCommit = live;
       return;
     }
-    if (live != _bootChange) {
+    if (live != _bootCommit) {
       _handled = true;
+      final from = _bootCommit!;
       try {
-        RenderLog.write(
-            'c241_vw_new_detected', 'live=$live boot=$_bootChange');
+        RenderLog.write('c241_vw_new_detected', 'live=$live boot=$from');
+      } catch (_) {}
+      try {
+        RenderLog.write('c287_update_prompt', 'from=$from;to=$live;countdown=6s');
       } catch (_) {}
       _showBanner();
       _scheduleAutoReload();
     }
   }
 
-  /// Returns true if the user is actively typing in any DOM input/textarea.
-  /// Flutter web routes key events through real DOM elements, so
-  /// document.activeElement reliably reflects text-field focus.
-  bool _isTyping() {
-    try {
-      final el = html.document.activeElement;
-      if (el == null) return false;
-      final tag = el.tagName?.toLowerCase() ?? '';
-      if (tag == 'input' || tag == 'textarea') return true;
-      final ce = el.getAttribute('contenteditable');
-      if (ce == 'true' || ce == '') return true;
-    } catch (_) {}
-    return false;
-  }
-
   void _scheduleAutoReload() {
-    _reloadLoop?.cancel();
-    _reloadLoop = Timer.periodic(_idleStep, (t) {
-      if (!_isTyping()) {
-        t.cancel();
-        _reload();
-      }
-      // user is typing — re-check in _idleStep seconds
-    });
+    _reloadTimer?.cancel();
+    _reloadTimer = Timer(_autoReload, _reload);
   }
 
   void _reload() {
+    _reloadTimer?.cancel();
     try {
       RenderLog.write('c241_vw_reload', 'reloading to new build');
     } catch (_) {}
@@ -134,14 +129,14 @@ class VersionWatcher {
           fontSize: 14,
           fontWeight: FontWeight.w500,
         ),
-        content: const Text('A new version of mediBO is available. Updating…'),
+        content: const Text('New version available — updating in 6 seconds…'),
         actions: [
           TextButton(
             onPressed: _reload,
             child: const Text(
-              'UPDATE NOW',
+              'Update now',
               style: TextStyle(
-                color: Color(0xFF1B5E20),
+                color: Color(0xFF1B7A43),
                 fontWeight: FontWeight.w700,
               ),
             ),

@@ -2910,10 +2910,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       // #256: "Send supplier reminder" removed from Warehouse — disputes are raised automatically
       // by fw_confirm_all_received and handled in the Disputes tab.
       RenderLog.write('c256_reminder_removed', 'warehouse_footer_built_without_reminder');
-      // CHANGE #277: log when confirm-all is gated by missing bag
-      if (widget.arrivals && _activeBag == null) {
-        RenderLog.write('c277_confirm_gate_no_bag', 'supplier=$_selectedSupplier');
-      }
+      // CHANGE #284: Confirm-all is always clickable (bag-or-not); log real state for audit.
+      final bool hasBag284 = _activeBag != null;
+      RenderLog.write('c284_confirm_always_clickable',
+          'bag=$hasBag284;enabled=${!_confirmingAll}');
       return Column(mainAxisSize: MainAxisSize.min, children: [
         SizedBox(
           height: 44,
@@ -2922,7 +2922,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
               backgroundColor: _kGreen,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
             ),
-            onPressed: (_confirmingAll || (widget.arrivals && _activeBag == null)) ? null : _fw_confirmAllReceived,
+            onPressed: _confirmingAll ? null : _fw_confirmAllReceived,
             child: _confirmingAll
                 ? const SizedBox(
                     width: 18,
@@ -4264,8 +4264,13 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     // CHANGE #277: bag-missing is a silent noop (no opacity/grey), not a disabled state
     final countingDisabled = _agentPhase != AgentPhase.idle ||
         (widget.arrivals && _arrivalsLocked); // #156: locked after confirm-all
-    if (widget.arrivals && _activeBag == null && !_loadingBox && _selectedSupplier != null) {
+    final bool voiceBagPresent = _activeBag != null;
+    if (widget.arrivals && !voiceBagPresent && !_loadingBox && _selectedSupplier != null) {
       RenderLog.write('c277_voice_gate_no_bag', 'narrow;supplier=$_selectedSupplier');
+    }
+    if (widget.arrivals && _selectedSupplier != null) {
+      RenderLog.write('c284_voice_gated',
+          'bag=$voiceBagPresent;enabled=$voiceBagPresent');
     }
     final agentDisabled = _voiceListening || _voiceProcessing;
     final agentPhase = _agentPhase;
@@ -4548,6 +4553,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c196_collect_card_layout_v2', 'surface=$surface');
     RenderLog.write('c198_card_layout_v3', 'surface=$surface');
     if (widget.arrivals) RenderLog.write('c265_warehouse_no_arrival', 'prod=${merged.productId}');
+    if (widget.arrivals) {
+      final bool itemBagPresent = _activeBag != null;
+      RenderLog.write('c284_itempopup_gated',
+          'bag=$itemBagPresent;enabled=$itemBagPresent');
+    }
 
     return GestureDetector(
       onTap: (widget.arrivals && _arrivalsLocked) ? null : () {

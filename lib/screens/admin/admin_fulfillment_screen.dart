@@ -9985,15 +9985,18 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
   Widget _buildBagItemTile(Map<String, dynamic> item) {
     final name             = item['product_name']?.toString() ?? '—';
     final customer         = item['customer']?.toString() ?? '';
+    final customerCode     = item['customer_code']?.toString() ?? '';
     final packType         = item['pack_type']?.toString() ?? '';
     final imageUrl         = item['image_url']?.toString();
     final recQty           = (item['received_qty'] as num?)?.toInt() ?? 0;
     final assignedSupplier = item['assigned_supplier']?.toString() ?? '';
     final packLabel        = packType.isNotEmpty ? '$recQty $packType' : '$recQty';
+    final custLabel        = customerCode.isNotEmpty ? 'C • $customer ($customerCode)' : 'C • $customer';
 
     return Builder(builder: (ctx) {
-      RenderLog.write('c286_bag_row_pack_brown',
-          'qty=$recQty;pack=$packType;brown=true');
+      RenderLog.write('c288_pack_badge_grey', 'pack=$recQty $packType;grey=true');
+      RenderLog.write('c288_customer_with_code', 'cust=$customer;code=$customerCode');
+      RenderLog.write('c288_bag_img_72', 'w=72;h=72');
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
@@ -10002,7 +10005,7 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
           border: Border.all(color: _kBorder),
         ),
         child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          _FulfilImageTile(imageUrl, size: 44),
+          _FulfilImageTile(imageUrl, size: 72),
           const SizedBox(width: 10),
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
@@ -10010,7 +10013,7 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
                   style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
                   maxLines: 2, overflow: TextOverflow.ellipsis),
               const SizedBox(height: 4),
-              _brownBadge(packLabel),
+              _greyBadge(packLabel),
               if (assignedSupplier.isNotEmpty) ...[
                 const SizedBox(height: 4),
                 Container(
@@ -10032,7 +10035,7 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
                     color: const Color(0xFFFFF3CD),
                     borderRadius: BorderRadius.circular(20),
                   ),
-                  child: Text('C • $customer',
+                  child: Text(custLabel,
                       style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: Color(0xFF8A6D00)),
                       maxLines: 1, overflow: TextOverflow.ellipsis),
                 ),
@@ -10044,20 +10047,21 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
     });
   }
 
-  Widget _brownBadge(String text) => Container(
+  Widget _greyBadge(String text) => Container(
     padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
     decoration: BoxDecoration(
-      color: const Color(0xFFEFE2D0),
+      color: const Color(0xFFF3F4F6),
       borderRadius: BorderRadius.circular(20),
     ),
     child: Text(text,
-        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: Color(0xFF6B4E2E)),
+        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: _kSub),
         maxLines: 1, overflow: TextOverflow.ellipsis),
   );
 
   Widget _buildSearchResultTile(Map<String, dynamic> item) {
     final name             = item['product_name']?.toString() ?? '—';
     final customer         = item['customer']?.toString() ?? '';
+    final customerCode     = item['customer_code']?.toString() ?? '';
     final packType         = item['pack_type']?.toString() ?? '';
     final imageUrl         = item['image_url']?.toString();
     final recQty           = (item['received_qty'] as num?)?.toInt() ?? 0;
@@ -10066,6 +10070,7 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
     final bagLabel         = bagNo != null
         ? (packType.isNotEmpty ? 'Bag $bagNo • $recQty $packType' : 'Bag $bagNo • $recQty')
         : (packType.isNotEmpty ? '$recQty $packType' : '$recQty');
+    final custLabel        = customerCode.isNotEmpty ? 'C • $customer ($customerCode)' : 'C • $customer';
 
     return Builder(builder: (ctx) {
       RenderLog.write('c286_search_row_v3', 'bag=$bagNo;qty=$recQty;combined_badge=true');
@@ -10077,7 +10082,7 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
           border: Border.all(color: _kBorder),
         ),
         child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          _FulfilImageTile(imageUrl, size: 44),
+          _FulfilImageTile(imageUrl, size: 72),
           const SizedBox(width: 10),
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
@@ -10085,16 +10090,7 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
                   style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
                   maxLines: 2, overflow: TextOverflow.ellipsis),
               const SizedBox(height: 4),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF3F4F6),
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: Text(bagLabel,
-                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: _kSub),
-                    maxLines: 1, overflow: TextOverflow.ellipsis),
-              ),
+              _greyBadge(bagLabel),
               if (assignedSupplier.isNotEmpty) ...[
                 const SizedBox(height: 4),
                 Container(
@@ -10116,7 +10112,7 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
                     color: const Color(0xFFFFF3CD),
                     borderRadius: BorderRadius.circular(20),
                   ),
-                  child: Text('C • $customer',
+                  child: Text(custLabel,
                       style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: Color(0xFF8A6D00)),
                       maxLines: 1, overflow: TextOverflow.ellipsis),
                 ),
@@ -10177,6 +10173,8 @@ class _BagAccordionShell extends StatelessWidget {
               child: Builder(builder: (ctx) {
                 RenderLog.write('c286_bag_header_v2',
                     'bag=$bagNo;items=$totalProducts;arrow=removed;dot=removed');
+                RenderLog.write('c288_items_badge_grey',
+                    'items=$totalProducts;grey=true;fixedw=true');
                 return Row(children: [
                   Text('Bag $bagNo',
                       style: TextStyle(
@@ -10184,16 +10182,20 @@ class _BagAccordionShell extends StatelessWidget {
                         color: isExpanded ? _kGreen : _kText,
                       )),
                   const Spacer(),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFEFE2D0),
-                      borderRadius: BorderRadius.circular(20),
+                  SizedBox(
+                    width: 80,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF3F4F6),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text('$totalProducts items',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                              fontSize: 11, fontWeight: FontWeight.w500,
+                              color: _kSub)),
                     ),
-                    child: Text('$totalProducts items',
-                        style: const TextStyle(
-                            fontSize: 11, fontWeight: FontWeight.w500,
-                            color: Color(0xFF6B4E2E))),
                   ),
                 ]);
               }),

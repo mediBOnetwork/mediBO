@@ -9621,6 +9621,7 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
   void initState() {
     super.initState();
     RenderLog.write('c280_bag_tab_mounted', 1);
+    RenderLog.write('c282_warehouse_unchanged', false); // showBagPicker is false at Warehouse call site — architectural guarantee
     _load();
     _subscribeRealtime();
   }
@@ -9979,20 +9980,15 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
   }
 
   Widget _buildBagItemTile(Map<String, dynamic> item) {
-    final name      = item['product_name']?.toString() ?? '—';
-    final customer  = item['customer']?.toString() ?? '';
-    final packType  = item['pack_type']?.toString() ?? '';
-    final imageUrl  = item['image_url']?.toString();
-    final qty       = (item['ordered_qty']  as num?)?.toInt() ?? 0;
-    final recQty    = (item['received_qty'] as num?)?.toInt() ?? 0;
-    final state     = item['fulfillment_state']?.toString() ?? 'pending';
-    final bagNo     = (item['bag_no'] as num?)?.toInt();
-
-    String? bagChipText;
-    if (bagNo != null) {
-      final bd = [{'bag_no': bagNo, 'qty': recQty}];
-      bagChipText = _fmtBreakdown(bd, packType);
-    }
+    final name         = item['product_name']?.toString() ?? '—';
+    final customer     = item['customer']?.toString() ?? '';
+    final packType     = item['pack_type']?.toString() ?? '';
+    final imageUrl     = item['image_url']?.toString();
+    final qty          = (item['ordered_qty']  as num?)?.toInt() ?? 0;
+    final recQty       = (item['received_qty'] as num?)?.toInt() ?? 0;
+    final state        = item['fulfillment_state']?.toString() ?? 'pending';
+    final bagNo        = (item['bag_no'] as num?)?.toInt();
+    final orderItemId  = item['order_item_id']?.toString() ?? '';
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -10021,19 +10017,11 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
               Text(packType.isNotEmpty ? packType : '—',
                   style: const TextStyle(fontSize: 11, color: _kSub),
                   maxLines: 1, overflow: TextOverflow.ellipsis),
-              if (bagChipText != null && bagChipText.isNotEmpty) ...[
-                const SizedBox(height: 2),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFEEEEEE),
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: Text(bagChipText,
-                      style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: Colors.black87),
-                      maxLines: 2, overflow: TextOverflow.ellipsis),
-                ),
-              ],
+              const SizedBox(height: 2),
+              _BagPickerChip(
+                currentBagNo: bagNo,
+                orderItemId: orderItemId,
+              ),
             ]),
           ),
         ),
@@ -10120,6 +10108,270 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
             _StatePill(state),
           ]),
         ),
+      ]),
+    );
+  }
+}
+
+// ── CHANGE #282: Per-item bag picker chip (Bag tab only) ─────────────────────
+
+class _BagPickerChip extends StatefulWidget {
+  const _BagPickerChip({
+    required this.orderItemId,
+    required this.currentBagNo,
+  });
+  final String orderItemId;
+  final int? currentBagNo;
+
+  @override
+  State<_BagPickerChip> createState() => _BagPickerChipState();
+}
+
+class _BagPickerChipState extends State<_BagPickerChip> {
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    RenderLog.write('c282_bag_picker_chip_mounted', 1);
+  }
+
+  Future<void> _openPicker() async {
+    if (_busy) return;
+    RenderLog.write('c282_bag_picker_opened', 1);
+
+    List<Map<String, dynamic>> bags = [];
+    try {
+      final data = await Supabase.instance.client.rpc('fw_list_bags') as Map;
+      bags = (data['bags'] as List? ?? [])
+          .map((r) => Map<String, dynamic>.from(r as Map))
+          .toList();
+    } catch (_) {}
+
+    if (!mounted) return;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      backgroundColor: Colors.white,
+      builder: (sheetCtx) => _BagPickerSheet(
+        currentBagNo: widget.currentBagNo,
+        bags: bags,
+        onSelectBag: (bagNo) => _doReassign(sheetCtx, bagNo),
+        onRemove: () => _doClear(sheetCtx),
+        onOtherBag: (bagNo) => _doReassign(sheetCtx, bagNo),
+      ),
+    );
+  }
+
+  Future<void> _doReassign(BuildContext sheetCtx, int bagNo) async {
+    Navigator.of(sheetCtx).pop();
+    if (!mounted) return;
+    setState(() => _busy = true);
+    try {
+      final res = await Supabase.instance.client.rpc('fw_set_item_bag', params: {
+        'p_order_item_id': widget.orderItemId,
+        'p_bag_no': bagNo,
+      }) as Map;
+      if (!mounted) return;
+      final err = res['error']?.toString();
+      if (err != null) {
+        _showSnack(_errMsg(err));
+      } else {
+        RenderLog.write('c282_bag_reassign_success', 'bag=$bagNo');
+        _showSnack('Moved to Bag $bagNo');
+      }
+    } catch (_) {
+      if (mounted) _showSnack("Couldn't update bag — try again");
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _doClear(BuildContext sheetCtx) async {
+    Navigator.of(sheetCtx).pop();
+    if (!mounted) return;
+    setState(() => _busy = true);
+    try {
+      final res = await Supabase.instance.client.rpc('fw_clear_item_bag', params: {
+        'p_order_item_id': widget.orderItemId,
+      }) as Map;
+      if (!mounted) return;
+      final err = res['error']?.toString();
+      if (err != null) {
+        _showSnack(_errMsg(err));
+      } else {
+        RenderLog.write('c282_bag_clear_success', 1);
+        _showSnack('Removed from bag');
+      }
+    } catch (_) {
+      if (mounted) _showSnack("Couldn't update bag — try again");
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  String _errMsg(String err) {
+    if (err == 'no_such_bag') return "That bag doesn't exist";
+    if (err == 'item_finalized') return "This item is already shipped/cancelled and can't be moved";
+    return err;
+  }
+
+  void _showSnack(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(msg), duration: const Duration(seconds: 2)));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final label = widget.currentBagNo != null ? 'Bag ${widget.currentBagNo}' : 'No bag';
+    return GestureDetector(
+      onTap: _openPicker,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+          color: const Color(0xFFEEEEEE),
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: _busy
+            ? const SizedBox(
+                width: 14,
+                height: 14,
+                child: CircularProgressIndicator(strokeWidth: 1.5, color: _kGreen))
+            : Row(mainAxisSize: MainAxisSize.min, children: [
+                Text(label,
+                    style: const TextStyle(
+                        fontSize: 10, fontWeight: FontWeight.w600, color: Colors.black87)),
+                const SizedBox(width: 2),
+                const Icon(Icons.expand_more, size: 14, color: Colors.black54),
+              ]),
+      ),
+    );
+  }
+}
+
+class _BagPickerSheet extends StatefulWidget {
+  const _BagPickerSheet({
+    required this.currentBagNo,
+    required this.bags,
+    required this.onSelectBag,
+    required this.onRemove,
+    required this.onOtherBag,
+  });
+  final int? currentBagNo;
+  final List<Map<String, dynamic>> bags;
+  final void Function(int) onSelectBag;
+  final void Function() onRemove;
+  final void Function(int) onOtherBag;
+
+  @override
+  State<_BagPickerSheet> createState() => _BagPickerSheetState();
+}
+
+class _BagPickerSheetState extends State<_BagPickerSheet> {
+  Future<void> _askOtherBag() async {
+    final ctrl = TextEditingController();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Enter bag number',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+        content: TextField(
+          controller: ctrl,
+          keyboardType: TextInputType.number,
+          inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+          decoration: InputDecoration(
+            hintText: '1–500',
+            filled: true,
+            fillColor: const Color(0xFFF5F6F8),
+            border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+                borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+          ),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () {
+              final v = int.tryParse(ctrl.text);
+              if (v == null || v < 1 || v > 500) return;
+              Navigator.pop(ctx, true);
+            },
+            style: ElevatedButton.styleFrom(
+                backgroundColor: _kGreen, foregroundColor: Colors.white),
+            child: const Text('Confirm'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true && mounted) {
+      final v = int.tryParse(ctrl.text);
+      if (v != null) widget.onOtherBag(v);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottomPad = MediaQuery.of(context).viewPadding.bottom;
+    return Padding(
+      padding: EdgeInsets.only(bottom: bottomPad),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        const SizedBox(height: 12),
+        const Text('Move to bag',
+            style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+                color: Color(0xFF111827))),
+        const SizedBox(height: 8),
+        const Divider(height: 1),
+        if (widget.currentBagNo != null)
+          ListTile(
+            leading: const Icon(Icons.remove_circle_outline,
+                color: Color(0xFF991B1B), size: 20),
+            title: const Text('Remove from bag',
+                style: TextStyle(
+                    fontSize: 14,
+                    color: Color(0xFF991B1B),
+                    fontWeight: FontWeight.w500)),
+            onTap: widget.onRemove,
+          ),
+        ConstrainedBox(
+          constraints: BoxConstraints(
+              maxHeight: MediaQuery.of(context).size.height * 0.4),
+          child: ListView.builder(
+            shrinkWrap: true,
+            itemCount: widget.bags.length,
+            itemBuilder: (_, i) {
+              final b = widget.bags[i];
+              final bn = (b['bag_no'] as num?)?.toInt() ?? 0;
+              final total = (b['total_products'] as num?)?.toInt() ?? 0;
+              return ListTile(
+                leading: const Icon(Icons.shopping_bag_outlined,
+                    size: 20, color: Color(0xFF1B7A43)),
+                title: Text('Bag $bn · $total items',
+                    style: const TextStyle(
+                        fontSize: 14, fontWeight: FontWeight.w500)),
+                onTap: () => widget.onSelectBag(bn),
+              );
+            },
+          ),
+        ),
+        ListTile(
+          leading: const Icon(Icons.edit_outlined,
+              size: 20, color: Color(0xFF6B7280)),
+          title: const Text('Other bag number…',
+              style: TextStyle(
+                  fontSize: 14,
+                  color: Color(0xFF6B7280),
+                  fontWeight: FontWeight.w500)),
+          onTap: _askOtherBag,
+        ),
+        const SizedBox(height: 8),
       ]),
     );
   }

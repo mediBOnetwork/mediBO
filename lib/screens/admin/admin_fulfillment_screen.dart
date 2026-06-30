@@ -11012,13 +11012,8 @@ class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
   }
 }
 
-// ── CHANGE #296: Packing — red full-width bag band, tap-thirds image, brown dots ─
-
-// Architecture (from #295, retained):
-// • OUTER PageView.builder over items[] — horizontal SWIPE = switch items.
-// • _ItemImageView (replaces _ItemImagePager) — no inner PageView; TAP LEFT/RIGHT
-//   THIRD of the image cycles images; middle-third does nothing. Brown dots.
-// • Both gestures coexist because tap recognizer and drag recognizer don't conflict.
+// ── CHANGE #298: Packing — auto-advance, hold-2s-undo, grey dots, layout spacing ─
+//   + one-time skipped-item return sweep per bag (sweptBags guard)
 
 class _PackingScreen extends StatefulWidget {
   final String orderId;
@@ -11042,6 +11037,13 @@ class _PackingScreenState extends State<_PackingScreen> {
 
   PageController? _itemPageController;
 
+  // CHANGE #298: one-time sweep guard — bags whose backwards sweep has fired.
+  final Set<int> _sweptBags = {};
+
+  // CHANGE #298: hold-2s-to-undo state.
+  Timer? _holdTimer;
+  bool   _holdFired = false;
+
   @override
   void initState() {
     super.initState();
@@ -11050,6 +11052,7 @@ class _PackingScreenState extends State<_PackingScreen> {
 
   @override
   void dispose() {
+    _holdTimer?.cancel();
     _itemPageController?.dispose();
     super.dispose();
   }
@@ -11088,6 +11091,7 @@ class _PackingScreenState extends State<_PackingScreen> {
         _bagCount     = bagCount;
         _allPacked    = allDone;
         _loading      = false;
+        _sweptBags.clear();
       });
       try {
         final first8 = items.take(8).map((i) => (i['bag_no'] ?? '?').toString()).join(',');
@@ -11100,40 +11104,175 @@ class _PackingScreenState extends State<_PackingScreen> {
     }
   }
 
-  Future<void> _toggleItem(int index) async {
+  // ── CHANGE #298: computeNext — bag-wise with one-time sweep ─────────────────
+  //
+  // After packing item at index [i] (already updated in _items), return the
+  // next index to show. Algorithm:
+  //   1. B = bag of i.
+  //   2. First unpacked after i in same bag → go there (normal flow).
+  //   3. Else: first unpacked anywhere in B (skipped items).
+  //      If exists AND B not in _sweptBags → one-time sweep to that item.
+  //   4. Else: first item of the next bag (k > i, bag != B).
+  //   5. Else (i was in last bag): any unpacked item anywhere, else null (done).
+  int? _computeNext(int i) {
+    if (i < 0 || i >= _items.length) return null;
+    final B = (_items[i]['bag_no'] as num?)?.toInt() ?? 0;
+
+    // Step 1: next unpacked after i in same bag
+    for (int j = i + 1; j < _items.length; j++) {
+      final jBag = (_items[j]['bag_no'] as num?)?.toInt() ?? 0;
+      if (jBag != B) break;
+      if (_items[j]['packed'] != true) return j;
+    }
+
+    // Step 2: one-time backwards sweep within bag B
+    int? earliestInB;
+    for (int j = 0; j < _items.length; j++) {
+      final jBag = (_items[j]['bag_no'] as num?)?.toInt() ?? 0;
+      if (jBag == B && _items[j]['packed'] != true) {
+        earliestInB = j;
+        break;
+      }
+    }
+    if (earliestInB != null && !_sweptBags.contains(B)) {
+      _sweptBags.add(B);
+      try {
+        RenderLog.write('c298_sweep', '$B:$i->$earliestInB');
+        RenderLog.write('c298_swept_bags', '[${_sweptBags.join(',')}]');
+      } catch (_) {}
+      return earliestInB;
+    }
+
+    // Step 3: leave bag B — first item in any other bag after i
+    for (int k = i + 1; k < _items.length; k++) {
+      final kBag = (_items[k]['bag_no'] as num?)?.toInt() ?? 0;
+      if (kBag != B) return k;
+    }
+
+    // Step 4: i was in the last bag — any unpacked item anywhere
+    for (int m = 0; m < _items.length; m++) {
+      if (_items[m]['packed'] != true) return m;
+    }
+
+    return null; // all items packed
+  }
+
+  // ── CHANGE #298: pack + auto-advance ────────────────────────────────────────
+  Future<void> _packAndAdvance(int index) async {
     if (_marking || index < 0 || index >= _items.length) return;
-    final item   = _items[index];
-    final packed = item['packed'] == true;
+    final item     = _items[index];
+    final wasPacked = item['packed'] == true;
+
+    if (!wasPacked) {
+      // Mark packed via RPC, then update local state
+      setState(() => _marking = true);
+      final itemId = item['order_item_id']?.toString() ?? '';
+      try {
+        await Supabase.instance.client.rpc('pack_mark_item',
+            params: {'p_order_item_id': itemId, 'p_packed': true});
+        if (!mounted) return;
+        setState(() {
+          _items[index] = {...item, 'packed': true};
+          _packedCount++;
+          _leftCount = (_leftCount - 1).clamp(0, _totalItems);
+          if (_leftCount == 0) _allPacked = true;
+          _marking = false;
+        });
+        try {
+          RenderLog.write('c293_btn_toggle',
+              'was=unpacked;now=packed;idx=$index');
+        } catch (_) {}
+      } catch (e) {
+        if (mounted) {
+          setState(() => _marking = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Error: $e'),
+                  duration: const Duration(seconds: 3)));
+        }
+        return;
+      }
+    }
+
+    // Compute and perform navigation
+    final next = _computeNext(index);
+    try {
+      RenderLog.write('c298_advance', '$index->${next ?? "done"}');
+    } catch (_) {}
+
+    if (next == null) {
+      // All packed — setState to show done screen
+      if (mounted) setState(() => _allPacked = true);
+      return;
+    }
+
+    // Animate outer PageView to the next item
+    _itemPageController?.animateToPage(
+      next,
+      duration: const Duration(milliseconds: 280),
+      curve: Curves.easeInOut,
+    );
+  }
+
+  // ── CHANGE #298: undo (hold-2s) — un-pack current item, stay in place ───────
+  Future<void> _performUndo(int index) async {
+    if (_marking || index < 0 || index >= _items.length) return;
+    final item = _items[index];
+    if (item['packed'] != true) return; // nothing to undo
+    HapticFeedback.mediumImpact();
     setState(() => _marking = true);
     final itemId = item['order_item_id']?.toString() ?? '';
     try {
       await Supabase.instance.client.rpc('pack_mark_item',
-          params: {'p_order_item_id': itemId, 'p_packed': !packed});
+          params: {'p_order_item_id': itemId, 'p_packed': false});
       if (!mounted) return;
       setState(() {
-        _items[index] = {...item, 'packed': !packed};
-        if (!packed) {
-          _packedCount++;
-          _leftCount = (_leftCount - 1).clamp(0, _totalItems);
-          if (_leftCount == 0) _allPacked = true;
-        } else {
-          _packedCount = (_packedCount - 1).clamp(0, _totalItems);
-          _leftCount++;
-          _allPacked = false;
-        }
+        _items[index] = {...item, 'packed': false};
+        _packedCount = (_packedCount - 1).clamp(0, _totalItems);
+        _leftCount++;
+        _allPacked = false;
         _marking = false;
       });
       try {
+        RenderLog.write('c298_undo', itemId);
         RenderLog.write('c293_btn_toggle',
-            'was=${packed ? "packed" : "unpacked"};now=${packed ? "unpacked" : "packed"};idx=$index');
+            'was=packed;now=unpacked;idx=$index');
       } catch (_) {}
     } catch (e) {
       if (mounted) {
         setState(() => _marking = false);
         ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Error: $e'), duration: const Duration(seconds: 3)));
+            SnackBar(content: Text('Error: $e'),
+                duration: const Duration(seconds: 3)));
       }
     }
+  }
+
+  // ── CHANGE #298: hold-timer handlers ────────────────────────────────────────
+  void _onHoldStart() {
+    if (_marking) return;
+    _holdFired = false;
+    _holdTimer?.cancel();
+    _holdTimer = Timer(const Duration(milliseconds: 2000), () {
+      _holdFired = true;
+      _performUndo(_currentIndex);
+    });
+  }
+
+  void _onHoldEnd() {
+    if (_holdFired) {
+      // Undo already fired — don't also run pack action
+      _holdFired = false;
+      return;
+    }
+    _holdTimer?.cancel();
+    _holdTimer = null;
+    _packAndAdvance(_currentIndex);
+  }
+
+  void _onHoldCancel() {
+    _holdTimer?.cancel();
+    _holdTimer = null;
+    _holdFired = false;
   }
 
   // ── Per-bag rollup (#293 retained) ──────────────────────────────────────────
@@ -11363,7 +11502,6 @@ class _PackingScreenState extends State<_PackingScreen> {
         backgroundColor: Colors.white,
         elevation: 0,
         surfaceTintColor: Colors.transparent,
-        // CHANGE 6: professional back chevron replaces "X" (#296)
         leading: Builder(builder: (ctx) {
           try { RenderLog.write('c296_back_icon', 'icon=back_chevron'); } catch (_) {}
           return IconButton(
@@ -11438,7 +11576,7 @@ class _PackingScreenState extends State<_PackingScreen> {
     ),
   );
 
-  // ── OUTER item PageView — horizontal SWIPE switches items (#295 retained) ───
+  // ── OUTER item PageView — horizontal SWIPE switches items ───────────────────
   Widget _buildItemView() {
     final ctrl = _itemPageController;
     if (ctrl == null) return const SizedBox.shrink();
@@ -11460,7 +11598,6 @@ class _PackingScreenState extends State<_PackingScreen> {
             try {
               RenderLog.write('c295_item_page',
                   'idx=$i/${_items.length};bag=$bagNo');
-              // #296 item-swipe render-log
               RenderLog.write('c296_item_swipe',
                   'dir=${i > _currentIndex ? "next" : "prev"};idx=$i/${_items.length}');
             } catch (_) {}
@@ -11480,11 +11617,9 @@ class _PackingScreenState extends State<_PackingScreen> {
     final packType  = item['pack_type']?.toString() ?? '';
     final qty       = (item['qty'] as num?)?.toInt() ?? 0;
     final bagNo     = (item['bag_no'] as num?)?.toInt() ?? 0;
-    // CHANGE 3: "x<qty> <packType>" format
     final qtyLabel  = packType.isNotEmpty ? 'x$qty $packType' : 'x$qty';
     final itemId    = item['order_item_id']?.toString() ?? '';
 
-    // Defensively read images[] with fallback to image_url (#295 spec retained)
     var imgs = ((item['images'] as List?)?.cast<String>() ?? const <String>[])
         .where((s) => s.isNotEmpty).toList();
     if (imgs.isEmpty) {
@@ -11493,7 +11628,6 @@ class _PackingScreenState extends State<_PackingScreen> {
     }
     final imgCount = imgs.length;
 
-    // Per-bag position (#295 retained)
     final bagItems    = _items.where(
         (i) => (i['bag_no'] as num?)?.toInt() == bagNo).toList();
     final posInBag    = bagItems.indexWhere(
@@ -11501,7 +11635,13 @@ class _PackingScreenState extends State<_PackingScreen> {
     final itemsInBag  = bagItems.length;
     final packedInBag = bagItems.where((i) => i['packed'] == true).length;
 
+    // CHANGE #298 layout constants (instrumented once per card build)
+    const double kCounterBagGap = 20;   // (#7) bigger gap counter → bag band
+    const double kBagBandVPad   = 15;   // (#5) taller bag band (was 10)
+    const double kNameImgGap    = 6;    // (#6) name stuck to image
     try {
+      RenderLog.write('c298_layout',
+          '{"counter_bag_gap":$kCounterBagGap,"bag_band_height":$kBagBandVPad,"name_img_gap":$kNameImgGap}');
       RenderLog.write('c295_card_v4',
           'nameAbove=true;imgs=$imgCount;dots=${imgCount > 1 ? imgCount : 0}');
     } catch (_) {}
@@ -11511,8 +11651,8 @@ class _PackingScreenState extends State<_PackingScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          const SizedBox(height: 10),
-          // Three x/x counters — no "in bag" text (#295 retained)
+          const SizedBox(height: 6),  // (#6 lift) reduced top padding
+          // Three x/x counters
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -11527,8 +11667,9 @@ class _PackingScreenState extends State<_PackingScreen> {
                       fontWeight: FontWeight.w600)),
             ],
           ),
-          const SizedBox(height: 8),
-          // CHANGE 1: full-width RED bag band (#296)
+          // CHANGE #298 (#7): bigger gap — counter → bag band
+          const SizedBox(height: kCounterBagGap),
+          // Red bag band — CHANGE #298 (#5): taller vertical padding
           Builder(builder: (ctx) {
             try {
               RenderLog.write('c296_bag_band',
@@ -11536,9 +11677,9 @@ class _PackingScreenState extends State<_PackingScreen> {
             } catch (_) {}
             return Container(
               width: double.infinity,
-              padding: const EdgeInsets.symmetric(vertical: 10),
+              padding: EdgeInsets.symmetric(vertical: kBagBandVPad),
               decoration: BoxDecoration(
-                  color: const Color(0xFFDC2626),   // app red
+                  color: const Color(0xFFDC2626),
                   borderRadius: BorderRadius.circular(14)),
               child: Text('Bag $bagNo',
                   style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800,
@@ -11546,18 +11687,17 @@ class _PackingScreenState extends State<_PackingScreen> {
                   textAlign: TextAlign.center),
             );
           }),
-          // CHANGE 2: clear gap badge→name (#296)
-          const SizedBox(height: 16),
-          // Product name above the image (#295 retained)
+          const SizedBox(height: 14),
+          // CHANGE #298 (#6): name sits directly above image — normal gap here
           Text(name,
               style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700,
                   color: _kText),
               textAlign: TextAlign.center,
               maxLines: 2,
               overflow: TextOverflow.ellipsis),
-          // CHANGE 4a: reduced gap name→image to nudge image up (#296)
-          const SizedBox(height: 6),
-          // IMAGE — TAP-THIRDS for image cycling; SWIPE (outer PageView) for items
+          // CHANGE #298 (#6): tiny gap name→image
+          const SizedBox(height: kNameImgGap),
+          // IMAGE — tap-thirds for image cycling; swipe (outer PageView) for items
           Expanded(
             child: _ItemImageView(
               key: ValueKey(itemId),
@@ -11571,24 +11711,32 @@ class _PackingScreenState extends State<_PackingScreen> {
     );
   }
 
-  // Toggle Packed button — green=unpacked, grey=packed; plain "Packed" label (#295)
+  // CHANGE #298: Packed button — tap = pack+advance; hold 2s = undo. ───────────
+  // Uses raw GestureDetector (not FilledButton.onPressed) to get onTapDown/Up/Cancel.
   Widget _buildPackedButton() {
     final item     = (_currentIndex < _items.length) ? _items[_currentIndex] : null;
     final isPacked = item?['packed'] == true;
+    final disabled = _marking || item == null;
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
-      child: SizedBox(
-        width: double.infinity,
-        height: 56,
-        child: FilledButton(
-          style: FilledButton.styleFrom(
-              backgroundColor: isPacked ? const Color(0xFFE5E7EB) : _kGreen,
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14))),
-          onPressed: (_marking || item == null)
-              ? null
-              : () => _toggleItem(_currentIndex),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTapDown: disabled ? null : (_) => _onHoldStart(),
+        onTapUp:   disabled ? null : (_) => _onHoldEnd(),
+        onTapCancel: disabled ? null : _onHoldCancel,
+        child: Container(
+          width: double.infinity,
+          height: 56,
+          decoration: BoxDecoration(
+            color: disabled
+                ? const Color(0xFFE5E7EB)
+                : isPacked
+                    ? const Color(0xFFE5E7EB)
+                    : _kGreen,
+            borderRadius: BorderRadius.circular(14),
+          ),
+          alignment: Alignment.center,
           child: _marking
               ? SizedBox(
                   width: 24, height: 24,
@@ -11662,17 +11810,11 @@ class _PackingScreenState extends State<_PackingScreen> {
   }
 }
 
-// ── #296: Image view — TAP LEFT/RIGHT THIRD = cycle images; no inner PageView ─
-// WHY THIS WORKS WITH THE OUTER PageView:
-// • The outer PageView registers a HorizontalDragGestureRecognizer for every
-//   pointer event in its subtree.
-// • This GestureDetector registers a TapGestureRecognizer.
-// • For a true TAP (minimal movement, quick), the TapGestureRecognizer wins the
-//   arena and fires onTapUp — image cycles.
-// • For a SWIPE (significant horizontal movement), the outer PageView's drag
-//   recognizer wins — item changes. The tap recognizer loses and onTapUp doesn't
-//   fire.
-// This is standard Flutter tap-vs-scroll arena resolution; no conflict.
+// ── #298: Image view — tap LEFT/RIGHT THIRD = cycle images; SWIPE = switch items ─
+// Gesture resolution: TapRecognizer (this GestureDetector) vs
+// HorizontalDragRecognizer (outer PageView).  A true tap → TapRecognizer wins,
+// onTapUp fires, image cycles.  A swipe → drag recognizer wins, outer PageView
+// moves, onTapUp never fires.  No conflict.
 
 class _ItemImageView extends StatefulWidget {
   final List<String> images;
@@ -11692,17 +11834,17 @@ class _ItemImageViewState extends State<_ItemImageView> {
     final safeIdx  = imgCount == 0 ? 0 : _imageIdx.clamp(0, imgCount - 1);
     final curImg   = imgCount > 0 ? imgs[safeIdx] : null;
 
-    // Brown colours for dots (#296 CHANGE 5)
-    const dotActive   = Color(0xFF6D4C41);   // dark brown
-    const dotInactive = Color(0xFF6D4C41);   // same hue, low alpha below
+    // CHANGE #298 (#3): grey dots (was brown in #296)
+    const Color dotActive   = Color(0xFF6B7280);   // medium grey
+    const Color dotInactive = Color(0xFFD1D5DB);   // light grey
 
     return LayoutBuilder(builder: (ctx, constraints) {
       final size = constraints.maxHeight.clamp(0.0, constraints.maxWidth);
 
       if (imgCount > 1) {
         try {
-          RenderLog.write('c296_dots_brown',
-              'n=$imgCount;brown=true');
+          RenderLog.write('c298_dots_active',   dotActive.toARGB32());
+          RenderLog.write('c298_dots_inactive', dotInactive.toARGB32());
         } catch (_) {}
       }
       try {
@@ -11714,10 +11856,6 @@ class _ItemImageViewState extends State<_ItemImageView> {
         child: Stack(
           alignment: Alignment.center,
           children: [
-            // Tap detector + image (#296 CHANGE 4b)
-            // HitTestBehavior.opaque: captures taps fully; the outer PageView still
-            // receives horizontal drag events because it is an ancestor that adds its
-            // recognizer regardless of descendant hit-test behaviour.
             GestureDetector(
               behavior: HitTestBehavior.opaque,
               onTapUp: imgCount <= 1 ? null : (TapUpDetails details) {
@@ -11725,15 +11863,13 @@ class _ItemImageViewState extends State<_ItemImageView> {
                 final third = size / 3;
                 String tapped;
                 if (x < third) {
-                  // left third → previous image (clamp, no wrap)
                   tapped = 'left';
                   if (safeIdx > 0) setState(() => _imageIdx = safeIdx - 1);
                 } else if (x > third * 2) {
-                  // right third → next image (clamp, no wrap)
                   tapped = 'right';
                   if (safeIdx < imgCount - 1) setState(() => _imageIdx = safeIdx + 1);
                 } else {
-                  tapped = 'mid'; // middle: nothing
+                  tapped = 'mid';
                 }
                 try {
                   RenderLog.write('c296_img_tap',
@@ -11752,21 +11888,21 @@ class _ItemImageViewState extends State<_ItemImageView> {
                 ),
               ),
             ),
-            // CHANGE 3: light-green flat qty pill, "x<qty> <pack_type>" (#296)
+            // Light-green flat qty pill (#296 retained)
             Positioned(
               top: 10, right: 10,
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                 decoration: BoxDecoration(
-                    color: _kReceivedBg,          // light green: Color(0xFFE1F5EE)
+                    color: _kReceivedBg,
                     borderRadius: BorderRadius.circular(16)),
                 child: Text(widget.qtyLabel,
                     style: const TextStyle(
                         fontSize: 13, fontWeight: FontWeight.w700,
-                        color: _kReceivedFg)),    // dark green text
+                        color: _kReceivedFg)),
               ),
             ),
-            // CHANGE 5: BROWN dots — current enlarged dark brown, others faded (#296)
+            // CHANGE #298 (#3): GREY dots
             if (imgCount > 1)
               Positioned(
                 bottom: 10, left: 0, right: 0,
@@ -11780,9 +11916,7 @@ class _ItemImageViewState extends State<_ItemImageView> {
                       margin: const EdgeInsets.symmetric(horizontal: 3),
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
-                        color: active
-                            ? dotActive
-                            : dotInactive.withValues(alpha: 0.30),
+                        color: active ? dotActive : dotInactive,
                       ),
                     );
                   }),
@@ -11803,7 +11937,6 @@ class _ItemImageViewState extends State<_ItemImageView> {
         size: 64, color: Color(0xFFD1D5DB)),
   );
 }
-
 
 // ── CHANGE #294 retained: Bag quick-view sheet — no Bag col, Packed header ────
 

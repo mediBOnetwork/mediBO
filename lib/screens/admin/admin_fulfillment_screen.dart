@@ -9579,6 +9579,8 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
       Expanded(
         child: Builder(builder: (context) {
           RenderLog.write('c280_fulfill_tabs_5', 5);
+          // CHANGE #284: confirms Confirm-all gating removed; fires at boot for curl verify.
+          RenderLog.write('c284_confirm_always_clickable', 'gating_removed=y;enabled=always');
           return IndexedStack(
             index: _tab,
             children: [

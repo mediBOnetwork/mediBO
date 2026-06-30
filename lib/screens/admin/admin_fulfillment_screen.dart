@@ -10481,14 +10481,30 @@ class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
   bool _loading = true;
   String? _error;
   String? _expandedOrderId;
-  // items + medicine data per order_id
-  final Map<String, List<Map<String, dynamic>>> _itemsByOrder = {};
   final Map<String, bool> _loadingItems = {};
   final ScrollController _scroll = ScrollController();
   final Map<String, GlobalKey> _rowKeys = {};
   double _savedScrollOffset = 0.0;
-  // #290: pack_get_queue status cache — null value means fetch in progress or failed
+  // CHANGE #299: full pack_get_queue response per orderId (replaces _itemsByOrder)
+  final Map<String, Map<String, dynamic>> _packQueueData = {};
+  // packed/total cache for packing button label
   final Map<String, Map<String, int>?> _packStatus = {};
+
+  // CHANGE #299: realtime subscription per expanded order
+  final Map<String, RealtimeChannel> _rtChannels = {};
+  Timer? _rtDebounce;
+
+  // CHANGE #299: voice counting
+  final VoiceReceiveService _voiceService = VoiceReceiveService();
+  bool _voiceListening = false;
+  bool _voiceProcessing = false;
+  bool _recStarted = false;
+  List<Map<String, dynamic>> _packMentions = [];
+  int? _lastVoiceSeq;
+
+  // CHANGE #299: Ask mediBO
+  bool _askListening = false;
+  String _askInterim = '';
 
   @override
   bool get wantKeepAlive => true;
@@ -10503,6 +10519,11 @@ class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
   @override
   void dispose() {
     _scroll.dispose();
+    _rtDebounce?.cancel();
+    for (final ch in _rtChannels.values) {
+      Supabase.instance.client.removeChannel(ch);
+    }
+    _rtChannels.clear();
     super.dispose();
   }
 
@@ -10516,7 +10537,6 @@ class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
         _customers = data.map((r) => Map<String, dynamic>.from(r as Map)).toList();
         _loading = false;
       });
-      // prefetch packing status for all orders in background
       for (final c in _customers) {
         final oid = c['order_id']?.toString() ?? '';
         if (oid.isNotEmpty) _fetchPackStatus(oid);
@@ -10527,22 +10547,14 @@ class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
     }
   }
 
-  // #291 — _fetchPackStatus: parse response as Map (jsonb object), with
-  // String fallback. On error, stores empty map so the button stays visible.
-  // Never removes the key — that was causing the infinite-spinner bug in #290.
+  // #291 — fetch packed/total for button label; never removes the key to avoid spinner loop
   Future<void> _fetchPackStatus(String orderId) async {
-    // Skip if already have a populated result (packed/total present)
     final existing = _packStatus[orderId];
     if (existing != null && existing.containsKey('total')) return;
-    // Mark as in-progress (null = fetching)
-    if (!_packStatus.containsKey(orderId)) {
-      _packStatus[orderId] = null;
-    }
+    if (!_packStatus.containsKey(orderId)) _packStatus[orderId] = null;
     try {
       final dynamic raw = await Supabase.instance.client
           .rpc('pack_get_queue', params: {'p_order_id': orderId});
-      // pack_get_queue returns a jsonb OBJECT, not a table row list.
-      // Supabase Dart client may deliver it as a Map or as a JSON String.
       final Map<String, dynamic> m = raw is String
           ? (jsonDecode(raw) as Map).cast<String, dynamic>()
           : Map<String, dynamic>.from(raw as Map);
@@ -10550,58 +10562,358 @@ class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
       final packed = (m['packed_count'] as num?)?.toInt() ?? 0;
       try {
         RenderLog.write('c291_pack_counts',
-            'order=${orderId.substring(0, orderId.length.clamp(0, 8))};total=$total;packed=$packed;parsed=${raw is String ? "string" : "map"}');
+            'order=${orderId.substring(0, orderId.length.clamp(0, 8))};total=$total;packed=$packed');
       } catch (_) {}
       if (mounted) setState(() => _packStatus[orderId] = {'packed': packed, 'total': total});
     } catch (e) {
-      // On any parse/network error keep the key so the button stays visible
-      // as "Start Packing"; do NOT remove the key (that was the #290 bug).
       if (mounted) setState(() => _packStatus[orderId] = {'packed': 0, 'total': -1});
     }
   }
 
-  // #291 — Button is ALWAYS rendered (never gated by fetch/parse/total>0).
-  // Default label is "Start Packing"; refined after _fetchPackStatus resolves.
-  // The presence of the button does NOT depend on async state.
+  // CHANGE #299: load full pack_get_queue for expanded card — items with packed/counted per row
+  Future<void> _loadFromPackQueue(String orderId) async {
+    if (_loadingItems[orderId] == true) return;
+    if (!mounted) return;
+    setState(() => _loadingItems[orderId] = true);
+    try {
+      final dynamic raw = await Supabase.instance.client
+          .rpc('pack_get_queue', params: {'p_order_id': orderId});
+      final Map<String, dynamic> m = raw is String
+          ? (jsonDecode(raw) as Map).cast<String, dynamic>()
+          : Map<String, dynamic>.from(raw as Map);
+      final total   = (m['total_items']  as num?)?.toInt() ?? 0;
+      final packed  = (m['packed_count'] as num?)?.toInt() ?? 0;
+      final counted = (m['counted_count'] as num?)?.toInt() ?? 0;
+      final items   = ((m['items'] as List?) ?? const [])
+          .map((i) => Map<String, dynamic>.from(i as Map))
+          .toList();
+      try {
+        RenderLog.write('c299_rows_src',
+            'order=${orderId.substring(0, orderId.length.clamp(0, 8))};total=$total;packed=$packed;counted=$counted');
+        RenderLog.write('c299_counts', 'total=$total;packed=$packed;counted=$counted');
+        if (items.isNotEmpty) {
+          final fi = items.first;
+          RenderLog.write('c299_row0',
+              'name=${fi["product_name"]};qty=${fi["qty"]};packed=${fi["packed"]};counted_qty=${fi["counted_qty"]}');
+        }
+      } catch (_) {}
+      if (!mounted) return;
+      setState(() {
+        _packQueueData[orderId] = m;
+        _packStatus[orderId] = {'packed': packed, 'total': total};
+        _loadingItems[orderId] = false;
+      });
+      if (_expandedOrderId == orderId) _refreshPackMentions(orderId);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loadingItems[orderId] = false;
+        if (!_packQueueData.containsKey(orderId)) {
+          _packStatus[orderId] = {'packed': 0, 'total': -1};
+        }
+      });
+    }
+  }
+
+  Future<void> _refreshPackMentions(String orderId) async {
+    try {
+      final rows = await Supabase.instance.client
+          .rpc('get_pack_clip_mentions', params: {'p_order_id': orderId}) as List;
+      if (!mounted) return;
+      final mentions = rows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
+      final distinct = mentions.map((m) => m['product_id']).where((id) => id != null).toSet().length;
+      RenderLog.write('c299_spoken', 'distinct=$distinct;total=${mentions.length}');
+      if (_expandedOrderId == orderId) setState(() => _packMentions = mentions);
+    } catch (_) {}
+  }
+
+  // CHANGE #299: realtime — subscribe to order_items UPDATEs for this order
+  void _subscribeOrderRt(String orderId) {
+    if (_rtChannels.containsKey(orderId)) return;
+    final ch = Supabase.instance.client
+        .channel('pack_rt_$orderId')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.update,
+          schema: 'public',
+          table: 'order_items',
+          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'order_id', value: orderId),
+          callback: (_) {
+            _rtDebounce?.cancel();
+            _rtDebounce = Timer(const Duration(milliseconds: 300), () {
+              if (mounted && _expandedOrderId == orderId) {
+                try { RenderLog.write('c299_rt', 'order=${orderId.substring(0, 8)};event=update'); } catch (_) {}
+                _loadFromPackQueue(orderId);
+              }
+            });
+          },
+        )
+        .subscribe();
+    _rtChannels[orderId] = ch;
+    try { RenderLog.write('c299_rt', 'order=${orderId.substring(0, 8)};subscribed=true'); } catch (_) {}
+  }
+
+  void _teardownOrderRt(String orderId) {
+    _rtDebounce?.cancel();
+    final ch = _rtChannels.remove(orderId);
+    if (ch != null) Supabase.instance.client.removeChannel(ch);
+  }
+
+  // CHANGE #299: voice counting — toggle record/stop
+  Future<void> _toggleCountVoice(String orderId) async {
+    if (_voiceProcessing) return;
+    if (_voiceListening) {
+      await _stopCountVoice(orderId);
+    } else {
+      await _startCountVoice();
+    }
+  }
+
+  Future<void> _startCountVoice() async {
+    if (_voiceListening || _voiceProcessing) return;
+    try {
+      await _voiceService.start();
+      _recStarted = true;
+      if (mounted) setState(() => _voiceListening = true);
+    } catch (e) {
+      if (mounted) _showPackSnack('Mic error: $e');
+    }
+  }
+
+  Future<void> _stopCountVoice(String orderId) async {
+    if (!_voiceListening) return;
+    if (mounted) setState(() { _voiceListening = false; _voiceProcessing = true; });
+    if (!_recStarted) { if (mounted) setState(() => _voiceProcessing = false); return; }
+    _recStarted = false;
+    try {
+      final result = await _voiceService.stop();
+      if (!mounted) { setState(() => _voiceProcessing = false); return; }
+      if (result == null || result.bytes.length < 1500) {
+        setState(() => _voiceProcessing = false);
+        _showPackSnack('No audio — try again');
+        return;
+      }
+      // Sequence number
+      int seq = 0;
+      String clipPath = '';
+      try {
+        final seqRaw = await Supabase.instance.client
+            .rpc('next_pack_recording_seq', params: {'p_order_id': orderId});
+        seq = (seqRaw as num?)?.toInt() ?? 0;
+        if (seq <= 0) seq = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+        RenderLog.write('c299_voice_seq', 'order=${orderId.substring(0, 8)};seq=$seq');
+      } catch (_) {}
+      // Upload to voice-clips bucket: {istDateYYYYMMDD}/pack-{orderId}/{seq}.{ext}
+      try {
+        final istNow = DateTime.now().toUtc().add(const Duration(hours: 5, minutes: 30));
+        final dateStr = '${istNow.year.toString().padLeft(4, '0')}'
+            '${istNow.month.toString().padLeft(2, '0')}'
+            '${istNow.day.toString().padLeft(2, '0')}';
+        clipPath = '$dateStr/pack-$orderId/$seq.${result.ext}';
+        final mimeUpload = result.ext == 'webm' ? 'audio/webm' : 'audio/mp4';
+        await Supabase.instance.client.storage.from('voice-clips').uploadBinary(
+          clipPath, result.bytes,
+          fileOptions: FileOptions(contentType: mimeUpload, upsert: true),
+        );
+      } catch (e) {
+        try {
+          RenderLog.write('c299_voice_seq',
+              'upload_err=${e.toString().substring(0, e.toString().length.clamp(0, 60))}');
+        } catch (_) {}
+      }
+      // Build expected list from pack_get_queue items (deduplicated by product_id)
+      final qData = _packQueueData[orderId];
+      final qItems = qData != null
+          ? ((qData['items'] as List?) ?? const [])
+              .map((i) => Map<String, dynamic>.from(i as Map))
+              .toList()
+          : <Map<String, dynamic>>[];
+      final Map<int, Map<String, dynamic>> byPid = {};
+      for (final qi in qItems) {
+        final pid = (qi['product_id'] as num?)?.toInt();
+        if (pid != null && !byPid.containsKey(pid)) byPid[pid] = qi;
+      }
+      final expected = byPid.values.map((qi) => {
+        'name': qi['product_name']?.toString() ?? '',
+        'ordered_qty': (qi['qty'] as num?)?.toInt() ?? 1,
+        'unit': qi['pack_type']?.toString() ?? '',
+      }).toList();
+      RenderLog.write('c299_voice_items', 'expected=${expected.length}');
+      // Transcribe via voice-receive edge function
+      final (:items, :transcript, :droppedNoQty, :droppedLowConf, :mentions) =
+          await _voiceService.transcribe(result.bytes, result.mime,
+              expected: expected.isEmpty ? null : expected);
+      if (!mounted) { setState(() => _voiceProcessing = false); return; }
+      // Build product name → product_id map
+      final Map<String, int> nameToId = {};
+      for (final qi in qItems) {
+        final pid = (qi['product_id'] as num?)?.toInt();
+        final pname = qi['product_name']?.toString();
+        if (pid != null && pname != null && !nameToId.containsKey(pname)) {
+          nameToId[pname] = pid;
+        }
+      }
+      // Commit each matched item via pack_set_counted (absolute SET)
+      int committed = 0;
+      for (final item in items) {
+        final matchedName = item['matched_name']?.toString();
+        final rawQty = item['received_qty'];
+        if (rawQty == null || matchedName == null || matchedName == 'not_on_order') continue;
+        final qty = (rawQty as num).toDouble();
+        if (qty <= 0) continue;
+        final pid = nameToId[matchedName];
+        if (pid == null) continue;
+        try {
+          await Supabase.instance.client.rpc('pack_set_counted', params: {
+            'p_order_id': orderId,
+            'p_product_id': pid,
+            'p_qty': qty,
+            'p_note': 'voice #299',
+          });
+          committed++;
+          RenderLog.write('c299_voice_set', 'product=$pid;qty=$qty');
+        } catch (_) {}
+      }
+      // Insert clip mentions
+      int ordIdx = 0;
+      for (final mention in mentions) {
+        final matchedName = mention['matched_name']?.toString();
+        final pid = matchedName != null ? nameToId[matchedName] : null;
+        try {
+          await Supabase.instance.client.rpc('pack_add_clip_mention', params: {
+            'p_order_id': orderId,
+            'p_recording_seq': seq,
+            'p_clip_path': clipPath,
+            'p_product_id': pid,
+            'p_matched_name': matchedName ?? '',
+            'p_qty': (mention['qty'] as num?)?.toDouble() ?? 0.0,
+            'p_t_start': mention['t_start'],
+            'p_t_end': mention['t_end'],
+            'p_ord': ordIdx++,
+          });
+        } catch (_) {}
+      }
+      RenderLog.write('c299_mentions', 'seq=$seq;rows=${mentions.length}');
+      if (!mounted) return;
+      setState(() {
+        _voiceProcessing = false;
+        _lastVoiceSeq = seq > 0 ? seq : null;
+      });
+      _showPackSnack(committed > 0
+          ? '$committed item${committed == 1 ? '' : 's'} counted'
+          : 'No items matched — try again');
+      await _loadFromPackQueue(orderId);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _voiceProcessing = false);
+      _showPackSnack('Voice error — try again');
+    }
+  }
+
+  // CHANGE #299: Ask mediBO — SpeechRecognition flow with order context
+  Future<void> _toggleAskMediaBO(String orderId) async {
+    if (_voiceProcessing || _voiceListening) return;
+    if (_askListening) {
+      stopVoiceListen();
+      if (mounted) setState(() { _askListening = false; _askInterim = ''; });
+      RenderLog.write('c299_ask', 'stopped');
+      return;
+    }
+    if (!voiceApiSupported) {
+      _showPackSnack('Voice not supported in this browser');
+      return;
+    }
+    RenderLog.write('c299_ask', 'started;order=${orderId.substring(0, 8)}');
+    if (mounted) setState(() { _askListening = true; _askInterim = 'Listening…'; });
+    startVoiceListen(
+      onInterim: (t) { if (mounted) setState(() => _askInterim = t); },
+      onFinal: (t) async {
+        if (!mounted) return;
+        setState(() { _askListening = false; _askInterim = ''; });
+        stopVoiceListen();
+        if (t.trim().isEmpty) return;
+        RenderLog.write('c299_ask',
+            'transcript=${t.substring(0, t.length.clamp(0, 40))}');
+        try {
+          final qData = _packQueueData[orderId];
+          final qItems = qData != null
+              ? ((qData['items'] as List?) ?? const [])
+                  .map((i) => Map<String, dynamic>.from(i as Map))
+                  .toList()
+              : <Map<String, dynamic>>[];
+          final agentItems = qItems.map((qi) => {
+            'product_name': qi['product_name']?.toString() ?? '',
+            'ordered_qty': (qi['qty'] as num?)?.toInt() ?? 0,
+            'pack_type': qi['pack_type']?.toString() ?? '',
+            'packed': qi['packed'] == true,
+            'counted_qty': qi['counted_qty'],
+          }).toList();
+          final token =
+              Supabase.instance.client.auth.currentSession?.accessToken ?? '';
+          final res = await Supabase.instance.client.functions.invoke(
+            'voice-agent',
+            body: {
+              'transcript': t,
+              'supplier_name': qData?['customer']?.toString() ?? '',
+              'items': agentItems,
+            },
+            headers: {'Authorization': 'Bearer $token'},
+          );
+          if (!mounted) return;
+          final data = res.data;
+          final reply =
+              (data is Map ? data['reply'] : null)?.toString() ?? '';
+          if (reply.isNotEmpty) {
+            _showPackSnack(reply,
+                duration: const Duration(seconds: 6));
+            try { speakText(reply); } catch (_) {}
+          }
+          RenderLog.write('c299_ask',
+              'reply=${reply.substring(0, reply.length.clamp(0, 40))}');
+        } catch (e) {
+          _showPackSnack('Ask mediBO error — try again');
+        }
+      },
+      onError: (e) {
+        if (mounted) setState(() { _askListening = false; _askInterim = ''; });
+        RenderLog.write('c299_ask', 'error=$e');
+      },
+    );
+  }
+
+  void _showPackSnack(String msg, {Duration? duration}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(msg),
+      duration: duration ?? const Duration(seconds: 3),
+      backgroundColor: const Color(0xFF1B7A43),
+    ));
+  }
+
+  // #291 — button always rendered, label refined from cached status
   Widget _buildPackingButton(Map<String, dynamic> c) {
     final orderId = c['order_id']?.toString() ?? '';
     if (orderId.isEmpty) return const SizedBox.shrink();
-
-    // Kick off background fetch if not already in progress or done.
-    // We do this unconditionally each build — _fetchPackStatus guards re-entry.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _fetchPackStatus(orderId);
     });
-
-    // Determine label from cached status (if available).
     final status = _packStatus[orderId];
     final int packed = status?['packed'] ?? 0;
     final int total  = status?['total']  ?? 0;
-
     final String label;
     final String logLabel;
     if (status == null || total <= 0) {
-      // Not yet fetched or fetch in progress — show default immediately.
-      label    = 'Start Packing';
-      logLabel = 'Start';
+      label = 'Start Packing'; logLabel = 'Start';
     } else if (packed == 0) {
-      label    = 'Start Packing';
-      logLabel = 'Start';
+      label = 'Start Packing'; logLabel = 'Start';
     } else if (packed >= total) {
-      label    = 'Packed ✓ — View';
-      logLabel = 'Packed';
+      label = 'Packed ✓ — View'; logLabel = 'Packed';
     } else {
-      label    = 'Resume Packing ($packed/$total)';
-      logLabel = 'Resume';
+      label = 'Resume Packing ($packed/$total)'; logLabel = 'Resume';
     }
-
-    // c291_pack_btn_build fires every time this widget builds — proves the
-    // button is in the real Pack-tab card renderer.
     try {
       RenderLog.write('c291_pack_btn_build',
           'order=${orderId.substring(0, orderId.length.clamp(0, 8))};branch=narrow;shown=true;label=$logLabel');
     } catch (_) {}
-
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
       child: SizedBox(
@@ -10610,76 +10922,30 @@ class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
         child: FilledButton(
           style: FilledButton.styleFrom(
             backgroundColor: _kGreen,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10)),
           ),
           onPressed: () async {
             await Navigator.push(
               context,
-              MaterialPageRoute(builder: (_) => _PackingScreen(orderId: orderId)),
+              MaterialPageRoute(
+                  builder: (_) => _PackingScreen(orderId: orderId)),
             );
-            // Refresh label after returning from packing screen.
             _packStatus.remove(orderId);
-            if (mounted) _fetchPackStatus(orderId);
+            _packQueueData.remove(orderId);
+            if (mounted) {
+              _fetchPackStatus(orderId);
+              if (_expandedOrderId == orderId) _loadFromPackQueue(orderId);
+            }
           },
-          child: Text(label, style: const TextStyle(
-              fontWeight: FontWeight.w700, fontSize: 15, color: Colors.white)),
+          child: Text(label,
+              style: const TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 15,
+                  color: Colors.white)),
         ),
       ),
     );
-  }
-
-  Future<void> _loadItems(String orderId) async {
-    if (_loadingItems[orderId] == true) return;
-    if (!mounted) return;
-    setState(() => _loadingItems[orderId] = true);
-    try {
-      // Step 1: fetch order_items for this order
-      final rows = await Supabase.instance.client
-          .from('order_items')
-          .select('id, product_id, product_name, quantity, received_qty, fulfillment_state, bag_no, at_warehouse')
-          .eq('order_id', orderId) as List;
-      final items = rows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
-
-      // Step 2: fetch image_url + pack_type from MEDICINE for distinct product_ids
-      final pids = items.map((r) => r['product_id']).whereType<int>().toSet().toList();
-      Map<int, Map<String, dynamic>> medMap = {};
-      if (pids.isNotEmpty) {
-        try {
-          final meds = await Supabase.instance.client
-              .from('MEDICINE')
-              .select('id, image_url_1, pack_type')
-              .inFilter('id', pids) as List;
-          for (final m in meds) {
-            final mid = (m['id'] as num?)?.toInt();
-            if (mid != null) medMap[mid] = Map<String, dynamic>.from(m as Map);
-          }
-        } catch (_) {}
-      }
-
-      // Step 3: merge medicine data into items
-      final merged = items.map((item) {
-        final pid = (item['product_id'] as num?)?.toInt();
-        final med = pid != null ? medMap[pid] : null;
-        return {
-          ...item,
-          'image_url': med?['image_url_1']?.toString(),
-          'pack_type': med?['pack_type']?.toString() ?? '',
-        };
-      }).toList();
-
-      // Sort A-Z by product_name (same as Supplier Shop)
-      merged.sort((a, b) => (a['product_name'] ?? '').toString().toLowerCase()
-          .compareTo((b['product_name'] ?? '').toString().toLowerCase()));
-
-      if (!mounted) return;
-      setState(() {
-        _itemsByOrder[orderId] = merged;
-        _loadingItems[orderId] = false;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _loadingItems[orderId] = false);
-    }
   }
 
   String _dot(Map<String, dynamic> c) {
@@ -10693,25 +10959,32 @@ class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
   Widget build(BuildContext context) {
     super.build(context);
     if (_loading) {
-      return const Center(child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2));
+      return const Center(
+          child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2));
     }
     if (_error != null) {
-      return Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+      return Center(
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
         const Icon(Icons.error_outline, size: 40, color: _kSub),
         const SizedBox(height: 12),
-        const Text('Could not load pack status', style: TextStyle(color: _kSub, fontSize: 14)),
+        const Text('Could not load pack status',
+            style: TextStyle(color: _kSub, fontSize: 14)),
         const SizedBox(height: 16),
         OutlinedButton(
           onPressed: _load,
-          style: OutlinedButton.styleFrom(side: const BorderSide(color: _kGreen), foregroundColor: _kGreen,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
+          style: OutlinedButton.styleFrom(
+              side: const BorderSide(color: _kGreen),
+              foregroundColor: _kGreen,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8))),
           child: const Text('Retry'),
         ),
       ]));
     }
     if (_customers.isEmpty) {
-      return const Center(child: Text('No accepted orders to pack',
-          style: TextStyle(color: _kSub, fontSize: 15)));
+      return const Center(
+          child: Text('No accepted orders to pack',
+              style: TextStyle(color: _kSub, fontSize: 15)));
     }
     return LayoutBuilder(builder: (_, constraints) {
       final maxW = constraints.maxWidth >= 900 ? 700.0 : double.infinity;
@@ -10744,83 +11017,112 @@ class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
       rowKey: rowKey,
       onTap: () {
         if (isExpanded) {
-          setState(() => _expandedOrderId = null);
+          _teardownOrderRt(orderId);
+          setState(() {
+            _expandedOrderId = null;
+            _voiceListening = false;
+            _voiceProcessing = false;
+            _askListening = false;
+            _askInterim = '';
+            _packMentions = [];
+          });
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (!mounted || !_scroll.hasClients) return;
             _scroll.animateTo(_savedScrollOffset,
-                duration: const Duration(milliseconds: 280), curve: Curves.easeInOutCubic);
+                duration: const Duration(milliseconds: 280),
+                curve: Curves.easeInOutCubic);
           });
         } else {
           RenderLog.write('c278_pack_card_open', name);
-          _savedScrollOffset = _scroll.hasClients ? _scroll.offset : 0.0;
-          setState(() => _expandedOrderId = orderId);
-          _loadItems(orderId);
+          _savedScrollOffset =
+              _scroll.hasClients ? _scroll.offset : 0.0;
+          setState(() {
+            _expandedOrderId = orderId;
+            _packMentions = [];
+          });
+          _loadFromPackQueue(orderId);
+          _subscribeOrderRt(orderId);
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (!mounted || !_scroll.hasClients) return;
             _scroll.animateTo(0.0,
-                duration: const Duration(milliseconds: 280), curve: Curves.easeInOutCubic);
+                duration: const Duration(milliseconds: 280),
+                curve: Curves.easeInOutCubic);
           });
         }
       },
-      expandedContent: isExpanded ? _buildExpandedBody(c) : const SizedBox.shrink(),
+      expandedContent:
+          isExpanded ? _buildExpandedBody(c) : const SizedBox.shrink(),
       mode: null,
       showPending: false,
     );
   }
 
   Widget _buildExpandedBody(Map<String, dynamic> c) {
-    final orderId = c['order_id']?.toString() ?? '';
-    final total   = (c['total_items']  as num?)?.toInt() ?? 0;
-    final ready   = (c['ready_items']  as num?)?.toInt() ?? 0;
-    final status  = c['fulfillment_status']?.toString() ?? '';
+    final orderId  = c['order_id']?.toString() ?? '';
+    final total    = (c['total_items'] as num?)?.toInt() ?? 0;
+    final ready    = (c['ready_items'] as num?)?.toInt() ?? 0;
+    final status   = c['fulfillment_status']?.toString() ?? '';
     final isLoading = _loadingItems[orderId] == true;
-    final items  = _itemsByOrder[orderId] ?? [];
+
+    final qData = _packQueueData[orderId];
+    final items = qData != null
+        ? ((qData['items'] as List?) ?? const [])
+            .map((i) => Map<String, dynamic>.from(i as Map))
+            .toList()
+        : <Map<String, dynamic>>[];
+    final countedCount =
+        qData != null ? (qData['counted_count'] as num?)?.toInt() ?? 0 : 0;
+    final totalItems = qData != null
+        ? (qData['total_items'] as num?)?.toInt() ?? total
+        : total;
+    final spokenCount = _packMentions
+        .map((m) => m['product_id'])
+        .where((id) => id != null)
+        .toSet()
+        .length;
 
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       const Divider(height: 1, color: _kBorder),
-
-      // #290: Start/Resume/Packed packing button
       _buildPackingButton(c),
+      _buildPackVoiceBar(orderId, spokenCount),
+      if (totalItems > 0) _buildPackProgressRow(countedCount, totalItems),
 
-      // Voice bar — identical layout, permanently disabled in Pack
-      _buildPackVoiceBar(),
-
-      // Progress row — driven by ready_items / total_items
-      if (total > 0) _buildPackProgressRow(ready, total),
-
-      // Item list
       if (isLoading)
-        const Center(child: Padding(
+        const Center(
+            child: Padding(
           padding: EdgeInsets.all(24),
-          child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2),
+          child:
+              CircularProgressIndicator(color: _kGreen, strokeWidth: 2),
         ))
-      else if (items.isEmpty)
+      else if (items.isEmpty && qData != null)
         const Padding(
           padding: EdgeInsets.fromLTRB(16, 12, 16, 16),
-          child: Text('No items found', style: TextStyle(color: _kSub, fontSize: 14)),
+          child: Text('No items found',
+              style: TextStyle(color: _kSub, fontSize: 14)),
         )
-      else
+      else if (items.isNotEmpty)
         Padding(
-          padding: const EdgeInsets.fromLTRB(0, 4, 0, 0),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              for (int i = 0; i < items.length; i++) ...[
-                Builder(builder: (_) {
-                  if (i == 0) {
-                    RenderLog.write('c279_pack_tab_warehouse_rows', items.length);
-                    RenderLog.write('c279_pack_item_row_widget', 1);
-                  }
-                  return Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
-                    child: _buildPackItemTile(items[i]),
-                  );
-                }),
-                if (i < items.length - 1) const SizedBox(height: 4),
-              ],
-            ]),
+          padding: const EdgeInsets.fromLTRB(0, 8, 0, 0),
+          child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                for (int i = 0; i < items.length; i++) ...[
+                  Builder(builder: (_) {
+                    if (i == 0) {
+                      RenderLog.write(
+                          'c299_rows_src', 'rendered=${items.length}');
+                    }
+                    return Padding(
+                      padding:
+                          const EdgeInsets.fromLTRB(16, 0, 16, 0),
+                      child: _buildPackItemTile(items[i]),
+                    );
+                  }),
+                  if (i < items.length - 1) const SizedBox(height: 6),
+                ],
+              ]),
         ),
 
-      // Footer
       if (!isLoading) ...[
         const SizedBox(height: 12),
         const Divider(height: 1, color: _kBorder),
@@ -10833,54 +11135,140 @@ class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
     ]);
   }
 
-  // Voice bar: pixel-identical to Supplier Shop's _buildNarrowVoiceBar, always disabled.
-  Widget _buildPackVoiceBar() {
+  // CHANGE #299: active voice bar — Count items + Ask mediBO
+  Widget _buildPackVoiceBar(String orderId, int spokenCount) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
       child: Row(children: [
-        Expanded(child: SizedBox(
-          height: 44,
-          child: _packPill(Icons.mic_none_rounded, 'Count items'),
-        )),
+        Expanded(
+            child: SizedBox(
+                height: 44,
+                child: _buildCountPill(orderId, spokenCount))),
         const SizedBox(width: 12),
-        Expanded(child: SizedBox(
-          height: 44,
-          child: _packPill(Icons.record_voice_over_rounded, 'Ask mediBO'),
-        )),
+        Expanded(
+            child: SizedBox(
+                height: 44, child: _buildAskPill(orderId))),
       ]),
     );
   }
 
-  // Disabled pill — same visual as _buildWidePill(disabled:true)
-  Widget _packPill(IconData icon, String label) {
-    return IgnorePointer(
-      child: Opacity(
-        opacity: 0.40,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 180),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(22),
-            border: Border.all(color: _kBorder),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.max,
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(icon, size: 16, color: _kGreen),
+  Widget _buildCountPill(String orderId, int spokenCount) {
+    final bool listening = _voiceListening;
+    final bool processing = _voiceProcessing;
+    final bool disabled = _voiceProcessing || _askListening;
+    return GestureDetector(
+      onTap: disabled ? null : () => _toggleCountVoice(orderId),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        decoration: BoxDecoration(
+          color: listening ? _kGreen : Colors.white,
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(color: listening ? _kGreen : _kBorder),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.max,
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            if (processing)
+              const SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(
+                      color: _kGreen, strokeWidth: 2))
+            else
+              Icon(
+                  listening
+                      ? Icons.stop_rounded
+                      : Icons.mic_none_rounded,
+                  size: 16,
+                  color: listening ? Colors.white : _kGreen),
+            const SizedBox(width: 6),
+            Flexible(
+                child: Text(
+              processing
+                  ? 'Processing…'
+                  : (listening ? 'Stop' : 'Count items'),
+              style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: listening ? Colors.white : _kText),
+              overflow: TextOverflow.ellipsis,
+              maxLines: 1,
+            )),
+            if (spokenCount > 0 && !listening && !processing) ...[
               const SizedBox(width: 6),
-              Flexible(child: Text(label, style: const TextStyle(
-                  fontSize: 13, fontWeight: FontWeight.w600, color: _kText),
-                  overflow: TextOverflow.ellipsis, maxLines: 1)),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 7, vertical: 2),
+                decoration: BoxDecoration(
+                  color: _kReceivedBg,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                      color:
+                          _kReceivedFg.withValues(alpha: 0.25)),
+                ),
+                child: Text('$spokenCount',
+                    style: const TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        color: _kReceivedFg)),
+              ),
             ],
-          ),
+          ],
         ),
       ),
     );
   }
 
-  // Progress row: identical layout to _buildNarrowProgressRow, driven by ready/total.
-  Widget _buildPackProgressRow(int ready, int total) {
+  Widget _buildAskPill(String orderId) {
+    final bool listening = _askListening;
+    final bool disabled = _voiceListening || _voiceProcessing;
+    return GestureDetector(
+      onTap: disabled ? null : () => _toggleAskMediaBO(orderId),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        decoration: BoxDecoration(
+          color: listening ? const Color(0xFF1E40AF) : Colors.white,
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(
+              color: listening
+                  ? const Color(0xFF1E40AF)
+                  : _kBorder),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.max,
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+                listening
+                    ? Icons.stop_rounded
+                    : Icons.record_voice_over_rounded,
+                size: 16,
+                color: listening
+                    ? Colors.white
+                    : _kGreen),
+            const SizedBox(width: 6),
+            Flexible(
+                child: Text(
+              listening
+                  ? (_askInterim.isNotEmpty
+                      ? _askInterim
+                      : 'Listening…')
+                  : 'Ask mediBO',
+              style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: listening ? Colors.white : _kText),
+              overflow: TextOverflow.ellipsis,
+              maxLines: 1,
+            )),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPackProgressRow(int counted, int total) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
       child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
@@ -10892,15 +11280,20 @@ class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
               color: _kGreen,
               borderRadius: BorderRadius.circular(6),
             ),
-            child: Text('$ready spoken',
-                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Colors.white),
-                maxLines: 1, overflow: TextOverflow.ellipsis, textAlign: TextAlign.center),
+            child: Text('$counted spoken',
+                style: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.white),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center),
           ),
         ),
         const SizedBox(width: 8),
         Expanded(
           child: LinearProgressIndicator(
-            value: total == 0 ? 0 : ready / total,
+            value: total == 0 ? 0 : counted / total,
             backgroundColor: _kBorder,
             color: _kGreen,
             minHeight: 6,
@@ -10908,80 +11301,118 @@ class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
           ),
         ),
         const SizedBox(width: 8),
-        Text('$ready/$total',
-            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText)),
+        Text('$counted/$total',
+            style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                color: _kText)),
       ]),
     );
   }
 
-  // Item row: identical to _buildItemTile in Supplier Shop.
+  // CHANGE #299: redesigned tile — bigger image left, 3 info lines, no bag chip
   Widget _buildPackItemTile(Map<String, dynamic> item) {
-    final name     = item['product_name']?.toString() ?? '—';
-    final packType = item['pack_type']?.toString() ?? '';
-    final imageUrl = item['image_url']?.toString();
-    final qty      = (item['quantity']     as num?)?.toInt() ?? 0;
-    final recQty   = (item['received_qty'] as num?)?.toInt() ?? 0;
-    final state    = item['fulfillment_state']?.toString() ?? 'pending';
-    final bagNo    = (item['bag_no'] as num?)?.toInt();
+    final name       = item['product_name']?.toString() ?? '—';
+    final packType   = item['pack_type']?.toString() ?? '';
+    final imageUrl   = item['image_url']?.toString();
+    final qty        = (item['qty'] as num?)?.toInt() ?? 0;
+    final packed     = item['packed'] == true;
+    final countedQty = (item['counted_qty'] as num?)?.toInt() ?? 0;
 
-    String? bagChipText;
-    if (bagNo != null) {
-      final bd = [{'bag_no': bagNo, 'qty': recQty}];
-      bagChipText = _fmtBreakdown(bd, packType);
-      RenderLog.write('c279_pack_bag_chip', 'bag=$bagNo;chip=$bagChipText');
-    }
+    final pk = packed ? qty : 0;
+    final ct = countedQty;
+    final pt = packType.isNotEmpty ? ' $packType' : '';
+
+    final packedFull  = pk >= qty && qty > 0;
+    final countedFull = ct >= qty && qty > 0;
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
         color: _kCard,
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: state == 'pending' ? _kBorder : (_stateBgMap[state] ?? _kBorder)),
+        border: Border.all(color: _kBorder),
       ),
-      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        _FulfilImageTile(imageUrl, size: 40),
-        const SizedBox(width: 10),
+      child:
+          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        _FulfilImageTile(imageUrl, size: 52),
+        const SizedBox(width: 12),
         Expanded(
-          child: Padding(
-            padding: const EdgeInsets.only(top: 2),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-              Text(name, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
-                  maxLines: 2, overflow: TextOverflow.ellipsis),
-              const SizedBox(height: 2),
-              Text(packType.isNotEmpty ? packType : '—',
-                  style: const TextStyle(fontSize: 11, color: _kSub),
-                  maxLines: 1, overflow: TextOverflow.ellipsis),
-              if (bagChipText != null && bagChipText.isNotEmpty) ...[
-                const SizedBox(height: 2),
+          child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(name,
+                    style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: _kText),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis),
+                const SizedBox(height: 5),
+                // GREEN chip — Packed
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 8, vertical: 3),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFEEEEEE),
+                    color: packedFull
+                        ? _kReceivedBg
+                        : (pk > 0
+                            ? _kReceivedBg.withValues(alpha: 0.5)
+                            : Colors.transparent),
                     borderRadius: BorderRadius.circular(6),
+                    border: Border.all(
+                      color: pk > 0
+                          ? _kReceivedFg.withValues(alpha: 0.4)
+                          : _kReceivedFg.withValues(alpha: 0.2),
+                    ),
                   ),
-                  child: Text(bagChipText,
-                      style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: Colors.black87),
-                      maxLines: 2, overflow: TextOverflow.ellipsis),
+                  child: Text('Packed • $pk/$qty$pt',
+                      style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: pk > 0
+                              ? _kReceivedFg
+                              : const Color(0xFF9CA3AF)),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis),
                 ),
-              ],
-            ]),
-          ),
-        ),
-        const SizedBox(width: 8),
-        ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 120),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
-            Text('$recQty/$qty',
-                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText)),
-            const SizedBox(height: 3),
-            _StatePill(state),
-          ]),
+                const SizedBox(height: 4),
+                // YELLOW chip — Counted
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: countedFull
+                        ? const Color(0xFFFEF3C7)
+                        : (ct > 0
+                            ? const Color(0xFFFEF9E7)
+                            : Colors.transparent),
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(
+                      color: ct > 0
+                          ? const Color(0xFFD97706)
+                              .withValues(alpha: 0.4)
+                          : const Color(0xFFD97706)
+                              .withValues(alpha: 0.2),
+                    ),
+                  ),
+                  child: Text('Counted • $ct/$qty$pt',
+                      style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: ct > 0
+                              ? const Color(0xFF92400E)
+                              : const Color(0xFF9CA3AF)),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis),
+                ),
+              ]),
         ),
       ]),
     );
   }
 
-  // Footer: same container shape as Supplier Shop's confirm footer.
   Widget _buildPackFooter(String status, int ready, int total) {
     final isReady = status == 'ready' || (total > 0 && ready >= total);
     return Container(
@@ -10997,15 +11428,26 @@ class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
         ),
       ),
       child: Row(children: [
-        Icon(isReady ? Icons.check_circle_outline_rounded : Icons.hourglass_top_rounded,
-            size: 15, color: isReady ? _kReceivedFg : const Color(0xFF92400E)),
+        Icon(
+            isReady
+                ? Icons.check_circle_outline_rounded
+                : Icons.hourglass_top_rounded,
+            size: 15,
+            color: isReady
+                ? _kReceivedFg
+                : const Color(0xFF92400E)),
         const SizedBox(width: 8),
-        Expanded(child: Text(
+        Expanded(
+            child: Text(
           isReady
               ? 'Ready to pack ✓'
               : 'Packing in progress — $ready/$total items at warehouse',
-          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
-              color: isReady ? _kReceivedFg : const Color(0xFF92400E)),
+          style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: isReady
+                  ? _kReceivedFg
+                  : const Color(0xFF92400E)),
         )),
       ]),
     );

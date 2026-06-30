@@ -9635,6 +9635,7 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
   void initState() {
     super.initState();
     RenderLog.write('c280_bag_tab_mounted', 1);
+    RenderLog.write('c285_bag_no_chip', 'rendered=false');
     _load();
     _subscribeRealtime();
   }
@@ -9923,7 +9924,22 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
 
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       const Divider(height: 1, color: _kBorder),
-      if (total > 0) _buildBagProgressRow(received, total),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
+        child: Builder(builder: (ctx) {
+          RenderLog.write('c285_bag_header_badge', 'bag=$bagNo;items=${items.length}');
+          return Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            decoration: BoxDecoration(
+              color: _kReceivedBg,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: _kReceivedFg.withValues(alpha: 0.3)),
+            ),
+            child: Text('Bag $bagNo · ${items.length} items',
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _kReceivedFg)),
+          );
+        }),
+      ),
       if (isLoading)
         const Center(child: Padding(
           padding: EdgeInsets.all(24),
@@ -9993,136 +10009,142 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
   }
 
   Widget _buildBagItemTile(Map<String, dynamic> item) {
-    final name         = item['product_name']?.toString() ?? '—';
-    final customer     = item['customer']?.toString() ?? '';
-    final packType     = item['pack_type']?.toString() ?? '';
-    final imageUrl     = item['image_url']?.toString();
-    final qty          = (item['ordered_qty']  as num?)?.toInt() ?? 0;
-    final recQty       = (item['received_qty'] as num?)?.toInt() ?? 0;
-    final state        = item['fulfillment_state']?.toString() ?? 'pending';
-    final bagNo        = (item['bag_no'] as num?)?.toInt();
-    final orderItemId  = item['order_item_id']?.toString() ?? '';
+    final name             = item['product_name']?.toString() ?? '—';
+    final customer         = item['customer']?.toString() ?? '';
+    final packType         = item['pack_type']?.toString() ?? '';
+    final imageUrl         = item['image_url']?.toString();
+    final recQty           = (item['received_qty'] as num?)?.toInt() ?? 0;
+    final assignedSupplier = item['assigned_supplier']?.toString() ?? '';
 
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: _kCard,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: state == 'pending' ? _kBorder : (_stateBgMap[state] ?? _kBorder)),
-      ),
-      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        _FulfilImageTile(imageUrl, size: 40),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Padding(
-            padding: const EdgeInsets.only(top: 2),
+    return Builder(builder: (ctx) {
+      RenderLog.write('c285_bag_row_v2',
+          'name=${name.substring(0, name.length.clamp(0, 8))};qty=$recQty;has_S=${assignedSupplier.isNotEmpty};has_C=${customer.isNotEmpty}');
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: _kCard,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: _kBorder),
+        ),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          _FulfilImageTile(imageUrl, size: 44),
+          const SizedBox(width: 10),
+          Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
               Text(name,
                   style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
                   maxLines: 2, overflow: TextOverflow.ellipsis),
-              if (customer.isNotEmpty) ...[
-                const SizedBox(height: 1),
-                Text(customer,
-                    style: const TextStyle(fontSize: 11, color: _kSub, fontStyle: FontStyle.italic),
-                    maxLines: 1, overflow: TextOverflow.ellipsis),
-              ],
-              const SizedBox(height: 2),
-              Text(packType.isNotEmpty ? packType : '—',
-                  style: const TextStyle(fontSize: 11, color: _kSub),
+              const SizedBox(height: 3),
+              Text('$recQty ${packType.isNotEmpty ? packType : "—"}',
+                  style: const TextStyle(fontSize: 12, color: _kSub),
                   maxLines: 1, overflow: TextOverflow.ellipsis),
-              const SizedBox(height: 2),
-              _BagPickerChip(
-                currentBagNo: bagNo,
-                orderItemId: orderItemId,
-              ),
-            ]),
-          ),
-        ),
-        const SizedBox(width: 8),
-        ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 120),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
-            Text('$recQty/$qty',
-                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText)),
-            const SizedBox(height: 3),
-            _StatePill(state),
-          ]),
-        ),
-      ]),
-    );
-  }
-
-  Widget _buildSearchResultTile(Map<String, dynamic> item) {
-    final name      = item['product_name']?.toString() ?? '—';
-    final customer  = item['customer']?.toString() ?? '';
-    final packType  = item['pack_type']?.toString() ?? '';
-    final imageUrl  = item['image_url']?.toString();
-    final qty       = (item['ordered_qty']  as num?)?.toInt() ?? 0;
-    final recQty    = (item['received_qty'] as num?)?.toInt() ?? 0;
-    final state     = item['fulfillment_state']?.toString() ?? 'pending';
-    final bagNo     = (item['bag_no'] as num?)?.toInt();
-
-    String? bagChipText;
-    if (bagNo != null) {
-      final bd = [{'bag_no': bagNo, 'qty': recQty}];
-      bagChipText = _fmtBreakdown(bd, packType);
-    }
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: _kCard,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: state == 'pending' ? _kBorder : (_stateBgMap[state] ?? _kBorder)),
-      ),
-      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        _FulfilImageTile(imageUrl, size: 40),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Padding(
-            padding: const EdgeInsets.only(top: 2),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-              Text(name,
-                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
-                  maxLines: 2, overflow: TextOverflow.ellipsis),
-              if (customer.isNotEmpty) ...[
-                const SizedBox(height: 1),
-                Text(customer,
-                    style: const TextStyle(fontSize: 11, color: _kSub, fontStyle: FontStyle.italic),
-                    maxLines: 1, overflow: TextOverflow.ellipsis),
-              ],
-              const SizedBox(height: 2),
-              Text(packType.isNotEmpty ? packType : '—',
-                  style: const TextStyle(fontSize: 11, color: _kSub),
-                  maxLines: 1, overflow: TextOverflow.ellipsis),
-              if (bagChipText != null && bagChipText.isNotEmpty) ...[
-                const SizedBox(height: 2),
+              if (assignedSupplier.isNotEmpty) ...[
+                const SizedBox(height: 4),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFEEEEEE),
-                    borderRadius: BorderRadius.circular(6),
+                    color: _kReceivedBg,
+                    borderRadius: BorderRadius.circular(20),
                   ),
-                  child: Text(bagChipText,
-                      style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: Colors.black87),
-                      maxLines: 2, overflow: TextOverflow.ellipsis),
+                  child: Text('S · $assignedSupplier',
+                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: _kReceivedFg),
+                      maxLines: 1, overflow: TextOverflow.ellipsis),
+                ),
+              ],
+              if (customer.isNotEmpty) ...[
+                const SizedBox(height: 4),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFFF3CD),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text('C · $customer',
+                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: Color(0xFF8A6D00)),
+                      maxLines: 1, overflow: TextOverflow.ellipsis),
                 ),
               ],
             ]),
           ),
+        ]),
+      );
+    });
+  }
+
+  Widget _buildSearchResultTile(Map<String, dynamic> item) {
+    final name             = item['product_name']?.toString() ?? '—';
+    final customer         = item['customer']?.toString() ?? '';
+    final packType         = item['pack_type']?.toString() ?? '';
+    final imageUrl         = item['image_url']?.toString();
+    final recQty           = (item['received_qty'] as num?)?.toInt() ?? 0;
+    final bagNo            = (item['bag_no'] as num?)?.toInt();
+    final assignedSupplier = item['assigned_supplier']?.toString() ?? '';
+
+    return Builder(builder: (ctx) {
+      RenderLog.write('c285_search_row_v2', 'bag=$bagNo;qty=$recQty');
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: _kCard,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: _kBorder),
         ),
-        const SizedBox(width: 8),
-        ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 120),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
-            Text('$recQty/$qty',
-                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText)),
-            const SizedBox(height: 3),
-            _StatePill(state),
-          ]),
-        ),
-      ]),
-    );
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          _FulfilImageTile(imageUrl, size: 44),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+              Text(name,
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
+                  maxLines: 2, overflow: TextOverflow.ellipsis),
+              const SizedBox(height: 3),
+              Text('$recQty ${packType.isNotEmpty ? packType : "—"}',
+                  style: const TextStyle(fontSize: 12, color: _kSub),
+                  maxLines: 1, overflow: TextOverflow.ellipsis),
+              if (assignedSupplier.isNotEmpty) ...[
+                const SizedBox(height: 4),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: _kReceivedBg,
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text('S · $assignedSupplier',
+                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: _kReceivedFg),
+                      maxLines: 1, overflow: TextOverflow.ellipsis),
+                ),
+              ],
+              if (customer.isNotEmpty) ...[
+                const SizedBox(height: 4),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFFF3CD),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text('C · $customer',
+                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: Color(0xFF8A6D00)),
+                      maxLines: 1, overflow: TextOverflow.ellipsis),
+                ),
+              ],
+              if (bagNo != null) ...[
+                const SizedBox(height: 4),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF3F4F6),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text('Bag $bagNo',
+                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: _kSub),
+                      maxLines: 1, overflow: TextOverflow.ellipsis),
+                ),
+              ],
+            ]),
+          ),
+        ]),
+      );
+    });
   }
 }
 

@@ -11012,7 +11012,7 @@ class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
   }
 }
 
-// ── CHANGE #292: Packing flow — PageView nav + button states + header popups ──
+// ── CHANGE #293: Packing flow — redesigned card, two-zone swipe, bag colours ─
 
 class _PackingScreen extends StatefulWidget {
   final String orderId;
@@ -11034,26 +11034,10 @@ class _PackingScreenState extends State<_PackingScreen> {
   bool _marking     = false;
   bool _allPacked   = false;
 
-  // #292: PageView navigation
-  late final PageController _pageController;
-
-  // #292: 2-second hold-to-undo
-  Timer?  _holdTimer;
-  double  _holdProgress = 0.0;
-  bool    _holdActive   = false;
-
   @override
   void initState() {
     super.initState();
-    _pageController = PageController();
     _loadQueue();
-  }
-
-  @override
-  void dispose() {
-    _holdTimer?.cancel();
-    _pageController.dispose();
-    super.dispose();
   }
 
   Future<void> _loadQueue() async {
@@ -11066,7 +11050,7 @@ class _PackingScreenState extends State<_PackingScreen> {
       final Map<String, dynamic> m = raw is String
           ? (jsonDecode(raw) as Map).cast<String, dynamic>()
           : Map<String, dynamic>.from(raw as Map);
-      // #292: items arrive in bag-number order from server — do NOT re-sort
+      // Items arrive in bag-number order from server — do NOT re-sort
       final items    = ((m['items'] as List?) ?? const [])
           .map((i) => Map<String, dynamic>.from(i as Map))
           .toList();
@@ -11088,13 +11072,6 @@ class _PackingScreenState extends State<_PackingScreen> {
         _allPacked    = allDone;
         _loading      = false;
       });
-      if (!allDone && startIdx > 0) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted && _pageController.hasClients) {
-            _pageController.jumpToPage(startIdx);
-          }
-        });
-      }
       try {
         final first8 = items.take(8).map((i) => (i['bag_no'] ?? '?').toString()).join(',');
         RenderLog.write('c292_queue_order', 'first8bags=$first8');
@@ -11106,26 +11083,41 @@ class _PackingScreenState extends State<_PackingScreen> {
     }
   }
 
-  Future<void> _packItem(int index) async {
+  void _goToItem(int index) {
+    if (index < 0 || index >= _items.length) return;
+    setState(() => _currentIndex = index);
+  }
+
+  // Toggle: pack if unpacked, unpack if packed (CHANGE 3 — simple tap both ways, no hold)
+  Future<void> _toggleItem(int index) async {
     if (_marking || index < 0 || index >= _items.length) return;
-    final item = _items[index];
-    if (item['packed'] == true) return;
+    final item   = _items[index];
+    final packed = item['packed'] == true;
     setState(() => _marking = true);
     final itemId = item['order_item_id']?.toString() ?? '';
     try {
-      await Supabase.instance.client
-          .rpc('pack_mark_item', params: {'p_order_item_id': itemId, 'p_packed': true});
+      await Supabase.instance.client.rpc('pack_mark_item',
+          params: {'p_order_item_id': itemId, 'p_packed': !packed});
       if (!mounted) return;
+      final wasStr = packed ? 'packed' : 'unpacked';
+      final nowStr = packed ? 'unpacked' : 'packed';
       setState(() {
-        _items[index] = {...item, 'packed': true};
-        _packedCount++;
-        _leftCount = (_leftCount - 1).clamp(0, _totalItems);
-        if (_leftCount == 0) _allPacked = true;
+        _items[index] = {...item, 'packed': !packed};
+        if (!packed) {
+          // packing
+          _packedCount++;
+          _leftCount = (_leftCount - 1).clamp(0, _totalItems);
+          if (_leftCount == 0) _allPacked = true;
+        } else {
+          // unpacking
+          _packedCount = (_packedCount - 1).clamp(0, _totalItems);
+          _leftCount++;
+          _allPacked = false;
+        }
         _marking = false;
       });
       try {
-        RenderLog.write('c292_btn_state',
-            'packed=true;color=grey;idx=$index;left=$_leftCount');
+        RenderLog.write('c293_btn_toggle', 'was=$wasStr;now=$nowStr;idx=$index');
       } catch (_) {}
     } catch (e) {
       if (mounted) {
@@ -11136,63 +11128,43 @@ class _PackingScreenState extends State<_PackingScreen> {
     }
   }
 
-  Future<void> _unpackItem(int index) async {
-    if (_marking || index < 0 || index >= _items.length) return;
-    final item = _items[index];
-    if (item['packed'] != true) return;
-    setState(() => _marking = true);
-    final itemId = item['order_item_id']?.toString() ?? '';
-    try {
-      await Supabase.instance.client
-          .rpc('pack_mark_item', params: {'p_order_item_id': itemId, 'p_packed': false});
-      if (!mounted) return;
-      setState(() {
-        _items[index] = {...item, 'packed': false};
-        _packedCount  = (_packedCount - 1).clamp(0, _totalItems);
-        _leftCount++;
-        _allPacked    = false;
-        _marking      = false;
-        _holdProgress = 0.0;
-        _holdActive   = false;
-      });
-      try {
-        RenderLog.write('c292_pack_undo',
-            'item=${itemId.substring(0, itemId.length.clamp(0, 8))};unpacked=true;left=$_leftCount');
-        RenderLog.write('c292_btn_state',
-            'packed=false;color=green;idx=$index;left=$_leftCount');
-      } catch (_) {}
-    } catch (e) {
-      if (mounted) {
-        setState(() { _marking = false; _holdProgress = 0.0; _holdActive = false; });
-        ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Error: $e'), duration: const Duration(seconds: 3)));
-      }
+  // ── Per-bag rollup helpers (#293 CHANGE 4) ──────────────────────────────────
+
+  Map<int, Map<String, int>> _computeBagStats() {
+    final result = <int, Map<String, int>>{};
+    for (final item in _items) {
+      final bn    = (item['bag_no'] as num?)?.toInt() ?? 0;
+      final done  = item['packed'] == true;
+      final entry = result.putIfAbsent(bn, () => {'packed': 0, 'total': 0});
+      entry['total'] = (entry['total'] ?? 0) + 1;
+      if (done) entry['packed'] = (entry['packed'] ?? 0) + 1;
     }
+    return result;
   }
 
-  void _startHold(int index) {
-    if (_holdActive || _marking) return;
-    if (index >= _items.length || _items[index]['packed'] != true) return;
-    _holdActive   = true;
-    _holdProgress = 0.0;
-    _holdTimer = Timer.periodic(const Duration(milliseconds: 50), (t) {
-      if (!mounted) { t.cancel(); return; }
-      setState(() => _holdProgress += 0.025);
-      if (_holdProgress >= 1.0) {
-        t.cancel();
-        _holdActive = false;
-        _unpackItem(index);
-      }
-    });
+  // Returns: 0=none, 1=some, 2=all
+  int _bagStatus(int bagNo, Map<int, Map<String, int>> stats) {
+    final s = stats[bagNo];
+    if (s == null) return 0;
+    final total  = s['total']  ?? 0;
+    final packed = s['packed'] ?? 0;
+    if (total == 0) return 0;
+    if (packed == total) return 2;
+    if (packed > 0) return 1;
+    return 0;
   }
 
-  void _cancelHold() {
-    _holdTimer?.cancel();
-    _holdTimer = null;
-    if (mounted) setState(() { _holdActive = false; _holdProgress = 0.0; });
-  }
+  Color _bagBg(int status)     => status == 2 ? _kReceivedBg
+      : status == 1 ? const Color(0xFFFFF3CD)
+      : const Color(0xFFF3F4F6);
+  Color _bagBorder(int status) => status == 2 ? _kGreen
+      : status == 1 ? const Color(0xFFFFCA28)
+      : _kBorder;
+  Color _bagFg(int status)     => status == 2 ? _kReceivedFg
+      : status == 1 ? const Color(0xFF8A6D00)
+      : _kSub;
 
-  // ── Header popup helpers (#292 CHANGE 4) ────────────────────────────────────
+  // ── Header popup helpers ─────────────────────────────────────────────────────
 
   void _showItemsPopup() {
     final sorted = List<Map<String, dynamic>>.from(_items)
@@ -11219,12 +11191,8 @@ class _PackingScreenState extends State<_PackingScreen> {
   }
 
   void _showBagsPopup() {
-    final bagMap = <int, List<Map<String, dynamic>>>{};
-    for (final item in _items) {
-      final bn = (item['bag_no'] as num?)?.toInt() ?? 0;
-      bagMap.putIfAbsent(bn, () => []).add(item);
-    }
-    final bags = bagMap.keys.toList()..sort();
+    final bagStats = _computeBagStats();
+    final bags     = bagStats.keys.toList()..sort();
     try { RenderLog.write('c292_hdr_popup', 'which=bags;rows=${bags.length}'); } catch (_) {}
     showModalBottomSheet<void>(
       context: context,
@@ -11237,24 +11205,30 @@ class _PackingScreenState extends State<_PackingScreen> {
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           _sheetHeader(ctx, 'Bags'),
           Flexible(child: SingleChildScrollView(child: Column(children: bags.map((bn) {
-            final group     = bagMap[bn]!;
-            final bagPacked = group.where((i) => i['packed'] == true).length;
-            final bagTotal  = group.length;
-            final bagDone   = bagPacked == bagTotal;
+            final st         = _bagStatus(bn, bagStats);
+            final s          = bagStats[bn]!;
+            final bagPacked  = s['packed'] ?? 0;
+            final bagTotal   = s['total']  ?? 0;
+            try {
+              RenderLog.write('c293_bag_color',
+                  'bag=$bn;state=${st == 2 ? "green" : st == 1 ? "yellow" : "grey"}');
+            } catch (_) {}
             return Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              decoration: const BoxDecoration(
-                  border: Border(bottom: BorderSide(color: _kBorder))),
+              decoration: BoxDecoration(
+                  color: _bagBg(st),
+                  border: const Border(bottom: BorderSide(color: _kBorder))),
               child: Row(children: [
-                Text('Bag $bn', style: const TextStyle(
-                    fontSize: 14, fontWeight: FontWeight.w500, color: _kText)),
+                Text('Bag $bn',
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500,
+                        color: _bagFg(st))),
                 const Spacer(),
-                if (bagDone)
-                  const Text('✓', style: TextStyle(
-                      fontSize: 14, fontWeight: FontWeight.w700, color: _kGreen))
+                if (st == 2)
+                  Text('✓', style: TextStyle(fontSize: 14,
+                      fontWeight: FontWeight.w700, color: _bagFg(st)))
                 else
                   Text('$bagPacked/$bagTotal',
-                      style: const TextStyle(fontSize: 13, color: _kSub)),
+                      style: TextStyle(fontSize: 13, color: _bagFg(st))),
               ]),
             );
           }).toList()))),
@@ -11292,7 +11266,8 @@ class _PackingScreenState extends State<_PackingScreen> {
                 const SizedBox(width: 32, child: Padding(
                   padding: EdgeInsets.fromLTRB(0, 6, 10, 6),
                   child: Text('✓', textAlign: TextAlign.center,
-                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _kGreen)),
+                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
+                          color: _kGreen)),
                 )),
             ]),
           ),
@@ -11315,14 +11290,13 @@ class _PackingScreenState extends State<_PackingScreen> {
                   )),
                   SizedBox(width: 80, child: Padding(
                     padding: const EdgeInsets.symmetric(vertical: 6),
-                    child: Text(qtyLabel,
-                        style: const TextStyle(fontSize: 12, color: _kSub)),
+                    child: Text(qtyLabel, style: const TextStyle(fontSize: 12, color: _kSub)),
                   )),
                   if (showTick)
                     SizedBox(width: 32, child: Center(
                       child: isPacked
-                          ? const Text('✓', style: TextStyle(
-                              fontSize: 14, fontWeight: FontWeight.w700, color: _kGreen))
+                          ? const Text('✓', style: TextStyle(fontSize: 14,
+                              fontWeight: FontWeight.w700, color: _kGreen))
                           : const SizedBox.shrink(),
                     )),
                 ]),
@@ -11364,7 +11338,9 @@ class _PackingScreenState extends State<_PackingScreen> {
       backgroundColor: Colors.white,
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
-      builder: (_) => _BagQuickViewSheet(items: List<Map<String, dynamic>>.from(_items)),
+      builder: (_) => _BagQuickViewSheet(
+          items: List<Map<String, dynamic>>.from(_items),
+          bagStats: _computeBagStats()),
     );
   }
 
@@ -11396,8 +11372,8 @@ class _PackingScreenState extends State<_PackingScreen> {
             TextButton.icon(
               icon: const Icon(Icons.inventory_2_outlined, size: 16, color: _kGreen),
               label: const Text('Bags',
-                  style: TextStyle(
-                      color: _kGreen, fontWeight: FontWeight.w600, fontSize: 13)),
+                  style: TextStyle(color: _kGreen, fontWeight: FontWeight.w600,
+                      fontSize: 13)),
               onPressed: _showBagQuickView,
             ),
         ],
@@ -11413,12 +11389,14 @@ class _PackingScreenState extends State<_PackingScreen> {
               ? _buildErrorView()
               : _allPacked
                   ? _buildAllPackedScreen(customer, _bagCount)
-                  : _buildItemPager(),
+                  : _buildItemView(),
     );
   }
 
+  // ── Header stat pills — no chevron (#293 CHANGE 2) ──────────────────────────
   Widget _buildStatRow() {
     String s(int n, String sg, String pl) => '$n ${n == 1 ? sg : pl}';
+    try { RenderLog.write('c293_no_chevron', 'chevron=removed'); } catch (_) {}
     return Container(
       color: Colors.white,
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
@@ -11437,6 +11415,7 @@ class _PackingScreenState extends State<_PackingScreen> {
     );
   }
 
+  // No chevron icon — CHANGE 2
   Widget _tappablePill(String text, VoidCallback onTap) => GestureDetector(
     onTap: onTap,
     child: Container(
@@ -11444,258 +11423,236 @@ class _PackingScreenState extends State<_PackingScreen> {
       decoration: BoxDecoration(
           color: const Color(0xFFF3F4F6),
           borderRadius: BorderRadius.circular(20)),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Text(text, style: const TextStyle(
-            fontSize: 11, fontWeight: FontWeight.w500, color: _kSub)),
-        const SizedBox(width: 2),
-        const Icon(Icons.keyboard_arrow_down, size: 12, color: _kSub),
-      ]),
+      child: Text(text, style: const TextStyle(
+          fontSize: 11, fontWeight: FontWeight.w500, color: _kSub)),
     ),
   );
 
-  Widget _buildItemPager() {
+  // ── Main item view — new layout with two-zone gestures (#293 CHANGES 5,6,7) ─
+  Widget _buildItemView() {
+    if (_currentIndex >= _items.length) return const SizedBox.shrink();
+    final item      = _items[_currentIndex];
+    final name      = item['product_name']?.toString() ?? '—';
+    final imageUrl  = item['image_url']?.toString();
+    final packType  = item['pack_type']?.toString() ?? '';
+    final qty       = (item['qty'] as num?)?.toInt() ?? 0;
+    final bagNo     = (item['bag_no'] as num?)?.toInt() ?? 0;
+    final qtyLabel  = packType.isNotEmpty ? '$qty $packType' : '$qty';
+
+    // Per-bag packing count for current bag
+    final bagStats  = _computeBagStats();
+    final bagSt     = bagStats[bagNo];
+    final bagPacked = bagSt?['packed'] ?? 0;
+    final bagTotal  = bagSt?['total']  ?? 0;
+
+    try {
+      RenderLog.write('c293_card_v2',
+          'idx=$_currentIndex;bag=$bagNo;inbag=$bagPacked/$bagTotal;img_overlay=true');
+    } catch (_) {}
+
     return Column(children: [
+      // Overall progress bar
       LinearProgressIndicator(
         value: _totalItems == 0 ? 0 : _packedCount / _totalItems,
         backgroundColor: _kBorder,
         color: _kGreen,
         minHeight: 4,
       ),
-      Padding(
-        padding: const EdgeInsets.only(top: 6),
-        child: Text('${_currentIndex + 1} / ${_items.length}',
-            style: const TextStyle(fontSize: 11, color: _kSub)),
-      ),
       Expanded(child: Stack(children: [
-        PageView.builder(
-          controller: _pageController,
-          itemCount: _items.length,
-          onPageChanged: (i) {
-            final dir = i > _currentIndex ? 'next' : 'prev';
-            _holdTimer?.cancel();
-            _holdTimer = null;
-            setState(() {
-              _currentIndex = i;
-              _holdActive   = false;
-              _holdProgress = 0.0;
-            });
-            try {
-              final bn = (_items[i]['bag_no'] as num?)?.toInt() ?? 0;
-              RenderLog.write('c292_pack_nav', 'idx=$i;bag=$bn;dir=$dir');
-            } catch (_) {}
-          },
-          itemBuilder: (ctx, i) => _buildItemCard(i),
+        // ── Card content ──────────────────────────────────────────────────────
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              const SizedBox(height: 10),
+              // Top row: overall position (left) + per-bag count (right)
+              Row(children: [
+                Text('${_currentIndex + 1} / $_totalItems',
+                    style: const TextStyle(fontSize: 13, color: _kSub,
+                        fontWeight: FontWeight.w500)),
+                const Spacer(),
+                Text('$bagPacked / $bagTotal in bag',
+                    style: const TextStyle(fontSize: 13, color: _kSub,
+                        fontWeight: FontWeight.w500)),
+              ]),
+              const SizedBox(height: 10),
+              // Bottom zone: swipe left/right on this area switches items (CHANGE 7)
+              GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onHorizontalDragEnd: (details) {
+                  final v = details.primaryVelocity ?? 0;
+                  if (v < -300 && _currentIndex < _items.length - 1) {
+                    _goToItem(_currentIndex + 1);
+                    try { RenderLog.write('c293_two_zone',
+                        'zone=bottom;dir=next;action=item'); } catch (_) {}
+                  } else if (v > 300 && _currentIndex > 0) {
+                    _goToItem(_currentIndex - 1);
+                    try { RenderLog.write('c293_two_zone',
+                        'zone=bottom;dir=prev;action=item'); } catch (_) {}
+                  }
+                },
+                child: Column(crossAxisAlignment: CrossAxisAlignment.center, children: [
+                  // Big YELLOW "Bag N" badge (CHANGE 6)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
+                    decoration: BoxDecoration(
+                        color: const Color(0xFFFFF3CD),
+                        borderRadius: BorderRadius.circular(24),
+                        border: Border.all(color: const Color(0xFFFFCA28), width: 1.5)),
+                    child: Text('Bag $bagNo',
+                        style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800,
+                            color: Color(0xFF8A6D00)),
+                        textAlign: TextAlign.center),
+                  ),
+                  const SizedBox(height: 10),
+                  // Product name
+                  Text(name,
+                      style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700,
+                          color: _kText),
+                      textAlign: TextAlign.center,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis),
+                ]),
+              ),
+              const SizedBox(height: 10),
+              // Top zone: image area — swipe here cycles images (CHANGE 7)
+              // Only one image exposed by pack_get_queue (image_url only),
+              // so image cycling is a no-op; zone logs the gesture.
+              Expanded(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onHorizontalDragEnd: (details) {
+                    final v = details.primaryVelocity ?? 0;
+                    final dir = v < 0 ? 'next' : 'prev';
+                    try {
+                      RenderLog.write('c293_two_zone',
+                          'zone=top;dir=$dir;action=image');
+                    } catch (_) {}
+                    // Single image — no cycling needed; gesture captured to prevent
+                    // conflict with bottom-zone item switch.
+                  },
+                  child: LayoutBuilder(builder: (ctx, constraints) {
+                    final size = constraints.maxHeight.clamp(0.0, constraints.maxWidth);
+                    return Center(
+                      child: Stack(alignment: Alignment.topRight, children: [
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(16),
+                          child: imageUrl != null && imageUrl.isNotEmpty
+                              ? Image.network(imageUrl,
+                                  width: size, height: size, fit: BoxFit.cover,
+                                  errorBuilder: (_, __, ___) => _imgPlaceholder(size))
+                              : _imgPlaceholder(size),
+                        ),
+                        // Qty overlay pill — top-right corner of image (CHANGE 6)
+                        Positioned(
+                          top: 10, right: 10,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 10, vertical: 5),
+                            decoration: BoxDecoration(
+                                color: const Color(0xFFFFF3CD),
+                                borderRadius: BorderRadius.circular(16),
+                                boxShadow: [BoxShadow(
+                                    color: Colors.black.withValues(alpha: 0.15),
+                                    blurRadius: 4)]),
+                            child: Text(qtyLabel,
+                                style: const TextStyle(
+                                    fontSize: 13, fontWeight: FontWeight.w700,
+                                    color: Color(0xFF8A6D00))),
+                          ),
+                        ),
+                      ]),
+                    );
+                  }),
+                ),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
         ),
-        Positioned(
-          left: 4, top: 0, bottom: 0,
-          child: Center(child: _chevronBtn(
-            icon: Icons.chevron_left,
-            enabled: _currentIndex > 0,
-            onTap: () {
-              if (_currentIndex > 0) {
-                _pageController.previousPage(
-                    duration: const Duration(milliseconds: 250),
-                    curve: Curves.easeInOut);
-              }
-            },
-          )),
-        ),
-        Positioned(
-          right: 4, top: 0, bottom: 0,
-          child: Center(child: _chevronBtn(
-            icon: Icons.chevron_right,
-            enabled: _currentIndex < _items.length - 1,
-            onTap: () {
-              if (_currentIndex < _items.length - 1) {
-                _pageController.nextPage(
-                    duration: const Duration(milliseconds: 250),
-                    curve: Curves.easeInOut);
-              }
-            },
-          )),
+        // ── Invisible left tap zone — prev item (CHANGE 5) ───────────────────
+        Positioned.fill(
+          child: Row(children: [
+            Expanded(
+              flex: 28,
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onTap: () {
+                  if (_currentIndex > 0) {
+                    _goToItem(_currentIndex - 1);
+                    try {
+                      RenderLog.write('c293_two_zone',
+                          'zone=bottom;dir=prev;action=item');
+                    } catch (_) {}
+                  }
+                },
+              ),
+            ),
+            const Expanded(flex: 44, child: SizedBox()),
+            Expanded(
+              flex: 28,
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onTap: () {
+                  if (_currentIndex < _items.length - 1) {
+                    _goToItem(_currentIndex + 1);
+                    try {
+                      RenderLog.write('c293_two_zone',
+                          'zone=bottom;dir=next;action=item');
+                    } catch (_) {}
+                  }
+                },
+              ),
+            ),
+          ]),
         ),
       ])),
+      // Packed button — simple toggle, no 2s hold (CHANGE 3)
       _buildPackedButton(),
     ]);
   }
 
-  Widget _chevronBtn({
-    required IconData icon,
-    required bool enabled,
-    required VoidCallback onTap,
-  }) {
-    return GestureDetector(
-      onTap: enabled ? onTap : null,
-      child: Container(
-        width: 36, height: 56,
-        decoration: BoxDecoration(
-          color: enabled
-              ? Colors.white.withValues(alpha: 0.9)
-              : Colors.white.withValues(alpha: 0.4),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: _kBorder),
-        ),
-        child: Icon(icon, size: 28,
-            color: enabled ? _kText : const Color(0xFFD1D5DB)),
-      ),
-    );
-  }
-
-  Widget _buildItemCard(int index) {
-    final item     = _items[index];
-    final name     = item['product_name']?.toString() ?? '—';
-    final imageUrl = item['image_url']?.toString();
-    final packType = item['pack_type']?.toString() ?? '';
-    final qty      = (item['qty'] as num?)?.toInt() ?? 0;
-    final bagNo    = (item['bag_no'] as num?)?.toInt();
-    final isPacked = item['packed'] == true;
-    final qtyLabel = packType.isNotEmpty ? '$qty $packType' : '$qty';
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 48),
-      child: SingleChildScrollView(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(0, 12, 0, 8),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.center, children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(16),
-              child: imageUrl != null && imageUrl.isNotEmpty
-                  ? Image.network(imageUrl,
-                      width: 220, height: 220, fit: BoxFit.contain,
-                      errorBuilder: (_, __, ___) => _imgPlaceholder(220))
-                  : _imgPlaceholder(220),
-            ),
-            const SizedBox(height: 14),
-            if (isPacked) ...[
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-                decoration: BoxDecoration(
-                    color: _kReceivedBg, borderRadius: BorderRadius.circular(20)),
-                child: const Text('✓ Packed',
-                    style: TextStyle(
-                        fontSize: 12, fontWeight: FontWeight.w600,
-                        color: _kReceivedFg)),
-              ),
-              const SizedBox(height: 6),
-            ],
-            Text(name,
-                style: const TextStyle(
-                    fontSize: 17, fontWeight: FontWeight.w700, color: _kText),
-                textAlign: TextAlign.center,
-                maxLines: 3,
-                overflow: TextOverflow.ellipsis),
-            const SizedBox(height: 6),
-            Text(qtyLabel,
-                style: const TextStyle(
-                    fontSize: 15, color: _kSub, fontWeight: FontWeight.w500),
-                textAlign: TextAlign.center),
-            const SizedBox(height: 6),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              decoration: BoxDecoration(
-                  color: _kReceivedBg, borderRadius: BorderRadius.circular(20)),
-              child: Text(bagNo != null ? 'Bag $bagNo' : 'No bag',
-                  style: const TextStyle(
-                      fontSize: 13, fontWeight: FontWeight.w500,
-                      color: _kReceivedFg)),
-            ),
-            const SizedBox(height: 6),
-            Text('$_packedCount / $_totalItems packed',
-                style: const TextStyle(fontSize: 12, color: _kSub)),
-          ]),
-        ),
-      ),
-    );
-  }
-
+  // ── Toggle Packed button — GREEN if unpacked, GREY if packed (CHANGE 3) ─────
   Widget _buildPackedButton() {
     final item     = (_currentIndex < _items.length) ? _items[_currentIndex] : null;
     final isPacked = item?['packed'] == true;
 
-    try {
-      RenderLog.write('c292_btn_state',
-          'packed=$isPacked;color=${isPacked ? "grey" : "green"};idx=$_currentIndex');
-    } catch (_) {}
-
-    if (isPacked) {
-      return Padding(
-        padding: const EdgeInsets.fromLTRB(24, 8, 24, 32),
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          GestureDetector(
-            onLongPressStart: (_) => _startHold(_currentIndex),
-            onLongPressEnd:   (_) => _cancelHold(),
-            onLongPressCancel:    _cancelHold,
-            onTap: () {
-              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                content: Text('Hold 2 s to undo'),
-                duration: Duration(seconds: 2),
-              ));
-            },
-            child: SizedBox(
-              width: double.infinity,
-              height: 56,
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(14),
-                child: Stack(alignment: Alignment.center, children: [
-                  Container(color: const Color(0xFFE5E7EB)),
-                  if (_holdActive && _holdProgress > 0)
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: FractionallySizedBox(
-                        widthFactor: _holdProgress.clamp(0.0, 1.0),
-                        heightFactor: 1.0,
-                        child: Container(color: _kReceivedBg),
-                      ),
-                    ),
-                  _marking && _holdActive
-                      ? const SizedBox(width: 24, height: 24,
-                          child: CircularProgressIndicator(
-                              color: _kGreen, strokeWidth: 2.5))
-                      : Text(
-                          _holdActive ? 'Undo…' : 'Packed ✓',
-                          style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w700,
-                              color: _holdActive ? _kGreen : _kSub)),
-                ]),
-              ),
-            ),
-          ),
-          const SizedBox(height: 4),
-          const Text('Hold 2 s to undo',
-              style: TextStyle(fontSize: 10, color: _kSub)),
-        ]),
-      );
-    } else {
-      return Padding(
-        padding: const EdgeInsets.fromLTRB(24, 8, 24, 32),
-        child: SizedBox(
-          width: double.infinity,
-          height: 56,
-          child: FilledButton(
-            style: FilledButton.styleFrom(
-                backgroundColor: _kGreen,
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14))),
-            onPressed: (_marking || item == null) ? null : () => _packItem(_currentIndex),
-            child: _marking
-                ? const SizedBox(width: 24, height: 24,
-                    child: CircularProgressIndicator(
-                        color: Colors.white, strokeWidth: 2.5))
-                : const Text('Packed',
-                    style: TextStyle(
-                        fontSize: 18, fontWeight: FontWeight.w700,
-                        color: Colors.white)),
-          ),
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+      child: SizedBox(
+        width: double.infinity,
+        height: 56,
+        child: FilledButton(
+          style: FilledButton.styleFrom(
+              backgroundColor: isPacked
+                  ? const Color(0xFFE5E7EB)
+                  : _kGreen,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14))),
+          onPressed: (_marking || item == null)
+              ? null
+              : () => _toggleItem(_currentIndex),
+          child: _marking
+              ? SizedBox(
+                  width: 24, height: 24,
+                  child: CircularProgressIndicator(
+                      color: isPacked ? _kGreen : Colors.white, strokeWidth: 2.5))
+              : Text(
+                  isPacked ? 'Packed ✓' : 'Packed',
+                  style: TextStyle(
+                      fontSize: 18, fontWeight: FontWeight.w700,
+                      color: isPacked ? _kSub : Colors.white)),
         ),
-      );
-    }
+      ),
+    );
   }
 
   Widget _imgPlaceholder(double size) => Container(
     width: size, height: size,
     decoration: BoxDecoration(
-        color: const Color(0xFFF3F4F6), borderRadius: BorderRadius.circular(16)),
+        color: const Color(0xFFF3F4F6),
+        borderRadius: BorderRadius.circular(16)),
     child: const Icon(Icons.medication_outlined,
         size: 64, color: Color(0xFFD1D5DB)),
   );
@@ -11735,9 +11692,8 @@ class _PackingScreenState extends State<_PackingScreen> {
               size: 48, color: _kReceivedFg),
         ),
         const SizedBox(height: 20),
-        const Text('All Packed',
-            style: TextStyle(
-                fontSize: 24, fontWeight: FontWeight.w700, color: _kText)),
+        const Text('All Packed', style: TextStyle(
+            fontSize: 24, fontWeight: FontWeight.w700, color: _kText)),
         const SizedBox(height: 8),
         Text('$_totalItems items · $bagCount bags packed for $customer',
             style: const TextStyle(fontSize: 14, color: _kSub),
@@ -11751,10 +11707,8 @@ class _PackingScreenState extends State<_PackingScreen> {
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(10))),
             onPressed: () => Navigator.pop(context),
-            child: const Text('Done',
-                style: TextStyle(
-                    fontSize: 16, fontWeight: FontWeight.w700,
-                    color: Colors.white)),
+            child: const Text('Done', style: TextStyle(
+                fontSize: 16, fontWeight: FontWeight.w700, color: Colors.white)),
           ),
         ),
       ]),
@@ -11762,11 +11716,12 @@ class _PackingScreenState extends State<_PackingScreen> {
   }
 }
 
-// ── CHANGE #292: Bag quick-view sheet — with green tick on packed rows ────────
+// ── CHANGE #293: Bag quick-view sheet — bag-colour chips (green/yellow/grey) ─
 
 class _BagQuickViewSheet extends StatefulWidget {
   final List<Map<String, dynamic>> items;
-  const _BagQuickViewSheet({required this.items});
+  final Map<int, Map<String, int>> bagStats;
+  const _BagQuickViewSheet({required this.items, required this.bagStats});
   @override
   State<_BagQuickViewSheet> createState() => _BagQuickViewSheetState();
 }
@@ -11789,6 +11744,28 @@ class _BagQuickViewSheetState extends State<_BagQuickViewSheet> {
         .where((i) => (i['bag_no'] as num?)?.toInt() == _selectedBag)
         .toList();
   }
+
+  // Bag status: 0=none, 1=some, 2=all
+  int _status(int bn) {
+    final s = widget.bagStats[bn];
+    if (s == null) return 0;
+    final total  = s['total']  ?? 0;
+    final packed = s['packed'] ?? 0;
+    if (total == 0) return 0;
+    if (packed == total) return 2;
+    if (packed > 0) return 1;
+    return 0;
+  }
+
+  Color _bg(int st)     => st == 2 ? _kReceivedBg
+      : st == 1 ? const Color(0xFFFFF3CD)
+      : const Color(0xFFF3F4F6);
+  Color _border(int st) => st == 2 ? _kGreen
+      : st == 1 ? const Color(0xFFFFCA28)
+      : _kBorder;
+  Color _fg(int st)     => st == 2 ? _kReceivedFg
+      : st == 1 ? const Color(0xFF8A6D00)
+      : _kSub;
 
   @override
   Widget build(BuildContext context) {
@@ -11822,57 +11799,57 @@ class _BagQuickViewSheetState extends State<_BagQuickViewSheet> {
             ),
           ]),
         ),
+        // Bag chips coloured by status (CHANGE 4)
         Padding(
           padding: const EdgeInsets.fromLTRB(0, 0, 0, 8),
           child: SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             padding: const EdgeInsets.symmetric(horizontal: 14),
             child: Row(children: [
+              // "All" chip — neutral
               GestureDetector(
                 onTap: () => setState(() => _selectedBag = null),
                 child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                   decoration: BoxDecoration(
-                    color: _selectedBag == null
-                        ? _kGreen
-                        : const Color(0xFFE8F5E9),
+                    color: _selectedBag == null ? _kGreen : const Color(0xFFE8F5E9),
                     borderRadius: BorderRadius.circular(20),
                     border: Border.all(color: _kGreen),
                   ),
-                  child: Text('All',
-                      style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: _selectedBag == null
-                              ? Colors.white
-                              : _kGreen)),
+                  child: Text('All', style: TextStyle(
+                      fontSize: 12, fontWeight: FontWeight.w600,
+                      color: _selectedBag == null ? Colors.white : _kGreen)),
                 ),
               ),
-              ...bags.map((bn) => Padding(
-                padding: const EdgeInsets.only(left: 8),
-                child: GestureDetector(
-                  onTap: () => setState(() => _selectedBag = bn),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 10, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: _selectedBag == bn
-                          ? _kGreen
-                          : const Color(0xFFE8F5E9),
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(color: _kGreen),
+              // Per-bag chips coloured green/yellow/grey
+              ...bags.map((bn) {
+                final st         = _status(bn);
+                final isSelected = _selectedBag == bn;
+                // When selected: keep selected colour; when not: show status colour
+                final bgColor    = isSelected ? _kGreen : _bg(st);
+                final bdColor    = isSelected ? _kGreen : _border(st);
+                final txtColor   = isSelected ? Colors.white : _fg(st);
+                try {
+                  RenderLog.write('c293_bag_color',
+                      'bag=$bn;state=${st == 2 ? "green" : st == 1 ? "yellow" : "grey"}');
+                } catch (_) {}
+                return Padding(
+                  padding: const EdgeInsets.only(left: 8),
+                  child: GestureDetector(
+                    onTap: () => setState(() => _selectedBag = bn),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                          color: bgColor,
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(color: bdColor)),
+                      child: Text('Bag $bn', style: TextStyle(
+                          fontSize: 12, fontWeight: FontWeight.w600,
+                          color: txtColor)),
                     ),
-                    child: Text('Bag $bn',
-                        style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                            color: _selectedBag == bn
-                                ? Colors.white
-                                : _kGreen)),
                   ),
-                ),
-              )),
+                );
+              }),
             ]),
           ),
         ),
@@ -11894,17 +11871,13 @@ class _BagQuickViewSheetState extends State<_BagQuickViewSheet> {
               const SizedBox(width: 44, child: Padding(
                 padding: EdgeInsets.fromLTRB(4, 6, 4, 6),
                 child: Text('Bag', textAlign: TextAlign.right,
-                    style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
+                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
                         color: _kSub)),
               )),
             const SizedBox(width: 32, child: Padding(
               padding: EdgeInsets.fromLTRB(0, 6, 10, 6),
               child: Text('✓', textAlign: TextAlign.center,
-                  style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
+                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
                       color: _kGreen)),
             )),
           ]),

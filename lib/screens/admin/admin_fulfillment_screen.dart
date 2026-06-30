@@ -4040,8 +4040,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     if (widget.arrivals) {
       RenderLog.write('c133_arrivals_filter_removed', 'true');
       RenderLog.write('c133_arrivals_item_count', '${visibleItems.length}');
-      RenderLog.write('c283_warehouse_rows_render',
-          'count=${visibleItems.length};ts=${DateTime.now().millisecondsSinceEpoch}');
     }
 
     return Container(
@@ -4400,6 +4398,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     final merged = _mergedItems;
     if (widget.arrivals) {
       RenderLog.write('c197_merged_rows_wh', 'products=${merged.length};raw_lines=${_items.length}');
+      RenderLog.write('c283_warehouse_rows_render',
+          'count=${merged.length};ts=${DateTime.now().millisecondsSinceEpoch}');
     } else {
       RenderLog.write('c197_merged_rows_shop', 'products=${merged.length};raw_lines=${_items.length}');
     }

@@ -1,23 +1,31 @@
-// mediBO self-destruct service worker — unregisters itself and purges all caches.
-// Exists so browsers with an OLD Flutter SW installed (pre-#238) fetch this on their
-// ~24h update check, install it, immediately self-unregister, and release control.
-// No new SW is registered (flutter_bootstrap has serviceWorkerVersion:null), so this
-// is a one-time cleanup that ages out on its own.
-self.addEventListener('install', function (e) { self.skipWaiting(); });
-self.addEventListener('activate', function (e) {
-  e.waitUntil((async function () {
-    try {
-      var keys = await caches.keys();
-      await Promise.all(keys.map(function (k) { return caches.delete(k); }));
-    } catch (err) {}
-    try {
-      await self.registration.unregister();
-    } catch (err) {}
-    try {
-      var clients = await self.clients.matchAll({ type: 'window' });
-      clients.forEach(function (c) { c.navigate(c.url); });
-    } catch (err) {}
-  })());
+'use strict';
+
+self.addEventListener('install', () => {
+  self.skipWaiting();
 });
-// Never serve from cache — always passthrough to network.
-self.addEventListener('fetch', function (e) { return; });
+
+self.addEventListener('activate', (event) => {
+  event.waitUntil(
+    (async () => {
+      try {
+        await self.registration.unregister();
+      } catch (e) {
+        console.warn('Failed to unregister the service worker:', e);
+      }
+
+      try {
+        const clients = await self.clients.matchAll({
+          type: 'window',
+        });
+        // Reload clients to ensure they are not using the old service worker.
+        clients.forEach((client) => {
+          if (client.url && 'navigate' in client) {
+            client.navigate(client.url);
+          }
+        });
+      } catch (e) {
+        console.warn('Failed to navigate some service worker clients:', e);
+      }
+    })()
+  );
+});

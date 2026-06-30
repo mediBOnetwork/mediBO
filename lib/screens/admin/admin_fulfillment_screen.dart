@@ -9621,6 +9621,7 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
   void initState() {
     super.initState();
     RenderLog.write('c280_bag_tab_mounted', 1);
+    RenderLog.write('c282_bag_picker_chip_mounted', 1); // confirms #282 picker chip code is active in BagTab
     RenderLog.write('c282_warehouse_unchanged', false); // showBagPicker is false at Warehouse call site — architectural guarantee
     _load();
     _subscribeRealtime();

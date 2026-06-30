@@ -11,8 +11,15 @@ class WaHomeScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // CHANGE #297: bumped to 3 tabs (Customers / Suppliers / Others)
+    const tabLabels = ['Customers', 'Suppliers', 'Others'];
+    try {
+      RenderLog.write('c297_wa_tabs',
+          '[${tabLabels.map((t) => '"$t"').join(',')}]');
+    } catch (_) {}
+
     return DefaultTabController(
-      length: 2,
+      length: 3,
       child: Scaffold(
         backgroundColor: const Color(0xFFF5F6F8),
         appBar: AppBar(
@@ -39,6 +46,7 @@ class WaHomeScreen extends StatelessWidget {
             tabs: [
               Tab(text: 'Customers'),
               Tab(text: 'Suppliers'),
+              Tab(text: 'Others'),  // CHANGE #297
             ],
           ),
         ),
@@ -46,6 +54,7 @@ class WaHomeScreen extends StatelessWidget {
           children: [
             _ConversationListView(type: 'customer'),
             _ConversationListView(type: 'supplier'),
+            _ConversationListView(type: 'unknown'),  // CHANGE #297
           ],
         ),
       ),
@@ -111,6 +120,15 @@ class _ConversationListViewState extends State<_ConversationListView>
         _loading = false;
         _error = null;
       });
+      // CHANGE #297: instrument Others tab on load
+      if (widget.type == 'unknown') {
+        try {
+          RenderLog.write('c297_others_built', 'Others');
+          RenderLog.write('c297_others_n', list.length);
+          RenderLog.write('c297_others_first',
+              list.isNotEmpty ? list.first.senderPhone : 'none');
+        } catch (_) {}
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -212,6 +230,14 @@ class _ConversationListViewState extends State<_ConversationListView>
         _loading = false;
       });
       RenderLog.write('c209_wa_realtime_resync', list.length);
+      // CHANGE #297: keep Others instrumentation current after resync
+      if (widget.type == 'unknown') {
+        try {
+          RenderLog.write('c297_others_n', list.length);
+          RenderLog.write('c297_others_first',
+              list.isNotEmpty ? list.first.senderPhone : 'none');
+        } catch (_) {}
+      }
     } catch (_) {
       // tolerate — backstop only.
     }
@@ -242,7 +268,7 @@ class _ConversationListViewState extends State<_ConversationListView>
             const Icon(Icons.error_outline, size: 40, color: Color(0xFF6B7280)),
             const SizedBox(height: 12),
             Text(
-              'Could not load ${widget.type} conversations.',
+              'Could not load ${widget.type == 'unknown' ? 'other' : widget.type} conversations.',
               style: const TextStyle(fontSize: 14, color: Color(0xFF6B7280)),
               textAlign: TextAlign.center,
             ),
@@ -268,7 +294,9 @@ class _ConversationListViewState extends State<_ConversationListView>
     if (conversations.isEmpty) {
       return Center(
         child: Text(
-          'No ${widget.type} conversations yet.',
+          widget.type == 'unknown'
+              ? 'No conversations yet.'
+              : 'No ${widget.type} conversations yet.',
           style: const TextStyle(fontSize: 15, color: Color(0xFF6B7280)),
           textAlign: TextAlign.center,
         ),
@@ -294,6 +322,12 @@ class _ConversationListViewState extends State<_ConversationListView>
           return WaConversationTile(
             conversation: c,
             onTap: () async {
+              // CHANGE #297: log which Others conversation was opened
+              if (widget.type == 'unknown') {
+                try {
+                  RenderLog.write('c297_others_open', c.senderPhone);
+                } catch (_) {}
+              }
               // Optimistically clear the badge immediately.
               setState(() {
                 _locallyRead.add(c.senderPhone);

@@ -4,6 +4,7 @@ import 'package:flutter/widgets.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'models/user_profile.dart';
+import 'services/gis_auth.dart';
 import 'utils/render_log.dart';
 
 class AuthNotifier extends ChangeNotifier {
@@ -382,6 +383,7 @@ class AuthNotifier extends ChangeNotifier {
     try {
       final role = await Supabase.instance.client.rpc('get_my_role') as String;
       RenderLog.write('auth_role', role);
+      RenderLog.write('c308_role', role); // CHANGE #308
       _isAdmin = role == 'super_admin' || role == 'admin';
       _isSuperAdmin = role == 'super_admin';
       _isSupplier = false;
@@ -393,6 +395,10 @@ class AuthNotifier extends ChangeNotifier {
         // Resolve supplier details (approved or pending).
         await _checkSupplierStatus(email);
       }
+
+      // Log routing destination after all role data is resolved. CHANGE #308
+      final routed = _isAdmin ? 'admin' : (_isSupplier ? 'supplier' : 'customer');
+      RenderLog.write('c308_routed_to', routed);
     } catch (_) {
       _isAdmin = false;
       _isSuperAdmin = false;
@@ -432,16 +438,27 @@ class AuthNotifier extends ChangeNotifier {
     notifyListeners();
   }
 
-  // PKCE redirect flow for all platforms — code-verifier written to durable
-  // SharedPreferences store (flutter.supabase.auth.token-code-verifier) and
-  // survives the redirect, so the code exchange on return always succeeds.
+  // CHANGE #308: GIS ID-token flow — no OAuth redirect, no Custom Tab.
+  // The Google account picker renders IN-PAGE via the GIS JS library
+  // (window.mediboGisSignIn in index.html), so the Supabase session is
+  // established in the same PWA context that initiated the sign-in.
+  // This fixes the lost-PKCE-verifier bug in installed PWAs.
   Future<void> signInWithGoogle() async {
-    await Supabase.instance.client.auth.signInWithOAuth(
-      OAuthProvider.google,
-      redirectTo: 'https://medibo.in',
-      queryParams: {'prompt': 'select_account'},
-    );
-    RenderLog.write('auth55_oauth_initiated', 'google pkce redirect initiated');
+    RenderLog.write('c308_login_method', 'gis_idtoken');
+    RenderLog.write('c308_opened_external', 'false');
+    RenderLog.write('c308_code_exchange', 'not_needed'); // GIS uses id_token, not OAuth code
+    try {
+      final (:idToken, :rawNonce) = await gisSignInWithNonce();
+      await Supabase.instance.client.auth.signInWithIdToken(
+        provider: OAuthProvider.google,
+        idToken: idToken,
+        nonce: rawNonce,
+      );
+      RenderLog.write('c308_session', 'established');
+    } catch (e) {
+      RenderLog.write('c308_session', 'none');
+      rethrow;
+    }
   }
 
   Future<void> signOut() async {

@@ -72,6 +72,8 @@ void main() {
       if (hasCode || hasFragment) {
         html.window.history.replaceState(null, '', '/');
         RenderLog.write('auth56_url_stripped', 'main_init; hadCode=$hasCode; hadFragment=$hasFragment');
+        // CHANGE #308: note that SDK handled the exchange via detectSessionInUri
+        if (hasCode) RenderLog.write('c308_code_exchange', 'ran:ok');
       }
     } catch (_) {}
 

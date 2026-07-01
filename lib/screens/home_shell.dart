@@ -351,6 +351,15 @@ class _HomeShellState extends State<HomeShell> {
       RenderLog.write('view_as_active', 'customer:${viewAs.identity!.id}');
     }
 
+    // CHANGE #308: while role is resolving after sign-in, show a brief spinner
+    // instead of flashing the customer "Not Registered" profile for admins/suppliers.
+    if (auth.profileLoading && !viewAs.isActive) {
+      return const Scaffold(
+        backgroundColor: Color(0xFFF5F6F8),
+        body: Center(child: CircularProgressIndicator(color: Color(0xFF1B7A43))),
+      );
+    }
+
     // Supplier: completely separate shell — takes priority after admin check
     if (!auth.isAdmin && auth.isSupplier) {
       return const SupplierShell();

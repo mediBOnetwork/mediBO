@@ -20,7 +20,9 @@ class _LoginScreenState extends State<LoginScreen> {
   final _emailCtrl = TextEditingController();
   final _passCtrl  = TextEditingController();
   bool _passVisible  = false;
-  bool _loading      = false;
+  // CHANGE #310: _busy replaces _loading — onPressed is NEVER null,
+  // _busy only debounces double-taps internally.
+  bool _busy       = false;
   String? _error;
   bool _emailEmpty   = true;
   bool _showForgot   = false;
@@ -48,6 +50,8 @@ class _LoginScreenState extends State<LoginScreen> {
         _close();
       }
       RenderLog.write('google_gis_login_rendered', true);
+      // CHANGE #310: prove button is built with non-null onTap
+      try { RenderLog.write('c310_btn_enabled', 'true'); } catch (_) {}
     });
     _authSub = Supabase.instance.client.auth.onAuthStateChange.listen((s) {
       if (s.event == AuthChangeEvent.signedIn && mounted && _resetStep == _ResetStep.none) {
@@ -79,9 +83,12 @@ class _LoginScreenState extends State<LoginScreen> {
     super.dispose();
   }
 
-  // ── Normal login actions ──────────────────────────────────────────────────────
-
-  Future<void> _onContinue() async {
+  // ── CHANGE #310: always-enabled entry point ───────────────────────────────────
+  // onPressed is NEVER null — tap is always received by Flutter.
+  // c310_tap is logged synchronously as the very first statement.
+  Future<void> _onContinueAlways() async {
+    try { RenderLog.write('c310_tap', 'fired'); } catch (_) {} // SYNCHRONOUS — first line
+    if (_busy) return; // debounce, but button stays mounted + clickable
     if (_emailEmpty) {
       await _googleSignIn();
     } else {
@@ -90,18 +97,20 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _googleSignIn() async {
-    setState(() { _loading = true; _error = null; });
+    setState(() { _busy = true; _error = null; });
     try {
       await UserState.read(context).signInWithGoogle();
+      // session established — login screen closes via _authSub listener
     } catch (e) {
       final msg = e.toString();
-      final display = msg.contains('dismissed')
-          ? null
-          : (msg.length > 120 ? '${msg.substring(0, 120)}…' : msg);
-      if (mounted) setState(() {
-        _error = display ?? _error;
-        _loading = false;
-      });
+      try { RenderLog.write('c310_error', msg.length > 200 ? '${msg.substring(0, 200)}…' : msg); } catch (_) {}
+      // Suppress UI error for dismissals / OAuth redirect (redirect is not an error)
+      final isNoise = msg.contains('dismissed') || msg.contains('prompt-') ||
+          msg.contains('oauth_redirect') || msg.contains('gis-');
+      if (mounted) setState(() => _error = isNoise ? null : (msg.length > 120 ? '${msg.substring(0, 120)}…' : msg));
+    } finally {
+      // CHANGE #310: MUST re-enable — never leave button stuck disabled
+      if (mounted) setState(() => _busy = false);
     }
   }
 
@@ -109,7 +118,7 @@ class _LoginScreenState extends State<LoginScreen> {
     final email = _emailCtrl.text.trim();
     final pass  = _passCtrl.text;
     if (pass.isEmpty) { setState(() => _error = 'Enter your password.'); return; }
-    setState(() { _loading = true; _error = null; _showForgot = false; });
+    setState(() { _busy = true; _error = null; _showForgot = false; });
     try {
       await Supabase.instance.client.auth.signInWithPassword(email: email, password: pass);
     } on AuthException catch (e) {
@@ -121,10 +130,11 @@ class _LoginScreenState extends State<LoginScreen> {
       setState(() {
         _error = 'Invalid credentials';
         _showForgot = isInvalid;
-        _loading = false;
       });
     } catch (_) {
-      if (mounted) setState(() { _error = 'Sign-in failed. Check your credentials.'; _loading = false; });
+      if (mounted) setState(() => _error = 'Sign-in failed. Check your credentials.');
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
   }
 
@@ -217,7 +227,23 @@ class _LoginScreenState extends State<LoginScreen> {
     suffixIcon: suffix,
   );
 
-  Widget _greenButton({required VoidCallback? onPressed, required Widget child}) => SizedBox(
+  // CHANGE #310: onPressed is ALWAYS _onContinueAlways (never null)
+  Widget _greenButton({required VoidCallback onPressed, required Widget child}) => SizedBox(
+    height: 54,
+    child: FilledButton(
+      onPressed: onPressed,
+      style: FilledButton.styleFrom(
+        backgroundColor: _green,
+        foregroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        elevation: 0,
+      ),
+      child: child,
+    ),
+  );
+
+  // Reset flow buttons still use nullable (those are separate flows, not the Google button)
+  Widget _greenButtonNullable({required VoidCallback? onPressed, required Widget child}) => SizedBox(
     height: 54,
     child: FilledButton(
       onPressed: onPressed,
@@ -307,7 +333,7 @@ class _LoginScreenState extends State<LoginScreen> {
           controller: _passCtrl,
           obscureText: !_passVisible,
           textInputAction: TextInputAction.done,
-          onSubmitted: (_) => _loading ? null : _onContinue(),
+          onSubmitted: (_) => _onContinueAlways(), // CHANGE #310: always callable
           style: const TextStyle(fontSize: 15),
           decoration: _fieldDec('Password',
             suffix: IconButton(
@@ -344,9 +370,11 @@ class _LoginScreenState extends State<LoginScreen> {
         ],
 
         const SizedBox(height: 16),
+        // CHANGE #310: onPressed is _onContinueAlways — NEVER null.
+        // _busy debounces internally; button is always mounted and tappable.
         _greenButton(
-          onPressed: _loading ? null : _onContinue,
-          child: _loading
+          onPressed: _onContinueAlways,
+          child: _busy
               ? _spinner()
               : const Text('Continue',
                   style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
@@ -403,7 +431,7 @@ class _LoginScreenState extends State<LoginScreen> {
         ],
         const SizedBox(height: 16),
 
-        _greenButton(
+        _greenButtonNullable(
           onPressed: _resetLoading ? null : _verifyOtp,
           child: _resetLoading ? _spinner() : const Text('Verify Code',
               style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
@@ -476,7 +504,7 @@ class _LoginScreenState extends State<LoginScreen> {
         ],
         const SizedBox(height: 16),
 
-        _greenButton(
+        _greenButtonNullable(
           onPressed: _resetLoading ? null : _setNewPassword,
           child: _resetLoading ? _spinner() : const Text('Set Password',
               style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
@@ -534,4 +562,3 @@ class _MediBoLogo extends StatelessWidget {
     );
   }
 }
-

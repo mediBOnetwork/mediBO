@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <meta name="build-commit" content="6709d16">
+  <meta name="build-commit" content="f610a73">
   <!-- CHANGE #238: SW permanently disabled. Unregister ALL SWs + wipe all caches on every load.
        No sessionStorage guard — runs unconditionally so even users whose old SW served this
        HTML from cache will have SWs cleared on the very next in-SW-controlled load.
@@ -139,10 +139,10 @@
        On every load, fetches /version.json (no-cache). If the live commit differs
        from the build-stamped commit below, does ONE hard reload so the PWA gets the
        newest bundle instead of staying on a stale cached build.
-       6709d16 is replaced with the actual short commit hash by deploy.sh. -->
+       f610a73 is replaced with the actual short commit hash by deploy.sh. -->
   <script>
     (function () {
-      var _builtCommit = '6709d16';
+      var _builtCommit = 'f610a73';
       var _sessionKey  = 'c220_pwa_reloaded';
       function _rlWrite(key, val) {
         try {
@@ -160,7 +160,7 @@
           // Already reloaded once this session — skip to prevent loop.
           if (sessionStorage.getItem(_sessionKey)) return;
           // Skip if placeholder was not stamped (local dev / test build).
-          if (_builtCommit === '6709d16') return;
+          if (_builtCommit === 'f610a73') return;
           fetch('/version.json?_t=' + Date.now(), { cache: 'no-store' })
             .then(function (r) { return r.json(); })
             .then(function (data) {
@@ -176,7 +176,7 @@
       });
       // Wire confirmation — written once regardless of outcome.
       window.addEventListener('DOMContentLoaded', function () {
-        if (_builtCommit !== '6709d16') {
+        if (_builtCommit !== 'f610a73') {
           _rlWrite('c220_pwa_check_wired', 1);
         }
       });
@@ -413,7 +413,7 @@
   </style>
   <div id="boot-loader"><div class="spin"></div></div>
 
-  <script src="flutter_bootstrap.js?v=6709d16" async></script>
+  <script src="flutter_bootstrap.js?v=f610a73" async></script>
   <script>
     var recaptchaResolve = null;
     var recaptchaWidgetId = null;
@@ -523,106 +523,72 @@
   </script>
 
   <!-- ═══════════════════════════════════════════════════════════════════════
-       GOOGLE IDENTITY SERVICES (GIS) BRIDGE  — nonce-aware + FedCM
-       Desktop ONLY: mediboGisSignIn(clientId, hashedNonce) → Promise<idToken string>
-       • hashedNonce  = SHA-256 hex of the raw nonce (computed by Dart)
-       • Resolves with the GIS credential (ID token JWT)
-       • GIS embeds hashedNonce in the JWT nonce claim; Supabase verifies
-         by re-hashing the raw nonce Dart passes to signInWithIdToken.
-       • FedCM (use_fedcm_for_prompt + itp_support) enables cookie-free
-         sign-in on mobile Chrome where third-party cookies are blocked.
+       GOOGLE IDENTITY SERVICES (GIS) BRIDGE — CHANGE #310
+       mediboGisSignIn(clientId, hashedNonce) → Promise<idToken string>
+       • Uses google.accounts.id.prompt() (FedCM / One Tap) — NO rendered HTML
+         button, NO custom overlay. This avoids the z-index:99999 overlay that
+         could intercept Flutter canvas taps if settle() ever failed to fire.
+       • 3-second readiness timeout (15 × 200ms): if GIS library hasn't loaded,
+         rejects immediately → Dart falls through to OAuth redirect fallback.
+       • try/catch around initialize() so JS errors can't leave UI stuck.
        ═══════════════════════════════════════════════════════════════════════ -->
-  <!-- GIS modal overlay — shown when Flutter calls mediboGisSignIn() -->
-  <div id="gis-overlay"
-       aria-modal="true"
-       role="dialog"
-       aria-label="Sign in with Google"
-       style="display:none;position:fixed;inset:0;z-index:99999;align-items:center;justify-content:center;background:rgba(0,0,0,0.45);">
-    <div style="background:#fff;border-radius:14px;padding:32px 28px 24px;display:flex;flex-direction:column;align-items:center;gap:20px;box-shadow:0 8px 40px rgba(0,0,0,0.22);min-width:300px;max-width:340px;width:90%;">
-      <p style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:17px;font-weight:600;color:#111827;text-align:center;">Sign in with Google</p>
-      <div id="gis-btn-container" style="min-height:44px;"></div>
-      <button id="gis-cancel-btn"
-              style="background:none;border:none;color:#6B7280;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;cursor:pointer;padding:6px 16px;border-radius:8px;">
-        Cancel
-      </button>
-    </div>
-  </div>
 
   <script>
     (function () {
       // mediboGisSignIn(clientId, hashedNonce)
-      //   clientId    — Google OAuth web client ID
-      //   hashedNonce — SHA-256 hex string of the raw nonce (Dart-computed)
-      // Resolves with the GIS credential string (ID token JWT).
-      // Rejects with 'dismissed' or 'gis-load-timeout'.
+      // Resolves with the GIS credential (ID token JWT) via One Tap / FedCM prompt.
+      // Rejects with reason string — Dart catches and falls through to OAuth redirect.
       window.mediboGisSignIn = function (clientId, hashedNonce) {
         return new Promise(function (resolve, reject) {
-          var overlay   = document.getElementById('gis-overlay');
-          var btnDiv    = document.getElementById('gis-btn-container');
-          var cancelBtn = document.getElementById('gis-cancel-btn');
-          var settled   = false;
+          var settled = false;
 
           function settle(fn, val) {
             if (settled) return;
             settled = true;
-            overlay.style.display = 'none';
-            overlay.onclick = null;
-            if (cancelBtn) cancelBtn.onclick = null;
             fn(val);
           }
 
-          function onCancel() { settle(reject, 'dismissed'); }
-
-          overlay.onclick = function (e) {
-            if (e.target === overlay) onCancel();
-          };
-          if (cancelBtn) cancelBtn.onclick = onCancel;
-
+          // 3-second readiness guard: 15 attempts × 200ms = 3000ms max wait.
           var attempts = 0;
-          function tryInit() {
+          function pollForGis() {
             if (settled) return;
             if (window.google && window.google.accounts && window.google.accounts.id) {
-              btnDiv.innerHTML = '';
-
-              // Pass the SHA-256 hex hash of rawNonce to GIS; GIS embeds it
-              // verbatim in the JWT nonce claim. Supabase re-hashes rawNonce
-              // and compares — they match iff we got the pairing right.
-              // use_fedcm_for_prompt + itp_support: enable FedCM — the
-              // browser-native credential flow that works on mobile Chrome
-              // even when third-party cookies are blocked (no popup required).
-              google.accounts.id.initialize({
-                client_id:             clientId,
-                nonce:                  hashedNonce,
-                callback:              function (response) {
-                  settle(resolve, response.credential);
-                },
-                use_fedcm_for_prompt:  true,
-                itp_support:           true,
-                auto_select:           false,
-              });
-
-              google.accounts.id.renderButton(btnDiv, {
-                type:          'standard',
-                shape:         'rectangular',
-                theme:         'outline',
-                text:          'signin_with',
-                size:          'large',
-                logo_alignment: 'left',
-                width:         260,
-              });
-
-              overlay.style.display = 'flex';
+              try {
+                google.accounts.id.initialize({
+                  client_id:            clientId,
+                  nonce:                hashedNonce,
+                  callback:             function (response) {
+                    settle(resolve, response.credential);
+                  },
+                  use_fedcm_for_prompt: true,
+                  itp_support:          true,
+                  auto_select:          false,
+                });
+                // prompt() triggers FedCM / One Tap natively — no HTML button rendered.
+                google.accounts.id.prompt(function (notification) {
+                  if (notification.isNotDisplayed() || notification.isSkippedMoment()) {
+                    // One Tap can't display (blocked, dismissed, suppressed) → OAuth fallback.
+                    var reason = notification.isNotDisplayed()
+                      ? ('not_displayed:' + (notification.getNotDisplayedReason() || 'unknown'))
+                      : ('skipped:' + (notification.getSkippedReason() || 'unknown'));
+                    settle(reject, 'prompt-' + reason);
+                  }
+                  // If displayed: wait for callback to fire when user picks account.
+                });
+              } catch (e) {
+                settle(reject, 'gis-init-error:' + (e && e.message ? e.message : String(e)));
+              }
             } else {
               attempts++;
-              if (attempts > 60) {
-                settle(reject, 'gis-load-timeout');
+              if (attempts > 15) {
+                settle(reject, 'gis-load-timeout'); // 3s elapsed, GIS not ready
               } else {
-                setTimeout(tryInit, 200);
+                setTimeout(pollForGis, 200);
               }
             }
           }
 
-          tryInit();
+          pollForGis();
         });
       };
     })();

@@ -10482,6 +10482,9 @@ class _BagPickerSheetState extends State<_BagPickerSheet> {
 
 // ── CHANGE #278: Pack tab — customer-wise packing view ───────────────────────
 
+// CHANGE #304b: fill-state enum shared by Packed and Counted badges.
+enum _FillState { empty, partial, full }
+
 class _PackTab extends StatefulWidget {
   const _PackTab({super.key});
   @override
@@ -10755,10 +10758,11 @@ class _PackTabState extends State<_PackTab>
       // CHANGE #301: upload is best-effort and independent of counting.
       // If upload throws, log and continue — do NOT retry or abort counting.
       try {
+        // CHANGE #304b: path MUST use YYYY-MM-DD (dashes) — matches next_pack_recording_seq lookup.
         final istNow = DateTime.now().toUtc().add(const Duration(hours: 5, minutes: 30));
         final dateStr = '${istNow.year.toString().padLeft(4, '0')}'
-            '${istNow.month.toString().padLeft(2, '0')}'
-            '${istNow.day.toString().padLeft(2, '0')}';
+            '-${istNow.month.toString().padLeft(2, '0')}'
+            '-${istNow.day.toString().padLeft(2, '0')}';
         clipPath = '$dateStr/pack-$orderId/$seq.${result.ext}';
         final mimeUpload = result.ext == 'webm' ? 'audio/webm' : 'audio/mp4';
         await Supabase.instance.client.storage.from('voice-clips').uploadBinary(
@@ -10845,6 +10849,14 @@ class _PackTabState extends State<_PackTab>
           't_end': mention['t_end'],
           'ord': i,
         });
+      }
+
+      // CHANGE #304b: second guard — if all items resolved to unknown products, skip.
+      if (itemsPayload.isEmpty && mentionsPayload.isEmpty) {
+        try { RenderLog.write('c304_silence', 'blocked'); } catch (_) {}
+        setState(() { _voiceProcessing = false; _lastVoiceSeq = null; });
+        _showPackSnack("Didn't catch anything — try again");
+        return;
       }
 
       // CHANGE #301: single atomic RPC — replaces old per-item + per-mention loops.
@@ -11176,7 +11188,10 @@ class _PackTabState extends State<_PackTab>
         .where((id) => id != null)
         .toSet()
         .length;
-    try { RenderLog.write('c301_spoken', '$spokenCount'); } catch (_) {}
+    try {
+      RenderLog.write('c301_spoken', '$spokenCount');
+      RenderLog.write('c304_spoken', '$spokenCount');
+    } catch (_) {}
 
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       const Divider(height: 1, color: _kBorder),
@@ -11475,24 +11490,26 @@ class _PackTabState extends State<_PackTab>
 
   // CHANGE #304: badge colour helper — grey/yellow/green by fill ratio.
   // x=0 → grey; 0<x<y → yellow; x>=y && y>0 → green.
+  // CHANGE #304b: shared fill-state enum + colour helper used by BOTH Packed and Counted badges.
+  _FillState _fillStateFor(int x, int y) {
+    if (y <= 0 || x <= 0) return _FillState.empty;
+    if (x >= y) return _FillState.full;
+    return _FillState.partial;
+  }
+  (Color bg, Color fg) _fillColors(_FillState s) => switch (s) {
+    _FillState.empty   => (const Color(0xFFF3F4F6), const Color(0xFF6B7280)),
+    _FillState.partial => (const Color(0xFFFEF3C7), const Color(0xFF92400E)),
+    _FillState.full    => (const Color(0xFFDCFCE7), const Color(0xFF166534)),
+  };
+
   Widget _packChip(String label, int x, int y) {
-    final bool zero = x == 0;
-    final bool full = y > 0 && x >= y;
-    final Color bg = zero
-        ? const Color(0xFFF3F4F6)
-        : full
-            ? _kReceivedBg
-            : const Color(0xFFFEF3C7);
-    final Color border = zero
-        ? const Color(0xFFD1D5DB)
-        : full
-            ? _kReceivedFg.withValues(alpha: 0.4)
-            : const Color(0xFFD97706).withValues(alpha: 0.4);
-    final Color text = zero
-        ? const Color(0xFF9CA3AF)
-        : full
-            ? _kReceivedFg
-            : const Color(0xFF92400E);
+    final s = _fillStateFor(x, y);
+    final (bg, text) = _fillColors(s);
+    final Color border = switch (s) {
+      _FillState.empty   => const Color(0xFFD1D5DB),
+      _FillState.partial => const Color(0xFFD97706).withValues(alpha: 0.4),
+      _FillState.full    => const Color(0xFF166534).withValues(alpha: 0.4),
+    };
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
@@ -11695,9 +11712,15 @@ class _PackMentionsSheet extends StatefulWidget {
   State<_PackMentionsSheet> createState() => _PackMentionsSheetState();
 }
 
+// CHANGE #304b: rewritten — uses createSignedUrl (private bucket) + html.AudioElement
+// with seek to t_start_sec and auto-stop at t_end_sec, mirroring _CountedMentionsPopupState.
 class _PackMentionsSheetState extends State<_PackMentionsSheet> {
-  // Groups mentions by recording_seq, newest first.
   late final List<(int seq, String clipPath, List<Map<String, dynamic>> rows)> _groups;
+
+  html.AudioElement? _clipAudio;
+  final Map<String, String> _signedUrlCache = {};
+  String? _playingKey; // "$clipPath:$ord" of the currently playing mention
+  double? _playingEnd; // t_end_sec to stop at
 
   @override
   void initState() {
@@ -11706,27 +11729,81 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
     for (final m in widget.mentions) {
       final seq = (m['recording_seq'] as num?)?.toInt() ?? 0;
       final path = m['clip_path']?.toString() ?? '';
-      if (!grouped.containsKey(seq)) {
-        grouped[seq] = (path, []);
-      }
+      if (!grouped.containsKey(seq)) grouped[seq] = (path, []);
       grouped[seq]!.$2.add(m);
     }
     _groups = grouped.entries
         .map((e) => (e.key, e.value.$1, e.value.$2))
         .toList()
-      ..sort((a, b) => b.$1.compareTo(a.$1)); // newest seq first
+      ..sort((a, b) => b.$1.compareTo(a.$1));
   }
 
-  String _clipLabel(int seq) => 'Clip #$seq';
+  @override
+  void dispose() {
+    _clipAudio?.pause();
+    _clipAudio?.src = '';
+    _clipAudio = null;
+    super.dispose();
+  }
 
-  String _bucketUrl(String path) {
-    if (path.isEmpty) return '';
-    const bucket = 'voice-clips';
-    final client = Supabase.instance.client;
+  void _stopAudio() {
+    _clipAudio?.pause();
+    _clipAudio?.src = '';
+    _clipAudio = null;
+    if (mounted) setState(() { _playingKey = null; _playingEnd = null; });
+  }
+
+  // Seek-to-mention playback: get signed URL, create AudioElement, seek then play.
+  // Toggle: tap the same mention again to stop.
+  Future<void> _playMention(
+    String clipPath, int ord, double? tStart, double? tEnd) async {
+    final key = '$clipPath:$ord';
+    if (_playingKey == key) { _stopAudio(); return; }
+    _stopAudio();
+    if (clipPath.isEmpty) return;
     try {
-      return client.storage.from(bucket).getPublicUrl(path);
-    } catch (_) {
-      return '';
+      String? url = _signedUrlCache[clipPath];
+      if (url == null) {
+        url = await Supabase.instance.client.storage
+            .from('voice-clips')
+            .createSignedUrl(clipPath, 3600);
+        if (!mounted) return;
+        _signedUrlCache[clipPath] = url;
+      }
+      final el = html.AudioElement(url);
+      _clipAudio = el;
+      _playingEnd = tEnd;
+      if (mounted) setState(() { _playingKey = key; });
+      if (tStart != null && tStart > 0) {
+        el.onCanPlay.first.then((_) {
+          if (!mounted || !identical(_clipAudio, el)) return;
+          el.currentTime = tStart;
+          el.play();
+        });
+      } else {
+        await el.play();
+      }
+      el.onTimeUpdate.listen((_) {
+        if (!mounted || !identical(_clipAudio, el)) return;
+        final end = _playingEnd;
+        if (end != null && el.currentTime >= end) _stopAudio();
+      });
+      el.onEnded.listen((_) {
+        if (!mounted || !identical(_clipAudio, el)) return;
+        _stopAudio();
+      });
+      el.onError.listen((_) {
+        if (!mounted || !identical(_clipAudio, el)) return;
+        _stopAudio();
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Couldn't play this clip")));
+      });
+    } catch (e) {
+      if (mounted) {
+        setState(() { _playingKey = null; _playingEnd = null; });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Couldn't play this clip")));
+      }
     }
   }
 
@@ -11769,72 +11846,60 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
                   itemCount: _groups.length,
                   itemBuilder: (_, gi) {
                     final (seq, clipPath, rows) = _groups[gi];
-                    final url = _bucketUrl(clipPath);
                     return Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                       if (gi > 0) const SizedBox(height: 12),
-                      Row(children: [
-                        Text(_clipLabel(seq),
-                            style: const TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w700,
-                                color: Color(0xFF1B7A43))),
-                        if (url.isNotEmpty) ...[
-                          const Spacer(),
-                          GestureDetector(
-                            onTap: () {
-                              // Play the clip from the beginning
-                              // (simple: open URL in a new tab via js interop if available)
-                              try {
-                                // ignore: undefined_prefixed_name
-                                html.window.open(url, '_blank');
-                              } catch (_) {}
-                            },
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 10, vertical: 4),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFD1FAE5),
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: const Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(Icons.play_arrow_rounded,
-                                      size: 14, color: Color(0xFF065F46)),
-                                  SizedBox(width: 4),
-                                  Text('Play',
-                                      style: TextStyle(
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.w600,
-                                          color: Color(0xFF065F46))),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ],
-                      ]),
+                      Text('Clip #$seq',
+                          style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                              color: Color(0xFF1B7A43))),
                       const SizedBox(height: 6),
                       ...rows.map((r) {
                         final name = r['matched_name']?.toString() ?? '—';
                         final qty = (r['qty'] as num?)?.toInt() ?? 0;
+                        final ord = (r['ord'] as num?)?.toInt() ?? 0;
                         final tStart = (r['t_start_sec'] as num?)?.toDouble();
-                        final tLabel = tStart != null
-                            ? ' (${tStart.toStringAsFixed(1)}s)'
-                            : '';
+                        final tEnd = (r['t_end_sec'] as num?)?.toDouble();
+                        final key = '$clipPath:$ord';
+                        final isPlaying = _playingKey == key;
+                        final canPlay = clipPath.isNotEmpty;
                         return Padding(
-                          padding: const EdgeInsets.only(bottom: 4),
+                          padding: const EdgeInsets.only(bottom: 6),
                           child: Row(children: [
-                            const Icon(Icons.fiber_manual_record,
-                                size: 6, color: Color(0xFF9CA3AF)),
+                            Icon(Icons.fiber_manual_record,
+                                size: 6, color: const Color(0xFF9CA3AF)),
                             const SizedBox(width: 8),
                             Expanded(
-                              child: Text('$name × $qty$tLabel',
-                                  style: const TextStyle(
-                                      fontSize: 13,
-                                      color: Color(0xFF374151))),
+                              child: Text(
+                                '$name × $qty'
+                                '${tStart != null ? ' (${tStart.toStringAsFixed(1)}s)' : ''}',
+                                style: const TextStyle(
+                                    fontSize: 13, color: Color(0xFF374151))),
                             ),
+                            if (canPlay)
+                              GestureDetector(
+                                onTap: () => _playMention(clipPath, ord, tStart, tEnd),
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 8, vertical: 3),
+                                  decoration: BoxDecoration(
+                                    color: isPlaying
+                                        ? const Color(0xFFFEE2E2)
+                                        : const Color(0xFFDCFCE7),
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
+                                  child: Icon(
+                                    isPlaying
+                                        ? Icons.stop_rounded
+                                        : Icons.play_arrow_rounded,
+                                    size: 14,
+                                    color: isPlaying
+                                        ? const Color(0xFF991B1B)
+                                        : const Color(0xFF166534)),
+                                ),
+                              ),
                           ]),
                         );
                       }),

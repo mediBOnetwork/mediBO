@@ -23,6 +23,10 @@ class _LoginScreenState extends State<LoginScreen> {
   // CHANGE #310: _busy replaces _loading — onPressed is NEVER null,
   // _busy only debounces double-taps internally.
   bool _busy       = false;
+  // CHANGE #311: cancel/retry tracking
+  int  _tapCount    = 0;
+  int  _cancelCount = 0;
+  bool _hadCancel   = false; // true after any cancel, cleared when picker reopens
   String? _error;
   bool _emailEmpty   = true;
   bool _showForgot   = false;
@@ -83,13 +87,21 @@ class _LoginScreenState extends State<LoginScreen> {
     super.dispose();
   }
 
-  // ── CHANGE #310: always-enabled entry point ───────────────────────────────────
-  // onPressed is NEVER null — tap is always received by Flutter.
-  // c310_tap is logged synchronously as the very first statement.
+  // ── CHANGE #310/311: always-enabled entry point ──────────────────────────────
+  // onPressed is NEVER null. c311_tap logged synchronously as first line.
   Future<void> _onContinueAlways() async {
-    try { RenderLog.write('c310_tap', 'fired'); } catch (_) {} // SYNCHRONOUS — first line
-    if (_busy) return; // debounce, but button stays mounted + clickable
+    _tapCount++;
+    final popupAlreadyOpen = _busy;
+    try { RenderLog.write('c311_tap', 'n=$_tapCount'); } catch (_) {}
+    try { RenderLog.write('c311_popup_open', popupAlreadyOpen ? 'true' : 'false'); } catch (_) {}
+    try { RenderLog.write('c310_tap', 'fired'); } catch (_) {} // kept for continuity
+    if (_busy) return; // popup is genuinely open — ignore tap
     if (_emailEmpty) {
+      if (_hadCancel) {
+        // This is a retry after a cancel — log it, then open fresh picker
+        try { RenderLog.write('c311_reopened', 'true'); } catch (_) {}
+        _hadCancel = false;
+      }
       await _googleSignIn();
     } else {
       await _passwordSignIn();
@@ -101,15 +113,29 @@ class _LoginScreenState extends State<LoginScreen> {
     try {
       await UserState.read(context).signInWithGoogle();
       // session established — login screen closes via _authSub listener
+      try { RenderLog.write('c311_signin', 'established'); } catch (_) {}
     } catch (e) {
       final msg = e.toString();
       try { RenderLog.write('c310_error', msg.length > 200 ? '${msg.substring(0, 200)}…' : msg); } catch (_) {}
-      // Suppress UI error for dismissals / OAuth redirect (redirect is not an error)
-      final isNoise = msg.contains('dismissed') || msg.contains('prompt-') ||
+
+      // CHANGE #311: detect cancel vs real error
+      final isCancel = msg.contains('cancelled') || msg.contains('dismissed') ||
+          msg.contains('overlay-timeout');
+      if (isCancel) {
+        _cancelCount++;
+        _hadCancel = true;
+        try { RenderLog.write('c311_cancelled', 'n=$_cancelCount'); } catch (_) {}
+        try { RenderLog.write('c311_reset', 'done'); } catch (_) {}
+      } else {
+        try { RenderLog.write('c311_signin', 'error:${msg.length > 80 ? msg.substring(0, 80) : msg}'); } catch (_) {}
+      }
+
+      // Suppress UI error for all noise: cancels, prompt failures, OAuth redirect, GIS load issues
+      final isNoise = isCancel || msg.contains('prompt-') ||
           msg.contains('oauth_redirect') || msg.contains('gis-');
       if (mounted) setState(() => _error = isNoise ? null : (msg.length > 120 ? '${msg.substring(0, 120)}…' : msg));
     } finally {
-      // CHANGE #310: MUST re-enable — never leave button stuck disabled
+      // MUST re-enable — never leave button stuck disabled
       if (mounted) setState(() => _busy = false);
     }
   }

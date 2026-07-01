@@ -603,6 +603,10 @@
           function poll() {
             if (settled) return;
             if (window.google && window.google.accounts && window.google.accounts.id) {
+              // CHANGE #311: reset GIS singleton state before each attempt so a
+              // previously-cancelled flow can't poison the next one.
+              try { google.accounts.id.cancel(); } catch (e2) {}
+              try { google.accounts.id.disableAutoSelect(); } catch (e2) {}
               try {
                 google.accounts.id.initialize({
                   client_id: clientId,

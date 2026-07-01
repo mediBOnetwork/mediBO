@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <meta name="build-commit" content="9586ef3">
+  <meta name="build-commit" content="389670b">
   <!-- CHANGE #238: SW permanently disabled. Unregister ALL SWs + wipe all caches on every load.
        No sessionStorage guard — runs unconditionally so even users whose old SW served this
        HTML from cache will have SWs cleared on the very next in-SW-controlled load.
@@ -139,10 +139,10 @@
        On every load, fetches /version.json (no-cache). If the live commit differs
        from the build-stamped commit below, does ONE hard reload so the PWA gets the
        newest bundle instead of staying on a stale cached build.
-       9586ef3 is replaced with the actual short commit hash by deploy.sh. -->
+       389670b is replaced with the actual short commit hash by deploy.sh. -->
   <script>
     (function () {
-      var _builtCommit = '9586ef3';
+      var _builtCommit = '389670b';
       var _sessionKey  = 'c220_pwa_reloaded';
       function _rlWrite(key, val) {
         try {
@@ -160,7 +160,7 @@
           // Already reloaded once this session — skip to prevent loop.
           if (sessionStorage.getItem(_sessionKey)) return;
           // Skip if placeholder was not stamped (local dev / test build).
-          if (_builtCommit === '9586ef3') return;
+          if (_builtCommit === '389670b') return;
           fetch('/version.json?_t=' + Date.now(), { cache: 'no-store' })
             .then(function (r) { return r.json(); })
             .then(function (data) {
@@ -176,7 +176,7 @@
       });
       // Wire confirmation — written once regardless of outcome.
       window.addEventListener('DOMContentLoaded', function () {
-        if (_builtCommit !== '9586ef3') {
+        if (_builtCommit !== '389670b') {
           _rlWrite('c220_pwa_check_wired', 1);
         }
       });
@@ -413,7 +413,7 @@
   </style>
   <div id="boot-loader"><div class="spin"></div></div>
 
-  <script src="flutter_bootstrap.js?v=9586ef3" async></script>
+  <script src="flutter_bootstrap.js?v=389670b" async></script>
   <script>
     var recaptchaResolve = null;
     var recaptchaWidgetId = null;
@@ -523,32 +523,90 @@
   </script>
 
   <!-- ═══════════════════════════════════════════════════════════════════════
-       GOOGLE IDENTITY SERVICES (GIS) BRIDGE — CHANGE #310
-       mediboGisSignIn(clientId, hashedNonce) → Promise<idToken string>
-       • Uses google.accounts.id.prompt() (FedCM / One Tap) — NO rendered HTML
-         button, NO custom overlay. This avoids the z-index:99999 overlay that
-         could intercept Flutter canvas taps if settle() ever failed to fire.
-       • 3-second readiness timeout (15 × 200ms): if GIS library hasn't loaded,
-         rejects immediately → Dart falls through to OAuth redirect fallback.
-       • try/catch around initialize() so JS errors can't leave UI stuck.
+       GOOGLE IDENTITY SERVICES (GIS) BRIDGE — CHANGE #310b
+       Strategy:
+       1. Try google.accounts.id.prompt() (FedCM/One Tap) on first call.
+       2. If prompt not displayed/skipped (Google suppresses it after dismissal),
+          fall through to renderButton() overlay which always works.
+       3. renderButton overlay is bulletproof: settle() called on every exit path,
+          auto-cancel after 90s, click-outside to cancel.
+       4. GIS load timeout = 3s; if library not ready, reject → OAuth redirect in Dart.
        ═══════════════════════════════════════════════════════════════════════ -->
+
+  <!-- Minimal overlay for renderButton fallback (hidden by default) -->
+  <div id="gis-rb-overlay"
+       style="display:none;position:fixed;inset:0;z-index:99998;
+              align-items:center;justify-content:center;
+              background:rgba(0,0,0,0.5);">
+    <div id="gis-rb-card"
+         style="background:#fff;border-radius:16px;padding:28px 24px 20px;
+                display:flex;flex-direction:column;align-items:center;gap:18px;
+                box-shadow:0 8px 40px rgba(0,0,0,0.25);min-width:280px;max-width:320px;width:88%;">
+      <p style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+                font-size:16px;font-weight:600;color:#111827;text-align:center;">
+        Sign in with Google
+      </p>
+      <div id="gis-rb-container" style="min-height:44px;width:100%;display:flex;justify-content:center;"></div>
+      <button id="gis-rb-cancel"
+              style="background:none;border:none;color:#6B7280;cursor:pointer;
+                     font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+                     font-size:14px;padding:6px 20px;border-radius:8px;">
+        Cancel
+      </button>
+    </div>
+  </div>
 
   <script>
     (function () {
-      // mediboGisSignIn(clientId, hashedNonce)
-      // Resolves with the GIS credential (ID token JWT) via One Tap / FedCM prompt.
-      // Rejects with reason string — Dart catches and falls through to OAuth redirect.
+      // Track whether the One Tap prompt has been dismissed this session.
+      // After dismissal google.accounts.id.prompt() is suppressed by the library;
+      // we go straight to renderButton() on subsequent calls.
+      window._mediboGisDismissed = false;
+
       window.mediboGisSignIn = function (clientId, hashedNonce) {
         return new Promise(function (resolve, reject) {
           var settled = false;
+          var autoTimer = null;
 
           function settle(fn, val) {
             if (settled) return;
             settled = true;
+            if (autoTimer) { clearTimeout(autoTimer); autoTimer = null; }
+            // Always hide the overlay on any exit
+            var ov = document.getElementById('gis-rb-overlay');
+            if (ov) ov.style.display = 'none';
             fn(val);
           }
 
-          // 3-second readiness guard: 15 attempts × 200ms = 3000ms max wait.
+          // ── showButtonOverlay: bulletproof renderButton fallback ──────────
+          function showButtonOverlay() {
+            var ov  = document.getElementById('gis-rb-overlay');
+            var ctr = document.getElementById('gis-rb-container');
+            var btn = document.getElementById('gis-rb-cancel');
+            if (!ov || !ctr || !btn) { settle(reject, 'overlay-missing'); return; }
+
+            ctr.innerHTML = '';
+            try {
+              google.accounts.id.renderButton(ctr, {
+                type: 'standard', shape: 'rectangular', theme: 'outline',
+                text: 'signin_with', size: 'large', logo_alignment: 'left', width: 240,
+              });
+            } catch (e) {
+              settle(reject, 'renderButton-error:' + (e && e.message ? e.message : String(e)));
+              return;
+            }
+
+            ov.style.display = 'flex';
+
+            // Cancel button
+            btn.onclick = function () { settle(reject, 'user-cancelled'); };
+            // Click outside card to cancel
+            ov.onclick = function (e) { if (e.target === ov) settle(reject, 'user-cancelled'); };
+            // Safety: auto-cancel after 90 s so overlay can never be permanently stuck
+            autoTimer = setTimeout(function () { settle(reject, 'overlay-timeout'); }, 90000);
+          }
+
+          // ── GIS readiness poll (3-second timeout) ─────────────────────────
           var attempts = 0;
           function pollForGis() {
             if (settled) return;
@@ -557,31 +615,40 @@
                 google.accounts.id.initialize({
                   client_id:            clientId,
                   nonce:                hashedNonce,
-                  callback:             function (response) {
-                    settle(resolve, response.credential);
-                  },
+                  callback:             function (response) { settle(resolve, response.credential); },
                   use_fedcm_for_prompt: true,
                   itp_support:          true,
                   auto_select:          false,
                 });
-                // prompt() triggers FedCM / One Tap natively — no HTML button rendered.
-                google.accounts.id.prompt(function (notification) {
-                  if (notification.isNotDisplayed() || notification.isSkippedMoment()) {
-                    // One Tap can't display (blocked, dismissed, suppressed) → OAuth fallback.
-                    var reason = notification.isNotDisplayed()
-                      ? ('not_displayed:' + (notification.getNotDisplayedReason() || 'unknown'))
-                      : ('skipped:' + (notification.getSkippedReason() || 'unknown'));
-                    settle(reject, 'prompt-' + reason);
-                  }
-                  // If displayed: wait for callback to fire when user picks account.
-                });
               } catch (e) {
                 settle(reject, 'gis-init-error:' + (e && e.message ? e.message : String(e)));
+                return;
+              }
+
+              if (window._mediboGisDismissed) {
+                // Already dismissed this session — skip prompt(), go straight to button
+                showButtonOverlay();
+              } else {
+                // Try One Tap / FedCM prompt first
+                try {
+                  google.accounts.id.prompt(function (notification) {
+                    if (notification.isNotDisplayed() || notification.isSkippedMoment()) {
+                      // Prompt suppressed or dismissed — mark and show button overlay
+                      window._mediboGisDismissed = true;
+                      showButtonOverlay();
+                    }
+                    // If prompt displayed: GIS callback fires resolve() when user picks account
+                  });
+                } catch (e) {
+                  // prompt() itself threw — fall back to button
+                  window._mediboGisDismissed = true;
+                  showButtonOverlay();
+                }
               }
             } else {
               attempts++;
               if (attempts > 15) {
-                settle(reject, 'gis-load-timeout'); // 3s elapsed, GIS not ready
+                settle(reject, 'gis-load-timeout'); // 3 s elapsed
               } else {
                 setTimeout(pollForGis, 200);
               }

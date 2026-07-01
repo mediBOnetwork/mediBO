@@ -1171,7 +1171,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('change_86_voice_card_present', '1');
     RenderLog.write('change_86_confirm_card_present', '1');
     RenderLog.write('change_87_typed_path_deleted', '1');
-    _probeRecorder();
+    // CHANGE #303: removed eager _probeRecorder() — mic permission is now
+    // requested only at tap time (inside _startRecording / _startCountVoice / etc.)
+    try { RenderLog.write('c303_eager_removed', 'probe_removed=1;site=warehouse_fulfillment_initState'); } catch (_) {}
     _initAgentTestHooks();
   }
 
@@ -2059,17 +2061,20 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       _voiceListening = true; _voiceInterim = 'Recording…'; _voiceError = '';
     });
     RenderLog.write('77_rec_start', 'attempt');
+    try { RenderLog.write('c303_mic_on_tap', 'warehouse_voice'); } catch (_) {}
     try {
       await _voiceService.start();
       _recStarted = true;
+      try { RenderLog.write('c303_mic_result', 'granted'); } catch (_) {}
       RenderLog.write('79_rec_start_ok', 'true');
     } catch (e) {
       _recStarted = false;
       if (!mounted) return;
       final msg = e.toString();
       if (e is MicPermissionException) {
+        try { RenderLog.write('c303_mic_result', 'denied'); } catch (_) {}
         setState(() { _voiceListening = false; _voiceInterim = ''; _voiceSupported = false; });
-        _showSnack('Allow microphone access to use voice receiving');
+        _showSnack('Mic access needed for voice — enable it in the browser site settings');
       } else {
         setState(() { _voiceListening = false; _voiceInterim = ''; _voiceError = msg; });
         Future.delayed(const Duration(seconds: 3), () {
@@ -3291,14 +3296,21 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     final hadPrev = _agentReply.isNotEmpty;
     if (mounted) setState(() { _agentReply = ''; _agentPhase = AgentPhase.idle; });
     RenderLog.write('c123_ask_open', 'cleared_prev=${hadPrev ? 'y' : 'n'}');
+    try { RenderLog.write('c303_mic_on_tap', 'ask_medibo'); } catch (_) {}
     try {
       await _voiceService.start();
       _agentRecStarted = true;
+      try { RenderLog.write('c303_mic_result', 'granted'); } catch (_) {}
       if (mounted) setState(() => _agentPhase = AgentPhase.listening);
     } catch (e) {
       _agentBusy = false;
       _agentRecStarted = false;
-      if (mounted) _showSnack('Mic error: $e');
+      if (e is MicPermissionException) {
+        try { RenderLog.write('c303_mic_result', 'denied'); } catch (_) {}
+        if (mounted) _showSnack('Mic access needed for voice — enable it in the browser site settings');
+      } else {
+        if (mounted) _showSnack('Mic error: $e');
+      }
     }
     _agentBusy = false;
   }
@@ -10674,12 +10686,19 @@ class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
 
   Future<void> _startCountVoice() async {
     if (_voiceListening || _voiceProcessing) return;
+    try { RenderLog.write('c303_mic_on_tap', 'pack_count_voice'); } catch (_) {}
     try {
       await _voiceService.start();
       _recStarted = true;
+      try { RenderLog.write('c303_mic_result', 'granted'); } catch (_) {}
       if (mounted) setState(() => _voiceListening = true);
     } catch (e) {
-      if (mounted) _showPackSnack('Mic error: $e');
+      if (e is MicPermissionException) {
+        try { RenderLog.write('c303_mic_result', 'denied'); } catch (_) {}
+        if (mounted) _showPackSnack('Mic access needed for voice — enable it in the browser site settings');
+      } else {
+        if (mounted) _showPackSnack('Mic error: $e');
+      }
     }
   }
 

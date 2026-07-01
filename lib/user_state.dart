@@ -443,11 +443,12 @@ class AuthNotifier extends ChangeNotifier {
   // CHANGE #310: Two-attempt Google sign-in.
   // Attempt A: GIS programmatic prompt (no rendered HTML button — avoids overlay blocking Flutter).
   //   Uses google.accounts.id.prompt() via gisSignInWithNonce() with a 3-second readiness guard.
-  //   Falls through to Attempt B on any failure (not-displayed, GIS not loaded, etc.).
-  // Attempt B: Standard OAuth PKCE redirect — always works; session established on return
-  //   via detectSessionInUri + exchangeCodeForSession.
+  //   Falls through to Attempt B ONLY when GIS library itself is unavailable (load timeout).
+  //   User dismissing the prompt just re-enables the button — no browser redirect.
+  // Attempt B: Standard OAuth PKCE redirect — only used when GIS can't load at all.
   Future<void> signInWithGoogle() async {
     // ── Attempt A: GIS programmatic prompt ──────────────────────────────────
+    bool gisLibraryUnavailable = false;
     try {
       RenderLog.write('c310_method', 'gis_idtoken');
       final (:idToken, :rawNonce) = await gisSignInWithNonce();
@@ -459,23 +460,29 @@ class AuthNotifier extends ChangeNotifier {
         nonce: rawNonce,
       );
       RenderLog.write('c310_session', 'established');
-      // Legacy #308 keys — kept for continuity
       RenderLog.write('c308_login_method', 'gis_idtoken');
       RenderLog.write('c308_session', 'established');
       return; // success — done
     } catch (e) {
       final errStr = e.toString();
-      // Log whether GIS library itself failed to load vs prompt rejected
-      if (errStr.contains('gis-load-timeout') || errStr.contains('gis-not-loaded')) {
-        RenderLog.write('c310_gis_loaded', 'false');
-      } else {
-        RenderLog.write('c310_gis_loaded', 'true'); // GIS loaded; prompt dismissed or failed
-      }
+      // Distinguish: GIS library failed to load (fall through to OAuth)
+      // vs user dismissed the prompt or prompt was suppressed (just re-enable button).
+      gisLibraryUnavailable = errStr.contains('gis-load-timeout') ||
+          errStr.contains('gis-not-loaded') ||
+          errStr.contains('gis-init-error');
+      RenderLog.write('c310_gis_loaded', gisLibraryUnavailable ? 'false' : 'true');
       RenderLog.write('c310_idtoken', 'none');
-      // Fall through to Attempt B
+
+      if (!gisLibraryUnavailable) {
+        // User cancelled / prompt suppressed — don't open browser, just re-enable.
+        // Throwing here propagates to _googleSignIn's catch → finally re-enables button.
+        rethrow;
+      }
+      // GIS unavailable → fall through to OAuth redirect below
     }
 
     // ── Attempt B: OAuth PKCE redirect ─────────────────────────────────────
+    // Only reached when GIS library itself could not load (load timeout / not present).
     RenderLog.write('c310_method', 'oauth_redirect');
     RenderLog.write('c308_login_method', 'oauth_redirect');
     RenderLog.write('c308_opened_external', 'true');
@@ -483,8 +490,6 @@ class AuthNotifier extends ChangeNotifier {
       OAuthProvider.google,
       redirectTo: 'https://medibo.in',
     );
-    // After redirect back, SDK exchanges the code (detectSessionInUri: true).
-    // Session logs (c310_session / c308_session) are written in main.dart / _resolveRole.
     RenderLog.write('c310_session', 'redirect_initiated');
   }
 

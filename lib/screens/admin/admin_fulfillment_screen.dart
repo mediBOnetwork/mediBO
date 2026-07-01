@@ -10499,6 +10499,8 @@ class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
   bool _voiceListening = false;
   bool _voiceProcessing = false;
   bool _recStarted = false;
+  // CHANGE #301: synchronous in-flight lock — set before any await, reset in finally
+  bool _packCounting = false;
   List<Map<String, dynamic>> _packMentions = [];
   int? _lastVoiceSeq;
 
@@ -10623,6 +10625,7 @@ class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
       final mentions = rows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
       final distinct = mentions.map((m) => m['product_id']).where((id) => id != null).toSet().length;
       RenderLog.write('c299_spoken', 'distinct=$distinct;total=${mentions.length}');
+      RenderLog.write('c301_mentions', 'rows=${mentions.length};distinct=$distinct');
       if (_expandedOrderId == orderId) setState(() => _packMentions = mentions);
     } catch (_) {}
   }
@@ -10660,7 +10663,8 @@ class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
 
   // CHANGE #299: voice counting — toggle record/stop
   Future<void> _toggleCountVoice(String orderId) async {
-    if (_voiceProcessing) return;
+    // CHANGE #301: block if processing is already in flight
+    if (_packCounting || _voiceProcessing) return;
     if (_voiceListening) {
       await _stopCountVoice(orderId);
     } else {
@@ -10681,18 +10685,28 @@ class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
 
   Future<void> _stopCountVoice(String orderId) async {
     if (!_voiceListening) return;
+    // CHANGE #301: set in-flight lock synchronously before any await so that
+    // a second call (double-tap, rebuild, realtime event) returns immediately.
+    if (_packCounting) return;
+    _packCounting = true;
+    RenderLog.write('c301_lock', 'locked');
     if (mounted) setState(() { _voiceListening = false; _voiceProcessing = true; });
-    if (!_recStarted) { if (mounted) setState(() => _voiceProcessing = false); return; }
+    if (!_recStarted) {
+      _packCounting = false;
+      if (mounted) setState(() => _voiceProcessing = false);
+      return;
+    }
     _recStarted = false;
     try {
       final result = await _voiceService.stop();
-      if (!mounted) { setState(() => _voiceProcessing = false); return; }
+      if (!mounted) return;
       if (result == null || result.bytes.length < 1500) {
-        setState(() => _voiceProcessing = false);
+        if (mounted) setState(() => _voiceProcessing = false);
         _showPackSnack('No audio — try again');
         return;
       }
-      // Sequence number
+
+      // CHANGE #301: seq is fetched fresh per recording, before upload.
       int seq = 0;
       String clipPath = '';
       try {
@@ -10700,9 +10714,14 @@ class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
             .rpc('next_pack_recording_seq', params: {'p_order_id': orderId});
         seq = (seqRaw as num?)?.toInt() ?? 0;
         if (seq <= 0) seq = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-        RenderLog.write('c299_voice_seq', 'order=${orderId.substring(0, 8)};seq=$seq');
-      } catch (_) {}
-      // Upload to voice-clips bucket: {istDateYYYYMMDD}/pack-{orderId}/{seq}.{ext}
+        RenderLog.write('c301_seq', 'order=${orderId.substring(0, 8)};seq=$seq');
+      } catch (e) {
+        seq = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+        RenderLog.write('c301_seq', 'fallback;seq=$seq;err=${e.toString().substring(0, e.toString().length.clamp(0, 40))}');
+      }
+
+      // CHANGE #301: upload is best-effort and independent of counting.
+      // If upload throws, log and continue — do NOT retry or abort counting.
       try {
         final istNow = DateTime.now().toUtc().add(const Duration(hours: 5, minutes: 30));
         final dateStr = '${istNow.year.toString().padLeft(4, '0')}'
@@ -10714,13 +10733,13 @@ class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
           clipPath, result.bytes,
           fileOptions: FileOptions(contentType: mimeUpload, upsert: true),
         );
+        RenderLog.write('c301_upload', 'ok;path_tail=${clipPath.length >= 8 ? clipPath.substring(clipPath.length - 8) : clipPath}');
       } catch (e) {
-        try {
-          RenderLog.write('c299_voice_seq',
-              'upload_err=${e.toString().substring(0, e.toString().length.clamp(0, 60))}');
-        } catch (_) {}
+        RenderLog.write('c301_upload', 'err=${e.toString().substring(0, e.toString().length.clamp(0, 60))}');
+        // clip path stays non-empty so pack_process_clip records it anyway
       }
-      // Build expected list from pack_get_queue items (deduplicated by product_id)
+
+      // Build expected list (deduplicated by product_id)
       final qData = _packQueueData[orderId];
       final qItems = qData != null
           ? ((qData['items'] as List?) ?? const [])
@@ -10737,13 +10756,14 @@ class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
         'ordered_qty': (qi['qty'] as num?)?.toInt() ?? 1,
         'unit': qi['pack_type']?.toString() ?? '',
       }).toList();
-      RenderLog.write('c299_voice_items', 'expected=${expected.length}');
+
       // Transcribe via voice-receive edge function
       final (:items, :transcript, :droppedNoQty, :droppedLowConf, :mentions) =
           await _voiceService.transcribe(result.bytes, result.mime,
               expected: expected.isEmpty ? null : expected);
-      if (!mounted) { setState(() => _voiceProcessing = false); return; }
-      // Build product name → product_id map
+      if (!mounted) return;
+
+      // Build product name → product_id map for resolution
       final Map<String, int> nameToId = {};
       for (final qi in qItems) {
         final pid = (qi['product_id'] as num?)?.toInt();
@@ -10752,8 +10772,9 @@ class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
           nameToId[pname] = pid;
         }
       }
-      // Commit each matched item via pack_set_counted (absolute SET)
-      int committed = 0;
+
+      // CHANGE #301: build itemsPayload and mentionsPayload for pack_process_clip.
+      final itemsPayload = <Map<String, dynamic>>[];
       for (final item in items) {
         final matchedName = item['matched_name']?.toString();
         final rawQty = item['received_qty'];
@@ -10762,50 +10783,71 @@ class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
         if (qty <= 0) continue;
         final pid = nameToId[matchedName];
         if (pid == null) continue;
-        try {
-          await Supabase.instance.client.rpc('pack_set_counted', params: {
-            'p_order_id': orderId,
-            'p_product_id': pid,
-            'p_qty': qty,
-            'p_note': 'voice #299',
-          });
-          committed++;
-          RenderLog.write('c299_voice_set', 'product=$pid;qty=$qty');
-        } catch (_) {}
+        itemsPayload.add({'product_id': pid, 'qty': qty});
       }
-      // Insert clip mentions
-      int ordIdx = 0;
-      for (final mention in mentions) {
+
+      // ord = mention's 0-based index in the clip (from voice-receive), NOT per-product.
+      final mentionsPayload = <Map<String, dynamic>>[];
+      for (int i = 0; i < mentions.length; i++) {
+        final mention = mentions[i];
         final matchedName = mention['matched_name']?.toString();
-        final pid = matchedName != null ? nameToId[matchedName] : null;
-        try {
-          await Supabase.instance.client.rpc('pack_add_clip_mention', params: {
+        final pid = (matchedName != null && matchedName != 'not_on_order')
+            ? nameToId[matchedName]
+            : null;
+        mentionsPayload.add({
+          'product_id': pid,
+          'matched_name': matchedName ?? '',
+          'qty': (mention['qty'] as num?)?.toDouble() ?? 0.0,
+          't_start': mention['t_start'],
+          't_end': mention['t_end'],
+          'ord': i,
+        });
+      }
+
+      // CHANGE #301: single atomic RPC — replaces old per-item + per-mention loops.
+      int countsSet = 0;
+      try {
+        final dynamic res = await Supabase.instance.client.rpc(
+          'pack_process_clip',
+          params: {
             'p_order_id': orderId,
             'p_recording_seq': seq,
             'p_clip_path': clipPath,
-            'p_product_id': pid,
-            'p_matched_name': matchedName ?? '',
-            'p_qty': (mention['qty'] as num?)?.toDouble() ?? 0.0,
-            'p_t_start': mention['t_start'],
-            'p_t_end': mention['t_end'],
-            'p_ord': ordIdx++,
-          });
-        } catch (_) {}
+            'p_items': itemsPayload,
+            'p_mentions': mentionsPayload,
+          },
+        );
+        final resMap = res is String
+            ? (jsonDecode(res) as Map).cast<String, dynamic>()
+            : Map<String, dynamic>.from(res as Map);
+        countsSet = (resMap['counts_set'] as num?)?.toInt() ?? itemsPayload.length;
+        RenderLog.write('c301_process',
+            'counts_set=${resMap["counts_set"]};mentions=${resMap["mentions"]};seq=$seq');
+      } catch (e) {
+        RenderLog.write('c301_process', 'err=${e.toString().substring(0, e.toString().length.clamp(0, 60))}');
       }
-      RenderLog.write('c299_mentions', 'seq=$seq;rows=${mentions.length}');
+
+      RenderLog.write('c301_lock', 'processed;countsSet=$countsSet');
+
       if (!mounted) return;
       setState(() {
         _voiceProcessing = false;
         _lastVoiceSeq = seq > 0 ? seq : null;
       });
-      _showPackSnack(committed > 0
-          ? '$committed item${committed == 1 ? '' : 's'} counted'
+      _showPackSnack(countsSet > 0
+          ? '$countsSet item${countsSet == 1 ? '' : 's'} counted'
           : 'No items matched — try again');
+
+      // Reload pack_get_queue to update Counted badges and progress row.
       await _loadFromPackQueue(orderId);
     } catch (e) {
       if (!mounted) return;
       setState(() => _voiceProcessing = false);
       _showPackSnack('Voice error — try again');
+    } finally {
+      // CHANGE #301: always release the in-flight lock.
+      _packCounting = false;
+      RenderLog.write('c301_lock', 'released');
     }
   }
 
@@ -11018,6 +11060,7 @@ class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
       onTap: () {
         if (isExpanded) {
           _teardownOrderRt(orderId);
+          _packCounting = false;
           setState(() {
             _expandedOrderId = null;
             _voiceListening = false;
@@ -11075,11 +11118,9 @@ class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
     final totalItems = qData != null
         ? (qData['total_items'] as num?)?.toInt() ?? total
         : total;
-    final spokenCount = _packMentions
-        .map((m) => m['product_id'])
-        .where((id) => id != null)
-        .toSet()
-        .length;
+    // CHANGE #301: use pack_get_queue.counted_count for the badge (distinct counted items).
+    final spokenCount = countedCount;
+    try { RenderLog.write('c301_spoken', '$spokenCount'); } catch (_) {}
 
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       const Divider(height: 1, color: _kBorder),
@@ -11154,8 +11195,9 @@ class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
 
   Widget _buildCountPill(String orderId, int spokenCount) {
     final bool listening = _voiceListening;
-    final bool processing = _voiceProcessing;
-    final bool disabled = _voiceProcessing || _askListening;
+    // CHANGE #301: _packCounting is the synchronous in-flight lock
+    final bool processing = _voiceProcessing || _packCounting;
+    final bool disabled = _voiceProcessing || _packCounting || _askListening;
     return GestureDetector(
       onTap: disabled ? null : () => _toggleCountVoice(orderId),
       child: AnimatedContainer(

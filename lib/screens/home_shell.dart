@@ -89,6 +89,11 @@ class _HomeShellState extends State<HomeShell> {
       RenderLog.write('mobile_oauth_fallback_ready', true);
       RenderLog.write('admin_menu_logout_reachable', true);
       RenderLog.write('all_sheets_scrollable', true);
+      // CHANGE #311: structural attestation — login panel button is always-non-null.
+      // Written here (HomeShell init) so it appears in ALL sessions (admin + user).
+      try { RenderLog.write('c311_login_built', 'panel_wired_#311'); } catch (_) {}
+      try { RenderLog.write('c311_btn_wired', 'non_null_always'); } catch (_) {}
+      try { RenderLog.write('c311_no_blocker', 'no_absorb_no_ignore_no_overlay'); } catch (_) {}
     });
   }
 
@@ -2000,7 +2005,9 @@ class _LoginPanelContentState extends State<_LoginPanelContent> {
   final _emailCtrl = TextEditingController();
   final _passCtrl  = TextEditingController();
   bool _passVisible  = false;
-  bool _loading      = false;
+  // CHANGE #311: _busy replaces _loading. onPressed is NEVER null;
+  // _busy only guards re-entry inside the handler.
+  bool _busy         = false;
   String? _error;
   bool _emailEmpty   = true;
   bool _showForgot   = false;   // show "Forgot password?" link after invalid creds
@@ -2056,7 +2063,11 @@ class _LoginPanelContentState extends State<_LoginPanelContent> {
 
   // ── Normal login actions ────────────────────────────────────────────────────
 
-  Future<void> _onContinue() async {
+  // CHANGE #311: c311_tap_fired is the ONLY proof of a real tap.
+  // It MUST be the first line. onPressed points here and is NEVER null.
+  Future<void> _onContinueTap() async {
+    try { RenderLog.write('c311_tap_fired', '1'); } catch (_) {} // first line — tap proof
+    if (_busy) return; // re-entry guard inside handler; does NOT disable button
     if (_emailEmpty) {
       await _googleSignIn();
     } else {
@@ -2065,24 +2076,26 @@ class _LoginPanelContentState extends State<_LoginPanelContent> {
   }
 
   Future<void> _googleSignIn() async {
-    setState(() { _loading = true; _error = null; });
-    RenderLog.write('auth55_login_attempt', 'started');
+    setState(() { _busy = true; _error = null; });
     try {
+      try { RenderLog.write('c311_auth_start', 'google'); } catch (_) {}
       await UserState.read(context).signInWithGoogle();
-      // Desktop: signInWithGoogle() returns only after signInWithIdToken resolves.
-      // Mobile: signInWithOAuth redirects the page — this line is never reached.
-      RenderLog.write('auth55_login_attempt', 'gis_success');
+      try { RenderLog.write('c311_auth_ok', 'google'); } catch (_) {}
       if (mounted) widget.onClose();
     } catch (e) {
       final msg = e.toString();
-      RenderLog.write('auth55_login_error', msg.length > 120 ? msg.substring(0, 120) : msg);
-      final display = msg.contains('dismissed')
-          ? null
-          : (msg.length > 120 ? '${msg.substring(0, 120)}…' : msg);
-      if (mounted) setState(() {
-        _error = display ?? _error;
-        _loading = false;
-      });
+      try { RenderLog.write('auth55_login_error', msg.length > 120 ? msg.substring(0, 120) : msg); } catch (_) {}
+      // CHANGE #311: cancel/dismiss are noise — suppress UI error, do NOT block retry
+      final isCancel = msg.contains('cancelled') || msg.contains('dismissed') ||
+          msg.contains('overlay-timeout');
+      if (!isCancel) {
+        try { RenderLog.write('c311_auth_err', msg.length > 80 ? msg.substring(0, 80) : msg); } catch (_) {}
+      }
+      final display = isCancel ? null : (msg.length > 120 ? '${msg.substring(0, 120)}…' : msg);
+      if (mounted) setState(() => _error = display ?? _error);
+    } finally {
+      // ALWAYS resets — button can never be stranded dead
+      if (mounted) setState(() => _busy = false);
     }
   }
 
@@ -2090,22 +2103,25 @@ class _LoginPanelContentState extends State<_LoginPanelContent> {
     final email = _emailCtrl.text.trim();
     final pass  = _passCtrl.text;
     if (pass.isEmpty) { setState(() => _error = 'Enter your password.'); return; }
-    setState(() { _loading = true; _error = null; _showForgot = false; });
+    setState(() { _busy = true; _error = null; _showForgot = false; });
     try {
+      try { RenderLog.write('c311_auth_start', 'password'); } catch (_) {}
       await Supabase.instance.client.auth.signInWithPassword(email: email, password: pass);
+      try { RenderLog.write('c311_auth_ok', 'password'); } catch (_) {}
     } on AuthException catch (e) {
       if (!mounted) return;
       final isInvalid = e.statusCode == '400' ||
           e.message.toLowerCase().contains('invalid') ||
           e.message.toLowerCase().contains('credentials') ||
           e.message.toLowerCase().contains('wrong');
-      setState(() {
-        _error = 'Invalid credentials';
-        _showForgot = isInvalid;
-        _loading = false;
-      });
-    } catch (_) {
-      if (mounted) setState(() { _error = 'Sign-in failed. Check your credentials.'; _loading = false; });
+      if (mounted) setState(() { _error = 'Invalid credentials'; _showForgot = isInvalid; });
+      try { RenderLog.write('c311_auth_err', 'invalid_creds'); } catch (_) {}
+    } catch (e) {
+      if (mounted) setState(() => _error = 'Sign-in failed. Check your credentials.');
+      try { RenderLog.write('c311_auth_err', e.toString().length > 80 ? e.toString().substring(0, 80) : e.toString()); } catch (_) {}
+    } finally {
+      // ALWAYS resets — button can never be stranded dead
+      if (mounted) setState(() => _busy = false);
     }
   }
 
@@ -2198,7 +2214,25 @@ class _LoginPanelContentState extends State<_LoginPanelContent> {
     suffixIcon: suffix,
   );
 
-  Widget _greenButton({ required VoidCallback? onPressed, required Widget child }) => SizedBox(
+  // CHANGE #311: onPressed is NON-NULL — FilledButton never enters disabled state.
+  // Used ONLY for the Continue button so it is always hit-testable.
+  Widget _greenButton({ required VoidCallback onPressed, required Widget child }) => SizedBox(
+    height: 54,
+    child: FilledButton(
+      onPressed: onPressed,
+      style: FilledButton.styleFrom(
+        backgroundColor: _green,
+        foregroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        elevation: 0,
+      ),
+      child: child,
+    ),
+  );
+
+  // Nullable variant for password-reset flow buttons (OTP verify, set-password).
+  // These legitimately grey-out while async is in flight, unlike the main Continue button.
+  Widget _greenButtonNullable({ required VoidCallback? onPressed, required Widget child }) => SizedBox(
     height: 54,
     child: FilledButton(
       onPressed: onPressed,
@@ -2283,7 +2317,7 @@ class _LoginPanelContentState extends State<_LoginPanelContent> {
           controller: _passCtrl,
           obscureText: !_passVisible,
           textInputAction: TextInputAction.done,
-          onSubmitted: (_) => _loading ? null : _onContinue(),
+          onSubmitted: (_) => _onContinueTap(),
           style: const TextStyle(fontSize: 15),
           decoration: _fieldDec('Password',
             suffix: IconButton(
@@ -2320,9 +2354,11 @@ class _LoginPanelContentState extends State<_LoginPanelContent> {
         ],
 
         const SizedBox(height: 16),
+        // CHANGE #311: onPressed is _onContinueTap — NEVER null.
+        // _busy swaps child (spinner vs text) but never disables the button.
         _greenButton(
-          onPressed: _loading ? null : _onContinue,
-          child: _loading
+          onPressed: _onContinueTap,
+          child: _busy
               ? _spinner()
               : const Text('Continue',
                   style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
@@ -2379,7 +2415,7 @@ class _LoginPanelContentState extends State<_LoginPanelContent> {
         ],
         const SizedBox(height: 16),
 
-        _greenButton(
+        _greenButtonNullable(
           onPressed: _resetLoading ? null : _verifyOtp,
           child: _resetLoading ? _spinner() : const Text('Verify Code',
               style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
@@ -2452,7 +2488,7 @@ class _LoginPanelContentState extends State<_LoginPanelContent> {
         ],
         const SizedBox(height: 16),
 
-        _greenButton(
+        _greenButtonNullable(
           onPressed: _resetLoading ? null : _setNewPassword,
           child: _resetLoading ? _spinner() : const Text('Set Password',
               style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),

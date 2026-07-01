@@ -1871,12 +1871,9 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
     // ── 2. Filter to available/active products only ──────────────────────────
     // RPC may not return the status column; if absent treat the row as active.
-    list = list.where((row) {
-      if (!row.containsKey('status')) return true;
-      final s = (row['status'] as String? ?? '').toLowerCase();
-      // null/blank status treated as available — the RPC WHERE clause already filters.
-      return s.isEmpty || s == 'available' || s == 'active' || s == '1' || s == 'true';
-    }).toList();
+    // No status filter: recognition matches any catalogued medicine regardless of
+    // availability. SOLD OUT / inactive items still need to be identified so the
+    // buyer knows what was on the order. Cart/fulfillment layers enforce stock.
 
     if (list.isEmpty) {
       debugPrint('[FuzzyMatch] 0 active candidates for "$name"');

@@ -10947,19 +10947,24 @@ class _PackTabState extends State<_PackTab>
               .map((i) => Map<String, dynamic>.from(i as Map))
               .toList()
           : <Map<String, dynamic>>[];
+      // CHANGE #305: mode:'pack' + customer_name + {name,qty,packed,counted_qty,pack_type}
+      // Do NOT send supplier_name or ordered/received fields in pack mode.
+      final customerName = qData?['customer']?.toString() ?? '';
       final agentItems = qItems.map((qi) => {
-        'product_name': qi['product_name']?.toString() ?? '',
-        'ordered_qty': (qi['qty'] as num?)?.toInt() ?? 0,
-        'pack_type': qi['pack_type']?.toString() ?? '',
+        'name': qi['product_name']?.toString() ?? '',
+        'qty': (qi['qty'] as num?)?.toInt() ?? 0,
         'packed': qi['packed'] == true,
         'counted_qty': qi['counted_qty'],
+        'pack_type': qi['pack_type']?.toString() ?? '',
       }).toList();
+      try { RenderLog.write('c305_ask_mode', 'pack'); } catch (_) {}
       final res = await Supabase.instance.client.functions.invoke(
         'voice-agent',
         body: {
           'audio_base64': b64,
           'mime_type': result.mime,
-          'supplier_name': qData?['customer']?.toString() ?? '',
+          'mode': 'pack',
+          'customer_name': customerName,
           'items': agentItems,
         },
         headers: {'Authorization': 'Bearer $token'},
@@ -10971,6 +10976,11 @@ class _PackTabState extends State<_PackTab>
         return;
       }
       final reply = (data is Map ? data['reply'] : null)?.toString() ?? '';
+      final transcript = (data is Map ? data['transcript'] : null)?.toString() ?? '';
+      try {
+        RenderLog.write('c305_ask_q', transcript.length > 80 ? transcript.substring(0, 80) : transcript);
+        RenderLog.write('c305_ask_reply', reply.length > 80 ? reply.substring(0, 80) : reply);
+      } catch (_) {}
       if (reply.isNotEmpty) {
         _showPackSnack(reply, duration: const Duration(seconds: 6));
         try { speakText(reply); } catch (_) {}

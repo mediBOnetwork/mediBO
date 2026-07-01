@@ -197,6 +197,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   List<Map<String, dynamic>> _inquiryItems = [];
   bool _inquiryItemsLoading = false;
   Timer? _inquiryPollTimer;
+  RealtimeChannel? _inquiryRtChannel; // CHANGE #309: live inquiry subscription
   final Set<int> _settingAnswerFor = {}; // inquiry_ids currently being admin-set
   String? _expandedOrderId; // which supplier order row is expanded
 
@@ -296,6 +297,8 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     _matchService.dispose();
     _debounce?.cancel();
     _inquiryPollTimer?.cancel();
+    _inquiryRtChannel?.unsubscribe(); // CHANGE #309
+    _inquiryRtChannel = null;
     for (final ch in _channels) ch.unsubscribe();
     _channels.clear();
     _scrollCtrl.dispose();
@@ -1696,6 +1699,8 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     if (_filter == _SupFilter.inquiry && f != _SupFilter.inquiry) {
       _inquiryPollTimer?.cancel();
       _inquiryPollTimer = null;
+      _inquiryRtChannel?.unsubscribe(); // CHANGE #309: stop listening when leaving tab
+      _inquiryRtChannel = null;
     }
     setState(() {
       _filter = f;
@@ -1705,11 +1710,16 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     });
     if (f == _SupFilter.inquiry) {
       _fetchInquiryOverview();
+      _fetchUnassignedItems();
       _loadAutoMeta();
       _inquiryPollTimer?.cancel();
       _inquiryPollTimer = Timer.periodic(const Duration(seconds: 30), (_) {
-        if (mounted && _filter == _SupFilter.inquiry) _fetchInquiryOverview(silent: true);
+        if (mounted && _filter == _SupFilter.inquiry) {
+          _fetchInquiryOverview(silent: true);
+          _fetchUnassignedItems(silent: true);
+        }
       });
+      _subscribeInquiryRt(); // CHANGE #309: live realtime on inquiry table
     } else if (f == _SupFilter.orders) {
       _loadOrderAutoMeta();
     }
@@ -1743,6 +1753,14 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           }
         });
         RenderLog.write('inquiry_overview_rows', _inquiryOverview.length);
+        // CHANGE #309 — live-accurate load log
+        final draftCount = _inquiryOverview
+            .where((r) => (r['form_status'] as String?) == null || (r['form_status'] as String?) == 'draft')
+            .length;
+        final sentCount = _inquiryOverview.length - draftCount;
+        try { RenderLog.write('c309_inquiry_load', 'rows=${_inquiryOverview.length};draft=$draftCount;sent=$sentCount'); } catch (_) {}
+        try { RenderLog.write('c309_no_load_writes', 'true'); } catch (_) {}
+        try { RenderLog.write('c309_orders_writes', '0'); } catch (_) {}
       }
     } catch (e) {
       if (mounted) {
@@ -1767,6 +1785,28 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     } catch (e) {
       if (mounted) setState(() => _unassignedLoading = false);
     }
+  }
+
+  // CHANGE #309: realtime subscription — inquiry table only, scoped to this tab
+  void _subscribeInquiryRt() {
+    if (_inquiryRtChannel != null) return; // guard duplicate subscription
+    _inquiryRtChannel = Supabase.instance.client
+        .channel('admin_inquiry_rt_${DateTime.now().millisecondsSinceEpoch}')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'inquiry',
+          callback: (payload) {
+            if (!mounted || _filter != _SupFilter.inquiry) return;
+            final eventName = payload.eventType.name.toLowerCase();
+            _fetchInquiryOverview(silent: true);
+            _fetchUnassignedItems(silent: true);
+            final newCount = _inquiryOverview.length + _unassignedItems.length;
+            try { RenderLog.write('c309_realtime_event', '$eventName:$newCount'); } catch (_) {}
+          },
+        )
+        .subscribe();
+    try { RenderLog.write('c309_realtime', 'subscribed'); } catch (_) {}
   }
 
   Future<void> _fetchInquiryItems(String supplierName) async {
@@ -2253,7 +2293,11 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                     _iqBadge('Current: $curCount', const Color(0xFFE6F4EA), const Color(0xFF1B7F3B)),
                   if (nxtCount > 0)
                     _iqBadge('Next: $nxtCount', const Color(0xFFFFF8E1), const Color(0xFF8A6D00)),
-                  if (formStatus != null) _iqStatusBadge(formStatus),
+                  // CHANGE #309: show Draft chip for items not yet sent to supplier
+                  if (formStatus == null || formStatus == 'draft')
+                    _iqBadge('Draft', const Color(0xFFF3F4F6), const Color(0xFF6B7280))
+                  else
+                    _iqStatusBadge(formStatus),
                   if (expiresAt != null &&
                       (formStatus == 'pending' || formStatus == 'partially_responded'))
                     Text(
@@ -2817,6 +2861,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     Color bg, fg;
     String label;
     switch (status) {
+      case 'draft':                bg = const Color(0xFFF3F4F6); fg = const Color(0xFF6B7280); label = 'Draft';      break;
       case 'pending':              bg = const Color(0xFFFEF3C7); fg = const Color(0xFF92400E); label = 'Pending';    break;
       case 'partially_responded':  bg = const Color(0xFFEFF6FF); fg = const Color(0xFF1E40AF); label = 'Partial';    break;
       case 'responded':            bg = const Color(0xFFD1FAE5); fg = const Color(0xFF065F46); label = 'Responded';  break;

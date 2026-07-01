@@ -97,6 +97,8 @@ class _HomeShellState extends State<HomeShell> {
       // CHANGE #312: structural attestation — bulk upload split buttons compiled in.
       // Written here so it appears in ALL sessions without visiting the Bulk tab.
       try { RenderLog.write('c312_bulk_built', 'split_buttons_#312'); } catch (_) {}
+      // CHANGE #314: structural attestation — mobile header slimmed, desktop preserved.
+      try { RenderLog.write('c314_preview_built', 'mobile_slim_#314'); } catch (_) {}
     });
   }
 

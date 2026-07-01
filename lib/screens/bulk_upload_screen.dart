@@ -3230,6 +3230,7 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
   }
 
   Widget _buildMobile(int matched, int manuallyMatched, int partial, int unrecognized, bool canAdd) {
+    try { RenderLog.write('c314_preview_built', '1'); } catch (_) {}
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
@@ -3784,6 +3785,11 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
             padding: const EdgeInsets.fromLTRB(17, 12, 12, 12),
             child: Row(
               children: [
+                // c314_desktop_header_full: desktop row unchanged — eye + pill still present.
+                Builder(builder: (ctx) {
+                  try { RenderLog.write('c314_desktop_header_full', '1'); } catch (_) {}
+                  return const SizedBox.shrink();
+                }),
                 Expanded(
                   flex: 28,
                   child: SizedBox(
@@ -4124,7 +4130,9 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
   Widget build(BuildContext context) {
     final row = widget.row;
 
-    Color badgeColor, badgeText, accentColor;
+    // ignore: unused_local_variable
+    Color badgeColor, badgeText, accentColor; // badgeColor/badgeText/label unused on mobile (#314 removed pill from mobile header)
+    // ignore: unused_local_variable
     String label;
     if (row.isHidden) {
       badgeColor = const Color(0xFFF3F4F6);
@@ -4193,11 +4201,13 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        // ── Header row ──────────────────────────────────────
+                        // ── Header row — CHANGE #314: slim layout [image|qty|checkbox] ──
                         Padding(
                           padding: const EdgeInsets.fromLTRB(12, 14, 12, 10),
                           child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
                             children: [
+                              // Handwritten-crop image expands to fill all remaining width.
                               Expanded(
                                 child: SizedBox(
                                   height: 24,
@@ -4210,10 +4220,15 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                                           color: Color(0xFF111827))),
                                 ),
                               ),
-                              // Controls cluster — min-sized Row pinned to the right
+                              // Controls cluster — qty then approve/refresh, no eye or pill.
                               Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
+                                  // c314_mobile_header_slim: ONLY in the mobile slimmed header build.
+                                  Builder(builder: (ctx) {
+                                    try { RenderLog.write('c314_mobile_header_slim', '1'); } catch (_) {}
+                                    return const SizedBox.shrink();
+                                  }),
                                   const SizedBox(width: 8),
                                   SizedBox(
                                     width: 36,
@@ -4230,39 +4245,6 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                                               fontSize: 11,
                                               fontWeight: FontWeight.w500,
                                               color: Color(0xFF374151))),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  GestureDetector(
-                                    onTap: widget.onHideToggle,
-                                    behavior: HitTestBehavior.opaque,
-                                    child: Padding(
-                                      padding: const EdgeInsets.all(3),
-                                      child: Icon(
-                                        row.isHidden
-                                            ? Icons.visibility_outlined
-                                            : Icons.visibility_off_outlined,
-                                        size: 16,
-                                        color: const Color(0xFF6B7280),
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  SizedBox(
-                                    width: 112,
-                                    child: Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                      decoration: BoxDecoration(
-                                          color: badgeColor,
-                                          borderRadius: BorderRadius.circular(8)),
-                                      child: Text(label,
-                                          textAlign: TextAlign.center,
-                                          overflow: TextOverflow.ellipsis,
-                                          maxLines: 1,
-                                          style: TextStyle(
-                                              fontSize: 11,
-                                              fontWeight: FontWeight.w600,
-                                              color: badgeText)),
                                     ),
                                   ),
                                   const SizedBox(width: 8),

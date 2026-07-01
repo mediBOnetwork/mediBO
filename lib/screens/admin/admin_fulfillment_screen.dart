@@ -11506,7 +11506,8 @@ class _PackingScreen extends StatefulWidget {
   State<_PackingScreen> createState() => _PackingScreenState();
 }
 
-class _PackingScreenState extends State<_PackingScreen> {
+class _PackingScreenState extends State<_PackingScreen>
+    with SingleTickerProviderStateMixin {
   bool _loading    = true;
   String? _error;
   Map<String, dynamic>? _queue;
@@ -11528,15 +11529,25 @@ class _PackingScreenState extends State<_PackingScreen> {
   Timer? _holdTimer;
   bool   _holdFired = false;
 
+  // CHANGE #302: hold-to-undo for already-PACKED items.
+  // AnimationController drives the 0→1 progress fill over 2 s.
+  late final AnimationController _holdProgressCtrl;
+  bool _undoing = false;
+
   @override
   void initState() {
     super.initState();
+    _holdProgressCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 2000),
+    );
     _loadQueue();
   }
 
   @override
   void dispose() {
     _holdTimer?.cancel();
+    _holdProgressCtrl.dispose();
     _itemPageController?.dispose();
     super.dispose();
   }
@@ -11757,6 +11768,68 @@ class _PackingScreenState extends State<_PackingScreen> {
     _holdTimer?.cancel();
     _holdTimer = null;
     _holdFired = false;
+  }
+
+  // CHANGE #302: hold-to-undo for already-PACKED items.
+  // Uses Listener (raw pointer events) so the PageView pan recognizer
+  // cannot steal the gesture during a stationary 2s hold.
+
+  void _startHoldForUndo() {
+    if (_undoing || _marking) return;
+    RenderLog.write('c302_undo_attached', 'true');
+    _holdTimer?.cancel();
+    _holdProgressCtrl.forward(from: 0.0);
+    _holdTimer = Timer(const Duration(milliseconds: 2000), () {
+      _doUndo(_currentIndex);
+    });
+  }
+
+  void _cancelHoldForUndo() {
+    _holdTimer?.cancel();
+    _holdTimer = null;
+    _holdProgressCtrl.reverse();
+  }
+
+  Future<void> _doUndo(int index) async {
+    if (_undoing || _marking) return;
+    _undoing = true;
+    _holdTimer?.cancel();
+    _holdTimer = null;
+    _holdProgressCtrl.stop();
+    if (index < 0 || index >= _items.length) { _undoing = false; return; }
+    final item = _items[index];
+    if (item['packed'] != true) { _undoing = false; return; }
+    HapticFeedback.mediumImpact();
+    setState(() => _marking = true);
+    final itemId = item['order_item_id']?.toString() ?? '';
+    try {
+      final dynamic res = await Supabase.instance.client.rpc(
+        'pack_mark_item',
+        params: {'p_order_item_id': itemId, 'p_packed': false},
+      );
+      if (!mounted) return;
+      setState(() {
+        _items[index] = {...item, 'packed': false};
+        _packedCount = (_packedCount - 1).clamp(0, _totalItems);
+        _leftCount++;
+        _allPacked = false;
+        _marking = false;
+      });
+      RenderLog.write('c302_hold_ms', '2000');
+      RenderLog.write('c302_undo_fire', '${jsonEncode(res ?? {})}');
+      RenderLog.write('c302_state', 'packed->unpacked');
+      _holdProgressCtrl.reset();
+    } catch (e) {
+      if (mounted) {
+        setState(() => _marking = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Undo error: $e'),
+                duration: const Duration(seconds: 3)));
+      }
+      _holdProgressCtrl.reset();
+    } finally {
+      _undoing = false;
+    }
   }
 
   // ── Per-bag rollup (#293 retained) ──────────────────────────────────────────
@@ -12195,13 +12268,74 @@ class _PackingScreenState extends State<_PackingScreen> {
     );
   }
 
-  // CHANGE #298: Packed button — tap = pack+advance; hold 2s = undo. ───────────
-  // Uses raw GestureDetector (not FilledButton.onPressed) to get onTapDown/Up/Cancel.
+  // CHANGE #302: Packed button — two distinct states:
+  //   UNPACKED: GestureDetector tap=pack+advance (unchanged from #298).
+  //   PACKED:   Listener (raw pointer — immune to PageView gesture arena)
+  //             shows "Packed ✓ · hold to undo"; 2 s hold fires _doUndo().
+  //             Short tap does NOTHING. Progress fill animates while holding.
   Widget _buildPackedButton() {
     final item     = (_currentIndex < _items.length) ? _items[_currentIndex] : null;
     final isPacked = item?['packed'] == true;
-    final disabled = _marking || item == null;
+    final disabled = _marking || _undoing || item == null;
 
+    if (isPacked && !_marking) {
+      // ── PACKED STATE: hold-to-undo bar ─────────────────────────────────────
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+        child: Listener(
+          behavior: HitTestBehavior.opaque,
+          onPointerDown: disabled ? null : (_) => _startHoldForUndo(),
+          onPointerUp:   disabled ? null : (_) => _cancelHoldForUndo(),
+          onPointerCancel: disabled ? null : (_) => _cancelHoldForUndo(),
+          child: Stack(
+            children: [
+              // Base bar — light green so it's clearly interactive, not dead
+              Container(
+                width: double.infinity,
+                height: 56,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFD1FAE5),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(
+                      color: _kReceivedFg.withValues(alpha: 0.3)),
+                ),
+                alignment: Alignment.center,
+                child: Text('Packed ✓  ·  hold to undo',
+                    style: const TextStyle(
+                        fontSize: 16, fontWeight: FontWeight.w700,
+                        color: _kReceivedFg)),
+              ),
+              // Progress fill — sweeps left→right over 2 s while holding
+              AnimatedBuilder(
+                animation: _holdProgressCtrl,
+                builder: (_, __) {
+                  final v = _holdProgressCtrl.value;
+                  if (v <= 0) return const SizedBox.shrink();
+                  return Positioned.fill(
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(14),
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: FractionallySizedBox(
+                          widthFactor: v,
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: _kReceivedFg.withValues(alpha: 0.18),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    // ── UNPACKED STATE (or _marking): tap = pack + advance (unchanged) ──────
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
       child: GestureDetector(
@@ -12213,23 +12347,19 @@ class _PackingScreenState extends State<_PackingScreen> {
           width: double.infinity,
           height: 56,
           decoration: BoxDecoration(
-            color: disabled
-                ? const Color(0xFFE5E7EB)
-                : isPacked
-                    ? const Color(0xFFE5E7EB)
-                    : _kGreen,
+            color: disabled ? const Color(0xFFE5E7EB) : _kGreen,
             borderRadius: BorderRadius.circular(14),
           ),
           alignment: Alignment.center,
-          child: _marking
-              ? SizedBox(
+          child: _marking || _undoing
+              ? const SizedBox(
                   width: 24, height: 24,
                   child: CircularProgressIndicator(
-                      color: isPacked ? _kGreen : Colors.white, strokeWidth: 2.5))
-              : Text('Packed',
+                      color: Colors.white, strokeWidth: 2.5))
+              : const Text('Pack',
                   style: TextStyle(
                       fontSize: 18, fontWeight: FontWeight.w700,
-                      color: isPacked ? _kSub : Colors.white)),
+                      color: Colors.white)),
         ),
       ),
     );

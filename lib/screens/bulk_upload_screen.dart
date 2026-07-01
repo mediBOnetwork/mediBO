@@ -1816,15 +1816,21 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
   _MatchRow _rowFromBulkResult(String name, int qty, Map<String, dynamic> item, Rect? bbox) {
     final status = item['status'] as String? ?? 'none';
-    final matchStatus = status == 'matched'
-        ? _MatchStatus.matched
-        : status == 'partial'
-            ? _MatchStatus.partial
-            : _MatchStatus.unrecognized;
     final candidatesRaw = (item['candidates'] as List<dynamic>?) ?? [];
     final candidates = candidatesRaw
         .map((c) => Product.fromBulkMatch(c as Map<String, dynamic>))
         .toList();
+    // "matched" → green, "partial" → amber, "none" with weak candidates → amber
+    // (never show a dead "No match found" when candidates exist).
+    // "none" with zero candidates → blank OCR text → auto-retry path.
+    final _MatchStatus matchStatus;
+    if (status == 'matched') {
+      matchStatus = _MatchStatus.matched;
+    } else if (status == 'partial' || candidates.isNotEmpty) {
+      matchStatus = _MatchStatus.partial;
+    } else {
+      matchStatus = _MatchStatus.unrecognized;
+    }
     return _MatchRow(
       lineItem: name,
       qty: qty,
@@ -1845,6 +1851,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       final payload = List.generate(
           names.length, (i) => {'name': names[i], 'qty': qtys[i].toString()});
       try { RenderLog.write('c320_bulk_uses_rpc', 'count:${names.length}'); } catch (_) {}
+      try { RenderLog.write('c321_bulk_rpc', 'count:${names.length}'); } catch (_) {}
       final resp = await Supabase.instance.client
           .rpc('bulk_match_items', params: {'p_items': payload});
       if (resp is Map && resp['status'] == 'ok') {
@@ -2113,7 +2120,8 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
       final isMatched = (row.status == _MatchStatus.matched ||
               row.status == _MatchStatus.manuallyMatched) &&
-          row.selectedProduct != null;
+          row.selectedProduct != null &&
+          row.selectedProduct!.isBuyable; // Part D: hard-exclude NA (buyable=false) from cart
 
       if (isMatched) {
         final product = row.selectedProduct!;
@@ -2183,6 +2191,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         if (!mounted) return;
         if (_rows[i].status != _MatchStatus.unrecognized) break;
         if (mounted) setState(() => _rows[i].isRetrying = true);
+        try { RenderLog.write('c321_autoretry_fired', 'row:$i'); } catch (_) {}
         await _retryOneRow(i, (_) {});
         if (!mounted) return;
       }
@@ -2329,6 +2338,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     _MatchRow fresh;
     try {
       try { RenderLog.write('c320_bulk_uses_rpc', 'retry'); } catch (_) {}
+      try { RenderLog.write('c321_bulk_rpc', 'retry'); } catch (_) {}
       final payload = [{'name': name, 'qty': old.qty.toString()}];
       final resp = await Supabase.instance.client
           .rpc('bulk_match_items', params: {'p_items': payload});
@@ -3919,6 +3929,7 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
   void _toggleApproval() {
     final row = widget.row;
     if (row.status == _MatchStatus.unrecognized) return;
+    if (row.selectedProduct?.isBuyable == false) return; // NA items cannot be ticked
     setState(() {
       if (row.status == _MatchStatus.matched) {
         // Untick a Matched row → Partial (unticked)
@@ -3978,9 +3989,12 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
         ? const BorderSide(color: Color(0xFFEEEEEE))
         : BorderSide.none;
 
-    // Ticked when Matched (auto) or Manually Matched.  Partial and Unrecognized are unticked.
-    final isApproved = row.status == _MatchStatus.matched ||
-        row.status == _MatchStatus.manuallyMatched;
+    // Ticked when Matched/ManuallyMatched AND product is available (AV).
+    // NA (buyable=false) items are always unchecked+disabled regardless of match status.
+    final selectedProd = row.selectedProduct;
+    final isNa = selectedProd != null && !selectedProd.isBuyable;
+    final isApproved = !isNa && (row.status == _MatchStatus.matched ||
+        row.status == _MatchStatus.manuallyMatched);
 
     return Opacity(
       opacity: row.isHidden ? 0.45 : 1.0,
@@ -4152,7 +4166,7 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
                                 ),
                               )
                         : GestureDetector(
-                            onTap: row.isHidden ? null : _toggleApproval,
+                            onTap: (row.isHidden || isNa) ? null : _toggleApproval,
                             behavior: HitTestBehavior.opaque,
                             child: Padding(
                               padding: const EdgeInsets.all(3),
@@ -4166,17 +4180,22 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
                                       child: const Icon(Icons.check,
                                           size: 13, color: Colors.white),
                                     )
-                                  : Container(
-                                      width: 18, height: 18,
-                                      decoration: BoxDecoration(
-                                        color: Colors.white,
-                                        borderRadius: BorderRadius.circular(4),
-                                        border: Border.all(
-                                            color: const Color(0xFF9CA3AF), width: 1.5),
-                                      ),
-                                      child: const Icon(Icons.check,
-                                          size: 13, color: Color(0xFFD1D5DB)),
-                                    ),
+                                  : Builder(builder: (cbCtx) {
+                                      if (isNa) try { RenderLog.write('c321_na_lock', 'desktop'); } catch (_) {}
+                                      return Container(
+                                        width: 18, height: 18,
+                                        decoration: BoxDecoration(
+                                          color: isNa ? const Color(0xFFF3F4F6) : Colors.white,
+                                          borderRadius: BorderRadius.circular(4),
+                                          border: Border.all(
+                                              color: isNa ? const Color(0xFFD1D5DB) : const Color(0xFF9CA3AF),
+                                              width: 1.5),
+                                        ),
+                                        child: isNa
+                                          ? null
+                                          : const Icon(Icons.check, size: 13, color: Color(0xFFD1D5DB)),
+                                      );
+                                    }),
                             ),
                           ),
                   ),
@@ -4347,6 +4366,7 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
   void _toggleApproval() {
     final row = widget.row;
     if (row.status == _MatchStatus.unrecognized) return;
+    if (row.selectedProduct?.isBuyable == false) return; // NA items cannot be ticked
     setState(() {
       if (row.status == _MatchStatus.matched) {
         // Untick a Matched row → Partial (unticked)
@@ -4402,9 +4422,11 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
 
     final p = row.selectedProduct;
     final pack = p != null ? _packShort(p) : '';
-    // Ticked when Matched (auto) or Manually Matched.  Partial and Unrecognized are unticked.
-    final isApproved = row.status == _MatchStatus.matched ||
-        row.status == _MatchStatus.manuallyMatched;
+    // Ticked when Matched/ManuallyMatched AND product is available (AV).
+    // NA (buyable=false) items are always unchecked+disabled.
+    final isNa = p != null && !p.isBuyable;
+    final isApproved = !isNa && (row.status == _MatchStatus.matched ||
+        row.status == _MatchStatus.manuallyMatched);
 
     return LayoutBuilder(builder: (context, _) {
       return Opacity(
@@ -4509,7 +4531,7 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                                               ),
                                             )
                                       : GestureDetector(
-                                          onTap: row.isHidden ? null : _toggleApproval,
+                                          onTap: (row.isHidden || isNa) ? null : _toggleApproval,
                                           behavior: HitTestBehavior.opaque,
                                           child: Padding(
                                             padding: const EdgeInsets.all(3),
@@ -4523,17 +4545,22 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                                                     child: const Icon(Icons.check,
                                                         size: 14, color: Colors.white),
                                                   )
-                                                : Container(
-                                                    width: 20, height: 20,
-                                                    decoration: BoxDecoration(
-                                                      color: Colors.white,
-                                                      borderRadius: BorderRadius.circular(4),
-                                                      border: Border.all(
-                                                          color: const Color(0xFF9CA3AF), width: 1.5),
-                                                    ),
-                                                    child: const Icon(Icons.check,
-                                                        size: 14, color: Color(0xFFD1D5DB)),
-                                                  ),
+                                                : Builder(builder: (mcbCtx) {
+                                                    if (isNa) try { RenderLog.write('c321_na_lock', 'mobile'); } catch (_) {}
+                                                    return Container(
+                                                      width: 20, height: 20,
+                                                      decoration: BoxDecoration(
+                                                        color: isNa ? const Color(0xFFF3F4F6) : Colors.white,
+                                                        borderRadius: BorderRadius.circular(4),
+                                                        border: Border.all(
+                                                            color: isNa ? const Color(0xFFD1D5DB) : const Color(0xFF9CA3AF),
+                                                            width: 1.5),
+                                                      ),
+                                                      child: isNa
+                                                          ? null
+                                                          : const Icon(Icons.check, size: 14, color: Color(0xFFD1D5DB)),
+                                                    );
+                                                  }),
                                           ),
                                         ),
                                 ],

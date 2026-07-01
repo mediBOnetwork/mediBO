@@ -140,6 +140,7 @@ void main() {
     RenderLog.write('c318_build', '318');
     RenderLog.write('c319_build', '319');
     RenderLog.write('c320_build', '320');
+    RenderLog.write('c321_build', '321');
 
     // Selftest hook (guarded; no-op without exact secret; mark for removal in #64).
     // Triggers signInWithPassword then defers the selftest_login trace to the

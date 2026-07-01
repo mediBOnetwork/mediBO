@@ -258,6 +258,7 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
     final productName = (item['product_name'] as String? ?? '').trim();
     final tc = (item['therapeutic_class'] as String? ?? '').trim();
     final company = (item['company'] as String? ?? '').trim();
+    final inquiryCode = (item['inquiry_code'] as String? ?? '').trim();
     final imageUrl = item['image_url'] as String?;
     final locked = _isLocked(item);
     final noSup = !locked && _noSupplier(item);
@@ -321,6 +322,21 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
+                      ],
+                      if (inquiryCode.isNotEmpty) ...[
+                        const SizedBox(height: 3),
+                        Builder(builder: (_) {
+                          RenderLog.write('c317_inquiry_id_shown', inquiryCode);
+                          return Text(
+                            inquiryCode,
+                            style: const TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w500,
+                              color: Color(0xFF9CA3AF),
+                              letterSpacing: 0.3,
+                            ),
+                          );
+                        }),
                       ],
                     ],
                   ),
@@ -420,6 +436,7 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
     final productName = (item['product_name'] as String? ?? '').trim();
     final tc = (item['therapeutic_class'] as String? ?? '').trim();
     final company = (item['company'] as String? ?? '').trim();
+    final inquiryCode = (item['inquiry_code'] as String? ?? '').trim();
     final imageUrl = item['image_url'] as String?;
     final locked = _isLocked(item);
     final noSup = !locked && _noSupplier(item);
@@ -480,6 +497,18 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
                           ),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                      if (inquiryCode.isNotEmpty) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          inquiryCode,
+                          style: const TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w500,
+                            color: Color(0xFF9CA3AF),
+                            letterSpacing: 0.3,
+                          ),
                         ),
                       ],
                       if (locked) ...[

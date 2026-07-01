@@ -160,6 +160,7 @@ class _OrderCard extends StatelessWidget {
   Widget build(BuildContext context) {
     // order_no is integer in DB
     final orderNo    = order['order_no']?.toString() ?? '';
+    final orderCode  = (order['order_code'] as String?)?.trim() ?? '';
     final totalAmount = (order['total_amount'] as num?)?.toDouble();
     final itemCount  = (order['item_count'] as num?)?.toInt() ?? 0;
     final createdAt  = order['created_at'] != null
@@ -208,6 +209,21 @@ class _OrderCard extends StatelessWidget {
                           color: Color(0xFF111827),
                         ),
                       ),
+                      if (orderCode.isNotEmpty) ...[
+                        const SizedBox(height: 2),
+                        Builder(builder: (_) {
+                          RenderLog.write('c317_order_id_shown', orderCode);
+                          return Text(
+                            orderCode,
+                            style: const TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w500,
+                              color: Color(0xFF9CA3AF),
+                              letterSpacing: 0.3,
+                            ),
+                          );
+                        }),
+                      ],
                       if (createdAt != null) ...[
                         const SizedBox(height: 2),
                         Text(

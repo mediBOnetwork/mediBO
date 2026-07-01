@@ -20,6 +20,9 @@ import 'screens/home_shell.dart';
 import 'screens/public/inquiry_form_screen.dart';
 import 'screens/public/dispute_form_screen.dart';
 import 'screens/public/public_order_page.dart';
+import 'screens/code_resolver_page.dart';
+import 'screens/inquiry_link_page.dart';
+import 'screens/dispute_link_page.dart';
 import 'screens/about_screen.dart';
 import 'screens/contact_screen.dart';
 import 'screens/legal_pages.dart';
@@ -133,6 +136,7 @@ void main() {
     RenderLog.write('c203b_proof_in_tile', 'proof_thumbnail_in_merged_tile_and_sheet');
     RenderLog.write('c190_sweep_done', 'hardcoded_labels_removed=true;dynamic_buttons=true;rpc_params_verified=true');
     RenderLog.write('c190_link_route_registered', '/dispute?token= route active');
+    RenderLog.write('c317_build', '317');
 
     // Selftest hook (guarded; no-op without exact secret; mark for removal in #64).
     // Triggers signInWithPassword then defers the selftest_login trace to the
@@ -339,6 +343,15 @@ class _PharmaB2BAppState extends State<PharmaB2BApp> {
                   );
                 }
               }
+              if (name.startsWith('/dispute/')) {
+                final token = name.substring('/dispute/'.length).split('?').first;
+                if (token.isNotEmpty) {
+                  return MaterialPageRoute(
+                    settings: settings,
+                    builder: (_) => DisputeLinkPage(token: token),
+                  );
+                }
+              }
               if (name.startsWith('/dispute')) {
                 final uri = Uri.tryParse(name) ?? Uri();
                 final token = uri.queryParameters['token'] ?? '';
@@ -346,6 +359,18 @@ class _PharmaB2BAppState extends State<PharmaB2BApp> {
                   return MaterialPageRoute(
                     settings: settings,
                     builder: (_) => DisputeFormScreen(token: token),
+                  );
+                }
+              }
+              // /:code — short tracking code resolver (MUST be last guard)
+              // Only matches segments shaped like SPO… or CPO… (e.g. SPO300626SAG100O1)
+              {
+                final seg = name.startsWith('/') ? name.substring(1) : name;
+                final codePattern = RegExp(r'^(SPO|CPO)[A-Za-z0-9]+$');
+                if (seg.isNotEmpty && codePattern.hasMatch(seg)) {
+                  return MaterialPageRoute(
+                    settings: settings,
+                    builder: (_) => CodeResolverPage(code: seg),
                   );
                 }
               }

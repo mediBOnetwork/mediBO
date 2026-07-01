@@ -365,6 +365,18 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
                 ),
               ]),
               // (b) meta
+              if ((item.disputeCode ?? '').isNotEmpty) ...[
+                const SizedBox(height: 3),
+                Text(
+                  item.disputeCode!,
+                  style: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w500,
+                    color: Color(0xFF9CA3AF),
+                    letterSpacing: 0.3,
+                  ),
+                ),
+              ],
               if ((item.category ?? '').isNotEmpty) ...[
                 const SizedBox(height: 3),
                 Text(item.category!,

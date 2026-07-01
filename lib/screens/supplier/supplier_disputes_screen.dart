@@ -413,6 +413,21 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
                           color: isActive ? _kGreen : _kSub)),
                 ),
               ]),
+              if ((item.disputeCode ?? '').isNotEmpty) ...[
+                const SizedBox(height: 3),
+                Builder(builder: (_) {
+                  RenderLog.write('c317_dispute_id_shown', item.disputeCode!);
+                  return Text(
+                    item.disputeCode!,
+                    style: const TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w500,
+                      color: Color(0xFF9CA3AF),
+                      letterSpacing: 0.3,
+                    ),
+                  );
+                }),
+              ],
               if ((item.category ?? '').isNotEmpty) ...[
                 const SizedBox(height: 3),
                 Text(item.category!,

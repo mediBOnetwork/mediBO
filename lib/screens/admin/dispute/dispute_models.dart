@@ -65,6 +65,7 @@ class DisputeItem {
   final String? respondedAt;
   final String? resolvedAt;
   final String? proofUrl;
+  final String? disputeCode;
 
   const DisputeItem({
     required this.disputeId,
@@ -97,6 +98,7 @@ class DisputeItem {
     this.respondedAt,
     this.resolvedAt,
     this.proofUrl,
+    this.disputeCode,
   });
 
   factory DisputeItem.fromJson(Map<String, dynamic> j) {
@@ -142,6 +144,7 @@ class DisputeItem {
       respondedAt: j['responded_at']?.toString(),
       resolvedAt: j['resolved_at']?.toString(),
       proofUrl: j['proof_url']?.toString(),
+      disputeCode: j['dispute_code']?.toString(),
     );
   }
 

@@ -20,6 +20,7 @@ import '../config/api_keys.dart';
 import '../models/product.dart';
 import '../user_state.dart';
 import '../util.dart';
+import '../utils/render_log.dart';
 import 'auth/login_screen.dart';
 
 // ─── Loading step ─────────────────────────────────────────────────────────────
@@ -410,21 +411,42 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
   // ── File picking & orchestration ───────────────────────────────────────────
 
+  // CHANGE #312: camera button — web capture input, no native plugin.
+  Future<void> _onCameraTap() async {
+    try { RenderLog.write('c312_camera_tap', '1'); } catch (_) {}
+    final input = html.FileUploadInputElement()
+      ..accept = 'image/*'
+      ..multiple = false;
+    input.setAttribute('capture', 'environment');
+    input.click();
+    await input.onChange.first;
+    final files = input.files;
+    if (files == null || files.isEmpty) return;
+    try { RenderLog.write('c312_camera_got', '1'); } catch (_) {}
+    await _processHtmlFile(files.first);
+  }
+
+  // CHANGE #312: upload button — keeps existing accept list.
   Future<void> _pickAndProcess() async {
+    try { RenderLog.write('c312_upload_tap', '1'); } catch (_) {}
     final input = html.FileUploadInputElement()
       ..accept = '.csv,.xlsx,.xls,.pdf,.ods,.tsv,.txt,.docx,.doc,.html,.htm,.jpg,.jpeg,.png,.webp,.heic,.heif,.gif'
       ..multiple = false;
     input.click();
-
     await input.onChange.first;
     final files = input.files;
     if (files == null || files.isEmpty) return;
+    try { RenderLog.write('c312_upload_got', '1'); } catch (_) {}
+    await _processHtmlFile(files.first);
+  }
 
+  // CHANGE #312: shared ingest entry — both camera and upload feed here.
+  Future<void> _processHtmlFile(html.File file) async {
+    try { RenderLog.write('c312_ingest_start', file.name); } catch (_) {}
     // Always start fresh — clear any stale session (including old bbox coordinates)
     // so the previous result never bleeds into the new upload's crop display.
     await _clearSession();
 
-    final file = files.first;
     setState(() {
       _step = _LoadStep.readingFile;
       _fileName = file.name;
@@ -603,7 +625,9 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         _bulkLineItemMap = {};
       });
       _saveSession();
+      try { RenderLog.write('c312_ingest_done', file.name); } catch (_) {}
     } catch (e) {
+      try { RenderLog.write('c312_ingest_err', e.toString().length > 80 ? e.toString().substring(0, 80) : e.toString()); } catch (_) {}
       if (!mounted) return;
       setState(() {
         _step = _LoadStep.idle;
@@ -2240,6 +2264,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
                     fileName: _fileName,
                     addingToCart: _addingToCart,
                     onPickFile: _pickAndProcess,
+                    onCamera: _onCameraTap,
                     onAddToCart: _addMatchedToCart,
                     onHideToggle: _onRowHideToggle,
                     uploadedImageSize: _uploadedImageSize,
@@ -2307,6 +2332,7 @@ class _MainLayout extends StatelessWidget {
   final String? fileName;
   final bool addingToCart;
   final VoidCallback onPickFile;
+  final VoidCallback onCamera;
   final Future<void> Function() onAddToCart;
   final void Function(int rowIndex) onHideToggle;
   final Size? uploadedImageSize;
@@ -2325,6 +2351,7 @@ class _MainLayout extends StatelessWidget {
     this.fileName,
     required this.addingToCart,
     required this.onPickFile,
+    required this.onCamera,
     required this.onAddToCart,
     required this.onHideToggle,
     this.uploadedImageSize,
@@ -2351,6 +2378,7 @@ class _MainLayout extends StatelessWidget {
                     flex: 35,
                     child: _UploadCard(
                       onPickFile: onPickFile,
+                      onCamera: onCamera,
                       fileName: fileName,
                       isLoading: isLoading,
                     ),
@@ -2386,7 +2414,7 @@ class _MainLayout extends StatelessWidget {
         children: [
           const _WhatsAppCard(),
           const SizedBox(height: 16),
-          _UploadCard(onPickFile: onPickFile, fileName: fileName, isLoading: isLoading),
+          _UploadCard(onPickFile: onPickFile, onCamera: onCamera, fileName: fileName, isLoading: isLoading),
           const SizedBox(height: 16),
           const _HowItWorksCard(),
           const SizedBox(height: 16),
@@ -2612,17 +2640,20 @@ class _WhatsAppCard extends StatelessWidget {
 
 class _UploadCard extends StatelessWidget {
   final VoidCallback onPickFile;
+  final VoidCallback onCamera;
   final String? fileName;
   final bool isLoading;
 
   const _UploadCard({
     required this.onPickFile,
+    required this.onCamera,
     this.fileName,
     required this.isLoading,
   });
 
   @override
   Widget build(BuildContext context) {
+    try { RenderLog.write('c312_bulk_built', '1'); } catch (_) {}
     return Container(
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(16),
@@ -2704,53 +2735,99 @@ class _UploadCard extends StatelessWidget {
                       textColor: const Color(0xFF374151),
                     ),
                     const SizedBox(height: 48),
-                    SizedBox(
-                      height: 52,
-                      child: fileName != null && !isLoading
-                          ? OutlinedButton.icon(
-                              onPressed: onPickFile,
-                              icon: const Icon(Icons.check_circle_outline,
-                                  size: 18, color: Color(0xFF16A34A)),
-                              label: Text(
-                                fileName!.length > 22
-                                    ? '${fileName!.substring(0, 19)}...'
-                                    : fileName!,
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w700,
-                                  fontSize: 13,
-                                  color: Color(0xFF16A34A),
+                    // CHANGE #312: split into Camera | Upload File buttons.
+                    if (fileName != null && !isLoading)
+                      SizedBox(
+                        height: 52,
+                        child: OutlinedButton.icon(
+                          onPressed: onPickFile,
+                          icon: const Icon(Icons.check_circle_outline,
+                              size: 18, color: Color(0xFF16A34A)),
+                          label: Text(
+                            fileName!.length > 22
+                                ? '${fileName!.substring(0, 19)}...'
+                                : fileName!,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w700,
+                              fontSize: 13,
+                              color: Color(0xFF16A34A),
+                            ),
+                          ),
+                          style: OutlinedButton.styleFrom(
+                            side: const BorderSide(color: Color(0xFF16A34A)),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(10)),
+                          ),
+                        ),
+                      )
+                    else if (isLoading)
+                      SizedBox(
+                        height: 52,
+                        child: FilledButton.icon(
+                          onPressed: onPickFile,
+                          icon: const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                          ),
+                          label: const Text('Processing…',
+                              style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12)),
+                          style: FilledButton.styleFrom(
+                            backgroundColor: const Color(0xFF1e2a3a),
+                            foregroundColor: Colors.white,
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(10)),
+                            elevation: 0,
+                          ),
+                        ),
+                      )
+                    else
+                      Builder(
+                        builder: (ctx) {
+                          try { RenderLog.write('c312_split_wired', '1'); } catch (_) {}
+                          return Row(
+                            children: [
+                              Expanded(
+                                child: SizedBox(
+                                  height: 52,
+                                  child: FilledButton.icon(
+                                    onPressed: onCamera,
+                                    icon: const Icon(Icons.camera_alt_outlined, size: 18),
+                                    label: const Text('Camera',
+                                        style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12)),
+                                    style: FilledButton.styleFrom(
+                                      backgroundColor: const Color(0xFF1e2a3a),
+                                      foregroundColor: Colors.white,
+                                      shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(10)),
+                                      elevation: 0,
+                                    ),
+                                  ),
                                 ),
                               ),
-                              style: OutlinedButton.styleFrom(
-                                side: const BorderSide(color: Color(0xFF16A34A)),
-                                shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(10)),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: SizedBox(
+                                  height: 52,
+                                  child: FilledButton.icon(
+                                    onPressed: onPickFile,
+                                    icon: const Icon(Icons.upload_file_outlined, size: 18),
+                                    label: const Text('Upload File',
+                                        style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12)),
+                                    style: FilledButton.styleFrom(
+                                      backgroundColor: const Color(0xFF1e2a3a),
+                                      foregroundColor: Colors.white,
+                                      shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(10)),
+                                      elevation: 0,
+                                    ),
+                                  ),
+                                ),
                               ),
-                            )
-                          : FilledButton.icon(
-                              onPressed: isLoading ? null : onPickFile,
-                              icon: isLoading
-                                  ? const SizedBox(
-                                      width: 16,
-                                      height: 16,
-                                      child: CircularProgressIndicator(
-                                          strokeWidth: 2, color: Colors.white),
-                                    )
-                                  : const Icon(Icons.upload_file_outlined, size: 18),
-                              label: Text(
-                                isLoading ? 'Processing...' : 'Choose File to Upload',
-                                style: const TextStyle(
-                                    fontWeight: FontWeight.w700, fontSize: 12),
-                              ),
-                              style: FilledButton.styleFrom(
-                                backgroundColor: const Color(0xFF1e2a3a),
-                                foregroundColor: Colors.white,
-                                shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(10)),
-                                elevation: 0,
-                              ),
-                            ),
-                    ),
+                            ],
+                          );
+                        },
+                      ),
                   ],
                 ),
               ),
@@ -2834,11 +2911,25 @@ class _HowItWorksCard extends StatelessWidget {
 class _DemoDownloadRow extends StatelessWidget {
   const _DemoDownloadRow();
 
-  void _download(String url, String filename) {
-    html.AnchorElement(href: url)
-      ..setAttribute('download', filename)
-      ..setAttribute('target', '_blank')
-      ..click();
+  // CHANGE #312: same-origin static files — instant download on all platforms.
+  void _downloadDemoImage() {
+    try { RenderLog.write('c312_demo_img_tap', '1'); } catch (_) {}
+    final a = html.AnchorElement(href: '/demo/demo-order.jpg')
+      ..download = 'demo-order.jpg'
+      ..target = '_self';
+    html.document.body!.append(a);
+    a.click();
+    a.remove();
+  }
+
+  void _downloadDemoExcel() {
+    try { RenderLog.write('c312_demo_xls_tap', '1'); } catch (_) {}
+    final a = html.AnchorElement(href: '/demo/demo-order.xlsx')
+      ..download = 'demo-order.xlsx'
+      ..target = '_self';
+    html.document.body!.append(a);
+    a.click();
+    a.remove();
   }
 
   @override
@@ -2849,10 +2940,7 @@ class _DemoDownloadRow extends StatelessWidget {
           child: _DemoBtn(
             label: 'Demo image',
             icon: Icons.image_outlined,
-            onTap: () => _download(
-              'https://drive.google.com/uc?export=download&id=12tJhDaPIlBb4JbU7ZbI0hdTctNc3lnMr',
-              'demo-handwritten.jpg',
-            ),
+            onTap: _downloadDemoImage,
           ),
         ),
         const SizedBox(width: 8),
@@ -2860,10 +2948,7 @@ class _DemoDownloadRow extends StatelessWidget {
           child: _DemoBtn(
             label: 'Demo file (Excel)',
             icon: Icons.table_chart_outlined,
-            onTap: () => _download(
-              'https://docs.google.com/spreadsheets/d/13dgfukS73-cZFS2Svg6MlNdVPf7_ZB0h/export?format=xlsx',
-              'demo-order.xlsx',
-            ),
+            onTap: _downloadDemoExcel,
           ),
         ),
       ],

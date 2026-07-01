@@ -10488,7 +10488,8 @@ class _PackTab extends StatefulWidget {
   State<_PackTab> createState() => _PackTabState();
 }
 
-class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
+class _PackTabState extends State<_PackTab>
+    with AutomaticKeepAliveClientMixin, SingleTickerProviderStateMixin {
   List<Map<String, dynamic>> _customers = [];
   bool _loading = true;
   String? _error;
@@ -10516,9 +10517,15 @@ class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
   List<Map<String, dynamic>> _packMentions = [];
   int? _lastVoiceSeq;
 
-  // CHANGE #299: Ask mediBO
+  // CHANGE #299: Ask mediBO (rewired #304: audio → voice-agent, same as Warehouse)
   bool _askListening = false;
+  bool _askProcessing = false;
   String _askInterim = '';
+
+  // CHANGE #304: footer dispatch hold (5 s hold-to-undo on "Ready to Dispatch")
+  late final AnimationController _dispatchHoldCtrl;
+  Timer? _dispatchHoldTimer;
+  bool _dispatchLoading = false;
 
   @override
   bool get wantKeepAlive => true;
@@ -10526,6 +10533,10 @@ class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
   @override
   void initState() {
     super.initState();
+    _dispatchHoldCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 5000),
+    );
     RenderLog.write('c278_pack_tab_mounted', 1);
     _load();
   }
@@ -10534,6 +10545,8 @@ class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
   void dispose() {
     _scroll.dispose();
     _rtDebounce?.cancel();
+    _dispatchHoldTimer?.cancel();
+    _dispatchHoldCtrl.dispose();
     for (final ch in _rtChannels.values) {
       Supabase.instance.client.removeChannel(ch);
     }
@@ -10776,11 +10789,22 @@ class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
         'unit': qi['pack_type']?.toString() ?? '',
       }).toList();
 
-      // Transcribe via voice-receive edge function
+      // Transcribe via voice-receive edge function — CHANGE #304: min_confidence 0.85
       final (:items, :transcript, :droppedNoQty, :droppedLowConf, :mentions) =
           await _voiceService.transcribe(result.bytes, result.mime,
-              expected: expected.isEmpty ? null : expected);
+              expected: expected.isEmpty ? null : expected,
+              minConfidence: 0.85);
       if (!mounted) return;
+
+      // CHANGE #304: SILENCE GUARD — if nothing was spoken, skip pack_process_clip entirely.
+      final bool silenced = transcript.trim().isEmpty || items.isEmpty;
+      if (silenced) {
+        try { RenderLog.write('c304_silence', 'blocked'); } catch (_) {}
+        setState(() { _voiceProcessing = false; _lastVoiceSeq = null; });
+        _showPackSnack("Didn't catch anything — try again");
+        return;
+      }
+      try { RenderLog.write('c304_silence', 'counted:${items.length}'); } catch (_) {}
 
       // Build product name → product_id map for resolution
       final Map<String, int> nameToId = {};
@@ -10870,75 +10894,85 @@ class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
     }
   }
 
-  // CHANGE #299: Ask mediBO — SpeechRecognition flow with order context
+  // CHANGE #304: Ask mediBO — rewired to audio-bytes → voice-agent (same as Warehouse).
+  // First tap starts recording (_voiceService.start), second tap stops + processes.
   Future<void> _toggleAskMediaBO(String orderId) async {
-    if (_voiceProcessing || _voiceListening) return;
+    if (_voiceProcessing || _voiceListening || _packCounting || _askProcessing) return;
     if (_askListening) {
-      stopVoiceListen();
-      if (mounted) setState(() { _askListening = false; _askInterim = ''; });
-      RenderLog.write('c299_ask', 'stopped');
+      // Second tap: stop recording and process
+      await _stopAskMediaBO(orderId);
       return;
     }
-    if (!voiceApiSupported) {
-      _showPackSnack('Voice not supported in this browser');
-      return;
-    }
-    RenderLog.write('c299_ask', 'started;order=${orderId.substring(0, 8)}');
+    // First tap: start recording
     if (mounted) setState(() { _askListening = true; _askInterim = 'Listening…'; });
-    startVoiceListen(
-      onInterim: (t) { if (mounted) setState(() => _askInterim = t); },
-      onFinal: (t) async {
-        if (!mounted) return;
-        setState(() { _askListening = false; _askInterim = ''; });
-        stopVoiceListen();
-        if (t.trim().isEmpty) return;
-        RenderLog.write('c299_ask',
-            'transcript=${t.substring(0, t.length.clamp(0, 40))}');
-        try {
-          final qData = _packQueueData[orderId];
-          final qItems = qData != null
-              ? ((qData['items'] as List?) ?? const [])
-                  .map((i) => Map<String, dynamic>.from(i as Map))
-                  .toList()
-              : <Map<String, dynamic>>[];
-          final agentItems = qItems.map((qi) => {
-            'product_name': qi['product_name']?.toString() ?? '',
-            'ordered_qty': (qi['qty'] as num?)?.toInt() ?? 0,
-            'pack_type': qi['pack_type']?.toString() ?? '',
-            'packed': qi['packed'] == true,
-            'counted_qty': qi['counted_qty'],
-          }).toList();
-          final token =
-              Supabase.instance.client.auth.currentSession?.accessToken ?? '';
-          final res = await Supabase.instance.client.functions.invoke(
-            'voice-agent',
-            body: {
-              'transcript': t,
-              'supplier_name': qData?['customer']?.toString() ?? '',
-              'items': agentItems,
-            },
-            headers: {'Authorization': 'Bearer $token'},
-          );
-          if (!mounted) return;
-          final data = res.data;
-          final reply =
-              (data is Map ? data['reply'] : null)?.toString() ?? '';
-          if (reply.isNotEmpty) {
-            _showPackSnack(reply,
-                duration: const Duration(seconds: 6));
-            try { speakText(reply); } catch (_) {}
-          }
-          RenderLog.write('c299_ask',
-              'reply=${reply.substring(0, reply.length.clamp(0, 40))}');
-        } catch (e) {
-          _showPackSnack('Ask mediBO error — try again');
-        }
-      },
-      onError: (e) {
-        if (mounted) setState(() { _askListening = false; _askInterim = ''; });
-        RenderLog.write('c299_ask', 'error=$e');
-      },
-    );
+    RenderLog.write('c304_ask', 'start;order=${orderId.substring(0, 8)}');
+    try {
+      await _voiceService.start();
+    } catch (e) {
+      if (mounted) setState(() { _askListening = false; _askInterim = ''; });
+      if (mounted) _showPackSnack(e is MicPermissionException
+          ? 'Mic access needed — enable it in browser site settings'
+          : 'Mic error: $e');
+    }
+  }
+
+  Future<void> _stopAskMediaBO(String orderId) async {
+    if (!_askListening) return;
+    if (mounted) setState(() { _askInterim = 'Processing…'; });
+    _askProcessing = true;
+    try {
+      final result = await _voiceService.stop();
+      if (!mounted) return;
+      if (result == null || result.bytes.length < 1500) {
+        _showPackSnack('No audio captured — try again');
+        return;
+      }
+      final b64 = base64Encode(result.bytes);
+      final token = Supabase.instance.client.auth.currentSession?.accessToken ?? '';
+      final qData = _packQueueData[orderId];
+      final qItems = qData != null
+          ? ((qData['items'] as List?) ?? const [])
+              .map((i) => Map<String, dynamic>.from(i as Map))
+              .toList()
+          : <Map<String, dynamic>>[];
+      final agentItems = qItems.map((qi) => {
+        'product_name': qi['product_name']?.toString() ?? '',
+        'ordered_qty': (qi['qty'] as num?)?.toInt() ?? 0,
+        'pack_type': qi['pack_type']?.toString() ?? '',
+        'packed': qi['packed'] == true,
+        'counted_qty': qi['counted_qty'],
+      }).toList();
+      final res = await Supabase.instance.client.functions.invoke(
+        'voice-agent',
+        body: {
+          'audio_base64': b64,
+          'mime_type': result.mime,
+          'supplier_name': qData?['customer']?.toString() ?? '',
+          'items': agentItems,
+        },
+        headers: {'Authorization': 'Bearer $token'},
+      );
+      if (!mounted) return;
+      final data = res.data;
+      if (data is Map && data['error'] != null) {
+        _showPackSnack('Ask mediBO error — try again');
+        return;
+      }
+      final reply = (data is Map ? data['reply'] : null)?.toString() ?? '';
+      if (reply.isNotEmpty) {
+        _showPackSnack(reply, duration: const Duration(seconds: 6));
+        try { speakText(reply); } catch (_) {}
+        try { RenderLog.write('c304_ask', 'ok'); } catch (_) {}
+      } else {
+        _showPackSnack('No reply — try again');
+      }
+    } catch (e) {
+      if (mounted) _showPackSnack('Ask mediBO error — try again');
+      try { RenderLog.write('c304_ask', 'err=${e.toString().substring(0, 40)}'); } catch (_) {}
+    } finally {
+      _askProcessing = false;
+      if (mounted) setState(() { _askListening = false; _askInterim = ''; });
+    }
   }
 
   void _showPackSnack(String msg, {Duration? duration}) {
@@ -11122,8 +11156,6 @@ class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
   Widget _buildExpandedBody(Map<String, dynamic> c) {
     final orderId  = c['order_id']?.toString() ?? '';
     final total    = (c['total_items'] as num?)?.toInt() ?? 0;
-    final ready    = (c['ready_items'] as num?)?.toInt() ?? 0;
-    final status   = c['fulfillment_status']?.toString() ?? '';
     final isLoading = _loadingItems[orderId] == true;
 
     final qData = _packQueueData[orderId];
@@ -11137,15 +11169,20 @@ class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
     final totalItems = qData != null
         ? (qData['total_items'] as num?)?.toInt() ?? total
         : total;
-    // CHANGE #301: use pack_get_queue.counted_count for the badge (distinct counted items).
-    final spokenCount = countedCount;
+
+    // CHANGE #304: spokenCount = distinct products in today's mention rows (not counted_count).
+    final spokenCount = _packMentions
+        .map((m) => m['product_id'])
+        .where((id) => id != null)
+        .toSet()
+        .length;
     try { RenderLog.write('c301_spoken', '$spokenCount'); } catch (_) {}
 
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       const Divider(height: 1, color: _kBorder),
       _buildPackingButton(c),
       _buildPackVoiceBar(orderId, spokenCount),
-      if (totalItems > 0) _buildPackProgressRow(countedCount, totalItems),
+      if (totalItems > 0) _buildPackProgressRow(countedCount, totalItems, orderId),
 
       if (isLoading)
         const Center(
@@ -11167,10 +11204,21 @@ class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 for (int i = 0; i < items.length; i++) ...[
-                  Builder(builder: (_) {
+                  Builder(builder: (ctx) {
                     if (i == 0) {
-                      RenderLog.write(
-                          'c299_rows_src', 'rendered=${items.length}');
+                      final firstItem = items[0];
+                      final pk0 = firstItem['packed'] == true
+                          ? (firstItem['qty'] as num?)?.toInt() ?? 0
+                          : 0;
+                      final ct0 = (firstItem['counted_qty'] as num?)?.toInt() ?? 0;
+                      final qty0 = (firstItem['qty'] as num?)?.toInt() ?? 0;
+                      String _chipColour(int x, int y) =>
+                          x == 0 ? 'grey' : (y > 0 && x >= y ? 'green' : 'yellow');
+                      try {
+                        RenderLog.write('c304_badge',
+                            'packed=$pk0/$qty0:${_chipColour(pk0, qty0)};counted=$ct0/$qty0:${_chipColour(ct0, qty0)}');
+                      } catch (_) {}
+                      RenderLog.write('c299_rows_src', 'rendered=${items.length}');
                     }
                     return Padding(
                       padding:
@@ -11188,7 +11236,8 @@ class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
         const Divider(height: 1, color: _kBorder),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-          child: _buildPackFooter(status, ready, total),
+          // CHANGE #304: footer driven by pack_get_queue packed_count/total_items/dispatch_ready
+          child: _buildPackFooter(orderId, qData),
         ),
       ] else
         const SizedBox(height: 8),
@@ -11256,23 +11305,26 @@ class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
               overflow: TextOverflow.ellipsis,
               maxLines: 1,
             )),
+            // CHANGE #304: tappable "N spoken" badge — opens review sheet
             if (spokenCount > 0 && !listening && !processing) ...[
               const SizedBox(width: 6),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 7, vertical: 2),
-                decoration: BoxDecoration(
-                  color: _kReceivedBg,
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(
-                      color:
-                          _kReceivedFg.withValues(alpha: 0.25)),
+              GestureDetector(
+                onTap: () => _openMentionsReview(orderId),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 7, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: _kReceivedBg,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                        color: _kReceivedFg.withValues(alpha: 0.25)),
+                  ),
+                  child: Text('$spokenCount',
+                      style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: _kReceivedFg)),
                 ),
-                child: Text('$spokenCount',
-                    style: const TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700,
-                        color: _kReceivedFg)),
               ),
             ],
           ],
@@ -11329,26 +11381,30 @@ class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
     );
   }
 
-  Widget _buildPackProgressRow(int counted, int total) {
+  // CHANGE #304: takes orderId so the spoken chip can open the review sheet.
+  Widget _buildPackProgressRow(int counted, int total, String orderId) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
       child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-        SizedBox(
-          width: 100,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(
-              color: _kGreen,
-              borderRadius: BorderRadius.circular(6),
+        GestureDetector(
+          onTap: () => _openMentionsReview(orderId),
+          child: SizedBox(
+            width: 100,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: _kGreen,
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text('$counted spoken',
+                  style: const TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.white),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center),
             ),
-            child: Text('$counted spoken',
-                style: const TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.white),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.center),
           ),
         ),
         const SizedBox(width: 8),
@@ -11384,9 +11440,6 @@ class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
     final ct = countedQty;
     final pt = packType.isNotEmpty ? ' $packType' : '';
 
-    final packedFull  = pk >= qty && qty > 0;
-    final countedFull = ct >= qty && qty > 0;
-
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
@@ -11394,8 +11447,7 @@ class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
         borderRadius: BorderRadius.circular(10),
         border: Border.all(color: _kBorder),
       ),
-      child:
-          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
         _FulfilImageTile(imageUrl, size: 52),
         const SizedBox(width: 12),
         Expanded(
@@ -11411,105 +11463,385 @@ class _PackTabState extends State<_PackTab> with AutomaticKeepAliveClientMixin {
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis),
                 const SizedBox(height: 5),
-                // GREEN chip — Packed
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 8, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: packedFull
-                        ? _kReceivedBg
-                        : (pk > 0
-                            ? _kReceivedBg.withValues(alpha: 0.5)
-                            : Colors.transparent),
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(
-                      color: pk > 0
-                          ? _kReceivedFg.withValues(alpha: 0.4)
-                          : _kReceivedFg.withValues(alpha: 0.2),
-                    ),
-                  ),
-                  child: Text('Packed • $pk/$qty$pt',
-                      style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
-                          color: pk > 0
-                              ? _kReceivedFg
-                              : const Color(0xFF9CA3AF)),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis),
-                ),
+                // CHANGE #304: shared colour helper — 0=grey, partial=yellow, full=green
+                _packChip('Packed • $pk/$qty$pt', pk, qty),
                 const SizedBox(height: 4),
-                // YELLOW chip — Counted
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 8, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: countedFull
-                        ? const Color(0xFFFEF3C7)
-                        : (ct > 0
-                            ? const Color(0xFFFEF9E7)
-                            : Colors.transparent),
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(
-                      color: ct > 0
-                          ? const Color(0xFFD97706)
-                              .withValues(alpha: 0.4)
-                          : const Color(0xFFD97706)
-                              .withValues(alpha: 0.2),
-                    ),
-                  ),
-                  child: Text('Counted • $ct/$qty$pt',
-                      style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
-                          color: ct > 0
-                              ? const Color(0xFF92400E)
-                              : const Color(0xFF9CA3AF)),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis),
-                ),
+                _packChip('Counted • $ct/$qty$pt', ct, qty),
               ]),
         ),
       ]),
     );
   }
 
-  Widget _buildPackFooter(String status, int ready, int total) {
-    final isReady = status == 'ready' || (total > 0 && ready >= total);
+  // CHANGE #304: badge colour helper — grey/yellow/green by fill ratio.
+  // x=0 → grey; 0<x<y → yellow; x>=y && y>0 → green.
+  Widget _packChip(String label, int x, int y) {
+    final bool zero = x == 0;
+    final bool full = y > 0 && x >= y;
+    final Color bg = zero
+        ? const Color(0xFFF3F4F6)
+        : full
+            ? _kReceivedBg
+            : const Color(0xFFFEF3C7);
+    final Color border = zero
+        ? const Color(0xFFD1D5DB)
+        : full
+            ? _kReceivedFg.withValues(alpha: 0.4)
+            : const Color(0xFFD97706).withValues(alpha: 0.4);
+    final Color text = zero
+        ? const Color(0xFF9CA3AF)
+        : full
+            ? _kReceivedFg
+            : const Color(0xFF92400E);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: border),
+      ),
+      child: Text(label,
+          style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: text),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis),
+    );
+  }
+
+  // CHANGE #304: FOOTER STATE MACHINE — driven by pack_get_queue fields.
+  // dispatch_ready=true → GREEN 5s-hold "Ready to Dispatch"
+  // packed==total>0     → YELLOW tap "Fully packed"
+  // otherwise           → muted "Pack all items (x/y)"
+  Widget _buildPackFooter(String orderId, Map<String, dynamic>? qData) {
+    final int packedCount = (qData?['packed_count'] as num?)?.toInt() ?? 0;
+    final int totalItems  = (qData?['total_items']  as num?)?.toInt() ?? 0;
+    final bool dispatchReady = qData?['dispatch_ready'] == true;
+
+    final String state = dispatchReady
+        ? 'readytodispatch'
+        : (totalItems > 0 && packedCount >= totalItems ? 'fullypacked' : 'progress');
+    try { RenderLog.write('c304_footer', 'state=$state'); } catch (_) {}
+
+    if (dispatchReady) {
+      // ── GREEN: hold 5 s to un-mark ────────────────────────────────────────
+      return Stack(children: [
+        // Base bar
+        Container(
+          height: 48,
+          decoration: BoxDecoration(
+            color: _kReceivedBg,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: _kReceivedFg.withValues(alpha: 0.35)),
+          ),
+          alignment: Alignment.center,
+          child: _dispatchLoading
+              ? const SizedBox(
+                  width: 20, height: 20,
+                  child: CircularProgressIndicator(color: _kReceivedFg, strokeWidth: 2))
+              : const Text('Ready to Dispatch  ·  hold 5 s to undo',
+                  style: TextStyle(
+                      fontSize: 13, fontWeight: FontWeight.w700, color: _kReceivedFg)),
+        ),
+        // Progress fill
+        if (!_dispatchLoading)
+          AnimatedBuilder(
+            animation: _dispatchHoldCtrl,
+            builder: (_, __) {
+              final v = _dispatchHoldCtrl.value;
+              if (v <= 0) return const SizedBox.shrink();
+              return Positioned.fill(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: FractionallySizedBox(
+                      widthFactor: v,
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: _kReceivedFg.withValues(alpha: 0.15),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        // Listener layer
+        if (!_dispatchLoading)
+          Positioned.fill(
+            child: Listener(
+              behavior: HitTestBehavior.opaque,
+              onPointerDown: (_) {
+                _dispatchHoldCtrl.forward(from: 0.0);
+                _dispatchHoldTimer?.cancel();
+                _dispatchHoldTimer = Timer(const Duration(milliseconds: 5000), () {
+                  HapticFeedback.mediumImpact();
+                  _doSetDispatchReady(orderId, false);
+                });
+              },
+              onPointerUp: (_) {
+                _dispatchHoldTimer?.cancel();
+                _dispatchHoldCtrl.reverse();
+              },
+              onPointerCancel: (_) {
+                _dispatchHoldTimer?.cancel();
+                _dispatchHoldCtrl.reverse();
+              },
+            ),
+          ),
+      ]);
+    }
+
+    if (totalItems > 0 && packedCount >= totalItems) {
+      // ── YELLOW: tap to mark dispatch_ready=true ───────────────────────────
+      return GestureDetector(
+        onTap: _dispatchLoading ? null : () => _doSetDispatchReady(orderId, true),
+        child: Container(
+          height: 48,
+          decoration: BoxDecoration(
+            color: const Color(0xFFFEF3C7),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+                color: const Color(0xFFD97706).withValues(alpha: 0.4)),
+          ),
+          alignment: Alignment.center,
+          child: _dispatchLoading
+              ? const SizedBox(
+                  width: 20, height: 20,
+                  child: CircularProgressIndicator(
+                      color: Color(0xFF92400E), strokeWidth: 2))
+              : const Text('Fully packed — tap to mark Ready to Dispatch',
+                  style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF92400E))),
+        ),
+      );
+    }
+
+    // ── MUTED: packing in progress ────────────────────────────────────────────
     return Container(
       height: 44,
       padding: const EdgeInsets.symmetric(horizontal: 16),
       decoration: BoxDecoration(
-        color: isReady ? _kReceivedBg : const Color(0xFFFEF3C7),
+        color: const Color(0xFFF9FAFB),
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(
-          color: isReady
-              ? _kReceivedFg.withValues(alpha: 0.3)
-              : const Color(0xFFFFB300).withValues(alpha: 0.5),
-        ),
+        border: Border.all(color: _kBorder),
       ),
       child: Row(children: [
-        Icon(
-            isReady
-                ? Icons.check_circle_outline_rounded
-                : Icons.hourglass_top_rounded,
-            size: 15,
-            color: isReady
-                ? _kReceivedFg
-                : const Color(0xFF92400E)),
+        const Icon(Icons.hourglass_top_rounded, size: 15, color: _kSub),
         const SizedBox(width: 8),
         Expanded(
             child: Text(
-          isReady
-              ? 'Ready to pack ✓'
-              : 'Packing in progress — $ready/$total items at warehouse',
-          style: TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-              color: isReady
-                  ? _kReceivedFg
-                  : const Color(0xFF92400E)),
+          'Pack all items ($packedCount/$totalItems)',
+          style: const TextStyle(
+              fontSize: 13, fontWeight: FontWeight.w600, color: _kSub),
         )),
+      ]),
+    );
+  }
+
+  Future<void> _doSetDispatchReady(String orderId, bool ready) async {
+    if (_dispatchLoading) return;
+    if (mounted) setState(() => _dispatchLoading = true);
+    _dispatchHoldTimer?.cancel();
+    _dispatchHoldCtrl.reset();
+    try {
+      final dynamic res = await Supabase.instance.client.rpc(
+        'pack_set_dispatch_ready',
+        params: {'p_order_id': orderId, 'p_ready': ready},
+      );
+      final resMap = res is String
+          ? (jsonDecode(res) as Map).cast<String, dynamic>()
+          : Map<String, dynamic>.from(res as Map);
+      try {
+        RenderLog.write('c304_dispatch',
+            'ready=$ready;status=${resMap['status']};dispatch_ready=${resMap['dispatch_ready']}');
+      } catch (_) {}
+      if (!mounted) return;
+      if (resMap['error'] != null) {
+        _showPackSnack('Not fully packed (${resMap['packed']}/${resMap['total']})');
+      }
+    } catch (e) {
+      if (mounted) _showPackSnack('Error: $e');
+    } finally {
+      if (mounted) setState(() => _dispatchLoading = false);
+    }
+    // Always refetch to sync footer + rows
+    if (mounted) await _loadFromPackQueue(orderId);
+  }
+
+  // CHANGE #304: opens a bottom sheet showing today's per-customer mentions.
+  void _openMentionsReview(String orderId) {
+    final mentions = List<Map<String, dynamic>>.from(_packMentions);
+    try { RenderLog.write('c304_review', 'mentions=${mentions.length}'); } catch (_) {}
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (_) => _PackMentionsSheet(mentions: mentions),
+    );
+  }
+}
+
+// ── CHANGE #304: Mentions review sheet — lists today's per-customer voice clips ──
+
+class _PackMentionsSheet extends StatefulWidget {
+  final List<Map<String, dynamic>> mentions;
+  const _PackMentionsSheet({required this.mentions});
+  @override
+  State<_PackMentionsSheet> createState() => _PackMentionsSheetState();
+}
+
+class _PackMentionsSheetState extends State<_PackMentionsSheet> {
+  // Groups mentions by recording_seq, newest first.
+  late final List<(int seq, String clipPath, List<Map<String, dynamic>> rows)> _groups;
+
+  @override
+  void initState() {
+    super.initState();
+    final grouped = <int, (String, List<Map<String, dynamic>>)>{};
+    for (final m in widget.mentions) {
+      final seq = (m['recording_seq'] as num?)?.toInt() ?? 0;
+      final path = m['clip_path']?.toString() ?? '';
+      if (!grouped.containsKey(seq)) {
+        grouped[seq] = (path, []);
+      }
+      grouped[seq]!.$2.add(m);
+    }
+    _groups = grouped.entries
+        .map((e) => (e.key, e.value.$1, e.value.$2))
+        .toList()
+      ..sort((a, b) => b.$1.compareTo(a.$1)); // newest seq first
+  }
+
+  String _clipLabel(int seq) => 'Clip #$seq';
+
+  String _bucketUrl(String path) {
+    if (path.isEmpty) return '';
+    const bucket = 'voice-clips';
+    final client = Supabase.instance.client;
+    try {
+      return client.storage.from(bucket).getPublicUrl(path);
+    } catch (_) {
+      return '';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return DraggableScrollableSheet(
+      initialChildSize: 0.55,
+      minChildSize: 0.35,
+      maxChildSize: 0.9,
+      expand: false,
+      builder: (_, ctrl) => Column(children: [
+        const SizedBox(height: 12),
+        Container(
+          width: 40, height: 4,
+          decoration: BoxDecoration(
+            color: const Color(0xFFD1D5DB),
+            borderRadius: BorderRadius.circular(2)),
+        ),
+        const SizedBox(height: 12),
+        const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 16),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Text('Voice count review',
+                style: TextStyle(
+                    fontSize: 16, fontWeight: FontWeight.w700,
+                    color: Color(0xFF111827))),
+          ),
+        ),
+        const SizedBox(height: 8),
+        const Divider(height: 1),
+        Expanded(
+          child: _groups.isEmpty
+              ? const Center(
+                  child: Text('No clips recorded today',
+                      style: TextStyle(color: Color(0xFF6B7280))))
+              : ListView.builder(
+                  controller: ctrl,
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+                  itemCount: _groups.length,
+                  itemBuilder: (_, gi) {
+                    final (seq, clipPath, rows) = _groups[gi];
+                    final url = _bucketUrl(clipPath);
+                    return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                      if (gi > 0) const SizedBox(height: 12),
+                      Row(children: [
+                        Text(_clipLabel(seq),
+                            style: const TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                                color: Color(0xFF1B7A43))),
+                        if (url.isNotEmpty) ...[
+                          const Spacer(),
+                          GestureDetector(
+                            onTap: () {
+                              // Play the clip from the beginning
+                              // (simple: open URL in a new tab via js interop if available)
+                              try {
+                                // ignore: undefined_prefixed_name
+                                html.window.open(url, '_blank');
+                              } catch (_) {}
+                            },
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 10, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFD1FAE5),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: const Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.play_arrow_rounded,
+                                      size: 14, color: Color(0xFF065F46)),
+                                  SizedBox(width: 4),
+                                  Text('Play',
+                                      style: TextStyle(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w600,
+                                          color: Color(0xFF065F46))),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ]),
+                      const SizedBox(height: 6),
+                      ...rows.map((r) {
+                        final name = r['matched_name']?.toString() ?? '—';
+                        final qty = (r['qty'] as num?)?.toInt() ?? 0;
+                        final tStart = (r['t_start_sec'] as num?)?.toDouble();
+                        final tLabel = tStart != null
+                            ? ' (${tStart.toStringAsFixed(1)}s)'
+                            : '';
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 4),
+                          child: Row(children: [
+                            const Icon(Icons.fiber_manual_record,
+                                size: 6, color: Color(0xFF9CA3AF)),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text('$name × $qty$tLabel',
+                                  style: const TextStyle(
+                                      fontSize: 13,
+                                      color: Color(0xFF374151))),
+                            ),
+                          ]),
+                        );
+                      }),
+                    ]);
+                  },
+                ),
+        ),
       ]),
     );
   }

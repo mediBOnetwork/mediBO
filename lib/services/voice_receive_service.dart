@@ -151,6 +151,7 @@ class VoiceReceiveService {
     Uint8List bytes,
     String mime, {
     List<Map<String, dynamic>>? expected,
+    double minConfidence = 0.55,
   }) async {
     final b64 = base64Encode(bytes);
     if (b64.length > 6 * 1024 * 1024) {
@@ -162,7 +163,7 @@ class VoiceReceiveService {
         'audio_base64': b64,
         'mime_type': mime,
         if (expected != null && expected.isNotEmpty) 'expected': expected,
-        'min_confidence': 0.55,
+        'min_confidence': minConfidence,
       },
     );
     final data = res.data;

@@ -14088,6 +14088,16 @@ class _DisputesScreenState extends State<_DisputesScreen> {
                         style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
                             color: _kText, height: 1.3),
                         maxLines: 2, overflow: TextOverflow.ellipsis),
+                    if ((item.disputeCode ?? '').isNotEmpty) ...[
+                      const SizedBox(height: 1),
+                      Builder(builder: (_) {
+                        try { RenderLog.write('c318_disp_id', item.disputeCode!); } catch (_) {}
+                        return Text(item.disputeCode!,
+                            style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w500,
+                                color: Color(0xFF9CA3AF), letterSpacing: 0.3),
+                            maxLines: 1, overflow: TextOverflow.ellipsis);
+                      }),
+                    ],
                     if (isWrong && (item.wrongProductName ?? '').isNotEmpty) ...[
                       const SizedBox(height: 1),
                       Text('Received: ${item.wrongProductName}',

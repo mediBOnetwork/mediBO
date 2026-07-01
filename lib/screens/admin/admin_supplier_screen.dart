@@ -92,6 +92,7 @@ class _OrderRow {
   final String status;
   final DateTime? createdAt;
   final List<Map<String, dynamic>> items;
+  final String? orderCode;
 
   const _OrderRow({
     required this.id,
@@ -101,6 +102,7 @@ class _OrderRow {
     required this.status,
     this.createdAt,
     this.items = const [],
+    this.orderCode,
   });
 
   factory _OrderRow.fromMap(Map<String, dynamic> m) => _OrderRow(
@@ -113,6 +115,7 @@ class _OrderRow {
     items:        (m['items'] as List<dynamic>?)
                       ?.map((e) => Map<String, dynamic>.from(e as Map))
                       .toList() ?? [],
+    orderCode:    (m['order_code'] as String?)?.trim(),
   );
 }
 
@@ -1988,6 +1991,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           status: order.status,
           createdAt: order.createdAt,
           items: enrichedItems,
+          orderCode: order.orderCode,
         );
       }).toList();
       RenderLog.write('c108_admin_suporder_item_enriched', enrichedCount);
@@ -2248,6 +2252,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     final nxtCount   = (ov['next_count'] as num?)?.toInt() ?? 0;
     final formStatus = ov['form_status'] as String?;
     final expiresAt  = ov['expires_at'] != null ? DateTime.tryParse(ov['expires_at'] as String) : null;
+    final inquiryCode = (ov['inquiry_code'] as String? ?? '').trim();
     final isExpanded = _expandedInquirySupplier == supName;
     final linkData   = _inquiryLinks[supName];
 
@@ -2276,8 +2281,23 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
                 Expanded(
-                  child: Text(supName,
-                      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(supName,
+                          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
+                      if (inquiryCode.isNotEmpty) ...[
+                        const SizedBox(height: 1),
+                        Builder(builder: (_) {
+                          try { RenderLog.write('c318_inq_id', inquiryCode); } catch (_) {}
+                          return Text(inquiryCode,
+                              style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w500,
+                                  color: Color(0xFF9CA3AF), letterSpacing: 0.3));
+                        }),
+                      ],
+                    ],
+                  ),
                 ),
                 AnimatedRotation(
                   turns: isExpanded ? 0.5 : 0,
@@ -3632,9 +3652,25 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
             border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
           ),
           child: Row(children: [
-            Expanded(flex: 4, child: Text(row.supplierName ?? '—',
-                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
-                overflow: TextOverflow.ellipsis)),
+            Expanded(flex: 4, child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(row.supplierName ?? '—',
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
+                    overflow: TextOverflow.ellipsis),
+                if ((row.orderCode ?? '').isNotEmpty) ...[
+                  const SizedBox(height: 1),
+                  Builder(builder: (_) {
+                    try { RenderLog.write('c318_ord_id', row.orderCode!); } catch (_) {}
+                    return Text(row.orderCode!,
+                        style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w500,
+                            color: Color(0xFF9CA3AF), letterSpacing: 0.3),
+                        overflow: TextOverflow.ellipsis);
+                  }),
+                ],
+              ],
+            )),
             Expanded(flex: 5, child: Text(row.description ?? '—',
                 style: const TextStyle(fontSize: 13, color: Color(0xFF374151)), overflow: TextOverflow.ellipsis)),
             Expanded(flex: 2, child: Text(row.totalAmount != null ? '₹${row.totalAmount!.toStringAsFixed(0)}' : '—',
@@ -3678,6 +3714,12 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                     overflow: TextOverflow.ellipsis)),
                 if (dateStr.isNotEmpty) Text(dateStr, style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
               ]),
+              if ((row.orderCode ?? '').isNotEmpty) ...[
+                const SizedBox(height: 2),
+                Text(row.orderCode!,
+                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500,
+                        color: Color(0xFF9CA3AF), letterSpacing: 0.3)),
+              ],
               if (row.description?.isNotEmpty == true) ...[
                 const SizedBox(height: 4),
                 Text(row.description!, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),

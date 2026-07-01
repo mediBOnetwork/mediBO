@@ -182,6 +182,36 @@ class Product {
     );
   }
 
+  /// Builds a [Product] from a `bulk_match_items` RPC response item.
+  /// Fields: id, product_name, company, pack_type, pack_size, mrp, buyable, category, image_url, gst_percent.
+  factory Product.fromBulkMatch(Map<String, dynamic> m) {
+    final mrp = (m['mrp'] as num?)?.toDouble() ?? 0.0;
+    final packSize = (m['pack_size'] as String?)?.trim() ?? '';
+    final packType = (m['pack_type'] as String?)?.trim() ?? '';
+    final imageUrl = (m['image_url'] as String?)?.trim() ?? '';
+    final cat = (m['category'] as String?)?.trim() ?? '';
+    return Product(
+      id: m['id']?.toString() ?? '',
+      name: (m['product_name'] as String?) ?? 'Unnamed',
+      genericName: '',
+      manufacturer: (m['company'] as String?) ?? '',
+      category: cat.isNotEmpty ? cat : 'Other',
+      therapeuticClass: cat,
+      imageUrl: imageUrl,
+      imageUrls: imageUrl.isNotEmpty ? [imageUrl] : [],
+      packSize: packSize.isNotEmpty ? packSize : packType,
+      mrp: mrp,
+      b2bPrice: mrp,
+      gstPercent: (m['gst_percent'] as num?)?.toDouble() ?? 12.0,
+      moq: 1,
+      stock: mrp > 0 ? 100 : 0,
+      buyable: m['buyable'] as bool?,
+      schedule: 'OTC',
+      requiresPrescription: false,
+      discount: 0.0,
+    );
+  }
+
   /// Reconstructs a minimal Product from cart row data (Supabase or localStorage).
   factory Product.fromCartData({
     required String id,

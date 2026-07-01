@@ -38,6 +38,7 @@ class _MatchRow {
   final List<Product> candidates;
   int selectedIndex;
   bool isHidden;
+  bool isRetrying = false;
   _MatchStatus? _preHideStatus; // saved on hide, restored on unhide
   final String _displaySku;
   final String _displayPrice;
@@ -287,12 +288,10 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       _matchTotal = items.length;
       _matchProgress = 0;
     });
-    final rows = <_MatchRow>[];
-    for (final item in items) {
-      rows.add(await _matchOne(item.name, item.qty));
-      if (!mounted) return;
-      setState(() => _matchProgress = rows.length);
-    }
+    final names = items.map((i) => i.name).toList();
+    final qtys = items.map((i) => i.qty).toList();
+    final noBboxes = List<Rect?>.filled(items.length, null);
+    final rows = await _bulkMatchRpc(names, qtys, noBboxes, noBboxes);
     if (!mounted) return;
     setState(() {
       _rows = rows;
@@ -300,6 +299,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       _fileName = widget.preloadedTitle;
       _step = _LoadStep.idle;
       _bulkLineItemMap = {};
+      _matchProgress = rows.length;
     });
   }
 
@@ -534,7 +534,11 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         _matchProgress = 0;
       });
 
-      final rows = <_MatchRow>[];
+      // First pass: parse all OCR items — collect names, qtys, and bounding boxes.
+      final bNames = <String>[];
+      final bQtys = <int>[];
+      final bNameBboxes = <Rect?>[];
+      final bLineBboxes = <Rect?>[];
       // box_2d     = full line extent (all words, used for vertical clamp y-range).
       // name_box_2d = complete multi-word product name (drives the crop thumbnail).
       // Fallback: if name_box_2d is missing or < 15% of box_2d width, use box_2d.
@@ -579,13 +583,18 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
               }
             }
           }
-          final row = await _matchOne(name, qty, bbox: nameBbox);
-          row.lineBbox = lineBbox ?? nameBbox;
-          rows.add(row);
+          bNames.add(name);
+          bQtys.add(qty);
+          bNameBboxes.add(nameBbox);
+          bLineBboxes.add(lineBbox ?? nameBbox);
         }
-        if (!mounted) return;
-        setState(() => _matchProgress = rows.length);
       }
+      if (!mounted) return;
+
+      // Second pass: bulk-match all items in one RPC call (full catalogue, availability-agnostic).
+      final rows = await _bulkMatchRpc(bNames, bQtys, bNameBboxes, bLineBboxes);
+      if (!mounted) return;
+      setState(() => _matchProgress = rows.length);
 
       // Process handwriting crops at a SHARED global scale so every row's
       // handwriting renders at the same apparent size.
@@ -1805,6 +1814,64 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
   // ── Supabase matching ──────────────────────────────────────────────────────
 
+  _MatchRow _rowFromBulkResult(String name, int qty, Map<String, dynamic> item, Rect? bbox) {
+    final status = item['status'] as String? ?? 'none';
+    final matchStatus = status == 'matched'
+        ? _MatchStatus.matched
+        : status == 'partial'
+            ? _MatchStatus.partial
+            : _MatchStatus.unrecognized;
+    final candidatesRaw = (item['candidates'] as List<dynamic>?) ?? [];
+    final candidates = candidatesRaw
+        .map((c) => Product.fromBulkMatch(c as Map<String, dynamic>))
+        .toList();
+    return _MatchRow(
+      lineItem: name,
+      qty: qty,
+      status: matchStatus,
+      candidates: candidates,
+      bbox: bbox,
+    );
+  }
+
+  Future<List<_MatchRow>> _bulkMatchRpc(
+    List<String> names,
+    List<int> qtys,
+    List<Rect?> nameBboxes,
+    List<Rect?> lineBboxes,
+  ) async {
+    if (names.isEmpty) return [];
+    try {
+      final payload = List.generate(
+          names.length, (i) => {'name': names[i], 'qty': qtys[i].toString()});
+      try { RenderLog.write('c320_bulk_uses_rpc', 'count:${names.length}'); } catch (_) {}
+      final resp = await Supabase.instance.client
+          .rpc('bulk_match_items', params: {'p_items': payload});
+      if (resp is Map && resp['status'] == 'ok') {
+        final ri = (resp['items'] as List<dynamic>?) ?? [];
+        return List.generate(names.length, (i) {
+          final itemData = i < ri.length
+              ? ri[i] as Map<String, dynamic>
+              : <String, dynamic>{};
+          final row = _rowFromBulkResult(names[i], qtys[i], itemData, nameBboxes[i]);
+          row.lineBbox = lineBboxes[i];
+          return row;
+        });
+      }
+      throw Exception('unexpected response shape');
+    } catch (e) {
+      debugPrint('[BulkMatch] RPC failed: $e — falling back to _matchOne per row');
+      final rows = <_MatchRow>[];
+      for (int i = 0; i < names.length; i++) {
+        if (!mounted) return rows;
+        final row = await _matchOne(names[i], qtys[i], bbox: nameBboxes[i]);
+        row.lineBbox = lineBboxes[i];
+        rows.add(row);
+      }
+      return rows;
+    }
+  }
+
   Future<_MatchRow> _matchOne(String name, int qty, {Rect? bbox}) async {
     // Strip punctuation noise common in handwritten/OCR orders:
     // • ,()*%  → always noise
@@ -2108,12 +2175,14 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
   // ── Auto-retry unrecognized rows (CHANGE #316 item 4b) ───────────────────
   Future<void> _autoRetryUnrecognized() async {
     try { RenderLog.write('c316_autoretry_ran', '1'); } catch (_) {}
+    try { RenderLog.write('c320_autoretry', '1'); } catch (_) {}
     for (int i = 0; i < _rows.length; i++) {
       if (!mounted) return;
       if (_rows[i].status != _MatchStatus.unrecognized) continue;
       for (int attempt = 0; attempt < 3; attempt++) {
         if (!mounted) return;
         if (_rows[i].status != _MatchStatus.unrecognized) break;
+        if (mounted) setState(() => _rows[i].isRetrying = true);
         await _retryOneRow(i, (_) {});
         if (!mounted) return;
       }
@@ -2257,7 +2326,22 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       return;
     }
 
-    final fresh = await _matchOne(name, old.qty, bbox: old.bbox);
+    _MatchRow fresh;
+    try {
+      try { RenderLog.write('c320_bulk_uses_rpc', 'retry'); } catch (_) {}
+      final payload = [{'name': name, 'qty': old.qty.toString()}];
+      final resp = await Supabase.instance.client
+          .rpc('bulk_match_items', params: {'p_items': payload});
+      if (resp is Map && resp['status'] == 'ok') {
+        final ri = (resp['items'] as List<dynamic>?) ?? [];
+        final itemData = ri.isNotEmpty ? ri[0] as Map<String, dynamic> : <String, dynamic>{};
+        fresh = _rowFromBulkResult(name, old.qty, itemData, old.bbox);
+      } else {
+        throw Exception('bad shape');
+      }
+    } catch (_) {
+      fresh = await _matchOne(name, old.qty, bbox: old.bbox);
+    }
 
     final _MatchStatus best;
     if (old.status == _MatchStatus.matched &&
@@ -4403,7 +4487,7 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                                   // Approve cell: per-row retry for unrecognized rows,
                                   // normal checkbox for all other statuses.
                                   (row.status == _MatchStatus.unrecognized && !row.isHidden)
-                                      ? _isRowRetrying
+                                      ? (_isRowRetrying || row.isRetrying)
                                           ? SizedBox(
                                               width: 20, height: 20,
                                               child: CircularProgressIndicator(
@@ -4483,6 +4567,7 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                                           fontSize: 11, color: Color(0xFF6B7280))),
                                   mrp: Builder(builder: (_avCtx) {
                                     try { RenderLog.write('c316_detail_avna', '1'); } catch (_) {}
+                                    try { RenderLog.write('c320_avna_mobile', '1'); } catch (_) {}
                                     final avail = p.isBuyable;
                                     return Container(
                                       padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 3),
@@ -4863,7 +4948,7 @@ const double _kMobPanelLeftPad  = 12.0;
 const double _kMobPanelRightPad =  8.0;
 const double _kMobPanelGap      =  6.0;
 const double _kMobPanelPackW    = 38.0;
-const double _kMobPanelMrpW     = 52.0;
+const double _kMobPanelMrpW     = 34.0;
 
 /// Shared mobile Row layout: [name Expanded(flex:3)] | [gap] |
 /// [Pack _kMobPanelPackW] | [gap] | [Company Expanded(flex:1)+ellipsis] | [gap] | [MRP _kMobPanelMrpW]
@@ -5245,12 +5330,22 @@ class _SearchResultRow extends StatelessWidget {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
-          mrp: Text(rupees(product.mrp),
-              textAlign: TextAlign.right,
-              maxLines: 1,
-              style: const TextStyle(
-                  fontSize: 11, fontWeight: FontWeight.w500,
-                  color: Color(0xFF374151))),
+          mrp: Builder(builder: (_srCtx) {
+            try { RenderLog.write('c320_avna_mobile', '1'); } catch (_) {}
+            final av = product.isBuyable;
+            return Container(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+              decoration: BoxDecoration(
+                color: av ? const Color(0xFFDCFCE7) : const Color(0xFFFEE2E2),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(av ? 'AV' : 'NA',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                      fontSize: 10, fontWeight: FontWeight.w600,
+                      color: av ? const Color(0xFF15803D) : const Color(0xFFDC2626))),
+            );
+          }),
         ),
       ),
     );
@@ -5550,7 +5645,6 @@ class _AlternativeRow extends StatelessWidget {
     // Fixed 18px leading slot (check icon on selected, empty on others) keeps
     // every row's name text at the identical left x regardless of selection state.
     final nameColor = isSelected ? const Color(0xFF16A34A) : const Color(0xFF374151);
-    final mrpColor  = isSelected ? const Color(0xFF16A34A) : const Color(0xFF6B7280);
     return GestureDetector(
       onTap: onTap,
       child: Container(
@@ -5596,15 +5690,26 @@ class _AlternativeRow extends StatelessWidget {
             ),
             const SizedBox(width: 6),
             SizedBox(
-              width: 52,
-              child: Text(rupees(product.mrp),
-                  textAlign: TextAlign.right,
-                  maxLines: 1,
-                  style: TextStyle(
-                      fontSize: 11, fontWeight: FontWeight.w500, color: mrpColor)),
+              width: 34,
+              child: Builder(builder: (_altCtx) {
+                try { RenderLog.write('c320_avna_mobile', '1'); } catch (_) {}
+                final av = product.isBuyable;
+                return Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: av ? const Color(0xFFDCFCE7) : const Color(0xFFFEE2E2),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(av ? 'AV' : 'NA',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                          fontSize: 10, fontWeight: FontWeight.w600,
+                          color: av ? const Color(0xFF15803D) : const Color(0xFFDC2626))),
+                );
+              }),
             ),
             // Blank trailing slot (same width as search-result's + icon row)
-            // so MRP column ends at the same right edge across all panel rows.
+            // so AV/NA column ends at the same right edge across all panel rows.
             const SizedBox(width: 6),
             const SizedBox(width: 14),
           ],

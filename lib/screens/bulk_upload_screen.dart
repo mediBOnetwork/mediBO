@@ -183,6 +183,7 @@ class BulkUploadScreen extends StatefulWidget {
 }
 
 class _BulkUploadScreenState extends State<BulkUploadScreen> {
+  final ScrollController _scrollCtrl = ScrollController();
   List<_MatchRow> _rows = _kSampleRows;
   _LoadStep _step = _LoadStep.idle;
   int _matchProgress = 0;
@@ -260,6 +261,12 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       await prefs.remove(_kImageKey);
       await prefs.remove(_kImageMetaKey);
     } catch (_) {}
+  }
+
+  @override
+  void dispose() {
+    _scrollCtrl.dispose();
+    super.dispose();
   }
 
   @override
@@ -460,6 +467,19 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
       // Step 2: Try AI; silently fall back to header-column matching on failure
       setState(() => _step = _LoadStep.aiAnalyzing);
+      // CHANGE #316 item 3: auto-scroll to preview on mobile only.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final width = MediaQuery.of(context).size.width;
+        if (width < 600) {
+          try { RenderLog.write('c316_autoscroll_mobile', '1'); } catch (_) {}
+          _scrollCtrl.animateTo(
+            600,
+            duration: const Duration(milliseconds: 450),
+            curve: Curves.easeInOut,
+          );
+        }
+      });
       final isBinary = rawContent.startsWith('PDF_BYTES:') ||
           rawContent.startsWith('IMAGE_BYTES:');
       // Structured spreadsheets have unambiguous column layout; parse locally
@@ -626,6 +646,9 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       });
       _saveSession();
       try { RenderLog.write('c312_ingest_done', file.name); } catch (_) {}
+      // CHANGE #316 item 4b: auto-retry unrecognized rows in background.
+      // ignore: unawaited_futures
+      _autoRetryUnrecognized();
     } catch (e) {
       try { RenderLog.write('c312_ingest_err', e.toString().length > 80 ? e.toString().substring(0, 80) : e.toString()); } catch (_) {}
       if (!mounted) return;
@@ -2082,6 +2105,21 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     _saveSession();
   }
 
+  // ── Auto-retry unrecognized rows (CHANGE #316 item 4b) ───────────────────
+  Future<void> _autoRetryUnrecognized() async {
+    try { RenderLog.write('c316_autoretry_ran', '1'); } catch (_) {}
+    for (int i = 0; i < _rows.length; i++) {
+      if (!mounted) return;
+      if (_rows[i].status != _MatchStatus.unrecognized) continue;
+      for (int attempt = 0; attempt < 3; attempt++) {
+        if (!mounted) return;
+        if (_rows[i].status != _MatchStatus.unrecognized) break;
+        await _retryOneRow(i, (_) {});
+        if (!mounted) return;
+      }
+    }
+  }
+
   // ── Retry matching ─────────────────────────────────────────────────────────
   // Re-runs stage1+stage2 on every non-manuallyMatched row using its stored
   // OCR text, without re-uploading the file.  Never downgrades a row's status
@@ -2252,6 +2290,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
   @override
   Widget build(BuildContext context) {
     return SingleChildScrollView(
+      controller: _scrollCtrl,
       child: Container(
         color: const Color(0xFFF9FAFB),
         width: double.infinity,
@@ -2444,6 +2483,7 @@ class _MainLayout extends StatelessWidget {
             onRetry: onRetry,
             isRetrying: isRetrying,
             retryProgress: retryProgress,
+            onRowRetry: onRowRetry,
           ),
         ],
       );
@@ -3163,6 +3203,104 @@ class _TemplateSection extends StatelessWidget {
   }
 }
 
+// ─── Two-stage animated progress bar (CHANGE #316 item 5) ────────────────────
+
+class _TwoStageProgressBar extends StatefulWidget {
+  final bool isOcrStage;
+  final int matchProgress;
+  final int matchTotal;
+
+  const _TwoStageProgressBar({
+    required this.isOcrStage,
+    required this.matchProgress,
+    required this.matchTotal,
+  });
+
+  @override
+  State<_TwoStageProgressBar> createState() => _TwoStageProgressBarState();
+}
+
+class _TwoStageProgressBarState extends State<_TwoStageProgressBar>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _ctrl;
+  late Animation<double> _anim;
+  bool _stage1Logged = false;
+  bool _stage2Logged = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(vsync: this, duration: const Duration(seconds: 7));
+    _anim = CurvedAnimation(parent: _ctrl, curve: Curves.easeOut);
+    _ctrl.animateTo(0.88);
+    _logStage();
+  }
+
+  void _logStage() {
+    if (widget.isOcrStage && !_stage1Logged) {
+      try { RenderLog.write('c316_progress_stage1', '1'); } catch (_) {}
+      _stage1Logged = true;
+    } else if (!widget.isOcrStage && !_stage2Logged) {
+      try { RenderLog.write('c316_progress_stage2', '1'); } catch (_) {}
+      _stage2Logged = true;
+    }
+  }
+
+  @override
+  void didUpdateWidget(_TwoStageProgressBar old) {
+    super.didUpdateWidget(old);
+    if (old.isOcrStage && !widget.isOcrStage) {
+      _ctrl.value = 0;
+      _ctrl.animateTo(0.88);
+    }
+    _logStage();
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _anim,
+      builder: (ctx, _) {
+        final double barValue;
+        if (!widget.isOcrStage && widget.matchTotal > 0) {
+          barValue = widget.matchProgress / widget.matchTotal;
+        } else {
+          barValue = _anim.value;
+        }
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: LinearProgressIndicator(
+                value: barValue,
+                backgroundColor: const Color(0xFFE5E7EB),
+                valueColor: const AlwaysStoppedAnimation(Color(0xFF16A34A)),
+                minHeight: 6,
+              ),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              widget.isOcrStage
+                  ? 'AI is identifying items…'
+                  : 'Matching medicines with database…',
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
 // ─── Smart match section ─────────────────────────────────────────────────────
 
 class _SmartMatchSection extends StatefulWidget {
@@ -3272,20 +3410,45 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
                   ],
                 ),
                 const SizedBox(height: 10),
-                Wrap(
-                  spacing: 6,
-                  runSpacing: 6,
-                  children: [
-                    if (matched > 0)
-                      _StatusPillBadge(label: '✓ $matched Matched', bg: const Color(0xFFDCFCE7), fg: const Color(0xFF15803D)),
-                    if (partial > 0)
-                      _StatusPillBadge(label: '~ $partial Partial', bg: const Color(0xFFFEF3C7), fg: const Color(0xFF92400E)),
-                    if (unrecognized > 0)
-                      _StatusPillBadge(label: '✗ $unrecognized Unrecognized', bg: const Color(0xFFFEE2E2), fg: const Color(0xFFDC2626)),
-                    if (manuallyMatched > 0)
-                      _StatusPillBadge(label: '● $manuallyMatched Manually Matched', bg: const Color(0xFFE0E7FF), fg: const Color(0xFF3730A3)),
-                  ],
-                ),
+                Builder(builder: (_bCtx) {
+                  try { RenderLog.write('c316_preview_built', '1'); } catch (_) {}
+                  try { RenderLog.write('c316_badges_built', '1'); } catch (_) {}
+                  int available = 0, needAttention = 0, unavailable = 0;
+                  for (final r in widget.rows) {
+                    if (r.isHidden) continue;
+                    final ticked = r.status == _MatchStatus.matched || r.status == _MatchStatus.manuallyMatched;
+                    if (ticked) {
+                      available++;
+                    } else if (r.status == _MatchStatus.partial) {
+                      needAttention++;
+                    } else {
+                      unavailable++;
+                    }
+                  }
+                  return Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: [
+                      _StatusPillBadge(
+                        label: 'Available • $available item${available == 1 ? '' : 's'}',
+                        bg: const Color(0xFFDCFCE7),
+                        fg: const Color(0xFF15803D),
+                      ),
+                      if (needAttention > 0)
+                        _StatusPillBadge(
+                          label: 'Need attention • $needAttention item${needAttention == 1 ? '' : 's'}',
+                          bg: const Color(0xFFFEF3C7),
+                          fg: const Color(0xFF92400E),
+                        ),
+                      if (unavailable > 0)
+                        _StatusPillBadge(
+                          label: 'Unavailable • $unavailable item${unavailable == 1 ? '' : 's'}',
+                          bg: const Color(0xFFFEE2E2),
+                          fg: const Color(0xFFDC2626),
+                        ),
+                    ],
+                  );
+                }),
                 const SizedBox(height: 10),
               ],
             ),
@@ -3293,30 +3456,10 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
           if (widget.isLoading)
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if (widget.matchTotal > 0) ...[
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(4),
-                      child: LinearProgressIndicator(
-                        value: widget.matchProgress / widget.matchTotal,
-                        backgroundColor: const Color(0xFFE5E7EB),
-                        valueColor: const AlwaysStoppedAnimation(Color(0xFF16A34A)),
-                        minHeight: 6,
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    Text('${widget.matchProgress} of ${widget.matchTotal} medicines matched',
-                        style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
-                  ] else
-                    const Center(
-                      child: Padding(
-                        padding: EdgeInsets.symmetric(vertical: 24),
-                        child: SizedBox(width: 32, height: 32, child: CircularProgressIndicator(strokeWidth: 2.5)),
-                      ),
-                    ),
-                ],
+              child: _TwoStageProgressBar(
+                isOcrStage: widget.matchTotal == 0,
+                matchProgress: widget.matchProgress,
+                matchTotal: widget.matchTotal,
               ),
             )
           else
@@ -3410,6 +3553,39 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
                       : '$matched matched · $manuallyMatched manually matched · $partial partial · $unrecognized unrecognized',
                   style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
                 );
+                // CHANGE #316 item 6: live availability badges.
+                int availableCount = 0, needAttentionCount = 0, unavailableCount = 0;
+                for (final r in widget.rows) {
+                  if (r.isHidden) continue;
+                  final ticked = r.status == _MatchStatus.matched || r.status == _MatchStatus.manuallyMatched;
+                  if (ticked) {
+                    availableCount++;
+                  } else if (r.status == _MatchStatus.partial) {
+                    needAttentionCount++;
+                  } else {
+                    unavailableCount++;
+                  }
+                }
+                final liveBadges = Builder(builder: (_lb) {
+                  try { RenderLog.write('c316_preview_built', '1'); } catch (_) {}
+                  try { RenderLog.write('c316_badges_built', '1'); } catch (_) {}
+                  return Wrap(spacing: 6, runSpacing: 4, children: [
+                    _StatusPillBadge(
+                      label: 'Available • $availableCount item${availableCount == 1 ? '' : 's'}',
+                      bg: const Color(0xFFDCFCE7), fg: const Color(0xFF15803D),
+                    ),
+                    if (needAttentionCount > 0)
+                      _StatusPillBadge(
+                        label: 'Need attention • $needAttentionCount item${needAttentionCount == 1 ? '' : 's'}',
+                        bg: const Color(0xFFFEF3C7), fg: const Color(0xFF92400E),
+                      ),
+                    if (unavailableCount > 0)
+                      _StatusPillBadge(
+                        label: 'Unavailable • $unavailableCount item${unavailableCount == 1 ? '' : 's'}',
+                        bg: const Color(0xFFFEE2E2), fg: const Color(0xFFDC2626),
+                      ),
+                  ]);
+                });
                 if (narrow) {
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -3423,6 +3599,8 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
                         const SizedBox(width: 8),
                         badgeWidget,
                       ]),
+                      const SizedBox(height: 8),
+                      liveBadges,
                       const SizedBox(height: 8),
                       Row(children: [
                         Expanded(child: statsText),
@@ -3462,6 +3640,8 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
                       widget.addingToCart ? spinner : addButton,
                     ]),
                     const SizedBox(height: 4),
+                    liveBadges,
+                    const SizedBox(height: 4),
                     statsText,
                   ],
                 );
@@ -3472,30 +3652,15 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
           if (widget.isLoading)
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 8, 20, 48),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if (widget.matchTotal > 0) ...[
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(4),
-                      child: LinearProgressIndicator(
-                        value: widget.matchTotal > 0 ? widget.matchProgress / widget.matchTotal : null,
-                        backgroundColor: const Color(0xFFE5E7EB),
-                        valueColor: const AlwaysStoppedAnimation(Color(0xFF16A34A)),
-                        minHeight: 6,
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    Text('${widget.matchProgress} of ${widget.matchTotal} medicines matched',
-                        style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
-                  ] else
-                    const Center(
-                      child: Padding(
-                        padding: EdgeInsets.symmetric(vertical: 24),
-                        child: SizedBox(width: 32, height: 32, child: CircularProgressIndicator(strokeWidth: 2.5)),
-                      ),
-                    ),
-                ],
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 480),
+                  child: _TwoStageProgressBar(
+                    isOcrStage: widget.matchTotal == 0,
+                    matchProgress: widget.matchProgress,
+                    matchTotal: widget.matchTotal,
+                  ),
+                ),
               ),
             )
           else ...[
@@ -3515,7 +3680,7 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
                   Expanded(flex: 6, child: Text('PACK', style: _kTh)),
                   Expanded(flex: 9, child: Text('COMPANY', style: _kTh)),
                   Expanded(flex: 5, child: Text('QTY', style: _kTh)),
-                  Expanded(flex: 7, child: Text('MRP', style: _kTh)),
+                  Expanded(flex: 7, child: Text('AVAIL', style: _kTh)),
                   Expanded(flex: 8, child: Text('STATUS', textAlign: TextAlign.center, style: _kTh)),
                   SizedBox(width: 12),
                   Expanded(flex: 3, child: Text('HIDE', textAlign: TextAlign.center, style: _kTh)),
@@ -3552,67 +3717,21 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
 /// Falls back to the digital parsed name only when no crop is available.
 Widget _lineItemCrop(_MatchRow row, Size? imageSize, {TextStyle? fallbackStyle}) {
   if (row.processedCrop != null) {
+    final crop = row.processedCrop!;
     return Tooltip(
       message: row.lineItem,
       waitDuration: const Duration(milliseconds: 400),
-      child: LayoutBuilder(builder: (ctx, constraints) {
-        final maxW =
-            constraints.maxWidth.isFinite ? constraints.maxWidth : double.infinity;
-
-        // Read native PNG pixel dimensions from header (bytes 16–19 = width, 20–23 = height).
-        // Render at NATIVE size: no scaling formula, no per-row height stretch.
-        // Because every PNG is generated at the same globalScale, native rendering
-        // gives constant apparent handwriting size across all rows automatically.
-        final crop = row.processedCrop!;
-        int pngW = 0, pngH = 0;
-        if (crop.length >= 24) {
-          pngW = (crop[16] << 24) | (crop[17] << 16) | (crop[18] << 8) | crop[19];
-          pngH = (crop[20] << 24) | (crop[21] << 16) | (crop[22] << 8) | crop[23];
-        }
-        if (pngW <= 0 || pngH <= 0) {
-          return Text(row.lineItem, maxLines: 1, overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)));
-        }
-
-        final nativeW = pngW.toDouble();
-        final nativeH = pngH.toDouble();
-        final visW = nativeW.clamp(0.0, maxW);
-        final isTruncated = nativeW > maxW;
-
-        // UnconstrainedBox lets the image be its native pixel width without being
-        // clamped to the column width, so left-alignment always shows the start.
-        Widget cropWidget = UnconstrainedBox(
+      child: Builder(builder: (ctx) {
+        try { RenderLog.write('c316_img_contain', '1'); } catch (_) {}
+        return FittedBox(
+          fit: BoxFit.scaleDown,
           alignment: Alignment.centerLeft,
           child: Image.memory(
             crop,
-            width: nativeW,
-            height: nativeH,
-            fit: BoxFit.none,
-            alignment: Alignment.centerLeft,
             filterQuality: FilterQuality.high,
             gaplessPlayback: true,
           ),
         );
-
-        // ClipRect first, then ShaderMask fade on the right edge.
-        Widget clipped = ClipRect(
-          child: SizedBox(width: visW, height: nativeH, child: cropWidget),
-        );
-
-        if (isTruncated) {
-          clipped = ShaderMask(
-            shaderCallback: (bounds) => LinearGradient(
-              begin: Alignment.centerLeft,
-              end: Alignment.centerRight,
-              stops: const [0.82, 1.0],
-              colors: const [Colors.white, Colors.transparent],
-            ).createShader(Rect.fromLTWH(0, 0, visW, nativeH)),
-            blendMode: BlendMode.dstIn,
-            child: clipped,
-          );
-        }
-
-        return Align(alignment: Alignment.centerLeft, child: clipped);
       }),
     );
   }
@@ -3699,6 +3818,7 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
   }
 
   Future<void> _doRowRetry() async {
+    try { RenderLog.write('c316_rowretry_tap', '1'); } catch (_) {}
     if (_isRowRetrying || widget.onRowRetry == null) return;
     setState(() { _isRowRetrying = true; _rowRetryProgress = 0.0; });
     try {
@@ -3835,8 +3955,9 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
                     style: const TextStyle(fontSize: 12, color: Color(0xFF374151)),
                   ),
                 ),
-                Expanded(
+                Flexible(
                   flex: 9,
+                  fit: FlexFit.loose,
                   child: Text(
                     row.selectedProduct?.manufacturer ?? '',
                     maxLines: 1,
@@ -3851,11 +3972,30 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
                 ),
                 Expanded(
                   flex: 7,
-                  child: Text(row.price,
-                      style: const TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w500,
-                          color: Color(0xFF374151))),
+                  child: Builder(builder: (_avCtx) {
+                    try { RenderLog.write('c316_detail_avna', '1'); } catch (_) {}
+                    final p = row.selectedProduct;
+                    if (p == null) return const SizedBox.shrink();
+                    final avail = p.isBuyable;
+                    return Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: avail ? const Color(0xFFDCFCE7) : const Color(0xFFFEE2E2),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        avail ? 'Available' : 'Not available',
+                        textAlign: TextAlign.center,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: avail ? const Color(0xFF15803D) : const Color(0xFFDC2626),
+                        ),
+                      ),
+                    );
+                  }),
                 ),
                 // STATUS column — fixed-width badge (sized to widest "Manually Matched")
                 Expanded(
@@ -3916,11 +4056,11 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
                                   backgroundColor: const Color(0xFFFEE2E2),
                                 ),
                               )
-                            : GestureDetector(
-                                onTap: widget.onRowRetry != null ? _doRowRetry : null,
-                                behavior: HitTestBehavior.opaque,
-                                child: Padding(
-                                  padding: const EdgeInsets.all(3),
+                            : SizedBox(
+                                width: 40, height: 40,
+                                child: InkWell(
+                                  onTap: widget.onRowRetry != null ? _doRowRetry : null,
+                                  borderRadius: BorderRadius.circular(20),
                                   child: Icon(Icons.refresh, size: 16,
                                       color: widget.onRowRetry != null
                                           ? const Color(0xFFDC2626)
@@ -4106,6 +4246,7 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
   }
 
   Future<void> _doRowRetry() async {
+    try { RenderLog.write('c316_rowretry_tap', '1'); } catch (_) {}
     if (_isRowRetrying || widget.onRowRetry == null) return;
     setState(() { _isRowRetrying = true; _rowRetryProgress = 0.0; });
     try {
@@ -4272,11 +4413,11 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                                                 backgroundColor: const Color(0xFFFEE2E2),
                                               ),
                                             )
-                                          : GestureDetector(
-                                              onTap: widget.onRowRetry != null ? _doRowRetry : null,
-                                              behavior: HitTestBehavior.opaque,
-                                              child: Padding(
-                                                padding: const EdgeInsets.all(3),
+                                          : SizedBox(
+                                              width: 40, height: 40,
+                                              child: InkWell(
+                                                onTap: widget.onRowRetry != null ? _doRowRetry : null,
+                                                borderRadius: BorderRadius.circular(20),
                                                 child: Icon(Icons.refresh, size: 18,
                                                     color: widget.onRowRetry != null
                                                         ? const Color(0xFFDC2626)
@@ -4340,14 +4481,26 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                                       overflow: TextOverflow.ellipsis,
                                       style: const TextStyle(
                                           fontSize: 11, color: Color(0xFF6B7280))),
-                                  mrp: Text(row.price,
-                                      textAlign: TextAlign.right,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
-                                          fontSize: 12,
+                                  mrp: Builder(builder: (_avCtx) {
+                                    try { RenderLog.write('c316_detail_avna', '1'); } catch (_) {}
+                                    final avail = p.isBuyable;
+                                    return Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 3),
+                                      decoration: BoxDecoration(
+                                        color: avail ? const Color(0xFFDCFCE7) : const Color(0xFFFEE2E2),
+                                        borderRadius: BorderRadius.circular(10),
+                                      ),
+                                      child: Text(
+                                        avail ? 'AV' : 'NA',
+                                        textAlign: TextAlign.center,
+                                        style: TextStyle(
+                                          fontSize: 11,
                                           fontWeight: FontWeight.w600,
-                                          color: Color(0xFF111827))),
+                                          color: avail ? const Color(0xFF15803D) : const Color(0xFFDC2626),
+                                        ),
+                                      ),
+                                    );
+                                  }),
                                 )
                               : Text(
                                   row.status != _MatchStatus.unrecognized
@@ -4893,61 +5046,68 @@ class _MatchPanelState extends State<_MatchPanel> {
           return const _WebPanelEmptyRow();
         }),
 
-        // Line 6: search box pinned at bottom with merged icon
+        // Line 6: search box — CHANGE #316 item 7: right 1/4 is a wide tap zone.
         Container(
           color: const Color(0xFFF3F4F6),
           padding: const EdgeInsets.fromLTRB(17, 7, 12, 7),
           decoration: const BoxDecoration(
             border: Border(top: BorderSide(color: Color(0xFFE5E7EB))),
           ),
-          child: TextField(
-            controller: _ctrl,
-            focusNode: _focusNode,
-            onSubmitted: (_) => _fireSearch(),
-            onChanged: _hasSearched ? _liveSearch : null,
-            decoration: InputDecoration(
-              hintText: 'Search / change match…',
-              hintStyle: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
-              isDense: true,
-              contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-              filled: true,
-              fillColor: Colors.white,
-              suffixIcon: _hasSearched
-                  ? GestureDetector(
-                      onTap: _clearSearch,
-                      child: const Icon(Icons.close_rounded,
-                          size: 16, color: Color(0xFF9CA3AF)),
-                    )
-                  : GestureDetector(
-                      onTap: _searching ? null : _fireSearch,
-                      child: _searching
-                          ? const Padding(
-                              padding: EdgeInsets.all(10),
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                valueColor: AlwaysStoppedAnimation<Color>(
-                                    Color(0xFF16A34A)),
-                              ),
-                            )
-                          : const Icon(Icons.search_rounded,
-                              size: 18, color: Color(0xFF6B7280)),
+          child: Builder(builder: (_szCtx) {
+            try { RenderLog.write('c316_search_hitzone', '1'); } catch (_) {}
+            return Row(children: [
+              Expanded(
+                flex: 3,
+                child: TextField(
+                  controller: _ctrl,
+                  focusNode: _focusNode,
+                  onSubmitted: (_) => _fireSearch(),
+                  onChanged: _hasSearched ? _liveSearch : null,
+                  decoration: InputDecoration(
+                    hintText: 'Search / change match…',
+                    hintStyle: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                    filled: true,
+                    fillColor: Colors.white,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(6),
+                      borderSide: const BorderSide(color: Color(0xFFD1D5DB)),
                     ),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(6),
-                borderSide: const BorderSide(color: Color(0xFFD1D5DB)),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(6),
+                      borderSide: const BorderSide(color: Color(0xFFD1D5DB)),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(6),
+                      borderSide: const BorderSide(color: Color(0xFF16A34A), width: 1.5),
+                    ),
+                  ),
+                  style: const TextStyle(fontSize: 12),
+                ),
               ),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(6),
-                borderSide: const BorderSide(color: Color(0xFFD1D5DB)),
+              Expanded(
+                flex: 1,
+                child: InkWell(
+                  onTap: _hasSearched ? _clearSearch : (_searching ? null : _fireSearch),
+                  borderRadius: BorderRadius.circular(6),
+                  child: Center(
+                    child: _hasSearched
+                        ? const Icon(Icons.close_rounded, size: 16, color: Color(0xFF9CA3AF))
+                        : _searching
+                            ? const SizedBox(
+                                width: 16, height: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF16A34A)),
+                                ),
+                              )
+                            : const Icon(Icons.search_rounded, size: 18, color: Color(0xFF6B7280)),
+                  ),
+                ),
               ),
-              focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(6),
-                borderSide:
-                    const BorderSide(color: Color(0xFF16A34A), width: 1.5),
-              ),
-            ),
-            style: const TextStyle(fontSize: 12),
-          ),
+            ]);
+          }),
         ),
       ],
     );
@@ -4975,60 +5135,68 @@ class _MatchPanelState extends State<_MatchPanel> {
           return const _MobilePanelEmptyRow();
         }),
 
-        // Line 6: search box with merged magnifier→X icon
+        // Line 6: search box — CHANGE #316 item 7: right 1/4 is a wide tap zone.
         Container(
           color: const Color(0xFFF3F4F6),
           padding: const EdgeInsets.fromLTRB(12, 7, 12, 7),
           decoration: const BoxDecoration(
             border: Border(top: BorderSide(color: Color(0xFFE5E7EB))),
           ),
-          child: TextField(
-            controller: _ctrl,
-            focusNode: _focusNode,
-            onSubmitted: (_) => _fireSearch(),
-            onChanged: _hasSearched ? _liveSearch : null,
-            decoration: InputDecoration(
-              hintText: 'Search / change match…',
-              hintStyle: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
-              isDense: true,
-              contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-              filled: true,
-              fillColor: Colors.white,
-              suffixIcon: _hasSearched
-                  ? GestureDetector(
-                      onTap: _clearSearch,
-                      child: const Icon(Icons.close_rounded,
-                          size: 16, color: Color(0xFF9CA3AF)),
-                    )
-                  : GestureDetector(
-                      onTap: _searching ? null : _fireSearch,
-                      child: _searching
-                          ? const Padding(
-                              padding: EdgeInsets.all(10),
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                valueColor: AlwaysStoppedAnimation<Color>(
-                                    Color(0xFF16A34A)),
-                              ),
-                            )
-                          : const Icon(Icons.search_rounded,
-                              size: 18, color: Color(0xFF6B7280)),
+          child: Builder(builder: (_szCtx) {
+            try { RenderLog.write('c316_search_hitzone', '1'); } catch (_) {}
+            return Row(children: [
+              Expanded(
+                flex: 3,
+                child: TextField(
+                  controller: _ctrl,
+                  focusNode: _focusNode,
+                  onSubmitted: (_) => _fireSearch(),
+                  onChanged: _hasSearched ? _liveSearch : null,
+                  decoration: InputDecoration(
+                    hintText: 'Search / change match…',
+                    hintStyle: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                    filled: true,
+                    fillColor: Colors.white,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(6),
+                      borderSide: const BorderSide(color: Color(0xFFD1D5DB)),
                     ),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(6),
-                borderSide: const BorderSide(color: Color(0xFFD1D5DB)),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(6),
+                      borderSide: const BorderSide(color: Color(0xFFD1D5DB)),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(6),
+                      borderSide: const BorderSide(color: Color(0xFF16A34A), width: 1.5),
+                    ),
+                  ),
+                  style: const TextStyle(fontSize: 12),
+                ),
               ),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(6),
-                borderSide: const BorderSide(color: Color(0xFFD1D5DB)),
+              Expanded(
+                flex: 1,
+                child: InkWell(
+                  onTap: _hasSearched ? _clearSearch : (_searching ? null : _fireSearch),
+                  borderRadius: BorderRadius.circular(6),
+                  child: Center(
+                    child: _hasSearched
+                        ? const Icon(Icons.close_rounded, size: 16, color: Color(0xFF9CA3AF))
+                        : _searching
+                            ? const SizedBox(
+                                width: 16, height: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF16A34A)),
+                                ),
+                              )
+                            : const Icon(Icons.search_rounded, size: 18, color: Color(0xFF6B7280)),
+                  ),
+                ),
               ),
-              focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(6),
-                borderSide: const BorderSide(color: Color(0xFF16A34A), width: 1.5),
-              ),
-            ),
-            style: const TextStyle(fontSize: 12),
-          ),
+            ]);
+          }),
         ),
       ],
     );

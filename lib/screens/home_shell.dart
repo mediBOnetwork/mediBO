@@ -101,6 +101,8 @@ class _HomeShellState extends State<HomeShell> {
       try { RenderLog.write('c314_preview_built', 'mobile_slim_#314'); } catch (_) {}
       // CHANGE #315: auto-match decision uses substring+0.72 thresholds, null-status fixed.
       try { RenderLog.write('c315_preview_built', 'rpc_match_#315'); } catch (_) {}
+      // CHANGE #316: AV/NA badges, FittedBox crop, progress bar, auto-retry, search hitzone, live availability badges.
+      try { RenderLog.write('c316_preview_built', 'ui_polish_#316'); } catch (_) {}
     });
   }
 

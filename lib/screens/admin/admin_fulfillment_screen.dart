@@ -10810,40 +10810,38 @@ class _PackTabState extends State<_PackTab>
       }
       try { RenderLog.write('c304_silence', 'counted:${items.length}'); } catch (_) {}
 
-      // Build product name → product_id map for resolution
-      final Map<String, int> nameToId = {};
-      for (final qi in qItems) {
-        final pid = (qi['product_id'] as num?)?.toInt();
-        final pname = qi['product_name']?.toString();
-        if (pid != null && pname != null && !nameToId.containsKey(pname)) {
-          nameToId[pname] = pid;
-        }
-      }
-
-      // CHANGE #301: build itemsPayload and mentionsPayload for pack_process_clip.
+      // CHANGE #306: fuzzy resolution — replaces exact name map with _resolveProductId.
+      // Strips dosage-form words before comparing so mis-heard brand names still resolve.
       final itemsPayload = <Map<String, dynamic>>[];
+      int _resolvedCount = 0;
       for (final item in items) {
         final matchedName = item['matched_name']?.toString();
         final rawQty = item['received_qty'];
         if (rawQty == null || matchedName == null || matchedName == 'not_on_order') continue;
         final qty = (rawQty as num).toDouble();
         if (qty <= 0) continue;
-        final pid = nameToId[matchedName];
+        final pid = _resolveProductId(matchedName, qItems);
         if (pid == null) continue;
+        _resolvedCount++;
         itemsPayload.add({'product_id': pid, 'qty': qty});
       }
+      try { RenderLog.write('c306_resolved', 'items=$_resolvedCount/${items.length}'); } catch (_) {}
 
       // ord = mention's 0-based index in the clip (from voice-receive), NOT per-product.
+      // When pid resolves, use the canonical product_name so the review shows the real product.
       final mentionsPayload = <Map<String, dynamic>>[];
       for (int i = 0; i < mentions.length; i++) {
         final mention = mentions[i];
         final matchedName = mention['matched_name']?.toString();
         final pid = (matchedName != null && matchedName != 'not_on_order')
-            ? nameToId[matchedName]
+            ? _resolveProductId(matchedName, qItems)
             : null;
+        final resolvedName = pid != null
+            ? (_resolveProductName(pid, qItems) ?? matchedName!)
+            : (matchedName ?? '');
         mentionsPayload.add({
           'product_id': pid,
-          'matched_name': matchedName ?? '',
+          'matched_name': resolvedName,
           'qty': (mention['qty'] as num?)?.toDouble() ?? 0.0,
           't_start': mention['t_start'],
           't_end': mention['t_end'],
@@ -10878,6 +10876,7 @@ class _PackTabState extends State<_PackTab>
         countsSet = (resMap['counts_set'] as num?)?.toInt() ?? itemsPayload.length;
         RenderLog.write('c301_process',
             'counts_set=${resMap["counts_set"]};mentions=${resMap["mentions"]};seq=$seq');
+        try { RenderLog.write('c306_counted', 'counts_set=${resMap["counts_set"]};mentions=${resMap["mentions"]}'); } catch (_) {}
       } catch (e) {
         RenderLog.write('c301_process', 'err=${e.toString().substring(0, e.toString().length.clamp(0, 60))}');
       }
@@ -11004,6 +11003,84 @@ class _PackTabState extends State<_PackTab>
       duration: duration ?? const Duration(seconds: 3),
       backgroundColor: const Color(0xFF1B7A43),
     ));
+  }
+
+  // ── CHANGE #306: fuzzy product resolver ──────────────────────────────────
+  // Strips dosage-form / suffix words before comparing so mis-heard brand names
+  // still resolve ("Rosusen F 10" → "Rosuson-F 10 Tablet").
+  static String _norm(String s) => s.toLowerCase()
+      .replaceAll(RegExp(r'[^a-z0-9 ]'), ' ')
+      .replaceAll(RegExp(r'\s+'), ' ').trim();
+
+  static const _kFormWords = {
+    'tablet','tablets','tab','tabs','capsule','capsules','cap','caps','syrup','syp',
+    'suspension','susp','cream','gel','ointment','drop','drops','injection','inj',
+    'lotion','solution','soln','sachet','powder','spray','liquid','bottle','strip',
+    'strips','vial','vials','sr','xr','xl','cr','er','mr','md','dsr','od','forte',
+    'plus','kit','tube'
+  };
+
+  static String _core(String s) => _norm(s).split(' ')
+      .where((t) => t.isNotEmpty && !_kFormWords.contains(t)).join(' ');
+
+  static int _lev(String a, String b) {
+    if (a.isEmpty) return b.length;
+    if (b.isEmpty) return a.length;
+    if (a == b) return 0;
+    final dp = List.generate(a.length + 1,
+        (i) => List.generate(b.length + 1, (j) => i == 0 ? j : (j == 0 ? i : 0)));
+    for (int i = 1; i <= a.length; i++) {
+      for (int j = 1; j <= b.length; j++) {
+        dp[i][j] = a[i - 1] == b[j - 1]
+            ? dp[i - 1][j - 1]
+            : 1 + [dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]]
+                .reduce((x, y) => x < y ? x : y);
+      }
+    }
+    return dp[a.length][b.length];
+  }
+
+  static double _simStr(String a, String b) {
+    if (a.isEmpty || b.isEmpty) return 0;
+    if (a == b) return 1;
+    final d = _lev(a, b);
+    final m = a.length > b.length ? a.length : b.length;
+    return 1 - d / m;
+  }
+
+  // Returns product_id of best fuzzy match, or null if below 0.72 threshold.
+  int? _resolveProductId(String spoken, List<Map<String, dynamic>> items) {
+    final hc = _core(spoken);
+    if (hc.isEmpty) return null;
+    final hTok = hc.split(' ').first;
+    final hSet = hc.split(' ').toSet();
+    int? best; double bestScore = 0;
+    for (final it in items) {
+      final nc = _core((it['product_name'] ?? '').toString());
+      if (nc.isEmpty) continue;
+      final nTok = nc.split(' ').first;
+      final nSet = nc.split(' ').toSet();
+      final whole = _simStr(hc, nc);
+      final brand = (hTok.isNotEmpty && nTok.isNotEmpty) ? _simStr(hTok, nTok) : 0.0;
+      final inter = hSet.where(nSet.contains).length;
+      final union = ({...hSet, ...nSet}).length;
+      final jac = union == 0 ? 0.0 : inter / union;
+      final score = [whole, 0.55 * brand + 0.45 * jac, 0.6 * whole + 0.4 * brand]
+          .reduce((a, b) => a > b ? a : b);
+      if (score > bestScore) {
+        bestScore = score;
+        best = (it['product_id'] as num?)?.toInt();
+      }
+    }
+    return bestScore >= 0.72 ? best : null;
+  }
+
+  // Returns product_name for a resolved product_id.
+  String? _resolveProductName(int pid, List<Map<String, dynamic>> items) {
+    for (final it in items) {
+      if ((it['product_id'] as num?)?.toInt() == pid) return it['product_name']?.toString();
+    }
+    return null;
   }
 
   // #291 — button always rendered, label refined from cached status
@@ -11201,6 +11278,7 @@ class _PackTabState extends State<_PackTab>
     try {
       RenderLog.write('c301_spoken', '$spokenCount');
       RenderLog.write('c304_spoken', '$spokenCount');
+      RenderLog.write('c306_spoken', '$spokenCount');
     } catch (_) {}
 
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
@@ -11698,226 +11776,357 @@ class _PackTabState extends State<_PackTab>
     if (mounted) await _loadFromPackQueue(orderId);
   }
 
-  // CHANGE #304: opens a bottom sheet showing today's per-customer mentions.
+  // CHANGE #306: opens the "Counted items" review sheet (same layout as Warehouse popup).
   void _openMentionsReview(String orderId) {
     final mentions = List<Map<String, dynamic>>.from(_packMentions);
-    try { RenderLog.write('c304_review', 'mentions=${mentions.length}'); } catch (_) {}
+    final qData = _packQueueData[orderId];
+    final packItems = qData != null
+        ? ((qData['items'] as List?) ?? const [])
+            .map((i) => Map<String, dynamic>.from(i as Map))
+            .toList()
+        : <Map<String, dynamic>>[];
+    final distinctProds = mentions.map((m) => m['product_id']).whereType<int>().toSet().length;
+    final unknownRows = mentions.where((m) => (m['product_id'] as num?) == null).length;
+    try {
+      RenderLog.write('c304_review', 'mentions=${mentions.length}');
+      RenderLog.write('c306_review', 'products=$distinctProds;unknown=$unknownRows');
+    } catch (_) {}
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.white,
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
-      builder: (_) => _PackMentionsSheet(mentions: mentions),
+      builder: (_) => _PackMentionsSheet(mentions: mentions, packItems: packItems),
     );
   }
 }
 
-// ── CHANGE #304: Mentions review sheet — lists today's per-customer voice clips ──
+// ── CHANGE #306: Pack "Counted items" review sheet — same table layout as Warehouse popup ──
+// Product | Qty sequence (per-clip pills) | Total (X/Y, green when full)
+// All / Clip N chips filter the rows; each Clip chip plays the whole clip.
 
 class _PackMentionsSheet extends StatefulWidget {
   final List<Map<String, dynamic>> mentions;
-  const _PackMentionsSheet({required this.mentions});
+  final List<Map<String, dynamic>> packItems; // pack_get_queue items for ordered-qty lookup
+  const _PackMentionsSheet({required this.mentions, required this.packItems});
   @override
   State<_PackMentionsSheet> createState() => _PackMentionsSheetState();
 }
 
-// CHANGE #304b: rewritten — uses createSignedUrl (private bucket) + html.AudioElement
-// with seek to t_start_sec and auto-stop at t_end_sec, mirroring _CountedMentionsPopupState.
 class _PackMentionsSheetState extends State<_PackMentionsSheet> {
-  late final List<(int seq, String clipPath, List<Map<String, dynamic>> rows)> _groups;
+  int? _selectedSeq; // null = All
+  final _chipScrollCtrl = ScrollController();
 
   html.AudioElement? _clipAudio;
   final Map<String, String> _signedUrlCache = {};
-  String? _playingKey; // "$clipPath:$ord" of the currently playing mention
-  double? _playingEnd; // t_end_sec to stop at
+  String? _playingClip;
+  int? _playingSeq;
 
-  @override
-  void initState() {
-    super.initState();
-    final grouped = <int, (String, List<Map<String, dynamic>>)>{};
-    for (final m in widget.mentions) {
-      final seq = (m['recording_seq'] as num?)?.toInt() ?? 0;
-      final path = m['clip_path']?.toString() ?? '';
-      if (!grouped.containsKey(seq)) grouped[seq] = (path, []);
-      grouped[seq]!.$2.add(m);
-    }
-    _groups = grouped.entries
-        .map((e) => (e.key, e.value.$1, e.value.$2))
-        .toList()
-      ..sort((a, b) => b.$1.compareTo(a.$1));
-  }
+  static const double _kTotalColW = 52.0;
+  static const double _kBadgeClusterMaxW = 108.0;
+  static const double _kBadgeToTotalGap = 6.0;
+  static const double _kNameToBadgeMinGap = 10.0;
 
   @override
   void dispose() {
     _clipAudio?.pause();
     _clipAudio?.src = '';
-    _clipAudio = null;
+    _chipScrollCtrl.dispose();
     super.dispose();
   }
 
-  void _stopAudio() {
-    _clipAudio?.pause();
-    _clipAudio?.src = '';
-    _clipAudio = null;
-    if (mounted) setState(() { _playingKey = null; _playingEnd = null; });
+  // Distinct clips ordered by seq ascending.
+  List<({int seq, String clipPath})> _distinctClips(List<Map<String, dynamic>> rows) {
+    final seen = <String>{};
+    final result = <({int seq, String clipPath})>[];
+    for (final r in rows) {
+      final path = r['clip_path']?.toString() ?? '';
+      if (path.isEmpty || !seen.add(path)) continue;
+      final seq = (r['recording_seq'] as num?)?.toInt() ?? 0;
+      result.add((seq: seq, clipPath: path));
+    }
+    result.sort((a, b) => a.seq.compareTo(b.seq));
+    return result;
   }
 
-  // Seek-to-mention playback: get signed URL, create AudioElement, seek then play.
-  // Toggle: tap the same mention again to stop.
-  Future<void> _playMention(
-    String clipPath, int ord, double? tStart, double? tEnd) async {
-    final key = '$clipPath:$ord';
-    if (_playingKey == key) { _stopAudio(); return; }
+  // Group by product_id (known) or 'Unknown item' (null pid).
+  // Qty sequence = one entry per mention (for the pill cluster).
+  List<({String name, List<({int qty, int seq})> entries, int total, int ordered})>
+      _groupMentions(List<Map<String, dynamic>> rows) {
+    final pidToName = <int, String>{};
+    final nameToOrdered = <String, int>{};
+    for (final it in widget.packItems) {
+      final pid = (it['product_id'] as num?)?.toInt();
+      final name = it['product_name']?.toString() ?? '';
+      final qty = (it['qty'] as num?)?.toInt() ?? 0;
+      if (pid != null && name.isNotEmpty) {
+        pidToName[pid] = name;
+        nameToOrdered[name] = qty;
+      }
+    }
+    // key = product_id (as string) for known, '' for unknown
+    final order = <String>[];
+    final byKey = <String, List<({int qty, int seq})>>{};
+    for (final r in rows) {
+      final pid = (r['product_id'] as num?)?.toInt();
+      final key = pid != null ? '$pid' : '';
+      if (!byKey.containsKey(key)) order.add(key);
+      final qty = (r['qty'] as num?)?.toInt() ?? 0;
+      final seq = (r['recording_seq'] as num?)?.toInt() ?? 0;
+      byKey.putIfAbsent(key, () => []).add((qty: qty, seq: seq));
+    }
+    return order.map((key) {
+      final entries = byKey[key]!;
+      final total = entries.fold(0, (s, e) => s + e.qty);
+      final pid = key.isEmpty ? null : int.tryParse(key);
+      final name = pid != null ? (pidToName[pid] ?? 'Unknown item') : 'Unknown item';
+      return (name: name, entries: entries, total: total, ordered: nameToOrdered[name] ?? 0);
+    }).toList();
+  }
+
+  Future<void> _playClip(String clipPath, int seq) async {
+    if (_playingClip == clipPath) { _stopAudio(); return; }
     _stopAudio();
     if (clipPath.isEmpty) return;
     try {
       String? url = _signedUrlCache[clipPath];
       if (url == null) {
         url = await Supabase.instance.client.storage
-            .from('voice-clips')
-            .createSignedUrl(clipPath, 3600);
+            .from('voice-clips').createSignedUrl(clipPath, 3600);
         if (!mounted) return;
         _signedUrlCache[clipPath] = url;
       }
       final el = html.AudioElement(url);
       _clipAudio = el;
-      _playingEnd = tEnd;
-      if (mounted) setState(() { _playingKey = key; });
-      if (tStart != null && tStart > 0) {
-        el.onCanPlay.first.then((_) {
-          if (!mounted || !identical(_clipAudio, el)) return;
-          el.currentTime = tStart;
-          el.play();
-        });
-      } else {
-        await el.play();
-      }
-      el.onTimeUpdate.listen((_) {
-        if (!mounted || !identical(_clipAudio, el)) return;
-        final end = _playingEnd;
-        if (end != null && el.currentTime >= end) _stopAudio();
-      });
       el.onEnded.listen((_) {
         if (!mounted || !identical(_clipAudio, el)) return;
-        _stopAudio();
+        setState(() { _playingClip = null; _playingSeq = null; });
       });
       el.onError.listen((_) {
         if (!mounted || !identical(_clipAudio, el)) return;
-        _stopAudio();
+        setState(() { _playingClip = null; _playingSeq = null; });
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Couldn't play this clip")));
+            const SnackBar(content: Text("Couldn't play this clip")));
       });
+      await el.play();
+      if (mounted) setState(() { _playingClip = clipPath; _playingSeq = seq; });
     } catch (e) {
-      if (mounted) {
-        setState(() { _playingKey = null; _playingEnd = null; });
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Couldn't play this clip")));
-      }
+      if (mounted) setState(() { _playingClip = null; _playingSeq = null; });
     }
+  }
+
+  void _stopAudio() {
+    _clipAudio?.pause();
+    _clipAudio?.src = '';
+    _clipAudio = null;
+    if (mounted) setState(() { _playingClip = null; _playingSeq = null; });
   }
 
   @override
   Widget build(BuildContext context) {
+    final allMentions = widget.mentions;
+    final clips = _distinctClips(allMentions);
+    final filtered = _selectedSeq == null
+        ? allMentions
+        : allMentions.where((m) => (m['recording_seq'] as num?)?.toInt() == _selectedSeq).toList();
+    final groups = _groupMentions(filtered);
+    final playSeq = _playingSeq;
+
     return DraggableScrollableSheet(
-      initialChildSize: 0.55,
-      minChildSize: 0.35,
-      maxChildSize: 0.9,
+      initialChildSize: 0.65,
+      minChildSize: 0.4,
+      maxChildSize: 0.92,
       expand: false,
-      builder: (_, ctrl) => Column(children: [
-        const SizedBox(height: 12),
-        Container(
-          width: 40, height: 4,
-          decoration: BoxDecoration(
-            color: const Color(0xFFD1D5DB),
-            borderRadius: BorderRadius.circular(2)),
-        ),
-        const SizedBox(height: 12),
-        const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 16),
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: Text('Voice count review',
-                style: TextStyle(
-                    fontSize: 16, fontWeight: FontWeight.w700,
-                    color: Color(0xFF111827))),
+      builder: (_, ctrl) => Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const SizedBox(height: 8),
+          Center(child: Container(
+            width: 36, height: 4,
+            decoration: BoxDecoration(
+                color: const Color(0xFFD1D5DB), borderRadius: BorderRadius.circular(2)),
+          )),
+          // Header: "Counted items" + X
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 10, 4, 6),
+            child: Row(children: [
+              const Text('Counted items',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _kText)),
+              const Spacer(),
+              GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => Navigator.of(context).pop(),
+                child: SizedBox(
+                  width: 44, height: 44,
+                  child: Center(child: Container(
+                    width: 28, height: 28,
+                    decoration: BoxDecoration(
+                        color: const Color(0xFFF3F4F6), shape: BoxShape.circle),
+                    child: const Icon(Icons.close_rounded, size: 16, color: Color(0xFF111827)),
+                  )),
+                ),
+              ),
+            ]),
           ),
-        ),
-        const SizedBox(height: 8),
-        const Divider(height: 1),
-        Expanded(
-          child: _groups.isEmpty
-              ? const Center(
-                  child: Text('No clips recorded today',
-                      style: TextStyle(color: Color(0xFF6B7280))))
-              : ListView.builder(
-                  controller: ctrl,
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-                  itemCount: _groups.length,
-                  itemBuilder: (_, gi) {
-                    final (seq, clipPath, rows) = _groups[gi];
-                    return Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                      if (gi > 0) const SizedBox(height: 12),
-                      Text('Clip #$seq',
-                          style: const TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w700,
-                              color: Color(0xFF1B7A43))),
-                      const SizedBox(height: 6),
-                      ...rows.map((r) {
-                        final name = r['matched_name']?.toString() ?? '—';
-                        final qty = (r['qty'] as num?)?.toInt() ?? 0;
-                        final ord = (r['ord'] as num?)?.toInt() ?? 0;
-                        final tStart = (r['t_start_sec'] as num?)?.toDouble();
-                        final tEnd = (r['t_end_sec'] as num?)?.toDouble();
-                        final key = '$clipPath:$ord';
-                        final isPlaying = _playingKey == key;
-                        final canPlay = clipPath.isNotEmpty;
-                        return Padding(
-                          padding: const EdgeInsets.only(bottom: 6),
-                          child: Row(children: [
-                            Icon(Icons.fiber_manual_record,
-                                size: 6, color: const Color(0xFF9CA3AF)),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                '$name × $qty'
-                                '${tStart != null ? ' (${tStart.toStringAsFixed(1)}s)' : ''}',
-                                style: const TextStyle(
-                                    fontSize: 13, color: Color(0xFF374151))),
-                            ),
-                            if (canPlay)
-                              GestureDetector(
-                                onTap: () => _playMention(clipPath, ord, tStart, tEnd),
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 8, vertical: 3),
-                                  decoration: BoxDecoration(
-                                    color: isPlaying
-                                        ? const Color(0xFFFEE2E2)
-                                        : const Color(0xFFDCFCE7),
-                                    borderRadius: BorderRadius.circular(6),
-                                  ),
-                                  child: Icon(
-                                    isPlaying
-                                        ? Icons.stop_rounded
-                                        : Icons.play_arrow_rounded,
-                                    size: 14,
-                                    color: isPlaying
-                                        ? const Color(0xFF991B1B)
-                                        : const Color(0xFF166534)),
+          // Chip row: All + Clip 1 ▶ / Clip 2 ▶ …
+          if (clips.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: SingleChildScrollView(
+                controller: _chipScrollCtrl,
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 14),
+                child: Row(children: [
+                  // "All" chip
+                  GestureDetector(
+                    onTap: () {
+                      _stopAudio();
+                      setState(() => _selectedSeq = null);
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: _selectedSeq == null ? _kGreen : const Color(0xFFE8F5E9),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: _kGreen),
+                      ),
+                      child: Text('All',
+                          style: TextStyle(
+                              fontSize: 12, fontWeight: FontWeight.w600,
+                              color: _selectedSeq == null ? Colors.white : _kGreen)),
+                    ),
+                  ),
+                  // Per-clip chips
+                  ...clips.asMap().entries.map((e) {
+                    final idx = e.key;
+                    final clip = e.value;
+                    final isSelected = _selectedSeq == clip.seq;
+                    final isPlaying = _playingClip == clip.clipPath;
+                    return Padding(
+                      padding: const EdgeInsets.only(left: 8),
+                      child: GestureDetector(
+                        onTap: () {
+                          setState(() => _selectedSeq = clip.seq);
+                          _playClip(clip.clipPath, clip.seq);
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: isSelected ? _kGreen : const Color(0xFFF3F4F6),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(color: isSelected ? _kGreen : _kBorder),
+                          ),
+                          child: Row(mainAxisSize: MainAxisSize.min, children: [
+                            Text('Clip ${idx + 1}',
+                                style: TextStyle(
+                                    fontSize: 12, fontWeight: FontWeight.w600,
+                                    color: isSelected ? Colors.white : _kSub)),
+                            const SizedBox(width: 4),
+                            Icon(
+                              isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                              size: 14,
+                              color: isSelected ? Colors.white : _kSub),
+                          ]),
+                        ),
+                      ),
+                    );
+                  }),
+                ]),
+              ),
+            ),
+          // Table header row
+          Container(
+            color: const Color(0xFFF5F6F8),
+            child: Row(children: [
+              Expanded(child: Padding(
+                padding: const EdgeInsets.fromLTRB(14, 6, 4, 6),
+                child: const Text('Product',
+                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _kSub)),
+              )),
+              const SizedBox(width: _kNameToBadgeMinGap),
+              SizedBox(width: _kBadgeClusterMaxW, child: const Text('Qty spoken',
+                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _kSub))),
+              const SizedBox(width: _kBadgeToTotalGap),
+              SizedBox(width: _kTotalColW, child: Padding(
+                padding: const EdgeInsets.only(right: 10),
+                child: const Text('Total', textAlign: TextAlign.right,
+                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _kSub)),
+              )),
+            ]),
+          ),
+          const Divider(height: 1),
+          // Table body
+          Expanded(
+            child: groups.isEmpty
+                ? const Center(child: Text('No mentions for this selection',
+                    style: TextStyle(color: _kSub)))
+                : ListView.builder(
+                    controller: ctrl,
+                    padding: const EdgeInsets.only(bottom: 24),
+                    itemCount: groups.length,
+                    itemBuilder: (_, i) {
+                      final g = groups[i];
+                      final full = g.ordered > 0 && g.total >= g.ordered;
+                      return Container(
+                        decoration: const BoxDecoration(
+                            border: Border(bottom: BorderSide(color: _kBorder))),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          children: [
+                            Expanded(child: Padding(
+                              padding: const EdgeInsets.fromLTRB(14, 8, 4, 8),
+                              child: Text(g.name,
+                                  style: const TextStyle(fontSize: 12, color: _kText),
+                                  overflow: TextOverflow.ellipsis, maxLines: 2),
+                            )),
+                            const SizedBox(width: _kNameToBadgeMinGap),
+                            SizedBox(
+                              width: _kBadgeClusterMaxW,
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(vertical: 6),
+                                child: Wrap(
+                                  spacing: 4, runSpacing: 4,
+                                  children: g.entries.map((e) {
+                                    final active = playSeq != null && e.seq == playSeq;
+                                    return Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: active ? _kGreen : const Color(0xFFF5F6F8),
+                                        borderRadius: BorderRadius.circular(8),
+                                        border: Border.all(color: active ? _kGreen : _kBorder),
+                                      ),
+                                      child: Text('${e.qty}',
+                                          style: TextStyle(
+                                              fontSize: 12, fontWeight: FontWeight.w600,
+                                              color: active ? Colors.white : _kText)),
+                                    );
+                                  }).toList(),
                                 ),
                               ),
-                          ]),
-                        );
-                      }),
-                    ]);
-                  },
-                ),
-        ),
-      ]),
+                            ),
+                            const SizedBox(width: _kBadgeToTotalGap),
+                            SizedBox(
+                              width: _kTotalColW,
+                              child: Padding(
+                                padding: const EdgeInsets.only(right: 10),
+                                child: Text(
+                                  g.ordered > 0 ? '${g.total}/${g.ordered}' : '${g.total}',
+                                  style: TextStyle(
+                                      fontSize: 12, fontWeight: FontWeight.w700,
+                                      color: full ? _kGreen : _kText),
+                                  textAlign: TextAlign.right,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
     );
   }
 }

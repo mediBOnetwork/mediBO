@@ -16,6 +16,7 @@ import 'package:xml/xml.dart' as xmlp;
 
 import '../../services/match_status_service.dart';
 import '../../utils/render_log.dart';
+import '../../widgets/code_field.dart';
 import '../../widgets/inquiry_v12.dart';
 import '../../widgets/order_item_card.dart';
 
@@ -4560,6 +4561,7 @@ class _SupplierEditDialog extends StatefulWidget {
 class _SupplierEditDialogState extends State<_SupplierEditDialog> {
   late final Map<String, TextEditingController> _ctrls;
   bool _saving = false;
+  CodeStatus _supCodeStatus = CodeStatus.idle;
 
   static const _fields = [
     ('supplier_name', 'Supplier Name'),
@@ -4638,19 +4640,30 @@ class _SupplierEditDialogState extends State<_SupplierEditDialog> {
                   for (final f in _fields)
                     SizedBox(
                       width: 220,
-                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        Text(f.$2, style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280), fontWeight: FontWeight.w500)),
-                        const SizedBox(height: 4),
-                        TextField(
-                          controller: _ctrls[f.$1],
-                          decoration: InputDecoration(
-                            isDense: true,
-                            contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                            border: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: const BorderSide(color: Color(0xFFD1D5DB))),
-                          ),
-                          style: const TextStyle(fontSize: 13),
-                        ),
-                      ]),
+                      child: f.$1 == 'supplier_code'
+                          ? CodeField(
+                              controller: _ctrls['supplier_code']!,
+                              label: 'Supplier Code',
+                              hint: 'ABC123',
+                              isTaken: (code) async => await Supabase.instance.client
+                                  .rpc('is_supplier_code_taken', params: {'p_code': code}) as bool,
+                              originalCode: widget.row.rawData['supplier_code']?.toString(),
+                              requiredField: false,
+                              onStatusChanged: (s) => setState(() => _supCodeStatus = s),
+                            )
+                          : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                              Text(f.$2, style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280), fontWeight: FontWeight.w500)),
+                              const SizedBox(height: 4),
+                              TextField(
+                                controller: _ctrls[f.$1],
+                                decoration: InputDecoration(
+                                  isDense: true,
+                                  contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: const BorderSide(color: Color(0xFFD1D5DB))),
+                                ),
+                                style: const TextStyle(fontSize: 13),
+                              ),
+                            ]),
                     ),
                 ]),
               ),
@@ -4660,7 +4673,7 @@ class _SupplierEditDialogState extends State<_SupplierEditDialog> {
               TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel', style: TextStyle(color: Color(0xFF6B7280)))),
               const SizedBox(width: 8),
               FilledButton(
-                onPressed: _saving ? null : _save,
+                onPressed: (_saving || _supCodeStatus == CodeStatus.taken || _supCodeStatus == CodeStatus.invalid) ? null : _save,
                 style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
                 child: _saving ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('Save'),
               ),
@@ -8965,6 +8978,7 @@ class _ManualSupplierImportDialogState extends State<_ManualSupplierImportDialog
   String? _page1Error;
   bool _submitting = false;
   String? _submitError;
+  CodeStatus _supCodeStatus = CodeStatus.idle;
 
   // Page 2 — category mode
   bool _byCategory = true;
@@ -9077,6 +9091,14 @@ class _ManualSupplierImportDialogState extends State<_ManualSupplierImportDialog
   // ── validation & submit ────────────────────────────────────────────────────
 
   bool _validatePage1() {
+    if (_supCodeStatus == CodeStatus.taken) {
+      setState(() => _page1Error = 'Supplier Code is already in use — choose another.');
+      return false;
+    }
+    if (_supCodeStatus == CodeStatus.invalid) {
+      setState(() => _page1Error = 'Supplier Code must be 3 letters + 3 digits (e.g. ABC123).');
+      return false;
+    }
     for (final f in _kRequiredFields) {
       final v = _kDropdownOptions.containsKey(f)
           ? (_dropdownValues[f] ?? '')
@@ -9278,6 +9300,20 @@ class _ManualSupplierImportDialogState extends State<_ManualSupplierImportDialog
   Widget _buildField(String col) {
     final label = _kFieldLabel[col] ?? col;
     final required = _kRequiredFields.contains(col);
+    if (col == 'supplier_code') {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 10),
+        child: CodeField(
+          controller: _ctrl['supplier_code']!,
+          label: label,
+          hint: 'ABC123',
+          isTaken: (code) async => await Supabase.instance.client
+              .rpc('is_supplier_code_taken', params: {'p_code': code}) as bool,
+          requiredField: false,
+          onStatusChanged: (s) => setState(() => _supCodeStatus = s),
+        ),
+      );
+    }
     if (_kDropdownOptions.containsKey(col)) {
       return Padding(
         padding: const EdgeInsets.only(bottom: 10),

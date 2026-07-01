@@ -1,11 +1,11 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../models/user_profile.dart';
 import '../../user_state.dart';
+import '../../utils/render_log.dart';
+import '../../widgets/code_field.dart';
 
 // ─── Role enum ───────────────────────────────────────────────────────────────
 
@@ -33,7 +33,6 @@ extension _RoleX on _Role {
   }
 }
 
-enum _CodeStatus { idle, invalid, checking, available, taken }
 
 class BusinessDetailsScreen extends StatefulWidget {
   final String userId;
@@ -73,8 +72,7 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
   final _gstCtrl = TextEditingController();
   String? _paymentTerm;
   final _customerCodeCtrl = TextEditingController();
-  _CodeStatus _codeStatus = _CodeStatus.idle;
-  Timer? _codeDebounce;
+  CodeStatus _customerCodeStatus = CodeStatus.idle;
 
   // ── Supplier fields ──────────────────────────────────────────────────────
   final _supCompanyCtrl = TextEditingController();
@@ -87,6 +85,8 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
   final _supGstCtrl = TextEditingController();
   final _supDlCtrl = TextEditingController();
   final _supCategoriesCtrl = TextEditingController();
+  final _supplierCodeCtrl = TextEditingController();
+  CodeStatus _supplierCodeStatus = CodeStatus.idle;
 
   // ── MR fields ────────────────────────────────────────────────────────────
   final _mrNameCtrl = TextEditingController();
@@ -161,39 +161,29 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
       _emailCtrl, _dl20bCtrl, _dl21bCtrl, _gstCtrl, _customerCodeCtrl,
       _supCompanyCtrl, _supContactCtrl, _supPhoneCtrl, _supEmailCtrl,
       _supCityCtrl, _supStateCtrl, _supAddressCtrl, _supGstCtrl, _supDlCtrl,
-      _supCategoriesCtrl, _mrNameCtrl, _mrPhoneCtrl, _mrEmailCtrl,
+      _supCategoriesCtrl, _supplierCodeCtrl, _mrNameCtrl, _mrPhoneCtrl, _mrEmailCtrl,
       _mrCompanyCtrl, _mrTerritoryCtrl, _mrCityCtrl, _mrStateCtrl, _mrAddressCtrl,
       _coNameCtrl, _coContactCtrl, _coPhoneCtrl, _coEmailCtrl, _coGstCtrl,
       _coDlCtrl, _coCategoriesCtrl, _coAddressCtrl, _coCityCtrl, _coStateCtrl,
       _coWebsiteCtrl, _dpNameCtrl, _dpPhoneCtrl, _dpEmailCtrl, _dpZoneCtrl,
       _dpCityCtrl, _dpStateCtrl, _dpAddressCtrl,
     ]) c.dispose();
-    _codeDebounce?.cancel();
     super.dispose();
   }
 
-  // ── Pharmacy code check ──────────────────────────────────────────────────
-  void _onCodeChanged(String value) {
-    final raw = value.trim().toUpperCase();
-    if (raw.isEmpty) { _codeDebounce?.cancel(); setState(() => _codeStatus = _CodeStatus.idle); return; }
-    if (!RegExp(r'^[A-Za-z]{3}[0-9]{3}$').hasMatch(raw)) { _codeDebounce?.cancel(); setState(() => _codeStatus = _CodeStatus.invalid); return; }
-    setState(() => _codeStatus = _CodeStatus.checking);
-    _codeDebounce?.cancel();
-    _codeDebounce = Timer(const Duration(milliseconds: 350), () => _checkCode(raw));
-  }
-
-  Future<void> _checkCode(String code) async {
-    try {
-      final taken = await Supabase.instance.client.rpc('is_customer_code_taken', params: {'p_code': code}) as bool;
-      if (!mounted) return;
-      if (_customerCodeCtrl.text.trim().toUpperCase() != code) return;
-      setState(() => _codeStatus = taken ? _CodeStatus.taken : _CodeStatus.available);
-    } catch (_) { if (mounted) setState(() => _codeStatus = _CodeStatus.idle); }
-  }
-
+  // ── Code availability helpers ────────────────────────────────────────────
   bool get _blockedByCode {
     if (_customerCodeCtrl.text.trim().isEmpty) return false;
-    return _codeStatus == _CodeStatus.invalid || _codeStatus == _CodeStatus.checking || _codeStatus == _CodeStatus.taken;
+    return _customerCodeStatus == CodeStatus.invalid ||
+        _customerCodeStatus == CodeStatus.checking ||
+        _customerCodeStatus == CodeStatus.taken;
+  }
+
+  bool get _blockedBySupCode {
+    if (_supplierCodeCtrl.text.trim().isEmpty) return false;
+    return _supplierCodeStatus == CodeStatus.invalid ||
+        _supplierCodeStatus == CodeStatus.checking ||
+        _supplierCodeStatus == CodeStatus.taken;
   }
 
   // ── Submit routing ───────────────────────────────────────────────────────
@@ -211,8 +201,12 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
       if (mounted) Navigator.of(context).pop();
     } on PostgrestException catch (e) {
       if (!mounted) return;
-      if (e.code == '23505') setState(() => _codeStatus = _CodeStatus.taken);
-      else setState(() => _saveError = '[${e.code}] ${e.message}');
+      if (e.code == '23505') {
+        if (_role == _Role.pharmacy) setState(() => _customerCodeStatus = CodeStatus.taken);
+        else if (_role == _Role.supplier) setState(() => _supplierCodeStatus = CodeStatus.taken);
+      } else {
+        setState(() => _saveError = '[${e.code}] ${e.message}');
+      }
     } catch (e) { if (mounted) setState(() => _saveError = e.toString()); }
     finally { if (mounted) setState(() => _saving = false); }
   }
@@ -242,6 +236,8 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
   }
 
   Future<void> _saveSupplier() async {
+    final code = _supplierCodeCtrl.text.trim().toUpperCase();
+    try { RenderLog.write('c307_saved_code', 'code=$code'); } catch (_) {}
     await Supabase.instance.client.from('supplier_profiles').insert({
       'user_id': widget.userId,
       'supplier_name': _supCompanyCtrl.text.trim(),
@@ -255,6 +251,7 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
       'gstin': _supGstCtrl.text.trim().isNotEmpty ? _supGstCtrl.text.trim().toUpperCase() : null,
       'drug_license': _supDlCtrl.text.trim().isNotEmpty ? _supDlCtrl.text.trim() : null,
       'notes': _supCategoriesCtrl.text.trim().isNotEmpty ? 'Product Categories: ${_supCategoriesCtrl.text.trim()}' : null,
+      if (code.isNotEmpty) 'supplier_code': code,
       'status': 'pending',
       'approved': false,
     });
@@ -308,21 +305,6 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
       'id_proof_type': _dpIdProofType,
       'status': 'pending',
     });
-  }
-
-  // ── Pharmacy code status widget ──────────────────────────────────────────
-  Widget _buildCodeStatus() {
-    switch (_codeStatus) {
-      case _CodeStatus.idle: return Padding(padding: const EdgeInsets.only(top: 6), child: Text('Format: 3 letters + 3 digits (e.g. ABC123). Must be unique.', style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))));
-      case _CodeStatus.invalid: return _codeStatusRow(icon: Icons.error_outline, color: const Color(0xFFDC2626), text: '3 letters + 3 digits (e.g. ABC123)');
-      case _CodeStatus.checking: return const Padding(padding: EdgeInsets.only(top: 6), child: Row(children: [SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF6B7280))), SizedBox(width: 6), Text('Checking availability…', style: TextStyle(fontSize: 12, color: Color(0xFF6B7280)))]));
-      case _CodeStatus.available: return _codeStatusRow(icon: Icons.check_circle_outline, color: const Color(0xFF16A34A), text: 'Available');
-      case _CodeStatus.taken: return _codeStatusRow(icon: Icons.cancel_outlined, color: const Color(0xFFDC2626), text: 'Already taken — choose a different code');
-    }
-  }
-
-  Widget _codeStatusRow({required IconData icon, required Color color, required String text}) {
-    return Padding(padding: const EdgeInsets.only(top: 6), child: Row(children: [Icon(icon, size: 14, color: color), const SizedBox(width: 4), Flexible(child: Text(text, style: TextStyle(fontSize: 12, color: color)))]));
   }
 
   @override
@@ -379,7 +361,7 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
                     SizedBox(
                       height: 52,
                       child: FilledButton(
-                        onPressed: (_saving || (_role == _Role.pharmacy && _blockedByCode)) ? null : _save,
+                        onPressed: (_saving || (_role == _Role.pharmacy && _blockedByCode) || (_role == _Role.supplier && _blockedBySupCode)) ? null : _save,
                         style: FilledButton.styleFrom(
                           backgroundColor: const Color(0xFF1B5E20),
                           disabledBackgroundColor: const Color(0xFF1B5E20).withValues(alpha: 0.5),
@@ -484,8 +466,14 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
     const SizedBox(height: 14),
     _Dropdown(label: 'Payment Term', required: true, value: _paymentTerm, items: _paymentTerms, onChanged: (v) => setState(() => _paymentTerm = v), validator: (v) => v == null ? 'Select payment term' : null),
     const SizedBox(height: 14),
-    _Field(label: 'Customer Code', required: true, controller: _customerCodeCtrl, hint: 'ABC123', maxLength: 6, capitalization: TextCapitalization.characters, onChanged: _onCodeChanged, inputFormatters: [LengthLimitingTextInputFormatter(6)], validator: (v) { if (v == null || v.trim().isEmpty) return 'Required'; if (!RegExp(r'^[A-Za-z]{3}[0-9]{3}$').hasMatch(v.trim())) return '3 letters + 3 digits (e.g. ABC123)'; return null; }),
-    _buildCodeStatus(),
+    CodeField(
+      controller: _customerCodeCtrl,
+      label: 'Customer Code',
+      hint: 'ABC123',
+      isTaken: (code) async =>
+          await Supabase.instance.client.rpc('is_customer_code_taken', params: {'p_code': code}) as bool,
+      onStatusChanged: (s) => setState(() => _customerCodeStatus = s),
+    ),
   ];
 
   // ── Supplier form ──────────────────────────────────────────────────────
@@ -517,6 +505,17 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
     _Field(label: 'Drug License Number', controller: _supDlCtrl, hint: 'GJ-AHM-123456 (optional)'),
     const SizedBox(height: 14),
     _Field(label: 'Product Categories Supplied', controller: _supCategoriesCtrl, hint: 'e.g. Antibiotics, Cardiovascular, OTC…', maxLines: 2),
+    const SizedBox(height: 28),
+    const _SectionHeader(icon: Icons.manage_accounts_outlined, title: 'Account Setup'),
+    const SizedBox(height: 14),
+    CodeField(
+      controller: _supplierCodeCtrl,
+      label: 'Supplier Code',
+      hint: 'ABC123',
+      isTaken: (code) async =>
+          await Supabase.instance.client.rpc('is_supplier_code_taken', params: {'p_code': code}) as bool,
+      onStatusChanged: (s) => setState(() => _supplierCodeStatus = s),
+    ),
   ];
 
   // ── MR form ────────────────────────────────────────────────────────────

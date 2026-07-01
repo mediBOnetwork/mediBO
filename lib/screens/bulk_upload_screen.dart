@@ -1809,13 +1809,25 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       final form = _detectDosageForm(term);
       double topScore = _stage2Score(term, products[0].name);
       if (form != null && _formMatches(products[0].name, form)) topScore += 0.02;
+      // Substring promotion: normalized OCR term inside candidate name (or vice-versa)
+      // catches exact-prefix matches like "renostrong" ⊂ "renostrong tablet".
+      final qNorm = _normStr(term);
+      final cNorm = _normStr(products[0].name);
+      final isSubstring = qNorm.isNotEmpty && cNorm.isNotEmpty &&
+          (cNorm.contains(qNorm) || qNorm.contains(cNorm));
+      final _MatchStatus decidedStatus;
+      if (isSubstring || topScore >= 0.72) {
+        decidedStatus = _MatchStatus.matched;
+      } else if (topScore >= 0.45) {
+        decidedStatus = _MatchStatus.partial;
+      } else {
+        decidedStatus = _MatchStatus.unrecognized;
+      }
+      try { RenderLog.write('c315_match_decided', '${decidedStatus.name}:${topScore.toStringAsFixed(2)}'); } catch (_) {}
       return _MatchRow(
         lineItem: name,
         qty: qty,
-        // Threshold 0.55: scores below this indicate a low-confidence or garbled-OCR
-        // match that should not be auto-ticked. The previous 0.40 threshold allowed
-        // form-bonus-inflated (~0.41) wrong matches like "Eptoin LS"→"Endogain-S".
-        status: topScore >= 0.55 ? _MatchStatus.matched : _MatchStatus.partial,
+        status: decidedStatus,
         candidates: products,
         bbox: bbox,
       );
@@ -1837,6 +1849,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         'page_limit': 20,
       });
       list = List<Map<String, dynamic>>.from(rows as List);
+      try { RenderLog.write('c315_automatch_rpc', list.length.toString()); } catch (_) {}
     } catch (e) {
       debugPrint('[FuzzyMatch] RPC failed for "$name": $e — falling back to ILIKE');
     }
@@ -1861,7 +1874,8 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     list = list.where((row) {
       if (!row.containsKey('status')) return true;
       final s = (row['status'] as String? ?? '').toLowerCase();
-      return s == 'available' || s == 'active' || s == '1' || s == 'true';
+      // null/blank status treated as available — the RPC WHERE clause already filters.
+      return s.isEmpty || s == 'available' || s == 'active' || s == '1' || s == 'true';
     }).toList();
 
     if (list.isEmpty) {

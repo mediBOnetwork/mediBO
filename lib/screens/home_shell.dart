@@ -99,6 +99,8 @@ class _HomeShellState extends State<HomeShell> {
       try { RenderLog.write('c312_bulk_built', 'split_buttons_#312'); } catch (_) {}
       // CHANGE #314: structural attestation — mobile header slimmed, desktop preserved.
       try { RenderLog.write('c314_preview_built', 'mobile_slim_#314'); } catch (_) {}
+      // CHANGE #315: auto-match decision uses substring+0.72 thresholds, null-status fixed.
+      try { RenderLog.write('c315_preview_built', 'rpc_match_#315'); } catch (_) {}
     });
   }
 

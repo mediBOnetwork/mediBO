@@ -1457,34 +1457,30 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     try {
       final slug = supName.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '_');
       // Always stamp a FRESH timer for this supplier (even if token already exists)
-      final rows = await Supabase.instance.client
-          .rpc('start_inquiry_for_suppliers', params: {'p_supplier_names': [supName]}) as List;
-      String? token;
-      for (final r in rows) {
-        final m = Map<String, dynamic>.from(r as Map);
-        if (mounted) setState(() => _inquiryLinks[m['supplier_name'] as String] = m);
-        if ((m['supplier_name'] as String?)?.toLowerCase() == supName.toLowerCase()) {
-          token = m['token'] as String?;
-        }
-      }
-      RenderLog.write('row_send_started_$slug', 'token:${token != null ? "ok" : "null"}');
+      // Stamp a fresh timer for this supplier
+      await Supabase.instance.client
+          .rpc('start_inquiry_for_suppliers', params: {'p_supplier_names': [supName]});
+
+      // Refresh overview so this card shows its fresh Exp timer and inquiry_code is populated
+      _fetchInquiryOverview(silent: true);
+      _fetchUnassignedItems(silent: true);
+      RenderLog.write('row_send_expiry_stamped', supName);
+
+      // Get the short link via get_supplier_contacts (returns link = 'https://medibo.in/<code>')
+      final link = await _getInquiryShortLink(supName);
+      RenderLog.write('row_send_started_$slug', 'link:${link != null ? "ok" : "null"}');
 
       if (!mounted) return;
 
       setState(() => _inquiryLoading = false);
 
-      if (token == null || token.isEmpty) {
-        showToast(context, 'Could not get inquiry link', isError: true);
+      if (link == null || link.isEmpty) {
+        showToast(context, 'Send the inquiry first', isError: true);
         return;
       }
 
-      final link = 'https://medibo.in/inquiry/$token';
+      RenderLog.write('c319_share_uses_rpc_link', 'inquiry:$supName');
       final message = 'Hello $supName,\nWe want to buy some items from you. Please confirm availability:\n$link';
-
-      // Refresh overview so this card shows its fresh Exp timer (timer already stamped)
-      _fetchInquiryOverview(silent: true);
-      _fetchUnassignedItems(silent: true);
-      RenderLog.write('row_send_expiry_stamped', supName);
 
       // Open contact-picker popup — user selects which number to WhatsApp
       await _showSendContactPicker(supplierName: supName, message: message, btnCtx: btnCtx, isOrders: false);
@@ -1506,8 +1502,8 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
 
       final supplierList = overview.map((o) {
         final name = o['supplier_name'] as String? ?? '';
-        final tok  = o['token'] as String? ?? '';
-        final link = 'https://medibo.in/inquiry/$tok';
+        final inquiryCode = (o['inquiry_code'] as String? ?? '').trim();
+        final link = inquiryCode.isNotEmpty ? 'https://medibo.in/$inquiryCode' : '';
         final sup = _suppliers.cast<_SupRow?>().firstWhere(
           (s) => s!.supplierName.toLowerCase() == name.toLowerCase(),
           orElse: () => null,
@@ -1620,12 +1616,11 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         ..._inquiryLinks.entries.map((e) {
           final supplierName = e.key;
           final data = e.value;
-          final token = data['token'] as String? ?? '';
           final status = data['status'] as String? ?? 'pending';
           final expiresAt = data['expires_at'] != null
               ? DateTime.tryParse(data['expires_at'] as String)
               : null;
-          final link = 'https://medibo.in/inquiry/$token';
+          final link = _inquiryShortLinkFromOverview(supplierName);
           final expStr = expiresAt != null ? _formatExpIST(expiresAt) : '';
           return Container(
             margin: const EdgeInsets.only(bottom: 8),
@@ -2386,8 +2381,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   }
 
   Widget _buildInquiryInlineLink(String supName, Map<String, dynamic> linkData) {
-    final tok  = linkData['token'] as String? ?? '';
-    final link = 'https://medibo.in/inquiry/$tok';
+    final link = _inquiryShortLinkFromOverview(supName);
     return Container(
       margin: const EdgeInsets.fromLTRB(14, 0, 14, 12),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -2725,6 +2719,33 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
 
   // ── Inquiry link helpers ──────────────────────────────────────────────────
 
+  // Returns the short inquiry link from get_supplier_contacts (e.g. https://medibo.in/SPO...I...).
+  // Returns null if no live form for this supplier.
+  Future<String?> _getInquiryShortLink(String supName) async {
+    try {
+      final result = await Supabase.instance.client
+          .rpc('get_supplier_contacts', params: {'p_supplier_name': supName});
+      if (result is Map) {
+        final link = result['link'] as String?;
+        return (link != null && link.isNotEmpty) ? link : null;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  // Returns the short inquiry link from the cached overview (no RPC call).
+  // Falls back to empty string if no inquiry_code available.
+  String _inquiryShortLinkFromOverview(String supName) {
+    final lower = supName.toLowerCase();
+    for (final ov in _inquiryOverview) {
+      if ((ov['supplier_name'] as String? ?? '').toLowerCase() == lower) {
+        final code = (ov['inquiry_code'] as String? ?? '').trim();
+        return code.isNotEmpty ? 'https://medibo.in/$code' : '';
+      }
+    }
+    return '';
+  }
+
   Future<String?> _ensureInquiryToken(String supName) async {
     final existing = _inquiryLinks[supName]?['token'] as String?;
     if (existing != null && existing.isNotEmpty) return existing;
@@ -2739,12 +2760,12 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   }
 
   Future<void> _copyInquiryLink(String supName) async {
-    final token = await _ensureInquiryToken(supName);
-    if (token == null || token.isEmpty) {
-      if (mounted) showToast(context, 'Could not get inquiry link', isError: true);
+    final link = await _getInquiryShortLink(supName);
+    if (link == null || link.isEmpty) {
+      if (mounted) showToast(context, 'Send the inquiry first', isError: true);
       return;
     }
-    final link = 'https://medibo.in/inquiry/$token';
+    RenderLog.write('c319_share_uses_rpc_link', 'copy:$supName');
     Clipboard.setData(ClipboardData(text: link));
     if (mounted) showToast(context, 'Link copied');
     RenderLog.write('inquiry_copy_link', supName);
@@ -2782,14 +2803,13 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
 
   Future<void> _openSendPopover(String supName) async {
     _closeSendPopover();
-    final token = await _ensureInquiryToken(supName);
-    if (token == null || token.isEmpty) {
-      if (mounted) showToast(context, 'Could not get inquiry link', isError: true);
+    final link = await _getInquiryShortLink(supName);
+    if (link == null || link.isEmpty) {
+      if (mounted) showToast(context, 'Send the inquiry first', isError: true);
       return;
     }
     if (!mounted) return;
-
-    final link = 'https://medibo.in/inquiry/$token';
+    RenderLog.write('c319_share_uses_rpc_link', 'popover:$supName');
     final sup = _suppliers.cast<_SupRow?>().firstWhere(
       (s) => s!.supplierName.toLowerCase() == supName.toLowerCase(),
       orElse: () => null,

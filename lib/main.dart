@@ -138,6 +138,7 @@ void main() {
     RenderLog.write('c190_link_route_registered', '/dispute?token= route active');
     RenderLog.write('c317_build', '317');
     RenderLog.write('c318_build', '318');
+    RenderLog.write('c319_build', '319');
 
     // Selftest hook (guarded; no-op without exact secret; mark for removal in #64).
     // Triggers signInWithPassword then defers the selftest_login trace to the

@@ -13640,16 +13640,19 @@ class _DisputesScreenState extends State<_DisputesScreen> {
   }
 
   String _supplierLinkFromItems(List<DisputeItem> items) {
-    const tokenStatuses = {'reminder_sent', 'shop_logged'};
-    final t = items
-            .where((d) => tokenStatuses.contains(d.statusCode) && (d.token ?? '').isNotEmpty)
-            .map((d) => d.token!)
+    // Use dispute_code to build the short /<CODE> link — never the token form.
+    const codeStatuses = {'reminder_sent', 'shop_logged'};
+    final code = items
+            .where((d) => codeStatuses.contains(d.statusCode) && (d.disputeCode ?? '').isNotEmpty)
+            .map((d) => d.disputeCode!)
             .firstOrNull ??
+        items.where((d) => (d.disputeCode ?? '').isNotEmpty).map((d) => d.disputeCode!).firstOrNull ??
         '';
-    if (t.isNotEmpty) {
+    if (code.isNotEmpty) {
       RenderLog.write('c174_supplier_link', 'shown_for_statuses=reminder_sent|shop_logged;domain=medibo.in');
+      RenderLog.write('c319_share_uses_rpc_link', 'dispute:$code');
     }
-    return t.isNotEmpty ? '$_kDisputeDomain/dispute?token=$t' : '';
+    return code.isNotEmpty ? '$_kDisputeDomain/$code' : '';
   }
 
   // Supplier counts — (active, total)

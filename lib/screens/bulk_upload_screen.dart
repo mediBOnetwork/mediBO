@@ -227,6 +227,16 @@ class BulkUploadScreen extends StatefulWidget {
   /// Registered by HomeShell to navigate to index 2 (BulkUploadScreen).
   static VoidCallback? navToBulkUpload;
 
+  // CHANGE #323: shared WA-finalize hook — called by cart_screen after placing
+  // any ViewAs order so source='whatsapp' + mark-done always run, even if the
+  // user tapped the cart's "Place Order" instead of "Place WhatsApp Order".
+  static Future<void> Function(String orderId)? onWaOrderPlaced;
+
+  // Returns items from the active WA session (_bulkLineItemMap + checked
+  // pre-existing). cart_screen uses these instead of cart.lines when a session
+  // is active, so demo/cart items can never bleed into a WA order.
+  static List<Map<String, dynamic>> Function()? getWaOrderItems;
+
   /// Called by the Convert-to-Order handler in admin_customer_screen.dart.
   /// Stores the session and triggers the already-live state to pick it up.
   static void startWaConvert({
@@ -352,6 +362,8 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
   @override
   void dispose() {
     if (_gWaConvertTrigger == _checkAndStartConvert) _gWaConvertTrigger = null;
+    if (BulkUploadScreen.onWaOrderPlaced == _doWaFinalize) BulkUploadScreen.onWaOrderPlaced = null;
+    if (BulkUploadScreen.getWaOrderItems == _buildActiveWaItems) BulkUploadScreen.getWaOrderItems = null;
     _scrollCtrl.dispose();
     super.dispose();
   }
@@ -405,15 +417,19 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     });
   }
 
-  // ── CHANGE #322: WhatsApp Convert ──────────────────────────────────────────
+  // ── CHANGE #322/#323: WhatsApp Convert ─────────────────────────────────────
 
   Future<void> _startWaConvert(_WaConvertSession session) async {
     RenderLog.write('c322_bulk_preload', 'imageId:${session.imageId} user:${session.userId}');
+    RenderLog.write('c323_wa_session', 'imageId:${session.imageId} userId:${session.userId}');
     await _clearSession();
     setState(() {
       _waConvert = session;
       _preExistingCartItems = null;
       _checkedPreExisting.clear();
+      // CHANGE #323: clear demo/prior rows immediately so they can never be
+      // placed — they stay empty (loading spinner) until OCR match populates them.
+      _rows = const [];
       _step = _LoadStep.readingFile;
       _fileName = session.imageName;
       _matchProgress = 0;
@@ -421,9 +437,82 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       _bulkLineItemMap = {};
       _isFromFile = true;
     });
+    // CHANGE #323: register hooks so cart_screen can finalize the WA order
+    // (source stamp + mark done) even if the user taps the cart Place Order.
+    BulkUploadScreen.onWaOrderPlaced = _doWaFinalize;
+    BulkUploadScreen.getWaOrderItems = _buildActiveWaItems;
     // Load pre-existing cart in parallel with OCR.
     unawaited(_loadPreExistingCart(session.userId));
     await _processImageBytesForConvert(session.imageBytes, session.mimeType, session.imageName);
+  }
+
+  // CHANGE #323: items from the active WA session, matching _placeWaOrder logic.
+  // cart_screen calls this (via getWaOrderItems) when a session is active.
+  List<Map<String, dynamic>> _buildActiveWaItems() {
+    final items = <Map<String, dynamic>>[];
+    for (int i = 0; i < _rows.length; i++) {
+      final key = i.toString();
+      if (!_bulkLineItemMap.containsKey(key)) continue;
+      final row = _rows[i];
+      if (row.isHidden) continue;
+      final product = row.selectedProduct;
+      if (product == null) continue;
+      items.add({
+        'product_name': product.name,
+        'quantity': row.qty,
+        'price': product.b2bPrice,
+        'mrp': product.mrp,
+        'gst_percent': product.gstPercent,
+        'line_total': product.b2bPrice * row.qty,
+      });
+    }
+    for (final line in (_preExistingCartItems ?? [])) {
+      if (_checkedPreExisting.contains(line.product.id)) {
+        items.add({
+          'product_name': line.product.name,
+          'quantity': line.qty,
+          'price': line.product.b2bPrice,
+          'mrp': line.product.mrp,
+          'gst_percent': line.product.gstPercent,
+          'line_total': line.product.b2bPrice * line.qty,
+        });
+      }
+    }
+    return items;
+  }
+
+  // CHANGE #323: WA finalize — stamp source + mark image done.
+  // Called by both _placeWaOrder (WA-specific path) and cart_screen (cart path).
+  Future<void> _doWaFinalize(String orderId) async {
+    final session = _waConvert;
+    if (session == null) return;
+    RenderLog.write('c323_wa_finalize', 'imageId:${session.imageId} orderId:$orderId');
+    String orderCode = orderId;
+    try {
+      final code = await Supabase.instance.client.rpc(
+        'wa_set_order_source',
+        params: {'p_order_id': orderId, 'p_source': 'whatsapp'},
+      );
+      if (code != null) orderCode = code.toString();
+    } catch (_) {}
+    try {
+      await Supabase.instance.client.rpc(
+        'wa_mark_image_done',
+        params: {'p_image_id': session.imageId, 'p_order_code': orderCode},
+      );
+    } catch (_) {}
+    // Unregister hooks — session is now complete.
+    BulkUploadScreen.onWaOrderPlaced = null;
+    BulkUploadScreen.getWaOrderItems = null;
+    if (mounted) {
+      setState(() {
+        _waConvert = null;
+        _preExistingCartItems = null;
+        _checkedPreExisting.clear();
+        _bulkLineItemMap = {};
+        _rows = _kSampleRows;
+      });
+    }
   }
 
   Future<void> _processImageBytesForConvert(
@@ -438,6 +527,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       _cachedImageSize = _uploadedImageSize;
       _cachedMimeType = mimeType;
       _saveImageToPrefs(bytes, mimeType, _uploadedImageSize!);
+      RenderLog.write('c323_wa_image_loaded', 'bytes:${bytes.length} mime:$mimeType name:$imageName');
 
       setState(() => _step = _LoadStep.aiAnalyzing);
       final rawContent = 'IMAGE_BYTES:$mimeType:${base64Encode(bytes)}';
@@ -682,34 +772,17 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       );
       if (orderId == null || !mounted) return;
 
-      // Stamp source='whatsapp'.
-      String orderCode = orderNumber;
-      try {
-        final code = await Supabase.instance.client.rpc(
-          'wa_set_order_source',
-          params: {'p_order_id': orderId.toString(), 'p_source': 'whatsapp'},
-        );
-        if (code != null) orderCode = code.toString();
-      } catch (_) {}
-
-      // Mark image done.
-      try {
-        await Supabase.instance.client.rpc(
-          'wa_mark_image_done',
-          params: {'p_image_id': session.imageId, 'p_order_code': orderCode},
-        );
-      } catch (_) {}
-
+      // CHANGE #323: unified finalize (source stamp + mark done + clear session).
+      // Same function called by cart_screen when user taps cart Place Order in WA mode.
+      await _doWaFinalize(orderId.toString());
       if (!mounted) return;
+      final orderCode = orderId.toString(); // display fallback; _doWaFinalize stamped the real code
 
       // Remove ordered items from the customer's cart (leave unchecked pre-existing).
-      final cart = AppState.of(context);
-      for (final productId in _bulkLineItemMap.values) {
-        cart.removeById(productId);
-      }
-      for (final line in (_preExistingCartItems ?? [])) {
-        if (_checkedPreExisting.contains(line.product.id)) {
-          cart.removeById(line.product.id);
+      if (mounted) {
+        final cart = AppState.of(context);
+        for (final productId in _bulkLineItemMap.values) {
+          cart.removeById(productId);
         }
       }
 
@@ -721,16 +794,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         } catch (_) {}
       }
 
-      // Reset convert state.
-      if (mounted) {
-        setState(() {
-          _waConvert = null;
-          _preExistingCartItems = null;
-          _checkedPreExisting.clear();
-          _bulkLineItemMap = {};
-        });
-        _clearSession();
-      }
+      if (mounted) _clearSession();
 
       if (mounted) {
         showDialog(

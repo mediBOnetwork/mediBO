@@ -4,6 +4,7 @@ import 'package:pharma_b2b/utils/toast.dart';
 
 import '../app_state.dart';
 import '../utils/order_code.dart';
+import 'bulk_upload_screen.dart';
 import '../utils/render_log.dart';
 import '../models/cart_model.dart';
 import '../models/product.dart';
@@ -78,16 +79,26 @@ class _CartScreenState extends State<CartScreen> {
           showToast(context, 'Customer id missing for ViewAs order', isError: true);
           return;
         }
-        final netPayable = cart.netPayable;
         final orderNumber = _generateOrderNumber();
-        final items = cart.lines.map((l) => {
-          'product_name': l.product.name,
-          'quantity':     l.quantity,
-          'price':        l.product.b2bPrice,
-          'mrp':          l.product.mrp,
-          'gst_percent':  l.product.gstPercent,
-          'line_total':   l.lineTotal,
-        }).toList();
+        // CHANGE #323: when a WA convert session is active, use the session's
+        // matched items (not cart.lines) so demo/pre-existing cart items can
+        // never bleed into a WhatsApp order.
+        final waItems = BulkUploadScreen.getWaOrderItems?.call();
+        final items = (waItems != null && waItems.isNotEmpty)
+            ? waItems
+            : cart.lines.map((l) => {
+                'product_name': l.product.name,
+                'quantity':     l.quantity,
+                'price':        l.product.b2bPrice,
+                'mrp':          l.product.mrp,
+                'gst_percent':  l.product.gstPercent,
+                'line_total':   l.lineTotal,
+              }).toList();
+        if (items.isEmpty) {
+          if (mounted) showToast(context, 'No items to order', isError: true);
+          return;
+        }
+        final netPayable = items.fold(0.0, (s, i) => s + (i['line_total'] as double));
         final orderId = await Supabase.instance.client.rpc(
           'admin_writeas_place_order',
           params: {
@@ -102,6 +113,11 @@ class _CartScreenState extends State<CartScreen> {
         );
         RenderLog.write('view_as_order_placed',
             'order:$orderId:customer:$customerId:total:${netPayable.toStringAsFixed(0)}');
+        // CHANGE #323: WhatsApp convert finalize — stamp source='whatsapp' and
+        // mark the image done.  No-op when no WA session is active.
+        if (orderId != null && BulkUploadScreen.onWaOrderPlaced != null) {
+          await BulkUploadScreen.onWaOrderPlaced!(orderId.toString());
+        }
         if (!mounted) return;
         // Read back the DB-generated order_code for display.
         String viewAsDisplayCode = orderNumber;

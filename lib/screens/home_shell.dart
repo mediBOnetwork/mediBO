@@ -115,6 +115,8 @@ class _HomeShellState extends State<HomeShell> {
       try { RenderLog.write('c327_img_view', 'fullscreen:openFullscreenImage'); } catch (_) {}
       // CHANGE #328: supplier Upload Bill + View Payment; admin View Bill + View Payment.
       try { RenderLog.write('c328_build', 328); } catch (_) {}
+      // CHANGE #329: 360° frontend fix — defensive parsers, bucket fix, import-return key.
+      try { RenderLog.write('c329_build', 329); } catch (_) {}
       // CHANGE #312: structural attestation — bulk upload split buttons compiled in.
       // Written here so it appears in ALL sessions without visiting the Bulk tab.
       try { RenderLog.write('c312_bulk_built', 'split_buttons_#312'); } catch (_) {}

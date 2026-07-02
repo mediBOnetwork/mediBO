@@ -18,6 +18,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../services/match_status_service.dart';
 import '../../utils/render_log.dart';
+import '../../utils/safe_parse.dart';
 import '../../widgets/code_field.dart';
 import '../../widgets/fullscreen_image.dart';
 import '../../widgets/inquiry_v12.dart';
@@ -10878,13 +10879,13 @@ class _AdminBillPanelBodyState extends State<_AdminBillPanelBody> {
   @override
   Widget build(BuildContext context) {
     final data          = widget.data;
-    final billsTotal    = (data['bills_total'] as num?)?.toInt() ?? 0;
-    final billsImported = (data['bills_imported'] as num?)?.toInt() ?? 0;
-    final billsLeft     = (data['bills_left'] as num?)?.toInt() ?? 0;
-    final mrpTotal      = (data['mrp_total'] as num?)?.toDouble() ?? 0.0;
-    final totalPaid     = (data['total_paid'] as num?)?.toDouble() ?? 0.0;
-    final advRequired   = (data['advance_required'] as num?)?.toDouble() ?? 0.0;
-    final advPaid       = (data['advance_paid'] as num?)?.toDouble() ?? 0.0;
+    final billsTotal    = safeParseInt(data['bills_total']);
+    final billsImported = safeParseInt(data['bills_imported']);
+    final billsLeft     = safeParseInt(data['bills_left']);
+    final mrpTotal      = safeParseDouble(data['mrp_total']);
+    final totalPaid     = safeParseDouble(data['total_paid']);
+    final advRequired   = safeParseDouble(data['advance_required']);
+    final advPaid       = safeParseDouble(data['advance_paid']);
     final supplierName  = (data['supplier_name'] as String?) ?? widget.row.supplierName ?? '?';
     final bills         = (data['bills'] as List<dynamic>? ?? [])
         .map((e) => Map<String, dynamic>.from(e as Map))
@@ -10904,8 +10905,8 @@ class _AdminBillPanelBodyState extends State<_AdminBillPanelBody> {
             onTap: () => setState(() => _selectedChip = 0),
           ),
           ...bills.map((bill) {
-            final billNo   = (bill['bill_no'] as num?)?.toInt() ?? 0;
-            final imported = bill['imported'] as bool? ?? false;
+            final billNo   = safeParseInt(bill['bill_no']);
+            final imported = parseBoolField(bill['imported']);
             return _BillChip(
               label: 'Bill $billNo',
               selected: _selectedChip == billNo,
@@ -11061,6 +11062,7 @@ class _BillTabState extends State<_BillTab> {
   Future<void> _loadUrl() async {
     final bucket   = widget.bill['bucket'] as String? ?? 'supplier-bills';
     final filePath = widget.bill['file_path'] as String? ?? '';
+    RenderLog.write('c329_bucket_ok', bucket);
     try {
       final url = await Supabase.instance.client.storage
           .from(bucket).createSignedUrl(filePath, 3600);
@@ -11097,6 +11099,7 @@ class _BillTabState extends State<_BillTab> {
         ),
       ));
       if (!mounted) return;
+      RenderLog.write('c329_import_return', 'ok');
       widget.onImported();
     } catch (e) {
       if (!mounted) return;
@@ -11108,8 +11111,8 @@ class _BillTabState extends State<_BillTab> {
 
   @override
   Widget build(BuildContext context) {
-    final imported    = widget.bill['imported'] as bool? ?? false;
-    final billNo      = (widget.bill['bill_no'] as num?)?.toInt() ?? 0;
+    final imported    = parseBoolField(widget.bill['imported']);
+    final billNo      = safeParseInt(widget.bill['bill_no']);
     final source      = widget.bill['source'] as String? ?? '';
     final fileName    = widget.bill['file_name'] as String? ?? '';
     final ext         = fileName.toLowerCase().split('.').last;
@@ -11244,10 +11247,10 @@ class _AdminPayPanelBodyState extends State<_AdminPayPanelBody> {
   @override
   Widget build(BuildContext context) {
     final data      = widget.data;
-    final mrpTotal  = (data['mrp_total'] as num?)?.toDouble() ?? 0.0;
-    final totalPaid = (data['total_paid'] as num?)?.toDouble() ?? 0.0;
-    final advReq    = (data['advance_required'] as num?)?.toDouble() ?? 0.0;
-    final advPaid   = (data['advance_paid'] as num?)?.toDouble() ?? 0.0;
+    final mrpTotal  = safeParseDouble(data['mrp_total']);
+    final totalPaid = safeParseDouble(data['total_paid']);
+    final advReq    = safeParseDouble(data['advance_required']);
+    final advPaid   = safeParseDouble(data['advance_paid']);
     final payments  = (data['payments'] as List<dynamic>? ?? [])
         .map((e) => Map<String, dynamic>.from(e as Map))
         .toList();

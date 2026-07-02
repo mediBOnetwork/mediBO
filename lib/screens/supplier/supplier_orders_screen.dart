@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../utils/render_log.dart';
+import '../../utils/safe_parse.dart';
 import '../../utils/toast.dart';
 import '../../widgets/order_item_card.dart';
 
@@ -548,11 +549,12 @@ class _SupPayPanelBody extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     RenderLog.write('c328_sup_viewpay', 'built');
+    RenderLog.write('c329_panel_parse', 'supplier');
 
-    final mrpTotal        = (data['mrp_total'] as num?)?.toDouble() ?? 0.0;
-    final totalPaid       = (data['total_paid'] as num?)?.toDouble() ?? 0.0;
-    final advRequired     = (data['advance_required'] as num?)?.toDouble() ?? 0.0;
-    final advPaid         = (data['advance_paid'] as num?)?.toDouble() ?? 0.0;
+    final mrpTotal        = safeParseDouble(data['mrp_total']);
+    final totalPaid       = safeParseDouble(data['total_paid']);
+    final advRequired     = safeParseDouble(data['advance_required']);
+    final advPaid         = safeParseDouble(data['advance_paid']);
     final payments        = (data['payments'] as List<dynamic>? ?? [])
         .map((e) => Map<String, dynamic>.from(e as Map))
         .toList();

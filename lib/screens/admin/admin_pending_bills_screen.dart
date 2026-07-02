@@ -775,7 +775,7 @@ class _PendingBillsScreenState extends State<PendingBillsScreen> {
     setState(() => _downloading[id] = true);
     try {
       final bytes = await Supabase.instance.client.storage
-          .from('supplier-bills')
+          .from(bill['bucket'] as String? ?? 'supplier-bills')
           .download(filePath);
       if (!mounted) return;
       await Navigator.of(context).push(MaterialPageRoute(

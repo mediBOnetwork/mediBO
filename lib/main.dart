@@ -469,7 +469,7 @@ class _AppRootState extends State<_AppRoot> {
             } catch (_) {}
           });
         }
-        return const HomeShell();
+        return HomeShell();
       },
     );
   }

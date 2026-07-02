@@ -19,6 +19,7 @@ import '../app_state.dart';
 import '../config/api_keys.dart';
 import '../models/product.dart';
 import '../user_state.dart';
+import '../view_as_state.dart';
 import '../util.dart';
 import '../utils/render_log.dart';
 import 'auth/login_screen.dart';
@@ -172,12 +173,88 @@ final _kSampleRows = <_MatchRow>[
   _MatchRow(lineItem: 'Vitamin D sachet', qty: 12, status: _MatchStatus.matched,  candidates: [], displaySku: 'D-Rise 60K IU Sachet',              displayPrice: '₹43.80'),
 ];
 
+// ─── WhatsApp cart line (pre-existing items) ─────────────────────────────────
+
+class _WaCartLine {
+  final Product product;
+  final int qty;
+  const _WaCartLine({required this.product, required this.qty});
+}
+
+// ─── WhatsApp convert session ─────────────────────────────────────────────────
+
+class _WaConvertSession {
+  final Uint8List imageBytes;
+  final String mimeType;
+  final String imageName;
+  final String imageId;
+  final String userId;
+  final String customerName;
+  final String pharmacy;
+  final String phone;
+  final String address;
+  final bool isApproved;
+  const _WaConvertSession({
+    required this.imageBytes,
+    required this.mimeType,
+    required this.imageName,
+    required this.imageId,
+    required this.userId,
+    required this.customerName,
+    required this.pharmacy,
+    required this.phone,
+    required this.address,
+    required this.isApproved,
+  });
+}
+
+// File-private callback registered by _BulkUploadScreenState so
+// BulkUploadScreen.startWaConvert() can trigger it without a GlobalKey.
+void Function()? _gWaConvertTrigger;
+
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
 class BulkUploadScreen extends StatefulWidget {
   final List<({String name, int qty})>? preloadedItems;
   final String? preloadedTitle;
   const BulkUploadScreen({super.key, this.preloadedItems, this.preloadedTitle});
+
+  // ── WA Convert API ──────────────────────────────────────────────────────────
+
+  // Pending convert session (set before state picks it up).
+  static _WaConvertSession? _pendingWaConvert;
+
+  /// Registered by HomeShell to navigate to index 2 (BulkUploadScreen).
+  static VoidCallback? navToBulkUpload;
+
+  /// Called by the Convert-to-Order handler in admin_customer_screen.dart.
+  /// Stores the session and triggers the already-live state to pick it up.
+  static void startWaConvert({
+    required Uint8List imageBytes,
+    required String mimeType,
+    required String imageName,
+    required String imageId,
+    required String userId,
+    required String customerName,
+    required String pharmacy,
+    required String phone,
+    required String address,
+    required bool isApproved,
+  }) {
+    _pendingWaConvert = _WaConvertSession(
+      imageBytes: imageBytes,
+      mimeType: mimeType,
+      imageName: imageName,
+      imageId: imageId,
+      userId: userId,
+      customerName: customerName,
+      pharmacy: pharmacy,
+      phone: phone,
+      address: address,
+      isApproved: isApproved,
+    );
+    _gWaConvertTrigger?.call();
+  }
 
   @override
   State<BulkUploadScreen> createState() => _BulkUploadScreenState();
@@ -194,6 +271,14 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
   bool _addingToCart = false;
   bool _isRetrying = false;
   double _retryProgress = 0.0;
+
+  // ── CHANGE #322: WhatsApp Convert session ────────────────────────────────────
+  _WaConvertSession? _waConvert;
+  // Items that were in the customer's cart BEFORE this session started.
+  List<_WaCartLine>? _preExistingCartItems;
+  // productIds of pre-existing items the admin has opted into this order.
+  final Set<String> _checkedPreExisting = {};
+  bool _placingWaOrder = false;
   // Maps row index (as string) → productId that row last added to cart.
   // Enables precise per-row removal: when a row changes product, only ITS old
   // product is removed — nothing else is touched. Persisted with session.
@@ -266,6 +351,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
   @override
   void dispose() {
+    if (_gWaConvertTrigger == _checkAndStartConvert) _gWaConvertTrigger = null;
     _scrollCtrl.dispose();
     super.dispose();
   }
@@ -273,11 +359,27 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
   @override
   void initState() {
     super.initState();
-    if (widget.preloadedItems != null) {
+    _gWaConvertTrigger = _checkAndStartConvert;
+    // Pick up any pending convert that was set before initState ran.
+    if (BulkUploadScreen._pendingWaConvert != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _checkAndStartConvert();
+      });
+    } else if (widget.preloadedItems != null) {
       _loadPreloadedItems();
     } else {
       _loadSession();
     }
+  }
+
+  // Called by BulkUploadScreen.startWaConvert() when a convert request is pending.
+  void _checkAndStartConvert() {
+    final session = BulkUploadScreen._pendingWaConvert;
+    if (session == null) return;
+    BulkUploadScreen._pendingWaConvert = null;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _startWaConvert(session);
+    });
   }
 
   Future<void> _loadPreloadedItems() async {
@@ -301,6 +403,357 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       _bulkLineItemMap = {};
       _matchProgress = rows.length;
     });
+  }
+
+  // ── CHANGE #322: WhatsApp Convert ──────────────────────────────────────────
+
+  Future<void> _startWaConvert(_WaConvertSession session) async {
+    RenderLog.write('c322_bulk_preload', 'imageId:${session.imageId} user:${session.userId}');
+    await _clearSession();
+    setState(() {
+      _waConvert = session;
+      _preExistingCartItems = null;
+      _checkedPreExisting.clear();
+      _step = _LoadStep.readingFile;
+      _fileName = session.imageName;
+      _matchProgress = 0;
+      _matchTotal = 0;
+      _bulkLineItemMap = {};
+      _isFromFile = true;
+    });
+    // Load pre-existing cart in parallel with OCR.
+    unawaited(_loadPreExistingCart(session.userId));
+    await _processImageBytesForConvert(session.imageBytes, session.mimeType, session.imageName);
+  }
+
+  Future<void> _processImageBytesForConvert(
+      Uint8List bytes, String mimeType, String imageName) async {
+    final session = _waConvert;
+    if (session == null) return;
+    try {
+      _uploadedImageBytes = bytes;
+      _uploadedMimeType = mimeType;
+      _uploadedImageSize = await _getImageSize(bytes, mimeType);
+      _cachedImageBytes = bytes;
+      _cachedImageSize = _uploadedImageSize;
+      _cachedMimeType = mimeType;
+      _saveImageToPrefs(bytes, mimeType, _uploadedImageSize!);
+
+      setState(() => _step = _LoadStep.aiAnalyzing);
+      final rawContent = 'IMAGE_BYTES:$mimeType:${base64Encode(bytes)}';
+      final extracted = await _extractWithGeminiAI(rawContent, imageName);
+      if (extracted.isEmpty) throw Exception('No medicines found in image');
+
+      setState(() {
+        _step = _LoadStep.matching;
+        _matchTotal = extracted.length;
+        _matchProgress = 0;
+      });
+      await _runMatchPipeline(extracted, bytes, _uploadedImageSize, mimeType, imageName);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _step = _LoadStep.idle;
+        _isFromFile = false;
+        _fileName = null;
+        _bulkLineItemMap = {};
+      });
+      showToast(context, _friendlyError(e), duration: const Duration(seconds: 6));
+    }
+  }
+
+  /// Shared second-half of the file processing pipeline: parse bboxes,
+  /// bulk-match, process crops, update rows.
+  Future<void> _runMatchPipeline(
+    List<Map<String, dynamic>> extracted,
+    Uint8List? origImageBytes,
+    Size? origImageSize,
+    String origMimeType,
+    String fileName,
+  ) async {
+    final bNames = <String>[];
+    final bQtys = <int>[];
+    final bNameBboxes = <Rect?>[];
+    final bLineBboxes = <Rect?>[];
+    for (final item in extracted) {
+      final name = item['name']?.toString().trim() ?? '';
+      final qty = (int.tryParse(item['qty']?.toString() ?? '') ?? 1).clamp(1, 99999);
+      if (name.isNotEmpty) {
+        Rect? lineBbox;
+        Rect? nameBbox;
+        if (origImageSize != null) {
+          Rect? parseBox(dynamic raw) {
+            if (raw is! List || raw.length != 4) return null;
+            final yMin = (raw[0] as num).toDouble() / 1000;
+            final xMin = (raw[1] as num).toDouble() / 1000;
+            final yMax = (raw[2] as num).toDouble() / 1000;
+            final xMax = (raw[3] as num).toDouble() / 1000;
+            final w = (xMax - xMin).clamp(0.0, 1.0);
+            final h = (yMax - yMin).clamp(0.0, 1.0);
+            return (w > 0 && h > 0) ? Rect.fromLTWH(xMin, yMin, w, h) : null;
+          }
+          lineBbox = parseBox(item['box_2d']);
+          nameBbox = parseBox(item['name_box_2d']);
+          if (nameBbox == null ||
+              (lineBbox != null && nameBbox.width < lineBbox.width * 0.15)) {
+            nameBbox = lineBbox;
+          }
+          if (lineBbox == null) {
+            final bm = item['bbox'] as Map<String, dynamic>?;
+            if (bm != null) {
+              final bx = (bm['x'] as num?)?.toDouble() ?? 0;
+              final by = (bm['y'] as num?)?.toDouble() ?? 0;
+              final bw = (bm['w'] as num?)?.toDouble() ?? 0;
+              final bh = (bm['h'] as num?)?.toDouble() ?? 0;
+              if (bw > 0 && bh > 0) {
+                lineBbox = Rect.fromLTWH(bx, by, bw, bh);
+                nameBbox = lineBbox;
+              }
+            }
+          }
+        }
+        bNames.add(name);
+        bQtys.add(qty);
+        bNameBboxes.add(nameBbox);
+        bLineBboxes.add(lineBbox ?? nameBbox);
+      }
+    }
+    if (!mounted) return;
+
+    final rows = await _bulkMatchRpc(bNames, bQtys, bNameBboxes, bLineBboxes);
+    if (!mounted) return;
+    setState(() => _matchProgress = rows.length);
+
+    if (origImageBytes != null && origImageSize != null) {
+      final imgEl = await _loadImageForProcessing(origImageBytes, origMimeType);
+      if (imgEl != null) {
+        final srcW = imgEl.naturalWidth;
+        final srcH = imgEl.naturalHeight;
+        const targetHeightPx = 46.0;
+        final lineHeights = rows
+            .where((r) => r.lineBbox != null)
+            .map((r) => r.lineBbox!.height * srcH)
+            .toList()..sort();
+        double globalScale = 0.4;
+        if (lineHeights.isNotEmpty) {
+          final median = lineHeights[lineHeights.length ~/ 2];
+          if (median > 0) globalScale = targetHeightPx / median;
+        }
+        _cropGlobalScale = globalScale;
+        for (int ri = 0; ri < rows.length; ri++) {
+          final row = rows[ri];
+          if (row.bbox == null) continue;
+          final lineBbox = row.lineBbox ?? row.bbox!;
+          final prevLineBbox = ri > 0 ? (rows[ri - 1].lineBbox ?? rows[ri - 1].bbox) : null;
+          final nextLineBbox = ri < rows.length - 1 ? (rows[ri + 1].lineBbox ?? rows[ri + 1].bbox) : null;
+          row.processedCrop = _processOneCrop(
+            imgEl, srcW, srcH, row.bbox!, lineBbox, globalScale,
+            prevLineBbox: prevLineBbox, nextLineBbox: nextLineBbox,
+          );
+        }
+      }
+    }
+    if (!mounted) return;
+    setState(() {
+      _rows = rows;
+      _isFromFile = true;
+      _step = _LoadStep.idle;
+      _bulkLineItemMap = {};
+    });
+    _saveSession();
+    unawaited(_autoRetryUnrecognized());
+  }
+
+  Future<void> _loadPreExistingCart(String userId) async {
+    try {
+      final rows = await Supabase.instance.client
+          .rpc('admin_preview_customer_cart', params: {'p_user_id': userId}) as List;
+      if (!mounted) return;
+      final items = rows.map((row) {
+        final product = Product.fromCartData(
+          id: row['product_id'] as String,
+          name: row['product_name'] as String,
+          b2bPrice: (row['price'] as num).toDouble(),
+          mrp: (row['mrp'] as num).toDouble(),
+          imageUrl: (row['image_url'] as String?) ?? '',
+          manufacturer: (row['manufacturer'] as String?) ?? '',
+          packSize: (row['pack_size'] as String?) ?? '',
+          category: (row['category'] as String?) ?? 'Other',
+          gstPercent: (row['gst_percent'] as num?)?.toDouble() ?? 12.0,
+        );
+        return _WaCartLine(product: product, qty: row['quantity'] as int);
+      }).toList();
+      RenderLog.write('c322_cart_merge', 'preExisting:${items.length}');
+      if (mounted) setState(() => _preExistingCartItems = items);
+    } catch (_) {
+      if (mounted) setState(() => _preExistingCartItems = []);
+    }
+  }
+
+  Future<void> _placeWaOrder() async {
+    final session = _waConvert;
+    if (session == null) return;
+    RenderLog.write('c322_place_wa', 'imageId:${session.imageId} user:${session.userId}');
+
+    // Build the will-be-ordered set (E4): matched/manual items + checked pre-existing.
+    final items = <Map<String, dynamic>>[];
+
+    // 1. Matched items added this session (tracked by _bulkLineItemMap).
+    for (int i = 0; i < _rows.length; i++) {
+      final key = i.toString();
+      if (!_bulkLineItemMap.containsKey(key)) continue;
+      final row = _rows[i];
+      if (row.isHidden) continue;
+      final product = row.selectedProduct;
+      if (product == null) continue;
+      items.add({
+        'product_name': product.name,
+        'quantity': row.qty,
+        'price': product.b2bPrice,
+        'mrp': product.mrp,
+        'gst_percent': product.gstPercent,
+        'line_total': product.b2bPrice * row.qty,
+      });
+    }
+
+    // 2. Checked pre-existing items.
+    for (final line in (_preExistingCartItems ?? [])) {
+      if (_checkedPreExisting.contains(line.product.id)) {
+        items.add({
+          'product_name': line.product.name,
+          'quantity': line.qty,
+          'price': line.product.b2bPrice,
+          'mrp': line.product.mrp,
+          'gst_percent': line.product.gstPercent,
+          'line_total': line.product.b2bPrice * line.qty,
+        });
+      }
+    }
+
+    if (items.isEmpty) {
+      showToast(context, 'No items selected — add matched items first', isError: true);
+      return;
+    }
+
+    final total = items.fold(0.0, (s, i) => s + (i['line_total'] as double));
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Place WhatsApp order?',
+            style: TextStyle(fontWeight: FontWeight.w700)),
+        content: Text(
+          'Place a real order for ${session.pharmacy.isNotEmpty ? session.pharmacy : session.customerName} '
+          'with ${items.length} item${items.length == 1 ? '' : 's'} '
+          '(₹${total.toStringAsFixed(0)}).',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43)),
+            child: const Text('Yes, Place Order'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _placingWaOrder = true);
+    try {
+      final now = DateTime.now();
+      final d = '${(now.year % 100).toString().padLeft(2, '0')}'
+          '${now.month.toString().padLeft(2, '0')}'
+          '${now.day.toString().padLeft(2, '0')}';
+      final s = (now.millisecondsSinceEpoch % 10000).toString().padLeft(4, '0');
+      final orderNumber = 'PO-$d-$s';
+
+      final pharmacyName = session.pharmacy.isNotEmpty ? session.pharmacy : session.customerName;
+      final orderId = await Supabase.instance.client.rpc(
+        'admin_writeas_place_order',
+        params: {
+          'p_user_id':       session.userId,
+          'p_pharmacy_name': pharmacyName,
+          'p_phone':         session.phone,
+          'p_address':       session.address,
+          'p_items':         items,
+          'p_total_amount':  total,
+          'p_payment_id':    orderNumber,
+        },
+      );
+      if (orderId == null || !mounted) return;
+
+      // Stamp source='whatsapp'.
+      String orderCode = orderNumber;
+      try {
+        final code = await Supabase.instance.client.rpc(
+          'wa_set_order_source',
+          params: {'p_order_id': orderId.toString(), 'p_source': 'whatsapp'},
+        );
+        if (code != null) orderCode = code.toString();
+      } catch (_) {}
+
+      // Mark image done.
+      try {
+        await Supabase.instance.client.rpc(
+          'wa_mark_image_done',
+          params: {'p_image_id': session.imageId, 'p_order_code': orderCode},
+        );
+      } catch (_) {}
+
+      if (!mounted) return;
+
+      // Remove ordered items from the customer's cart (leave unchecked pre-existing).
+      final cart = AppState.of(context);
+      for (final productId in _bulkLineItemMap.values) {
+        cart.removeById(productId);
+      }
+      for (final line in (_preExistingCartItems ?? [])) {
+        if (_checkedPreExisting.contains(line.product.id)) {
+          cart.removeById(line.product.id);
+        }
+      }
+
+      // Exit ViewAs → customer shell disappears, cart reloads for admin.
+      if (mounted) {
+        try {
+          final va = ViewAsState.read(context);
+          if (va.isActive) va.exit();
+        } catch (_) {}
+      }
+
+      // Reset convert state.
+      if (mounted) {
+        setState(() {
+          _waConvert = null;
+          _preExistingCartItems = null;
+          _checkedPreExisting.clear();
+          _bulkLineItemMap = {};
+        });
+        _clearSession();
+      }
+
+      if (mounted) {
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (_) => AlertDialog(
+            title: const Text('Order placed!', style: TextStyle(fontWeight: FontWeight.w700)),
+            content: Text('WhatsApp order $orderCode placed for $pharmacyName.'),
+            actions: [
+              FilledButton(
+                onPressed: () => Navigator.of(context).pop(),
+                style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43)),
+                child: const Text('Done'),
+              ),
+            ],
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) showToast(context, 'Could not place order: $e', isError: true);
+    } finally {
+      if (mounted) setState(() => _placingWaOrder = false);
+    }
   }
 
   Future<void> _loadSession() async {
@@ -525,139 +978,14 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         _saveImageToPrefs(origImageBytes, origMimeType, origImageSize!);
       }
 
-      // Step 3: fuzzy-match each extracted medicine against Supabase.
-      // IMPORTANT: rows are processed sequentially (await) and appended in
-      // input order. _rows must never be sorted — display preserves this order.
+      // Step 3: fuzzy-match + crop pipeline (shared with WA convert path).
       setState(() {
         _step = _LoadStep.matching;
         _matchTotal = extracted.length;
         _matchProgress = 0;
       });
-
-      // First pass: parse all OCR items — collect names, qtys, and bounding boxes.
-      final bNames = <String>[];
-      final bQtys = <int>[];
-      final bNameBboxes = <Rect?>[];
-      final bLineBboxes = <Rect?>[];
-      // box_2d     = full line extent (all words, used for vertical clamp y-range).
-      // name_box_2d = complete multi-word product name (drives the crop thumbnail).
-      // Fallback: if name_box_2d is missing or < 15% of box_2d width, use box_2d.
-      for (int i = 0; i < extracted.length; i++) {
-        final item = extracted[i];
-        final name = item['name']?.toString().trim() ?? '';
-        final qty = (int.tryParse(item['qty']?.toString() ?? '') ?? 1).clamp(1, 99999);
-        if (name.isNotEmpty) {
-          Rect? lineBbox; // full-line box — vertical clamping
-          Rect? nameBbox; // name-only box — crop thumbnail
-          if (origImageSize != null) {
-            Rect? parseBox(dynamic raw) {
-              if (raw is! List || raw.length != 4) return null;
-              final yMin = (raw[0] as num).toDouble() / 1000;
-              final xMin = (raw[1] as num).toDouble() / 1000;
-              final yMax = (raw[2] as num).toDouble() / 1000;
-              final xMax = (raw[3] as num).toDouble() / 1000;
-              final w = (xMax - xMin).clamp(0.0, 1.0);
-              final h = (yMax - yMin).clamp(0.0, 1.0);
-              return (w > 0 && h > 0) ? Rect.fromLTWH(xMin, yMin, w, h) : null;
-            }
-            lineBbox = parseBox(item['box_2d']);
-            nameBbox = parseBox(item['name_box_2d']);
-            // Fallback: use full-line box when name box is absent or implausibly narrow.
-            if (nameBbox == null ||
-                (lineBbox != null && nameBbox.width < lineBbox.width * 0.15)) {
-              nameBbox = lineBbox;
-            }
-            debugPrint('[BBox] "$name" line=${item["box_2d"]} name=${item["name_box_2d"]} → using w=${nameBbox?.width?.toStringAsFixed(3)}');
-            // Legacy: old {x,y,w,h} bbox from PDF/text path.
-            if (lineBbox == null) {
-              final bm = item['bbox'] as Map<String, dynamic>?;
-              if (bm != null) {
-                final bx = (bm['x'] as num?)?.toDouble() ?? 0;
-                final by = (bm['y'] as num?)?.toDouble() ?? 0;
-                final bw = (bm['w'] as num?)?.toDouble() ?? 0;
-                final bh = (bm['h'] as num?)?.toDouble() ?? 0;
-                if (bw > 0 && bh > 0) {
-                  lineBbox = Rect.fromLTWH(bx, by, bw, bh);
-                  nameBbox = lineBbox;
-                }
-              }
-            }
-          }
-          bNames.add(name);
-          bQtys.add(qty);
-          bNameBboxes.add(nameBbox);
-          bLineBboxes.add(lineBbox ?? nameBbox);
-        }
-      }
-      if (!mounted) return;
-
-      // Second pass: bulk-match all items in one RPC call (full catalogue, availability-agnostic).
-      final rows = await _bulkMatchRpc(bNames, bQtys, bNameBboxes, bLineBboxes);
-      if (!mounted) return;
-      setState(() => _matchProgress = rows.length);
-
-      // Process handwriting crops at a SHARED global scale so every row's
-      // handwriting renders at the same apparent size.
-      if (origImageBytes != null && origImageSize != null) {
-        final imgEl = await _loadImageForProcessing(origImageBytes, origMimeType);
-        if (imgEl != null) {
-          final srcW = imgEl.naturalWidth;
-          final srcH = imgEl.naturalHeight;
-
-          // Shared scale: targetH / median line height. One value for all rows
-          // so every row's handwriting appears the same size.
-          // Long names overflow → right-edge fade in _lineItemCrop handles them.
-          const targetHeightPx = 46.0;
-
-          final lineHeights = rows
-              .where((r) => r.lineBbox != null)
-              .map((r) => r.lineBbox!.height * srcH)
-              .toList()..sort();
-
-          double globalScale = 0.4; // fallback
-          if (lineHeights.isNotEmpty) {
-            final median = lineHeights[lineHeights.length ~/ 2];
-            if (median > 0) globalScale = targetHeightPx / median;
-          }
-          _cropGlobalScale = globalScale;
-          debugPrint('[Crop] globalScale=${globalScale.toStringAsFixed(3)} targetH=$targetHeightPx');
-
-          for (int ri = 0; ri < rows.length; ri++) {
-            final row = rows[ri];
-            if (row.bbox == null) continue;
-            final lineBbox = row.lineBbox ?? row.bbox!;
-            // Adjacent line bboxes for midpoint-clamped erase band.
-            final prevLineBbox = ri > 0
-                ? (rows[ri - 1].lineBbox ?? rows[ri - 1].bbox)
-                : null;
-            final nextLineBbox = ri < rows.length - 1
-                ? (rows[ri + 1].lineBbox ?? rows[ri + 1].bbox)
-                : null;
-            row.processedCrop = _processOneCrop(
-              imgEl, srcW, srcH,
-              row.bbox!,   // name_box_2d → left anchor
-              lineBbox,    // box_2d      → vertical extent
-              globalScale,
-              prevLineBbox: prevLineBbox,
-              nextLineBbox: nextLineBbox,
-            );
-            debugPrint('[Crop] "${row.lineItem}" → ${row.processedCrop?.length ?? 0} B');
-          }
-        }
-      }
-
-      if (!mounted) return;
-      setState(() {
-        _rows = rows;
-        _isFromFile = true;
-        _step = _LoadStep.idle;
-        _bulkLineItemMap = {};
-      });
-      _saveSession();
+      await _runMatchPipeline(extracted, origImageBytes, origImageSize, origMimeType, file.name);
       try { RenderLog.write('c312_ingest_done', file.name); } catch (_) {}
-      // CHANGE #316 item 4b: auto-retry unrecognized rows in background.
-      // ignore: unawaited_futures
-      _autoRetryUnrecognized();
     } catch (e) {
       try { RenderLog.write('c312_ingest_err', e.toString().length > 80 ? e.toString().substring(0, 80) : e.toString()); } catch (_) {}
       if (!mounted) return;
@@ -2417,12 +2745,236 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
                     retryProgress: _retryProgress,
                     onRowRetry: _isFromFile ? _retryOneRow : null,
                   ),
+                  if (_waConvert != null) ...[
+                    const SizedBox(height: 24),
+                    _WaConvertSection(
+                      session: _waConvert!,
+                      preExistingItems: _preExistingCartItems,
+                      checkedIds: _checkedPreExisting,
+                      onToggle: (id) => setState(() {
+                        if (_checkedPreExisting.contains(id)) {
+                          _checkedPreExisting.remove(id);
+                        } else {
+                          _checkedPreExisting.add(id);
+                        }
+                      }),
+                      bulkLineItemMap: _bulkLineItemMap,
+                      rows: _rows,
+                      placing: _placingWaOrder,
+                      onPlaceOrder: _placeWaOrder,
+                    ),
+                  ],
                   const SizedBox(height: 48),
                 ],
               ),
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+// ─── CHANGE #322: WA Convert section ─────────────────────────────────────────
+
+class _WaConvertSection extends StatelessWidget {
+  final _WaConvertSession session;
+  final List<_WaCartLine>? preExistingItems;
+  final Set<String> checkedIds;
+  final void Function(String id) onToggle;
+  final Map<String, String> bulkLineItemMap;
+  final List<_MatchRow> rows;
+  final bool placing;
+  final VoidCallback onPlaceOrder;
+
+  const _WaConvertSection({
+    required this.session,
+    required this.preExistingItems,
+    required this.checkedIds,
+    required this.onToggle,
+    required this.bulkLineItemMap,
+    required this.rows,
+    required this.placing,
+    required this.onPlaceOrder,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    // Count matched items added this session.
+    int matchedAdded = 0;
+    double sessionTotal = 0;
+    for (int i = 0; i < rows.length; i++) {
+      if (bulkLineItemMap.containsKey(i.toString()) && !rows[i].isHidden) {
+        final p = rows[i].selectedProduct;
+        if (p != null) {
+          matchedAdded++;
+          sessionTotal += p.b2bPrice * rows[i].qty;
+        }
+      }
+    }
+
+    // Count checked pre-existing.
+    int checkedCount = 0;
+    double checkedTotal = 0;
+    for (final line in (preExistingItems ?? [])) {
+      if (checkedIds.contains(line.product.id)) {
+        checkedCount++;
+        checkedTotal += line.product.b2bPrice * line.qty;
+      }
+    }
+
+    final totalItems = matchedAdded + checkedCount;
+    final grandTotal = sessionTotal + checkedTotal;
+    final customerName = session.pharmacy.isNotEmpty ? session.pharmacy : session.customerName;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFF1B7A43).withValues(alpha: 0.4)),
+        boxShadow: const [BoxShadow(color: Color(0x0A000000), blurRadius: 8, offset: Offset(0, 2))],
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // Header
+        Container(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 14),
+          decoration: BoxDecoration(
+            color: const Color(0xFF1B7A43).withValues(alpha: 0.06),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+          ),
+          child: Row(children: [
+            const Icon(Icons.chat_outlined, color: Color(0xFF1B7A43), size: 18),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'WhatsApp Order — $customerName',
+                style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF111827)),
+              ),
+            ),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1B7A43).withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Text(
+                '$totalItems item${totalItems == 1 ? '' : 's'} · ₹${grandTotal.toStringAsFixed(0)}',
+                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF1B7A43)),
+              ),
+            ),
+          ]),
+        ),
+
+        // Already in cart section
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+          child: Text(
+            "Already in $customerName's cart",
+            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
+          ),
+        ),
+        if (preExistingItems == null)
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+            child: Row(children: [
+              SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+              SizedBox(width: 10),
+              Text('Loading cart…', style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+            ]),
+          )
+        else if (preExistingItems!.isEmpty)
+          const Padding(
+            padding: EdgeInsets.fromLTRB(20, 0, 20, 12),
+            child: Text('No items in cart yet.', style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+          )
+        else ...[
+          ...preExistingItems!.map((line) => _WaCartLineRow(
+            line: line,
+            checked: checkedIds.contains(line.product.id),
+            onToggle: () => onToggle(line.product.id),
+          )),
+        ],
+
+        const Divider(height: 1, color: Color(0xFFE5E7EB)),
+
+        // Place Order button
+        Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            if (matchedAdded == 0) ...[
+              const Padding(
+                padding: EdgeInsets.only(bottom: 12),
+                child: Text(
+                  'Add matched items to cart first, then place the WhatsApp order.',
+                  style: TextStyle(fontSize: 13, color: Color(0xFF6B7280)),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            ],
+            SizedBox(
+              height: 48,
+              child: FilledButton.icon(
+                onPressed: (matchedAdded > 0 && !placing) ? onPlaceOrder : null,
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFF1B7A43),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  elevation: 0,
+                ),
+                icon: placing
+                    ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                    : const Icon(Icons.check_circle_outline, size: 18),
+                label: placing
+                    ? const Text('Placing order…', style: TextStyle(fontWeight: FontWeight.w700))
+                    : Text(
+                        'Place WhatsApp Order ($totalItems item${totalItems == 1 ? '' : 's'} · ₹${grandTotal.toStringAsFixed(0)})',
+                        style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
+                      ),
+              ),
+            ),
+          ]),
+        ),
+      ]),
+    );
+  }
+}
+
+class _WaCartLineRow extends StatelessWidget {
+  final _WaCartLine line;
+  final bool checked;
+  final VoidCallback onToggle;
+  const _WaCartLineRow({required this.line, required this.checked, required this.onToggle});
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onToggle,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        child: Row(children: [
+          Checkbox(
+            value: checked,
+            onChanged: (_) => onToggle(),
+            activeColor: const Color(0xFF1B7A43),
+            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(line.product.name,
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
+                  overflow: TextOverflow.ellipsis),
+              if (line.product.packSize.isNotEmpty)
+                Text(line.product.packSize,
+                    style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
+            ]),
+          ),
+          const SizedBox(width: 8),
+          Text('Qty: ${line.qty}',
+              style: const TextStyle(fontSize: 12, color: Color(0xFF374151))),
+          const SizedBox(width: 12),
+          Text('₹${(line.product.b2bPrice * line.qty).toStringAsFixed(0)}',
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF1B7A43))),
+        ]),
       ),
     );
   }

@@ -40,7 +40,11 @@ import 'supplier/supplier_shell.dart';
 /// App shell: responsive — desktop gets a top nav + sidebar, mobile/tablet
 /// keeps the existing header + quick-nav chips + bottom nav layout.
 class HomeShell extends StatefulWidget {
-  const HomeShell({super.key});
+  static final _shellKey = GlobalKey<_HomeShellState>();
+  HomeShell() : super(key: _shellKey);
+
+  /// Switch to the Bulk Upload tab (index 2). Called by Convert-to-Order flow.
+  static void switchToBulkUpload() => _shellKey.currentState?._setIndex(2);
 
   @override
   State<HomeShell> createState() => _HomeShellState();
@@ -80,6 +84,7 @@ class _HomeShellState extends State<HomeShell> {
   @override
   void initState() {
     super.initState();
+    BulkUploadScreen.navToBulkUpload = () { if (mounted) setState(() => _index = 2); };
     _initFromUrl();
     listenPopState(_applyPath);
     // Proof keys: single Continue button wired, mobile redirect + desktop GIS compiled in.
@@ -301,6 +306,7 @@ class _HomeShellState extends State<HomeShell> {
 
   @override
   void dispose() {
+    if (BulkUploadScreen.navToBulkUpload != null) BulkUploadScreen.navToBulkUpload = null;
     _searchCtrl.dispose();
     super.dispose();
   }

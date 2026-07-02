@@ -280,6 +280,7 @@ class CartModel extends ChangeNotifier {
         _recomputeTotals();
         notifyListeners();
         RenderLog.write('view_as_cart', 'items:${_lines.length}:netPayable:${netPayable.toStringAsFixed(0)}');
+        RenderLog.write('c326_cart_server_src', 'items:${_lines.length}:user:$_viewAsUserId');
         return;
       }
 
@@ -763,6 +764,17 @@ class CartModel extends ChangeNotifier {
   /// index in the preview). Always overwrites any existing entry for this
   /// product so the bulkOrder is set correctly on re-sync.
   void setBulkQuantity(Product product, int qty, int bulkOrder) {
+    // CHANGE #326: ViewAs must persist via server RPC, not local store.
+    if (isViewAs) {
+      _lines[product.id] = CartLine(product, qty,
+          bulkOrder: bulkOrder, addedByAdmin: true);
+      _recomputeTotals();
+      notifyListeners();
+      RenderLog.write('c326_bulk_upsert',
+          'product:${product.id}:qty:$qty:user:$_viewAsUserId');
+      _viewAsUpsert(product, qty); // admin_writeas_cart_upsert + reload from server
+      return;
+    }
     _lines[product.id] = CartLine(product, qty, bulkOrder: bulkOrder);
     _recomputeTotals();
     notifyListeners();

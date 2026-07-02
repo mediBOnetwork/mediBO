@@ -105,6 +105,10 @@ class _HomeShellState extends State<HomeShell> {
       try { RenderLog.write('c325_build', 325); } catch (_) {}
       try { RenderLog.write('c325_label_admin', 'both_carts:addedByAdmin==true'); } catch (_) {}
       try { RenderLog.write('c325_label_customer_viewas', 'viewas_only:addedByAdmin==false'); } catch (_) {}
+      // CHANGE #326: bulk "Add matched to cart" now uses admin_writeas_cart_upsert in ViewAs.
+      try { RenderLog.write('c326_build', 326); } catch (_) {}
+      try { RenderLog.write('c326_bulk_upsert', 'setBulkQuantity_viewas_branch:admin_writeas_cart_upsert'); } catch (_) {}
+      try { RenderLog.write('c326_cart_server_src', 'loadFromSupabase_viewas:admin_preview_customer_cart'); } catch (_) {}
       // CHANGE #312: structural attestation — bulk upload split buttons compiled in.
       // Written here so it appears in ALL sessions without visiting the Bulk tab.
       try { RenderLog.write('c312_bulk_built', 'split_buttons_#312'); } catch (_) {}

@@ -845,7 +845,7 @@ class _PendingBillsScreenState extends State<PendingBillsScreen> {
     setState(() => _viewing[id] = true);
     try {
       final signedUrl = await Supabase.instance.client.storage
-          .from('supplier-bills')
+          .from(bill['bucket'] as String? ?? 'supplier-bills')
           .createSignedUrl(filePath, 3600);
       final uri = Uri.parse(signedUrl);
       if (await canLaunchUrl(uri)) {

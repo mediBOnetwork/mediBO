@@ -814,49 +814,46 @@ class _CartItemCard extends StatelessWidget {
                                   fontSize: 9, color: Color(0xFFEA580C))),
                         ),
                       ],
-                      // CHANGE #324: in ViewAs, show which party added the item.
-                      if (viewAsChecked != null) ...[
+                      // CHANGE #325 label rules:
+                      // "Added by Admin"   → both customer's own cart AND ViewAs.
+                      // "Added by customer"→ ViewAs only (never shown to the customer).
+                      if (line.addedByAdmin) ...[
                         const SizedBox(height: 3),
                         Container(
                           padding: const EdgeInsets.symmetric(
                               horizontal: 5, vertical: 1),
                           decoration: BoxDecoration(
-                            color: line.addedByAdmin
-                                ? const Color(0xFFFEF08A)
-                                : const Color(0xFFEFF6FF),
+                            color: const Color(0xFFD1FAE5),
                             borderRadius: BorderRadius.circular(4),
-                            border: Border.all(
-                              color: line.addedByAdmin
-                                  ? const Color(0xFFFBBF24)
-                                  : const Color(0xFFBFDBFE),
-                            ),
+                            border: Border.all(color: const Color(0xFF6EE7B7)),
                           ),
-                          child: Text(
-                            line.addedByAdmin ? 'added by you' : "customer's item",
+                          child: const Text(
+                            'Added by Admin',
                             style: TextStyle(
                               fontSize: 9,
                               fontWeight: FontWeight.w600,
-                              color: line.addedByAdmin
-                                  ? const Color(0xFF92400E)
-                                  : const Color(0xFF1E40AF),
+                              color: Color(0xFF065F46),
                             ),
                           ),
                         ),
-                      ] else if (line.addedByAdmin) ...[
+                      ] else if (viewAsChecked != null) ...[
                         const SizedBox(height: 3),
                         Container(
                           padding: const EdgeInsets.symmetric(
                               horizontal: 5, vertical: 1),
                           decoration: BoxDecoration(
-                            color: const Color(0xFFFEF08A),
+                            color: const Color(0xFFFEF3C7),
                             borderRadius: BorderRadius.circular(4),
-                            border: Border.all(color: const Color(0xFFFBBF24)),
+                            border: Border.all(color: const Color(0xFFFDE68A)),
                           ),
-                          child: const Text('Added by mediBO',
-                              style: TextStyle(
-                                  fontSize: 9,
-                                  fontWeight: FontWeight.w600,
-                                  color: Color(0xFF92400E))),
+                          child: const Text(
+                            'Added by customer',
+                            style: TextStyle(
+                              fontSize: 9,
+                              fontWeight: FontWeight.w600,
+                              color: Color(0xFF92400E),
+                            ),
+                          ),
                         ),
                       ],
                     ],

@@ -1660,38 +1660,35 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                   onTap: () {},
                   child: _ConfirmActions(row: row, onUpdate: _updateStatus),
                 ),
-                // CHANGE #213 — View Payment replaces ACTION cell
-                if (row.orderId != null) ...[
-                  const SizedBox(height: 6),
-                  GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onTap: () {},
-                    child: _ViewPayBtn(
-                      isOpen: _payOpen[row.orderId] == true,
-                      onTap: () => setState(() =>
-                          _payOpen[row.orderId!] =
-                              !(_payOpen[row.orderId!] ?? false)),
-                      onLongPress: () => showModalBottomSheet(
-                        context: context,
-                        isScrollControlled: true,
-                        backgroundColor: Colors.transparent,
-                        builder: (_) => CashPaymentSheet(
-                          orderId: row.orderId!,
-                          onSuccess: () => setState(() {}),
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-                // CHANGE #322 — WhatsApp button
+                // CHANGE #327 — View Payment (left) + WhatsApp (right) side-by-side
                 const SizedBox(height: 6),
                 GestureDetector(
                   behavior: HitTestBehavior.opaque,
                   onTap: () {},
-                  child: _WaBtn(
-                    isOpen: _waOpen[row.userId] == true,
-                    onTap: () => _toggleWaOpen(row.userId),
-                  ),
+                  child: Row(children: [
+                    if (row.orderId != null) ...[
+                      Expanded(child: _ViewPayBtn(
+                        isOpen: _payOpen[row.orderId] == true,
+                        onTap: () => setState(() =>
+                            _payOpen[row.orderId!] =
+                                !(_payOpen[row.orderId!] ?? false)),
+                        onLongPress: () => showModalBottomSheet(
+                          context: context,
+                          isScrollControlled: true,
+                          backgroundColor: Colors.transparent,
+                          builder: (_) => CashPaymentSheet(
+                            orderId: row.orderId!,
+                            onSuccess: () => setState(() {}),
+                          ),
+                        ),
+                      )),
+                      const SizedBox(width: 8),
+                    ],
+                    Expanded(child: _WaBtn(
+                      isOpen: _waOpen[row.userId] == true,
+                      onTap: () => _toggleWaOpen(row.userId),
+                    )),
+                  ]),
                 ),
               ],
             ]),
@@ -6348,16 +6345,34 @@ class _WaOrderPanelState extends State<_WaOrderPanel> {
   Map<String, dynamic>? _data;
   bool _loading = true;
   String? _error;
-  // Which order group index is expanded. 0 = latest day (Order 1) expanded by default.
-  int? _expandedGroup = 0;
-  // imageId → converting in-flight.
+  // null = All tab; imageId = specific image tab
+  String? _selectedTab;
+  // imageId → converting in-flight
   final Set<String> _converting = {};
+  // imageId → signed URL for today's images
+  final Map<String, String> _signedUrls = {};
+  // imageId → HtmlElementView viewType
+  final Map<String, String> _imgViewTypes = {};
 
   @override
   void initState() {
     super.initState();
     _loadData();
     RenderLog.write('c322_wa_panel', 'userId:${widget.userId}');
+    RenderLog.write('c327_build', 327);
+  }
+
+  List<Map<String, dynamic>> _todayImages() {
+    final groups = (_data?['groups'] as List?) ?? [];
+    for (final g in groups) {
+      final group = Map<String, dynamic>.from(g as Map);
+      if (group['is_today'] == true) {
+        return ((group['images'] as List?) ?? [])
+            .map((i) => Map<String, dynamic>.from(i as Map))
+            .toList();
+      }
+    }
+    return [];
   }
 
   Future<void> _loadData() async {
@@ -6367,21 +6382,62 @@ class _WaOrderPanelState extends State<_WaOrderPanel> {
         'wa_admin_order_groups',
         params: {'p_user_id': widget.userId},
       );
-      if (mounted) setState(() { _data = Map<String, dynamic>.from(res as Map); _loading = false; });
+      if (mounted) {
+        setState(() {
+          _data = Map<String, dynamic>.from(res as Map);
+          _loading = false;
+        });
+        _loadTodaySignedUrls();
+      }
     } catch (e) {
       if (mounted) setState(() { _loading = false; _error = e.toString(); });
     }
+  }
+
+  Future<void> _loadTodaySignedUrls() async {
+    final images = _todayImages();
+    RenderLog.write('c327_wa_tabs', 'today_images:${images.length}');
+    for (final image in images) {
+      final imageId = image['id'] as String;
+      final filePath = image['file_path'] as String? ?? '';
+      if (filePath.isEmpty || _signedUrls.containsKey(imageId)) continue;
+      try {
+        final url = await Supabase.instance.client.storage
+            .from('whatsapp-media')
+            .createSignedUrl(filePath, 3600);
+        if (mounted) {
+          final vt = 'wa-img-$imageId';
+          if (!_imgViewTypes.containsKey(imageId)) {
+            final capturedCtx = context;
+            ui_web.platformViewRegistry.registerViewFactory(vt, (int viewId) {
+              final img = html.ImageElement()
+                ..src = url
+                ..style.width = '100%'
+                ..style.height = '100%'
+                ..style.objectFit = 'contain'
+                ..style.background = '#F3F4F6'
+                ..style.cursor = 'pointer';
+              img.onClick.listen((_) => openFullscreenImage(capturedCtx, url));
+              return img;
+            });
+          }
+          setState(() {
+            _signedUrls[imageId] = url;
+            _imgViewTypes[imageId] = vt;
+          });
+        }
+      } catch (_) {}
+    }
+    if (mounted) RenderLog.write('c327_img_view', 'urls_loaded:${_signedUrls.length}');
   }
 
   Future<void> _convertImage(Map<String, dynamic> image) async {
     final imageId = image['id'] as String;
     if (_converting.contains(imageId)) return;
     setState(() => _converting.add(imageId));
-    // Capture notifier and toast callback before async gap.
     final viewAs = ViewAsState.of(context);
     final scaffoldCtx = context;
     try {
-      // 1. wa_convert_start → flip to processing, get file_path + user_id.
       final res = await Supabase.instance.client.rpc(
         'wa_convert_start', params: {'p_image_id': imageId});
       final data = Map<String, dynamic>.from(res as Map);
@@ -6392,14 +6448,12 @@ class _WaOrderPanelState extends State<_WaOrderPanel> {
       final filePath = data['file_path'] as String;
       final userId = data['user_id'] as String;
 
-      // 2. Download image bytes from Supabase storage.
       final bytes = await Supabase.instance.client.storage
           .from('whatsapp-media')
           .download(filePath);
 
       if (!mounted) return;
 
-      // 3. Enter ViewAs impersonation (triggers cart reload + customer shell).
       final pharmacyName = widget.pharmacy.isNotEmpty ? widget.pharmacy : widget.customerName;
       viewAs.activate(
         ViewAsRole.customer,
@@ -6413,8 +6467,8 @@ class _WaOrderPanelState extends State<_WaOrderPanel> {
       );
 
       RenderLog.write('c322_convert', 'imageId:$imageId userId:$userId');
+      RenderLog.write('c327_convert_click', 'imageId:$imageId');
 
-      // 4. After ViewAs activation rebuilds (resets index to 0), start convert session.
       WidgetsBinding.instance.addPostFrameCallback((_) {
         BulkUploadScreen.startWaConvert(
           imageBytes: bytes,
@@ -6429,6 +6483,7 @@ class _WaOrderPanelState extends State<_WaOrderPanel> {
           isApproved: widget.isApproved,
         );
         BulkUploadScreen.navToBulkUpload?.call();
+        RenderLog.write('c327_convert_done', 'imageId:$imageId');
       });
     } catch (e) {
       if (mounted) {
@@ -6482,70 +6537,171 @@ class _WaOrderPanelState extends State<_WaOrderPanel> {
             child: Text('Error: $_error',
                 style: const TextStyle(fontSize: 12, color: Color(0xFF991B1B))),
           )
-        else if (_data == null || _data!['found'] != true || (_data!['groups'] as List?)?.isEmpty == true)
+        else if (_data == null || _data!['found'] != true)
           const Padding(
             padding: EdgeInsets.symmetric(horizontal: 20, vertical: 12),
             child: Text('No WhatsApp order images yet.',
                 style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
           )
         else ...[
-          // Summary chips
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
-            child: Wrap(spacing: 8, children: [
-              _waChip('Images: ${_data!['images_total'] ?? 0}', const Color(0xFF2563EB)),
-              _waChip('Processed: ${_data!['images_done'] ?? 0}', const Color(0xFF1B7A43)),
-              _waChip('Left: ${_data!['images_pending'] ?? 0}', const Color(0xFFD97706)),
-            ]),
-          ),
-          // Groups list
-          ...((_data!['groups'] as List?) ?? []).asMap().entries.map((entry) {
-            final idx = entry.key;
-            final group = Map<String, dynamic>.from(entry.value as Map);
-            final isExpanded = _expandedGroup == idx;
-            final status = group['status'] as String? ?? 'pending';
-            final images = (group['images'] as List?) ?? [];
-            return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              InkWell(
-                onTap: () => setState(() => _expandedGroup = isExpanded ? null : idx),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-                  child: Row(children: [
-                    Text(
-                      'Order ${group['order_no']}  ·  ${group['day'] ?? ''}  ·  ${group['image_count']} image(s)',
-                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
-                    ),
-                    const SizedBox(width: 8),
-                    _waStatusPill(status),
-                    const Spacer(),
-                    AnimatedRotation(
-                      turns: isExpanded ? 0.5 : 0.0,
-                      duration: const Duration(milliseconds: 150),
-                      child: const Icon(Icons.expand_more, size: 16, color: Color(0xFF6B7280)),
-                    ),
-                  ]),
-                ),
-              ),
-              if (isExpanded) ...[
-                ...images.map((img) {
-                  final image = Map<String, dynamic>.from(img as Map);
-                  final imgId = image['id'] as String;
-                  final imgStatus = image['status'] as String? ?? 'pending';
-                  final isDone = imgStatus == 'done';
-                  final isConverting = _converting.contains(imgId);
-                  return _WaImageRow(
-                    image: image,
-                    isDone: isDone,
-                    isConverting: isConverting,
-                    onConvert: isDone || isConverting ? null : () => _convertImage(image),
-                  );
-                }),
-              ],
-              const Divider(height: 1, color: Color(0xFFD1FAE5)),
-            ]);
-          }),
+          _buildChipRow(),
+          _buildBody(),
         ],
         const SizedBox(height: 8),
+      ]),
+    );
+  }
+
+  Widget _buildChipRow() {
+    final todayImages = _todayImages();
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(children: [
+          _WaTabChip(
+            label: 'All',
+            selected: _selectedTab == null,
+            isAll: true,
+            onTap: () => setState(() => _selectedTab = null),
+          ),
+          ...todayImages.asMap().entries.map((entry) {
+            final idx = entry.key;
+            final image = entry.value;
+            final imageId = image['id'] as String;
+            final isDone = (image['status'] as String?) == 'done';
+            return Padding(
+              padding: const EdgeInsets.only(left: 8),
+              child: _WaTabChip(
+                label: 'Order ${idx + 1}',
+                selected: _selectedTab == imageId,
+                isDone: isDone,
+                onTap: () => setState(() => _selectedTab = imageId),
+              ),
+            );
+          }),
+        ]),
+      ),
+    );
+  }
+
+  Widget _buildBody() {
+    if (_selectedTab == null) return _buildAllBody();
+    final images = _todayImages();
+    final idx = images.indexWhere((i) => (i['id'] as String?) == _selectedTab);
+    if (idx < 0) return _buildAllBody();
+    return _buildOrderBody(images[idx], idx);
+  }
+
+  Widget _buildAllBody() {
+    final todayImages = _todayImages();
+    final total = todayImages.length;
+    final done = todayImages.where((i) => (i['status'] as String?) == 'done').length;
+    final pending = total - done;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+      child: Wrap(spacing: 8, runSpacing: 6, children: [
+        _waChip('Received: $total', const Color(0xFF2563EB)),
+        _waChip('Processed: $done', const Color(0xFF1B7A43)),
+        _waChip('Left: $pending', const Color(0xFFD97706)),
+      ]),
+    );
+  }
+
+  Widget _buildOrderBody(Map<String, dynamic> image, int idx) {
+    final imageId = image['id'] as String;
+    final caption = image['caption'] as String? ?? '';
+    final isDone = (image['status'] as String?) == 'done';
+    final convertedCode = image['converted_order_code'] as String?;
+    final isConverting = _converting.contains(imageId);
+    final vt = _imgViewTypes[imageId];
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // Full-width image viewer
+        Container(
+          height: 240,
+          width: double.infinity,
+          decoration: BoxDecoration(
+            color: const Color(0xFFE5E7EB),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          clipBehavior: Clip.hardEdge,
+          child: vt != null
+              ? HtmlElementView(viewType: vt)
+              : const Center(child: SizedBox(
+                  width: 24, height: 24,
+                  child: CircularProgressIndicator(strokeWidth: 2))),
+        ),
+        if (caption.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          Text(caption, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+        ],
+        const SizedBox(height: 12),
+        // Convert button — amber pending, green+disabled done
+        SizedBox(
+          width: double.infinity,
+          child: isDone
+              ? Container(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFD1FAE5),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                        color: const Color(0xFF1B7A43).withValues(alpha: 0.3)),
+                  ),
+                  alignment: Alignment.center,
+                  child: Text(
+                    convertedCode != null
+                        ? 'Converted ✓  $convertedCode'
+                        : 'Converted ✓',
+                    style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFF065F46)),
+                  ),
+                )
+              : GestureDetector(
+                  onTap: isConverting
+                      ? null
+                      : () => _convertImage(image),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFEF3C7),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                          color: const Color(0xFFD97706).withValues(alpha: 0.5)),
+                    ),
+                    alignment: Alignment.center,
+                    child: isConverting
+                        ? const Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              SizedBox(
+                                width: 14,
+                                height: 14,
+                                child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Color(0xFF92400E)),
+                              ),
+                              SizedBox(width: 8),
+                              Text('Opening…',
+                                  style: TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w700,
+                                      color: Color(0xFF92400E))),
+                            ],
+                          )
+                        : const Text('Convert to Order',
+                            style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                                color: Color(0xFF92400E))),
+                  ),
+                ),
+        ),
       ]),
     );
   }
@@ -6557,135 +6713,61 @@ class _WaOrderPanelState extends State<_WaOrderPanel> {
       borderRadius: BorderRadius.circular(20),
       border: Border.all(color: color.withValues(alpha: 0.3)),
     ),
-    child: Text(label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: color)),
+    child: Text(label,
+        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: color)),
   );
-
-  Widget _waStatusPill(String status) {
-    final Color bg;
-    final Color fg;
-    final String label;
-    switch (status) {
-      case 'done':   bg = const Color(0xFFD1FAE5); fg = const Color(0xFF065F46); label = 'Done'; break;
-      case 'partial': bg = const Color(0xFFFEF3C7); fg = const Color(0xFF92400E); label = 'Partial'; break;
-      default:       bg = const Color(0xFFEFF6FF); fg = const Color(0xFF1E40AF); label = 'Pending'; break;
-    }
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(20)),
-      child: Text(label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: fg)),
-    );
-  }
 }
 
-// ── WA image row within a group ──────────────────────────────────────────────
+// ── CHANGE #327 — WA tab chip (All | Order 1 | Order 2 …) ───────────────────
 
-class _WaImageRow extends StatefulWidget {
-  final Map<String, dynamic> image;
+class _WaTabChip extends StatelessWidget {
+  final String label;
+  final bool selected;
   final bool isDone;
-  final bool isConverting;
-  final VoidCallback? onConvert;
-  const _WaImageRow({required this.image, required this.isDone, required this.isConverting, required this.onConvert});
+  final bool isAll;
+  final VoidCallback onTap;
 
-  @override
-  State<_WaImageRow> createState() => _WaImageRowState();
-}
-
-class _WaImageRowState extends State<_WaImageRow> {
-  String? _signedUrl;
-  bool _urlLoading = true;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadUrl();
-  }
-
-  Future<void> _loadUrl() async {
-    try {
-      final filePath = widget.image['file_path'] as String? ?? '';
-      if (filePath.isEmpty) { setState(() => _urlLoading = false); return; }
-      final url = await Supabase.instance.client.storage
-          .from('whatsapp-media')
-          .createSignedUrl(filePath, 3600);
-      if (mounted) setState(() { _signedUrl = url; _urlLoading = false; });
-    } catch (_) {
-      if (mounted) setState(() => _urlLoading = false);
-    }
-  }
+  const _WaTabChip({
+    required this.label,
+    required this.selected,
+    this.isDone = false,
+    this.isAll = false,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final image = widget.image;
-    final caption = image['caption'] as String? ?? '';
-    final receivedAt = image['received_at'] as String? ?? '';
-    final convertedCode = image['converted_order_code'] as String?;
+    final bool useGreen = isAll || isDone;
+    final Color selectedBg =
+        useGreen ? const Color(0xFF1B7A43) : const Color(0xFFD97706);
+    const Color selectedFg = Colors.white;
+    final Color unselectedBg =
+        useGreen ? const Color(0xFFD1FAE5) : const Color(0xFFFEF3C7);
+    final Color unselectedFg =
+        useGreen ? const Color(0xFF065F46) : const Color(0xFF92400E);
+    final Color borderColor = useGreen
+        ? const Color(0xFF1B7A43).withValues(alpha: 0.4)
+        : const Color(0xFFD97706).withValues(alpha: 0.4);
 
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
-      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        // Thumbnail
-        Container(
-          width: 64, height: 64,
-          decoration: BoxDecoration(
-            color: const Color(0xFFE5E7EB),
-            borderRadius: BorderRadius.circular(8),
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        decoration: BoxDecoration(
+          color: selected ? selectedBg : unselectedBg,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: selected ? selectedBg : borderColor),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            color: selected ? selectedFg : unselectedFg,
           ),
-          child: _urlLoading
-              ? const Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)))
-              : (_signedUrl != null
-                  ? ClipRRect(
-                      borderRadius: BorderRadius.circular(8),
-                      child: Image.network(_signedUrl!, fit: BoxFit.cover,
-                          errorBuilder: (_, __, ___) =>
-                              const Icon(Icons.image_not_supported_outlined, color: Color(0xFF9CA3AF))),
-                    )
-                  : const Icon(Icons.image_not_supported_outlined, color: Color(0xFF9CA3AF))),
         ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            if (caption.isNotEmpty)
-              Text(caption, style: const TextStyle(fontSize: 12, color: Color(0xFF374151))),
-            if (receivedAt.isNotEmpty)
-              Text(_fmtTs(receivedAt),
-                  style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
-            const SizedBox(height: 6),
-            if (widget.isDone && convertedCode != null)
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFD1FAE5),
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: Text('Done · $convertedCode',
-                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF065F46))),
-              )
-            else
-              FilledButton.icon(
-                onPressed: widget.onConvert,
-                style: FilledButton.styleFrom(
-                  backgroundColor: const Color(0xFF1B7A43),
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                  minimumSize: const Size(0, 32),
-                  textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-                  elevation: 0,
-                ),
-                icon: widget.isConverting
-                    ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                    : const Icon(Icons.open_in_browser_outlined, size: 14),
-                label: Text(widget.isConverting ? 'Opening…' : 'Convert to order'),
-              ),
-          ]),
-        ),
-      ]),
+      ),
     );
   }
-
-  String _fmtTs(String ts) {
-    try {
-      final dt = DateTime.parse(ts).toLocal();
-      return '${dt.day.toString().padLeft(2, '0')}/${dt.month.toString().padLeft(2, '0')} ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
-    } catch (_) { return ts; }
-  }
 }
+

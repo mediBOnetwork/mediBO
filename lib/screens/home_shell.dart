@@ -109,6 +109,10 @@ class _HomeShellState extends State<HomeShell> {
       try { RenderLog.write('c326_build', 326); } catch (_) {}
       try { RenderLog.write('c326_bulk_upsert', 'setBulkQuantity_viewas_branch:admin_writeas_cart_upsert'); } catch (_) {}
       try { RenderLog.write('c326_cart_server_src', 'loadFromSupabase_viewas:admin_preview_customer_cart'); } catch (_) {}
+      // CHANGE #327: WA panel chip tabs + full-width image viewer + side-by-side mobile buttons.
+      try { RenderLog.write('c327_build', 327); } catch (_) {}
+      try { RenderLog.write('c327_wa_tabs', 'chip_tabs:all_order_n'); } catch (_) {}
+      try { RenderLog.write('c327_img_view', 'fullscreen:openFullscreenImage'); } catch (_) {}
       // CHANGE #312: structural attestation — bulk upload split buttons compiled in.
       // Written here so it appears in ALL sessions without visiting the Bulk tab.
       try { RenderLog.write('c312_bulk_built', 'split_buttons_#312'); } catch (_) {}

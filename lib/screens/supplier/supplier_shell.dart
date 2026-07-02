@@ -80,7 +80,7 @@ class _SupplierShellState extends State<SupplierShell> {
         viewAsSupplierName: widget.viewAsSupplierName,
         onPendingCount: _onPendingCount,
       ),
-      SupplierOrdersScreen(viewAsSupplierId: viewAsSupplierId),
+      SupplierOrdersScreen(viewAsSupplierId: viewAsSupplierId, supplierName: supplierName),
       SupplierDisputesScreen(
         viewAsSupplierId: viewAsSupplierId,
         viewAsSupplierName: widget.viewAsSupplierName,

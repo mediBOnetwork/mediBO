@@ -14,11 +14,15 @@ import 'package:pharma_b2b/utils/toast.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart';
 import 'package:xml/xml.dart' as xmlp;
 
+import 'package:url_launcher/url_launcher.dart';
+
 import '../../services/match_status_service.dart';
 import '../../utils/render_log.dart';
 import '../../widgets/code_field.dart';
+import '../../widgets/fullscreen_image.dart';
 import '../../widgets/inquiry_v12.dart';
 import '../../widgets/order_item_card.dart';
+import 'admin_add_medicine_screen.dart';
 
 const _ocrEdgeFn =
     'https://swojhmarmaijkshsbeih.supabase.co/functions/v1/gemini-ocr';
@@ -203,6 +207,18 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   RealtimeChannel? _inquiryRtChannel; // CHANGE #309: live inquiry subscription
   final Set<int> _settingAnswerFor = {}; // inquiry_ids currently being admin-set
   String? _expandedOrderId; // which supplier order row is expanded
+
+  // ── CHANGE #328: supplier order bill+payment panels ──────────────────────
+  // bill panel open per order id
+  final Map<String, bool> _orderBillOpen = {};
+  // payment panel open per order id
+  final Map<String, bool> _orderPayOpen  = {};
+  // cached panel data per order id (from sup_order_bill_panel)
+  final Map<String, Map<String, dynamic>> _orderPanelData    = {};
+  // loading state per order id
+  final Map<String, bool> _orderPanelLoading = {};
+  // error per order id
+  final Map<String, String?> _orderPanelError = {};
 
   // ── Inquiry select-and-submit state (#109) ───────────────────────────────
   final Map<int, String> _adminSelections = {};
@@ -1946,6 +1962,26 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         RenderLog.write('supplier_orders_refreshed', _orders.length);
       }
     } catch (_) {}
+  }
+
+  // CHANGE #328: load sup_order_bill_panel for one order card
+  Future<void> _loadOrderPanel(String orderId, {bool refresh = false}) async {
+    if (_orderPanelLoading[orderId] == true) return;
+    if (_orderPanelData.containsKey(orderId) && !refresh) return;
+    if (!mounted) return;
+    setState(() { _orderPanelLoading[orderId] = true; _orderPanelError[orderId] = null; });
+    try {
+      final result = await Supabase.instance.client
+          .rpc('sup_order_bill_panel', params: {'p_supplier_order_id': orderId});
+      if (!mounted) return;
+      setState(() {
+        _orderPanelData[orderId] = Map<String, dynamic>.from(result as Map? ?? {});
+        _orderPanelLoading[orderId] = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() { _orderPanelError[orderId] = e.toString(); _orderPanelLoading[orderId] = false; });
+    }
   }
 
   Future<List<_OrderRow>> _enrichOrderItems(List<_OrderRow> orders) async {
@@ -3702,6 +3738,26 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         ),
       ),
       if (isExpanded) _buildOrderItemsPanel(currentItems, padH: 28), // CHANGE #277: show current items only
+      // CHANGE #328 — bill + payment panels (desktop)
+      if (_orderBillOpen[row.id] == true)
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 28),
+          child: _buildAdminBillPanel(row),
+        ),
+      if (_orderPayOpen[row.id] == true)
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 28),
+          child: _buildAdminPayPanel(row),
+        ),
+      // CHANGE #328 — button row (desktop, shown below main row always)
+      Container(
+        padding: const EdgeInsets.fromLTRB(28, 6, 28, 10),
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
+        ),
+        child: _buildOrderBillPayRow(row.id),
+      ),
     ]);
   }
 
@@ -3754,10 +3810,194 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                 const Spacer(),
                 _buildOrderSendButton(row),
               ]),
+              // CHANGE #328 — View Bill (left) + View Payment (right)
+              const SizedBox(height: 8),
+              _buildOrderBillPayRow(row.id),
             ]),
           ),
+          // CHANGE #328 — bill + payment panels
+          if (_orderBillOpen[row.id] == true)
+            _buildAdminBillPanel(row),
+          if (_orderPayOpen[row.id] == true)
+            _buildAdminPayPanel(row),
           if (isExpanded) _buildOrderItemsPanel(currentItems, padH: 14), // CHANGE #277: show current items only
         ]),
+      ),
+    );
+  }
+
+  // ── CHANGE #328: View Bill / View Payment button row ─────────────────────
+
+  Widget _buildOrderBillPayRow(String orderId) {
+    final billOpen = _orderBillOpen[orderId] == true;
+    final payOpen  = _orderPayOpen[orderId] == true;
+
+    Widget toggleBtn(String label, bool isOpen, VoidCallback onTap) {
+      return GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: isOpen ? const Color(0xFFEFF6FF) : const Color(0xFFF5F6F8),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: isOpen
+                  ? const Color(0xFF1E40AF).withValues(alpha: 0.4)
+                  : const Color(0xFFE5E7EB),
+            ),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Flexible(
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 12, fontWeight: FontWeight.w600,
+                    color: isOpen ? const Color(0xFF1E40AF) : const Color(0xFF374151),
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              const SizedBox(width: 4),
+              AnimatedRotation(
+                turns: isOpen ? 0.5 : 0.0,
+                duration: const Duration(milliseconds: 150),
+                child: Icon(Icons.expand_more, size: 14,
+                    color: isOpen ? const Color(0xFF1E40AF) : const Color(0xFF6B7280)),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Row(children: [
+      Expanded(child: toggleBtn('View Bill', billOpen, () {
+        final willOpen = !billOpen;
+        setState(() {
+          _orderBillOpen[orderId] = willOpen;
+          if (willOpen) _orderPayOpen[orderId] = false; // close pay when opening bill
+        });
+        if (willOpen) _loadOrderPanel(orderId);
+      })),
+      const SizedBox(width: 8),
+      Expanded(child: toggleBtn('View Payment', payOpen, () {
+        final willOpen = !payOpen;
+        setState(() {
+          _orderPayOpen[orderId] = willOpen;
+          if (willOpen) _orderBillOpen[orderId] = false; // close bill when opening pay
+        });
+        if (willOpen) _loadOrderPanel(orderId);
+      })),
+    ]);
+  }
+
+  // ── CHANGE #328: admin View Bill chip panel ──────────────────────────────
+
+  Widget _buildAdminBillPanel(_OrderRow row) {
+    final orderId = row.id;
+    final isLoading = _orderPanelLoading[orderId] == true;
+    final error = _orderPanelError[orderId];
+    final data = _orderPanelData[orderId];
+
+    return Container(
+      decoration: const BoxDecoration(
+        border: Border(top: BorderSide(color: Color(0xFFF3F4F6))),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(children: [
+              const Text('View Bill', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+              const Spacer(),
+              GestureDetector(
+                onTap: () => _loadOrderPanel(orderId, refresh: true),
+                child: const Icon(Icons.refresh, size: 16, color: Color(0xFF6B7280)),
+              ),
+            ]),
+            const SizedBox(height: 8),
+            if (isLoading)
+              const Center(child: Padding(
+                padding: EdgeInsets.all(16),
+                child: CircularProgressIndicator(color: Color(0xFF1B7A43)),
+              ))
+            else if (error != null)
+              Row(children: [
+                const Text('Failed to load.', style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
+                const SizedBox(width: 8),
+                GestureDetector(
+                  onTap: () => _loadOrderPanel(orderId, refresh: true),
+                  child: const Text('Retry', style: TextStyle(fontSize: 13, color: Color(0xFF1B7A43), fontWeight: FontWeight.w600)),
+                ),
+              ])
+            else if (data == null || data['found'] != true)
+              const Text('Bill details unavailable.', style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)))
+            else
+              _AdminBillPanelBody(
+                data: data,
+                row: row,
+                onReload: () => _loadOrderPanel(orderId, refresh: true),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── CHANGE #328: admin View Payment panel ────────────────────────────────
+
+  Widget _buildAdminPayPanel(_OrderRow row) {
+    final orderId = row.id;
+    final isLoading = _orderPanelLoading[orderId] == true;
+    final error = _orderPanelError[orderId];
+    final data = _orderPanelData[orderId];
+
+    return Container(
+      decoration: const BoxDecoration(
+        border: Border(top: BorderSide(color: Color(0xFFF3F4F6))),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(children: [
+              const Text('Payment Summary', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+              const Spacer(),
+              GestureDetector(
+                onTap: () => _loadOrderPanel(orderId, refresh: true),
+                child: const Icon(Icons.refresh, size: 16, color: Color(0xFF6B7280)),
+              ),
+            ]),
+            const SizedBox(height: 8),
+            if (isLoading)
+              const Center(child: Padding(
+                padding: EdgeInsets.all(16),
+                child: CircularProgressIndicator(color: Color(0xFF1B7A43)),
+              ))
+            else if (error != null)
+              Row(children: [
+                const Text('Failed to load.', style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
+                const SizedBox(width: 8),
+                GestureDetector(
+                  onTap: () => _loadOrderPanel(orderId, refresh: true),
+                  child: const Text('Retry', style: TextStyle(fontSize: 13, color: Color(0xFF1B7A43), fontWeight: FontWeight.w600)),
+                ),
+              ])
+            else if (data == null || data['found'] != true)
+              const Text('Payment details unavailable.', style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)))
+            else
+              _AdminPayPanelBody(
+                data: data,
+                orderId: orderId,
+                onReload: () => _loadOrderPanel(orderId, refresh: true),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -10554,5 +10794,640 @@ class _MovePickerRow extends StatelessWidget {
         ]),
       ),
     );
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CHANGE #328 — admin bill + payment panel widgets
+// ══════════════════════════════════════════════════════════════════════════════
+
+String _c328Rupee(num? v) {
+  if (v == null) return '₹—';
+  final d = v.toDouble();
+  return d == d.truncateToDouble() ? '₹${v.toInt()}' : '₹${d.toStringAsFixed(2)}';
+}
+
+class _C328StatCard extends StatelessWidget {
+  final String label;
+  final String headline;
+  final String sub;
+  final double fill;
+  final Color barColor;
+
+  const _C328StatCard({
+    required this.label,
+    required this.headline,
+    required this.sub,
+    required this.fill,
+    required this.barColor,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(label, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: Color(0xFF9CA3AF))),
+        const SizedBox(height: 4),
+        Text(headline, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+        if (sub.isNotEmpty) ...[
+          const SizedBox(height: 2),
+          Text(sub, style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
+        ],
+        const SizedBox(height: 8),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(6),
+          child: LinearProgressIndicator(
+            value: fill,
+            minHeight: 10,
+            backgroundColor: const Color(0xFFF3F4F6),
+            color: barColor,
+          ),
+        ),
+      ]),
+    );
+  }
+}
+
+// ── Admin View Bill chip panel ────────────────────────────────────────────────
+
+class _AdminBillPanelBody extends StatefulWidget {
+  final Map<String, dynamic> data;
+  final _OrderRow row;
+  final VoidCallback onReload;
+
+  const _AdminBillPanelBody({
+    required this.data,
+    required this.row,
+    required this.onReload,
+  });
+
+  @override
+  State<_AdminBillPanelBody> createState() => _AdminBillPanelBodyState();
+}
+
+class _AdminBillPanelBodyState extends State<_AdminBillPanelBody> {
+  int _selectedChip = 0; // 0 = Bill Info, 1+ = bill_no
+
+  @override
+  Widget build(BuildContext context) {
+    final data          = widget.data;
+    final billsTotal    = (data['bills_total'] as num?)?.toInt() ?? 0;
+    final billsImported = (data['bills_imported'] as num?)?.toInt() ?? 0;
+    final billsLeft     = (data['bills_left'] as num?)?.toInt() ?? 0;
+    final mrpTotal      = (data['mrp_total'] as num?)?.toDouble() ?? 0.0;
+    final totalPaid     = (data['total_paid'] as num?)?.toDouble() ?? 0.0;
+    final advRequired   = (data['advance_required'] as num?)?.toDouble() ?? 0.0;
+    final advPaid       = (data['advance_paid'] as num?)?.toDouble() ?? 0.0;
+    final supplierName  = (data['supplier_name'] as String?) ?? widget.row.supplierName ?? '?';
+    final bills         = (data['bills'] as List<dynamic>? ?? [])
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
+
+    RenderLog.write('c328_admin_billtabs', 'bills=$billsTotal;imported=$billsImported');
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      // Chip row
+      SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(children: [
+          _BillChip(
+            label: 'Bill Info',
+            selected: _selectedChip == 0,
+            chipColor: null,
+            onTap: () => setState(() => _selectedChip = 0),
+          ),
+          ...bills.map((bill) {
+            final billNo   = (bill['bill_no'] as num?)?.toInt() ?? 0;
+            final imported = bill['imported'] as bool? ?? false;
+            return _BillChip(
+              label: 'Bill $billNo',
+              selected: _selectedChip == billNo,
+              chipColor: imported ? const Color(0xFF1B7A43) : const Color(0xFFDC2626),
+              onTap: () => setState(() => _selectedChip = billNo),
+            );
+          }),
+        ]),
+      ),
+
+      const SizedBox(height: 12),
+
+      if (_selectedChip == 0)
+        _buildBillInfoTab(
+          billsTotal: billsTotal, billsImported: billsImported, billsLeft: billsLeft,
+          mrpTotal: mrpTotal, totalPaid: totalPaid,
+          advRequired: advRequired, advPaid: advPaid,
+          supplierName: supplierName,
+        )
+      else
+        Builder(builder: (_) {
+          final bill = bills.firstWhere(
+            (b) => (b['bill_no'] as num?)?.toInt() == _selectedChip,
+            orElse: () => <String, dynamic>{},
+          );
+          if (bill.isEmpty) return const Text('Bill not found.', style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)));
+          return _BillTab(bill: bill, onImported: widget.onReload);
+        }),
+    ]);
+  }
+
+  Widget _buildBillInfoTab({
+    required int billsTotal, required int billsImported, required int billsLeft,
+    required double mrpTotal, required double totalPaid,
+    required double advRequired, required double advPaid,
+    required String supplierName,
+  }) {
+    RenderLog.write('c328_bill_info', 'bills=$billsTotal;paid=$totalPaid');
+    final pct = mrpTotal > 0 ? ((totalPaid / mrpTotal) * 100).round() : 0;
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      if (billsTotal == 0)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: Text('No bills received from $supplierName yet.',
+              style: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
+        ),
+      _C328StatCard(
+        label: 'Bills imported',
+        headline: '$billsImported / $billsTotal',
+        sub: 'Left: $billsLeft',
+        fill: billsTotal > 0 ? (billsImported / billsTotal).clamp(0.0, 1.0) : 0.0,
+        barColor: billsLeft == 0 && billsTotal > 0 ? const Color(0xFF1B7A43) : const Color(0xFFD97706),
+      ),
+      _C328StatCard(
+        label: 'Total ordered vs paid',
+        headline: '${_c328Rupee(totalPaid)} / ${_c328Rupee(mrpTotal)}',
+        sub: mrpTotal > 0 ? '$pct% paid' : '—',
+        fill: mrpTotal > 0 ? (totalPaid / mrpTotal).clamp(0.0, 1.0) : 0.0,
+        barColor: const Color(0xFF1B7A43),
+      ),
+      _C328StatCard(
+        label: 'Advance (30% of MRP)',
+        headline: '${_c328Rupee(advPaid)} / ${_c328Rupee(advRequired)}',
+        sub: '',
+        fill: advRequired > 0 ? (advPaid / advRequired).clamp(0.0, 1.0) : 0.0,
+        barColor: advPaid >= advRequired && advRequired > 0 ? const Color(0xFF1B7A43) : const Color(0xFFD97706),
+      ),
+    ]);
+  }
+}
+
+// ── Bill chip ─────────────────────────────────────────────────────────────────
+
+class _BillChip extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final Color? chipColor;
+  final VoidCallback onTap;
+
+  const _BillChip({required this.label, required this.selected, required this.chipColor, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final Color bg;
+    final Color fg;
+    final Border border;
+
+    if (chipColor == null) {
+      bg = selected ? const Color(0xFF1B7A43) : const Color(0xFFF3F4F6);
+      fg = selected ? Colors.white : const Color(0xFF374151);
+      border = Border.all(color: selected ? const Color(0xFF1B7A43) : const Color(0xFFE5E7EB));
+    } else {
+      final isGreen = chipColor == const Color(0xFF1B7A43);
+      bg = selected
+          ? chipColor!
+          : (isGreen ? const Color(0xFFD1FAE5) : const Color(0xFFFEE2E2));
+      fg = selected
+          ? Colors.white
+          : (isGreen ? const Color(0xFF065F46) : const Color(0xFF991B1B));
+      border = Border.all(
+        color: isGreen
+            ? const Color(0xFF1B7A43).withValues(alpha: 0.5)
+            : const Color(0xFFDC2626).withValues(alpha: 0.5),
+      );
+    }
+
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        margin: const EdgeInsets.only(right: 6, bottom: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(20), border: border),
+        child: Text(label, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: fg)),
+      ),
+    );
+  }
+}
+
+// ── Bill N tab body ───────────────────────────────────────────────────────────
+
+class _BillTab extends StatefulWidget {
+  final Map<String, dynamic> bill;
+  final VoidCallback onImported;
+
+  const _BillTab({required this.bill, required this.onImported});
+
+  @override
+  State<_BillTab> createState() => _BillTabState();
+}
+
+class _BillTabState extends State<_BillTab> {
+  String? _signedUrl;
+  bool _urlLoading = true;
+  String? _urlError;
+  bool _importing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadUrl();
+  }
+
+  @override
+  void didUpdateWidget(_BillTab old) {
+    super.didUpdateWidget(old);
+    if (old.bill['id'] != widget.bill['id']) {
+      setState(() { _signedUrl = null; _urlLoading = true; _urlError = null; });
+      _loadUrl();
+    }
+  }
+
+  Future<void> _loadUrl() async {
+    final bucket   = widget.bill['bucket'] as String? ?? 'supplier-bills';
+    final filePath = widget.bill['file_path'] as String? ?? '';
+    try {
+      final url = await Supabase.instance.client.storage
+          .from(bucket).createSignedUrl(filePath, 3600);
+      if (mounted) setState(() { _signedUrl = url; _urlLoading = false; });
+    } catch (e) {
+      if (mounted) setState(() { _urlError = e.toString(); _urlLoading = false; });
+    }
+  }
+
+  Future<void> _importBill() async {
+    RenderLog.write('c328_bill_import',
+        'bill_id=${widget.bill['id']};bill_no=${widget.bill['bill_no']}');
+    final bucket   = widget.bill['bucket'] as String? ?? 'supplier-bills';
+    final filePath = widget.bill['file_path'] as String? ?? '';
+    final fileName = widget.bill['file_name'] as String? ?? 'bill';
+    final id       = widget.bill['id'] as String? ?? '';
+    if (!mounted) return;
+    setState(() => _importing = true);
+    try {
+      final bytes = await Supabase.instance.client.storage.from(bucket).download(filePath);
+      if (!mounted) return;
+      await Navigator.of(context).push(MaterialPageRoute(
+        builder: (_) => AdminAddMedicineScreen(
+          preloadedBytes: bytes,
+          preloadedFileName: fileName,
+          onImportComplete: () async {
+            try {
+              await Supabase.instance.client.from('pending_bills').update({
+                'status': 'imported',
+                'imported_at': DateTime.now().toIso8601String(),
+              }).eq('id', id);
+            } catch (_) {}
+          },
+        ),
+      ));
+      if (!mounted) return;
+      widget.onImported();
+    } catch (e) {
+      if (!mounted) return;
+      showToast(context, 'Download failed: ${e.toString().replaceFirst('Exception: ', '')}', isError: true);
+    } finally {
+      if (mounted) setState(() => _importing = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final imported    = widget.bill['imported'] as bool? ?? false;
+    final billNo      = (widget.bill['bill_no'] as num?)?.toInt() ?? 0;
+    final source      = widget.bill['source'] as String? ?? '';
+    final fileName    = widget.bill['file_name'] as String? ?? '';
+    final ext         = fileName.toLowerCase().split('.').last;
+    final isPdf       = ext == 'pdf';
+    final receivedRaw = widget.bill['received_at'] as String?;
+    final receivedAt  = receivedRaw != null ? DateTime.tryParse(receivedRaw)?.toLocal() : null;
+    final receivedStr = receivedAt != null ? _fmtD(receivedAt) : '—';
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      // (1) Import button
+      if (!imported)
+        FilledButton(
+          onPressed: _importing ? null : _importBill,
+          style: FilledButton.styleFrom(
+            backgroundColor: const Color(0xFFD97706),
+            foregroundColor: Colors.white,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            minimumSize: const Size(double.infinity, 40),
+          ),
+          child: _importing
+              ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+              : const Text('Import bill', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+        )
+      else
+        FilledButton(
+          onPressed: null,
+          style: FilledButton.styleFrom(
+            disabledBackgroundColor: const Color(0xFFD1FAE5),
+            disabledForegroundColor: const Color(0xFF065F46),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            minimumSize: const Size(double.infinity, 40),
+          ),
+          child: const Text('Imported ✓', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+        ),
+
+      const SizedBox(height: 10),
+
+      // (2) Bill content
+      if (_urlLoading)
+        const Center(child: Padding(padding: EdgeInsets.all(24), child: CircularProgressIndicator(color: Color(0xFF1B7A43))))
+      else if (_urlError != null)
+        GestureDetector(
+          onTap: () { setState(() { _urlLoading = true; _urlError = null; }); _loadUrl(); },
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(color: const Color(0xFFFEF3C7), borderRadius: BorderRadius.circular(8)),
+            child: const Text('Failed to load. Tap to retry.', textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 13, color: Color(0xFF92400E))),
+          ),
+        )
+      else if (isPdf)
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: const Color(0xFFF9FAFB),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: const Color(0xFFE5E7EB)),
+          ),
+          child: Column(children: [
+            const Icon(Icons.picture_as_pdf_outlined, size: 40, color: Color(0xFF9CA3AF)),
+            const SizedBox(height: 8),
+            Text(fileName, style: const TextStyle(fontSize: 13, color: Color(0xFF374151)), textAlign: TextAlign.center),
+            const SizedBox(height: 10),
+            OutlinedButton.icon(
+              onPressed: () async {
+                final uri = Uri.parse(_signedUrl!);
+                if (await canLaunchUrl(uri)) launchUrl(uri, mode: LaunchMode.externalApplication);
+              },
+              icon: const Icon(Icons.open_in_new, size: 14),
+              label: const Text('Open PDF ↗'),
+              style: OutlinedButton.styleFrom(
+                side: const BorderSide(color: Color(0xFF1B7A43)),
+                foregroundColor: const Color(0xFF1B7A43),
+              ),
+            ),
+          ]),
+        )
+      else
+        GestureDetector(
+          onTap: () => openFullscreenImage(context, _signedUrl!),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: Image.network(
+              _signedUrl!,
+              width: double.infinity,
+              fit: BoxFit.contain,
+              loadingBuilder: (_, child, progress) => progress == null
+                  ? child
+                  : const Center(child: Padding(padding: EdgeInsets.all(24), child: CircularProgressIndicator(color: Color(0xFF1B7A43)))),
+              errorBuilder: (_, __, ___) => Container(
+                width: double.infinity, padding: const EdgeInsets.all(16), color: const Color(0xFFF3F4F6),
+                child: const Text('Image failed to load.', textAlign: TextAlign.center, style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
+              ),
+            ),
+          ),
+        ),
+
+      const SizedBox(height: 8),
+
+      // (4) Meta line
+      Text('Bill $billNo · $source · $receivedStr', style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
+    ]);
+  }
+
+  String _fmtD(DateTime dt) {
+    final dd = dt.day.toString().padLeft(2,'0');
+    final mm = dt.month.toString().padLeft(2,'0');
+    final yy = (dt.year % 100).toString().padLeft(2,'0');
+    var h = dt.hour % 12; if (h == 0) h = 12;
+    final min = dt.minute.toString().padLeft(2,'0');
+    final ap = dt.hour >= 12 ? 'PM' : 'AM';
+    return '$dd/$mm/$yy $h:$min $ap';
+  }
+}
+
+// ── Admin View Payment panel body ─────────────────────────────────────────────
+
+class _AdminPayPanelBody extends StatefulWidget {
+  final Map<String, dynamic> data;
+  final String orderId;
+  final VoidCallback onReload;
+
+  const _AdminPayPanelBody({required this.data, required this.orderId, required this.onReload});
+
+  @override
+  State<_AdminPayPanelBody> createState() => _AdminPayPanelBodyState();
+}
+
+class _AdminPayPanelBodyState extends State<_AdminPayPanelBody> {
+  @override
+  Widget build(BuildContext context) {
+    final data      = widget.data;
+    final mrpTotal  = (data['mrp_total'] as num?)?.toDouble() ?? 0.0;
+    final totalPaid = (data['total_paid'] as num?)?.toDouble() ?? 0.0;
+    final advReq    = (data['advance_required'] as num?)?.toDouble() ?? 0.0;
+    final advPaid   = (data['advance_paid'] as num?)?.toDouble() ?? 0.0;
+    final payments  = (data['payments'] as List<dynamic>? ?? [])
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
+    final pct       = mrpTotal > 0 ? ((totalPaid / mrpTotal) * 100).round() : 0;
+    final remaining = (mrpTotal - totalPaid).clamp(0.0, double.infinity);
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      _C328StatCard(
+        label: 'Total ordered',
+        headline: '${_c328Rupee(totalPaid)} / ${_c328Rupee(mrpTotal)}',
+        sub: mrpTotal > 0 ? '$pct% paid' : '—',
+        fill: mrpTotal > 0 ? (totalPaid / mrpTotal).clamp(0.0, 1.0) : 0.0,
+        barColor: const Color(0xFF1B7A43),
+      ),
+      _C328StatCard(
+        label: 'Advance payment (30%)',
+        headline: '${_c328Rupee(advPaid)} / ${_c328Rupee(advReq)}',
+        sub: '',
+        fill: advReq > 0 ? (advPaid / advReq).clamp(0.0, 1.0) : 0.0,
+        barColor: advPaid >= advReq && advReq > 0 ? const Color(0xFF1B7A43) : const Color(0xFFD97706),
+      ),
+      _C328StatCard(
+        label: 'Remaining balance',
+        headline: '${_c328Rupee(remaining)} left',
+        sub: 'of ${_c328Rupee(mrpTotal)} total',
+        fill: mrpTotal > 0 ? (remaining / mrpTotal).clamp(0.0, 1.0) : 0.0,
+        barColor: const Color(0xFF1B7A43),
+      ),
+      OutlinedButton.icon(
+        onPressed: () => _showAddPaymentDialog(),
+        icon: const Icon(Icons.add, size: 16),
+        label: const Text('+ Add Payment', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+        style: OutlinedButton.styleFrom(
+          side: const BorderSide(color: Color(0xFF1B7A43)),
+          foregroundColor: const Color(0xFF1B7A43),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          minimumSize: const Size(double.infinity, 40),
+        ),
+      ),
+      const SizedBox(height: 12),
+      const Text('Payments', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF6B7280))),
+      const SizedBox(height: 6),
+      if (payments.isEmpty)
+        const Text('No payments recorded yet.', style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)))
+      else
+        ...payments.map((p) => _C328PayRow(payment: p)),
+    ]);
+  }
+
+  Future<void> _showAddPaymentDialog() async {
+    final amountCtrl = TextEditingController();
+    final noteCtrl   = TextEditingController();
+    String mode = 'cash';
+    String? amountError;
+    bool saving = false;
+    String? saveError;
+
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDlg) => AlertDialog(
+          title: const Text('Add Payment', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+          content: Column(mainAxisSize: MainAxisSize.min, children: [
+            TextField(
+              controller: amountCtrl,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: InputDecoration(
+                labelText: 'Amount (₹)',
+                errorText: amountError,
+                border: const OutlineInputBorder(),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+              ),
+              onChanged: (_) { if (amountError != null) setDlg(() => amountError = null); },
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              value: mode,
+              decoration: const InputDecoration(
+                labelText: 'Mode',
+                border: OutlineInputBorder(),
+                contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+              ),
+              items: const [
+                DropdownMenuItem(value: 'cash',   child: Text('Cash')),
+                DropdownMenuItem(value: 'online', child: Text('Online')),
+              ],
+              onChanged: (v) { if (v != null) setDlg(() => mode = v); },
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: noteCtrl,
+              decoration: const InputDecoration(
+                labelText: 'Note (optional)',
+                border: OutlineInputBorder(),
+                contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+              ),
+            ),
+            if (saveError != null) ...[
+              const SizedBox(height: 8),
+              Text(saveError!, style: const TextStyle(fontSize: 12, color: Color(0xFFDC2626))),
+            ],
+          ]),
+          actions: [
+            TextButton(
+              onPressed: saving ? null : () => Navigator.of(ctx).pop(),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: saving ? null : () async {
+                final raw = amountCtrl.text.trim();
+                final amount = double.tryParse(raw);
+                if (amount == null || amount <= 0) {
+                  setDlg(() => amountError = 'Enter a valid amount');
+                  return;
+                }
+                setDlg(() { saving = true; saveError = null; });
+                RenderLog.write('c328_admin_addpay', 'order=${widget.orderId};amount=$amount');
+                try {
+                  await Supabase.instance.client.rpc('sup_add_payment', params: {
+                    'p_supplier_order_id': widget.orderId,
+                    'p_amount': amount,
+                    'p_mode': mode,
+                    'p_note': noteCtrl.text.trim().isEmpty ? null : noteCtrl.text.trim(),
+                  });
+                  if (ctx.mounted) Navigator.of(ctx).pop();
+                  if (mounted) {
+                    showToast(context, 'Payment recorded ✓');
+                    widget.onReload();
+                  }
+                } catch (e) {
+                  setDlg(() {
+                    saving = false;
+                    saveError = e.toString().replaceFirst('Exception: ', '');
+                  });
+                }
+              },
+              style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43)),
+              child: saving
+                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                  : const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _C328PayRow extends StatelessWidget {
+  final Map<String, dynamic> payment;
+  const _C328PayRow({required this.payment});
+
+  @override
+  Widget build(BuildContext context) {
+    final amount = (payment['amount'] as num?)?.toDouble() ?? 0;
+    final mode   = payment['mode'] as String? ?? '';
+    final note   = payment['note'] as String?;
+    final atRaw  = payment['at'] as String?;
+    final at     = atRaw != null ? DateTime.tryParse(atRaw)?.toLocal() : null;
+    final atStr  = at != null ? _fmtP(at) : '—';
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text('${_c328Rupee(amount)} · $mode · $atStr',
+            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: Color(0xFF111827))),
+        if (note != null && note.isNotEmpty)
+          Text(note, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+      ]),
+    );
+  }
+
+  String _fmtP(DateTime dt) {
+    final dd = dt.day.toString().padLeft(2,'0');
+    final mm = dt.month.toString().padLeft(2,'0');
+    final yy = (dt.year % 100).toString().padLeft(2,'0');
+    var h = dt.hour % 12; if (h == 0) h = 12;
+    final min = dt.minute.toString().padLeft(2,'0');
+    final ap = dt.hour >= 12 ? 'PM' : 'AM';
+    return '$dd/$mm/$yy $h:$min $ap';
   }
 }

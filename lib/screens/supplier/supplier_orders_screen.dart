@@ -1,14 +1,22 @@
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../utils/render_log.dart';
+import '../../utils/toast.dart';
 import '../../widgets/order_item_card.dart';
 
 // ── Screen ────────────────────────────────────────────────────────────────────
 
 class SupplierOrdersScreen extends StatefulWidget {
   final String? viewAsSupplierId;
-  const SupplierOrdersScreen({super.key, this.viewAsSupplierId});
+  final String supplierName;
+
+  const SupplierOrdersScreen({
+    super.key,
+    this.viewAsSupplierId,
+    this.supplierName = 'Supplier',
+  });
 
   @override
   State<SupplierOrdersScreen> createState() => _SupplierOrdersScreenState();
@@ -52,8 +60,6 @@ class _SupplierOrdersScreenState extends State<SupplierOrdersScreen> {
     if (!silent) setState(() => _loading = true);
     try {
       final sid = widget.viewAsSupplierId;
-      // Pass p_supplier_id when acting-as (admin View As Supplier flow).
-      // When null, the RPC resolves via current_supplier_profile().
       final params = sid != null
           ? <String, dynamic>{'p_supplier_id': sid}
           : <String, dynamic>{};
@@ -65,8 +71,6 @@ class _SupplierOrdersScreenState extends State<SupplierOrdersScreen> {
           .map((e) => Map<String, dynamic>.from(e as Map))
           .toList();
 
-      // On first load, auto-expand the newest (first) order.
-      // On subsequent fetches, keep current expansion unless a new order arrived at top.
       String? newExpanded = _expandedOrderId;
       if (_firstLoad) {
         newExpanded = list.isNotEmpty ? (list.first['order_id'] as String?) : null;
@@ -108,7 +112,6 @@ class _SupplierOrdersScreenState extends State<SupplierOrdersScreen> {
   Widget build(BuildContext context) {
     RenderLog.write('supplier_orders_screen_built', 1);
 
-    // LayoutBuilder wraps the whole build so supplier_orders_vp_w is always stamped.
     return LayoutBuilder(builder: (context, constraints) {
       RenderLog.write('supplier_orders_vp_w', constraints.maxWidth.toInt());
 
@@ -138,6 +141,7 @@ class _SupplierOrdersScreenState extends State<SupplierOrdersScreen> {
           final isOpen = _expandedOrderId == orderId;
           return _OrderCard(
             order: order,
+            supplierName: widget.supplierName,
             isOpen: isOpen,
             onToggle: () => _toggleOrder(orderId),
           );
@@ -147,29 +151,147 @@ class _SupplierOrdersScreenState extends State<SupplierOrdersScreen> {
   }
 }
 
-// ── Order card (collapsible) ──────────────────────────────────────────────────
+// ── Order card (collapsible, manages bill/payment panel state) ─────────────────
 
-class _OrderCard extends StatelessWidget {
+class _OrderCard extends StatefulWidget {
   final Map<String, dynamic> order;
+  final String supplierName;
   final bool isOpen;
   final VoidCallback onToggle;
 
-  const _OrderCard({required this.order, required this.isOpen, required this.onToggle});
+  const _OrderCard({
+    required this.order,
+    required this.supplierName,
+    required this.isOpen,
+    required this.onToggle,
+  });
+
+  @override
+  State<_OrderCard> createState() => _OrderCardState();
+}
+
+class _OrderCardState extends State<_OrderCard> {
+  bool _payOpen = false;
+  bool _uploading = false;
+  Map<String, dynamic>? _panelData;
+  bool _panelLoading = false;
+  String? _panelError;
+
+  String get _orderId => widget.order['order_id'] as String? ?? '';
+
+  Future<void> _loadPanel({bool refresh = false}) async {
+    if (_panelLoading) return;
+    if (_panelData != null && !refresh) return;
+    if (!mounted) return;
+    setState(() { _panelLoading = true; _panelError = null; });
+    try {
+      final result = await Supabase.instance.client
+          .rpc('sup_order_bill_panel', params: {'p_supplier_order_id': _orderId});
+      if (!mounted) return;
+      setState(() {
+        _panelData = Map<String, dynamic>.from(result as Map? ?? {});
+        _panelLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _panelError = e.toString();
+        _panelLoading = false;
+      });
+    }
+  }
+
+  Future<void> _uploadSupplierBill() async {
+    // step 1: pick file
+    FilePickerResult? result;
+    try {
+      result = await FilePicker.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['jpg', 'jpeg', 'png', 'webp', 'pdf'],
+        allowMultiple: false,
+        withData: true,
+      );
+    } catch (_) {
+      return;
+    }
+    if (result == null || result.files.isEmpty) return;
+
+    final file = result.files.first;
+    final bytes = file.bytes;
+    if (bytes == null) return;
+
+    // step 2: size guard
+    if (bytes.length > 15 * 1024 * 1024) {
+      if (mounted) showToast(context, 'File too large (max 15 MB)', isError: true);
+      return;
+    }
+
+    setState(() => _uploading = true);
+    try {
+      // step 3: build path
+      final ext = (file.extension ?? 'jpg').toLowerCase();
+      final orderCode = (widget.order['order_code'] as String?)?.trim() ?? _orderId.substring(0, 8);
+      final path = 'sup/${orderCode}_${DateTime.now().millisecondsSinceEpoch}.$ext';
+      final contentType = switch (ext) {
+        'pdf'  => 'application/pdf',
+        'png'  => 'image/png',
+        'webp' => 'image/webp',
+        _      => 'image/jpeg',
+      };
+
+      // step 4: upload to storage
+      try {
+        await Supabase.instance.client.storage
+            .from('supplier-bills')
+            .uploadBinary(path, bytes, fileOptions: FileOptions(contentType: contentType));
+      } catch (e) {
+        if (mounted) showToast(context, 'Upload failed — try again', isError: true);
+        return;
+      }
+
+      // step 5: register bill
+      RenderLog.write('c328_sup_upload', 'order=$orderCode;file=${file.name}');
+      try {
+        await Supabase.instance.client.rpc('sup_register_bill', params: {
+          'p_supplier_name': widget.supplierName,
+          'p_file_path': path,
+          'p_file_name': file.name,
+          'p_bucket': 'supplier-bills',
+        });
+        if (mounted) showToast(context, 'Bill uploaded ✓');
+      } catch (e) {
+        if (mounted) {
+          showToast(context,
+            'Bill saved but not registered — contact mediBO', isError: true);
+        }
+        return;
+      }
+
+      // step 7: refresh panel if open
+      if (_payOpen && mounted) {
+        await _loadPanel(refresh: true);
+      }
+    } finally {
+      if (mounted) setState(() => _uploading = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    // order_no is integer in DB
-    final orderNo    = order['order_no']?.toString() ?? '';
-    final orderCode  = (order['order_code'] as String?)?.trim() ?? '';
-    final totalAmount = (order['total_amount'] as num?)?.toDouble();
-    final itemCount  = (order['item_count'] as num?)?.toInt() ?? 0;
-    final createdAt  = order['created_at'] != null
-        ? DateTime.tryParse(order['created_at'] as String)?.toLocal()
+    final orderNo   = widget.order['order_no']?.toString() ?? '';
+    final orderCode = (widget.order['order_code'] as String?)?.trim() ?? '';
+    final totalAmount = (widget.order['total_amount'] as num?)?.toDouble();
+    final itemCount = (widget.order['item_count'] as num?)?.toInt() ?? 0;
+    final createdAt = widget.order['created_at'] != null
+        ? DateTime.tryParse(widget.order['created_at'] as String)?.toLocal()
         : null;
-    final items = (order['items'] as List<dynamic>? ?? [])
+    final items = (widget.order['items'] as List<dynamic>? ?? [])
         .map((e) => Map<String, dynamic>.from(e as Map))
         .toList();
-    final status = order['status'] as String? ?? '';
+    final status = widget.order['status'] as String? ?? '';
+
+    // c328_sup_row fires on every card render (list-time, not tap-gated)
+    RenderLog.write('c328_sup_row', 'order=${orderCode.isNotEmpty ? orderCode : _orderId.substring(0, 8)}');
 
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
@@ -190,10 +312,10 @@ class _OrderCard extends StatelessWidget {
         children: [
           // ── Header ──────────────────────────────────────────────────────────
           InkWell(
-            borderRadius: isOpen
+            borderRadius: (widget.isOpen || _payOpen)
                 ? const BorderRadius.vertical(top: Radius.circular(12))
                 : BorderRadius.circular(12),
-            onTap: onToggle,
+            onTap: widget.onToggle,
             child: Padding(
               padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
               child: Row(children: [
@@ -204,9 +326,7 @@ class _OrderCard extends StatelessWidget {
                       Text(
                         orderNo.isNotEmpty ? 'Order $orderNo' : 'Order',
                         style: const TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700,
-                          color: Color(0xFF111827),
+                          fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF111827),
                         ),
                       ),
                       if (orderCode.isNotEmpty) ...[
@@ -216,10 +336,8 @@ class _OrderCard extends StatelessWidget {
                           return Text(
                             orderCode,
                             style: const TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w500,
-                              color: Color(0xFF9CA3AF),
-                              letterSpacing: 0.3,
+                              fontSize: 11, fontWeight: FontWeight.w500,
+                              color: Color(0xFF9CA3AF), letterSpacing: 0.3,
                             ),
                           );
                         }),
@@ -256,7 +374,7 @@ class _OrderCard extends StatelessWidget {
                     const SizedBox(width: 8),
                   ],
                   Icon(
-                    isOpen
+                    widget.isOpen
                         ? Icons.keyboard_arrow_up_rounded
                         : Icons.keyboard_arrow_down_rounded,
                     color: const Color(0xFF6B7280),
@@ -267,8 +385,88 @@ class _OrderCard extends StatelessWidget {
             ),
           ),
 
-          // ── Expanded body ────────────────────────────────────────────────────
-          if (isOpen) ...[
+          // ── Upload Bill / View Payment button row ────────────────────────────
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+            child: Row(children: [
+              // Upload Bill (left)
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: _uploading ? null : _uploadSupplierBill,
+                  icon: _uploading
+                      ? const SizedBox(
+                          width: 14, height: 14,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF1B7A43)),
+                        )
+                      : const Icon(Icons.upload_outlined, size: 14),
+                  label: Text(_uploading ? 'Uploading…' : 'Upload Bill',
+                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 6),
+                    side: const BorderSide(color: Color(0xFFD1D5DB)),
+                    foregroundColor: const Color(0xFF374151),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    minimumSize: const Size(0, 36),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              // View Payment (right)
+              Expanded(
+                child: GestureDetector(
+                  onTap: () {
+                    setState(() => _payOpen = !_payOpen);
+                    if (!_payOpen) return;
+                    _loadPanel();
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: _payOpen ? const Color(0xFFEFF6FF) : const Color(0xFFF5F6F8),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: _payOpen
+                            ? const Color(0xFF1E40AF).withValues(alpha: 0.4)
+                            : const Color(0xFFE5E7EB),
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Flexible(
+                          child: Text(
+                            'View Payment',
+                            style: TextStyle(
+                              fontSize: 12, fontWeight: FontWeight.w600,
+                              color: _payOpen ? const Color(0xFF1E40AF) : const Color(0xFF374151),
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        AnimatedRotation(
+                          turns: _payOpen ? 0.5 : 0.0,
+                          duration: const Duration(milliseconds: 150),
+                          child: Icon(
+                            Icons.expand_more,
+                            size: 14,
+                            color: _payOpen ? const Color(0xFF1E40AF) : const Color(0xFF6B7280),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ]),
+          ),
+
+          // ── View Payment panel ───────────────────────────────────────────────
+          if (_payOpen) _buildPayPanel(),
+
+          // ── Expanded order items body ────────────────────────────────────────
+          if (widget.isOpen) ...[
             const Divider(height: 1, color: Color(0xFFF3F4F6)),
             Padding(
               padding: const EdgeInsets.all(12),
@@ -278,14 +476,55 @@ class _OrderCard extends StatelessWidget {
                   : Builder(builder: (_) {
                       RenderLog.write('c189_supplier_tab_shared_card', 'true');
                       return Column(
-                        children: items
-                            .map((item) => OrderItemCard(item: item))
-                            .toList(),
+                        children: items.map((item) => OrderItemCard(item: item)).toList(),
                       );
                     }),
             ),
           ],
         ],
+      ),
+    );
+  }
+
+  Widget _buildPayPanel() {
+    return Container(
+      decoration: const BoxDecoration(
+        border: Border(top: BorderSide(color: Color(0xFFF3F4F6))),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(children: [
+              const Text('Payment Summary',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+              const Spacer(),
+              GestureDetector(
+                onTap: () => _loadPanel(refresh: true),
+                child: const Icon(Icons.refresh, size: 16, color: Color(0xFF6B7280)),
+              ),
+            ]),
+            const SizedBox(height: 8),
+            if (_panelLoading)
+              const Center(
+                child: Padding(
+                  padding: EdgeInsets.all(16),
+                  child: CircularProgressIndicator(color: Color(0xFF1B7A43)),
+                ),
+              )
+            else if (_panelError != null)
+              _PanelError(onRetry: () => _loadPanel(refresh: true))
+            else if (_panelData == null || _panelData!['found'] != true)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 12),
+                child: Text('Payment details unavailable.',
+                    style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
+              )
+            else
+              _SupPayPanelBody(data: _panelData!),
+          ],
+        ),
       ),
     );
   }
@@ -297,6 +536,187 @@ class _OrderCard extends StatelessWidget {
     final ampm = dt.hour >= 12 ? 'PM' : 'AM';
     final m = dt.minute.toString().padLeft(2, '0');
     return '${dt.day} ${months[dt.month - 1]}, $h:$m $ampm';
+  }
+}
+
+// ── Supplier read-only payment panel body ─────────────────────────────────────
+
+class _SupPayPanelBody extends StatelessWidget {
+  final Map<String, dynamic> data;
+  const _SupPayPanelBody({required this.data});
+
+  @override
+  Widget build(BuildContext context) {
+    RenderLog.write('c328_sup_viewpay', 'built');
+
+    final mrpTotal        = (data['mrp_total'] as num?)?.toDouble() ?? 0.0;
+    final totalPaid       = (data['total_paid'] as num?)?.toDouble() ?? 0.0;
+    final advRequired     = (data['advance_required'] as num?)?.toDouble() ?? 0.0;
+    final advPaid         = (data['advance_paid'] as num?)?.toDouble() ?? 0.0;
+    final payments        = (data['payments'] as List<dynamic>? ?? [])
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
+
+    final pct = mrpTotal > 0 ? ((totalPaid / mrpTotal) * 100).round() : 0;
+    final remaining = (mrpTotal - totalPaid).clamp(0.0, double.infinity);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Card 1 — Total ordered
+        _SupStatCard(
+          label: 'Total ordered',
+          headline: '${_rupee(totalPaid)} / ${_rupee(mrpTotal)}',
+          sub: mrpTotal > 0 ? '$pct% paid' : '—',
+          fill: mrpTotal > 0 ? (totalPaid / mrpTotal).clamp(0.0, 1.0) : 0.0,
+          barColor: const Color(0xFF1B7A43),
+        ),
+        // Card 2 — Advance payment (30%)
+        _SupStatCard(
+          label: 'Advance payment (30%)',
+          headline: '${_rupee(advPaid)} / ${_rupee(advRequired)}',
+          sub: '',
+          fill: advRequired > 0 ? (advPaid / advRequired).clamp(0.0, 1.0) : 0.0,
+          barColor: advPaid >= advRequired && advRequired > 0
+              ? const Color(0xFF1B7A43)
+              : const Color(0xFFD97706),
+        ),
+        // Card 3 — Remaining balance
+        _SupStatCard(
+          label: 'Remaining balance',
+          headline: '${_rupee(remaining)} left',
+          sub: 'of ${_rupee(mrpTotal)} total',
+          fill: mrpTotal > 0 ? (remaining / mrpTotal).clamp(0.0, 1.0) : 0.0,
+          barColor: remaining == 0 ? const Color(0xFF1B7A43) : const Color(0xFF1B7A43),
+        ),
+
+        const SizedBox(height: 4),
+        const Text('Payments',
+            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF6B7280))),
+        const SizedBox(height: 6),
+
+        if (payments.isEmpty)
+          const Text('No payments recorded yet.',
+              style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)))
+        else
+          ...payments.map((p) => _PaymentRow(payment: p)),
+      ],
+    );
+  }
+}
+
+// ── Shared stat card ──────────────────────────────────────────────────────────
+
+class _SupStatCard extends StatelessWidget {
+  final String label;
+  final String headline;
+  final String sub;
+  final double fill;
+  final Color barColor;
+
+  const _SupStatCard({
+    required this.label,
+    required this.headline,
+    required this.sub,
+    required this.fill,
+    required this.barColor,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(label, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: Color(0xFF9CA3AF))),
+        const SizedBox(height: 4),
+        Text(headline, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+        if (sub.isNotEmpty) ...[
+          const SizedBox(height: 2),
+          Text(sub, style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
+        ],
+        const SizedBox(height: 8),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(6),
+          child: LinearProgressIndicator(
+            value: fill,
+            minHeight: 10,
+            backgroundColor: const Color(0xFFF3F4F6),
+            color: barColor,
+          ),
+        ),
+      ]),
+    );
+  }
+}
+
+// ── Single payment row ────────────────────────────────────────────────────────
+
+class _PaymentRow extends StatelessWidget {
+  final Map<String, dynamic> payment;
+  const _PaymentRow({required this.payment});
+
+  @override
+  Widget build(BuildContext context) {
+    final amount = (payment['amount'] as num?)?.toDouble() ?? 0;
+    final mode   = payment['mode'] as String? ?? '';
+    final note   = payment['note'] as String?;
+    final atRaw  = payment['at'] as String?;
+    final at     = atRaw != null ? DateTime.tryParse(atRaw)?.toLocal() : null;
+    final atStr  = at != null ? _fmtPayDate(at) : '—';
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '${_rupee(amount)} · $mode · $atStr',
+            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: Color(0xFF111827)),
+          ),
+          if (note != null && note.isNotEmpty)
+            Text(note, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+        ],
+      ),
+    );
+  }
+
+  String _fmtPayDate(DateTime dt) {
+    final dd = dt.day.toString().padLeft(2, '0');
+    final mm = dt.month.toString().padLeft(2, '0');
+    final yy = (dt.year % 100).toString().padLeft(2, '0');
+    var h = dt.hour % 12;
+    if (h == 0) h = 12;
+    final min = dt.minute.toString().padLeft(2, '0');
+    final ampm = dt.hour >= 12 ? 'PM' : 'AM';
+    return '$dd/$mm/$yy $h:$min $ampm';
+  }
+}
+
+// ── Panel error / retry ───────────────────────────────────────────────────────
+
+class _PanelError extends StatelessWidget {
+  final VoidCallback onRetry;
+  const _PanelError({required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Row(children: [
+        const Text('Failed to load.', style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
+        const SizedBox(width: 8),
+        GestureDetector(
+          onTap: onRetry,
+          child: const Text('Retry', style: TextStyle(fontSize: 13, color: Color(0xFF1B7A43), fontWeight: FontWeight.w600)),
+        ),
+      ]),
+    );
   }
 }
 
@@ -327,3 +747,10 @@ class _StatusBadge extends StatelessWidget {
   }
 }
 
+// ── Rupee formatter ───────────────────────────────────────────────────────────
+
+String _rupee(num? v) {
+  if (v == null) return '₹—';
+  final d = v.toDouble();
+  return d == d.truncateToDouble() ? '₹${v.toInt()}' : '₹${d.toStringAsFixed(2)}';
+}

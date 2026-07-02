@@ -117,6 +117,8 @@ class _HomeShellState extends State<HomeShell> {
       try { RenderLog.write('c328_build', 328); } catch (_) {}
       // CHANGE #329: 360° frontend fix — defensive parsers, bucket fix, import-return key.
       try { RenderLog.write('c329_build', 329); } catch (_) {}
+      // CHANGE #330: UPI payment_address on supplier profile; shared SupPayPanel with 3 chip tabs; advance+balance pipelines; supplier read-only mirror.
+      try { RenderLog.write('c330_build', 330); } catch (_) {}
       // CHANGE #312: structural attestation — bulk upload split buttons compiled in.
       // Written here so it appears in ALL sessions without visiting the Bulk tab.
       try { RenderLog.write('c312_bulk_built', 'split_buttons_#312'); } catch (_) {}

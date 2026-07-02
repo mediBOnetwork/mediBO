@@ -23,6 +23,7 @@ import '../../widgets/code_field.dart';
 import '../../widgets/fullscreen_image.dart';
 import '../../widgets/inquiry_v12.dart';
 import '../../widgets/order_item_card.dart';
+import '../../widgets/sup_pay_panel.dart';
 import 'admin_add_medicine_screen.dart';
 
 const _ocrEdgeFn =
@@ -3992,7 +3993,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
             else if (data == null || data['found'] != true)
               const Text('Payment details unavailable.', style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)))
             else
-              _AdminPayPanelBody(
+              SupPayPanel(
                 data: data,
                 orderId: orderId,
                 onReload: () => _loadOrderPanel(orderId, refresh: true),
@@ -4912,20 +4913,23 @@ class _SupplierEditDialogState extends State<_SupplierEditDialog> {
   CodeStatus _supCodeStatus = CodeStatus.idle;
 
   static const _fields = [
-    ('supplier_name', 'Supplier Name'),
-    ('contact_name',  'Contact Name'),
-    ('phone',         'Phone'),
-    ('whatsapp_no',   'WhatsApp No.'),
-    ('email',         'Email'),
-    ('supplier_code', 'Supplier Code'),
-    ('payment_term',  'Payment Term'),
-    ('city',          'City'),
-    ('state',         'State'),
-    ('pincode',       'PIN Code'),
-    ('gstin',         'GSTIN'),
-    ('drug_license',  'Drug License'),
-    ('notes',         'Notes'),
+    ('supplier_name',    'Supplier Name'),
+    ('contact_name',     'Contact Name'),
+    ('phone',            'Phone'),
+    ('whatsapp_no',      'WhatsApp No.'),
+    ('email',            'Email'),
+    ('payment_address',  'Payment Address (UPI)'),
+    ('supplier_code',    'Supplier Code'),
+    ('payment_term',     'Payment Term'),
+    ('city',             'City'),
+    ('state',            'State'),
+    ('pincode',          'PIN Code'),
+    ('gstin',            'GSTIN'),
+    ('drug_license',     'Drug License'),
+    ('notes',            'Notes'),
   ];
+
+  String? _upiError;
 
   @override
   void initState() {
@@ -4943,13 +4947,24 @@ class _SupplierEditDialogState extends State<_SupplierEditDialog> {
   }
 
   Future<void> _save() async {
-    setState(() => _saving = true);
+    // Validate UPI payment address before acquiring saving lock
+    final upiRaw = _ctrls['payment_address']!.text.trim();
+    if (upiRaw.isNotEmpty &&
+        !RegExp(r'^[0-9A-Za-z._\-]{2,}@[A-Za-z]{2,}$').hasMatch(upiRaw)) {
+      setState(() => _upiError = 'Enter a valid UPI id (name@bank)');
+      return;
+    }
+    setState(() { _saving = true; _upiError = null; });
     try {
       // Explicitly build only the writable fields — never include SPN (GENERATED ALWAYS)
       // or any computed/aggregate columns. _fields lists exactly the editable columns.
       final update = <String, dynamic>{
         for (final f in _fields) f.$1: _ctrls[f.$1]!.text.trim(),
       };
+      // Coerce empty payment_address to null (column is nullable)
+      if ((update['payment_address'] as String? ?? '').isEmpty) {
+        update['payment_address'] = null;
+      }
       await Supabase.instance.client
           .from('supplier_profiles')
           .update(update)
@@ -5004,12 +5019,21 @@ class _SupplierEditDialogState extends State<_SupplierEditDialog> {
                               const SizedBox(height: 4),
                               TextField(
                                 controller: _ctrls[f.$1],
+                                keyboardType: f.$1 == 'payment_address'
+                                    ? TextInputType.emailAddress
+                                    : TextInputType.text,
                                 decoration: InputDecoration(
                                   isDense: true,
                                   contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                                  hintText: f.$1 == 'payment_address' ? 'name@bank' : null,
+                                  hintStyle: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+                                  errorText: f.$1 == 'payment_address' ? _upiError : null,
                                   border: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: const BorderSide(color: Color(0xFFD1D5DB))),
                                 ),
                                 style: const TextStyle(fontSize: 13),
+                                onChanged: f.$1 == 'payment_address'
+                                    ? (_) { if (_upiError != null) setState(() => _upiError = null); }
+                                    : null,
                               ),
                             ]),
                     ),
@@ -8048,6 +8072,7 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
   final _waCtrl      = TextEditingController();
   final _emailCtrl   = TextEditingController();
   final _codeCtrl    = TextEditingController();
+  final _upiCtrl     = TextEditingController();
 
   // Editable company list
   List<_ResolvedCompany> _companies = [];
@@ -8069,7 +8094,7 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
 
   @override
   void dispose() {
-    for (final c in [_nameCtrl,_addrCtrl,_cityCtrl,_phoneCtrl,_waCtrl,_emailCtrl,_codeCtrl,_newCompCtrl]) c.dispose();
+    for (final c in [_nameCtrl,_addrCtrl,_cityCtrl,_phoneCtrl,_waCtrl,_emailCtrl,_codeCtrl,_newCompCtrl,_upiCtrl]) c.dispose();
     for (final c in _companies) c.dispose();
     for (final f in [..._spnFields, ..._otherFields]) f.dispose();
     super.dispose();
@@ -8174,6 +8199,12 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
       showToast(context, 'Supplier name is required', isError: true);
       return;
     }
+    final upiRaw = _upiCtrl.text.trim();
+    if (upiRaw.isNotEmpty &&
+        !RegExp(r'^[0-9A-Za-z._\-]{2,}@[A-Za-z]{2,}$').hasMatch(upiRaw)) {
+      showToast(context, 'Enter a valid UPI id (name@bank)', isError: true);
+      return;
+    }
     RenderLog.write('c67_insert_attempted', 'true');
     RenderLog.write('c67_insert_table', 'supplier_profiles');
     setState(() => _step = _SupCardStep.importing);
@@ -8195,6 +8226,7 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
       if (_waCtrl.text.trim().isNotEmpty) rec['whatsapp_no'] = _waCtrl.text.trim();
       if (_emailCtrl.text.trim().isNotEmpty) rec['email'] = _emailCtrl.text.trim();
       if (_codeCtrl.text.trim().isNotEmpty) rec['supplier_code'] = _codeCtrl.text.trim();
+      if (upiRaw.isNotEmpty) rec['payment_address'] = upiRaw;
       for (final f in [..._spnFields, ..._otherFields]) {
         final v = f.value;
         if (v.isNotEmpty) rec[f.column] = v;
@@ -8341,6 +8373,7 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
                 Expanded(child: _field('WhatsApp / Mobile', _waCtrl)),
               ]),
               _field('Email', _emailCtrl),
+              _field('Payment Address (UPI)', _upiCtrl),
               const SizedBox(height: 4),
               const Divider(color: Color(0xFFE5E7EB)),
               const SizedBox(height: 4),
@@ -8550,13 +8583,14 @@ class _SupCardMultiImportDialogState extends State<_SupCardMultiImportDialog> {
   String? _error;
 
   // Same editable fields as single-image form, populated from merged OCR
-  final _nameCtrl  = TextEditingController();
-  final _addrCtrl  = TextEditingController();
-  final _cityCtrl  = TextEditingController();
-  final _phoneCtrl = TextEditingController();
-  final _waCtrl    = TextEditingController();
-  final _emailCtrl = TextEditingController();
-  final _codeCtrl  = TextEditingController();
+  final _nameCtrl    = TextEditingController();
+  final _addrCtrl    = TextEditingController();
+  final _cityCtrl    = TextEditingController();
+  final _phoneCtrl   = TextEditingController();
+  final _waCtrl      = TextEditingController();
+  final _emailCtrl   = TextEditingController();
+  final _codeCtrl    = TextEditingController();
+  final _upiCtrl     = TextEditingController();
   final _newCompCtrl = TextEditingController();
 
   List<_ResolvedCompany> _companies = [];
@@ -8598,7 +8632,7 @@ class _SupCardMultiImportDialogState extends State<_SupCardMultiImportDialog> {
 
   @override
   void dispose() {
-    for (final c in [_nameCtrl,_addrCtrl,_cityCtrl,_phoneCtrl,_waCtrl,_emailCtrl,_codeCtrl,_newCompCtrl]) c.dispose();
+    for (final c in [_nameCtrl,_addrCtrl,_cityCtrl,_phoneCtrl,_waCtrl,_emailCtrl,_codeCtrl,_newCompCtrl,_upiCtrl]) c.dispose();
     for (final c in _companies) c.dispose();
     for (final f in [..._spnFields, ..._otherFields]) f.dispose();
     super.dispose();
@@ -8728,6 +8762,12 @@ class _SupCardMultiImportDialogState extends State<_SupCardMultiImportDialog> {
       showToast(context, 'Supplier name is required', isError: true);
       return;
     }
+    final upiRaw = _upiCtrl.text.trim();
+    if (upiRaw.isNotEmpty &&
+        !RegExp(r'^[0-9A-Za-z._\-]{2,}@[A-Za-z]{2,}$').hasMatch(upiRaw)) {
+      showToast(context, 'Enter a valid UPI id (name@bank)', isError: true);
+      return;
+    }
     RenderLog.write('c67_insert_attempted', 'true');
     RenderLog.write('c67_insert_table', 'supplier_profiles');
     setState(() => _step = _MultiStep.importing);
@@ -8744,6 +8784,7 @@ class _SupCardMultiImportDialogState extends State<_SupCardMultiImportDialog> {
       if (_waCtrl.text.trim().isNotEmpty) rec['whatsapp_no'] = _waCtrl.text.trim();
       if (_emailCtrl.text.trim().isNotEmpty) rec['email'] = _emailCtrl.text.trim();
       if (_codeCtrl.text.trim().isNotEmpty) rec['supplier_code'] = _codeCtrl.text.trim();
+      if (upiRaw.isNotEmpty) rec['payment_address'] = upiRaw;
       for (final f in [..._spnFields, ..._otherFields]) {
         final v = f.value; if (v.isNotEmpty) rec[f.column] = v;
       }
@@ -8880,6 +8921,7 @@ class _SupCardMultiImportDialogState extends State<_SupCardMultiImportDialog> {
                 Expanded(child: _field('WhatsApp / Mobile', _waCtrl)),
               ]),
               _field('Email', _emailCtrl),
+              _field('Payment Address (UPI)', _upiCtrl),
               const SizedBox(height: 4),
               const Divider(color: Color(0xFFE5E7EB)),
               const SizedBox(height: 4),

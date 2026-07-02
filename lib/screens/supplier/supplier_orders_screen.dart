@@ -3,9 +3,9 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../utils/render_log.dart';
-import '../../utils/safe_parse.dart';
 import '../../utils/toast.dart';
 import '../../widgets/order_item_card.dart';
+import '../../widgets/sup_pay_panel.dart';
 
 // ── Screen ────────────────────────────────────────────────────────────────────
 
@@ -523,7 +523,12 @@ class _OrderCardState extends State<_OrderCard> {
                     style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
               )
             else
-              _SupPayPanelBody(data: _panelData!),
+              SupPayPanel(
+                data: _panelData!,
+                orderId: _orderId,
+                onReload: () => _loadPanel(refresh: true),
+                isReadOnly: true,
+              ),
           ],
         ),
       ),
@@ -537,166 +542,6 @@ class _OrderCardState extends State<_OrderCard> {
     final ampm = dt.hour >= 12 ? 'PM' : 'AM';
     final m = dt.minute.toString().padLeft(2, '0');
     return '${dt.day} ${months[dt.month - 1]}, $h:$m $ampm';
-  }
-}
-
-// ── Supplier read-only payment panel body ─────────────────────────────────────
-
-class _SupPayPanelBody extends StatelessWidget {
-  final Map<String, dynamic> data;
-  const _SupPayPanelBody({required this.data});
-
-  @override
-  Widget build(BuildContext context) {
-    RenderLog.write('c328_sup_viewpay', 'built');
-    RenderLog.write('c329_panel_parse', 'supplier');
-
-    final mrpTotal        = safeParseDouble(data['mrp_total']);
-    final totalPaid       = safeParseDouble(data['total_paid']);
-    final advRequired     = safeParseDouble(data['advance_required']);
-    final advPaid         = safeParseDouble(data['advance_paid']);
-    final payments        = (data['payments'] as List<dynamic>? ?? [])
-        .map((e) => Map<String, dynamic>.from(e as Map))
-        .toList();
-
-    final pct = mrpTotal > 0 ? ((totalPaid / mrpTotal) * 100).round() : 0;
-    final remaining = (mrpTotal - totalPaid).clamp(0.0, double.infinity);
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // Card 1 — Total ordered
-        _SupStatCard(
-          label: 'Total ordered',
-          headline: '${_rupee(totalPaid)} / ${_rupee(mrpTotal)}',
-          sub: mrpTotal > 0 ? '$pct% paid' : '—',
-          fill: mrpTotal > 0 ? (totalPaid / mrpTotal).clamp(0.0, 1.0) : 0.0,
-          barColor: const Color(0xFF1B7A43),
-        ),
-        // Card 2 — Advance payment (30%)
-        _SupStatCard(
-          label: 'Advance payment (30%)',
-          headline: '${_rupee(advPaid)} / ${_rupee(advRequired)}',
-          sub: '',
-          fill: advRequired > 0 ? (advPaid / advRequired).clamp(0.0, 1.0) : 0.0,
-          barColor: advPaid >= advRequired && advRequired > 0
-              ? const Color(0xFF1B7A43)
-              : const Color(0xFFD97706),
-        ),
-        // Card 3 — Remaining balance
-        _SupStatCard(
-          label: 'Remaining balance',
-          headline: '${_rupee(remaining)} left',
-          sub: 'of ${_rupee(mrpTotal)} total',
-          fill: mrpTotal > 0 ? (remaining / mrpTotal).clamp(0.0, 1.0) : 0.0,
-          barColor: remaining == 0 ? const Color(0xFF1B7A43) : const Color(0xFF1B7A43),
-        ),
-
-        const SizedBox(height: 4),
-        const Text('Payments',
-            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF6B7280))),
-        const SizedBox(height: 6),
-
-        if (payments.isEmpty)
-          const Text('No payments recorded yet.',
-              style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)))
-        else
-          ...payments.map((p) => _PaymentRow(payment: p)),
-      ],
-    );
-  }
-}
-
-// ── Shared stat card ──────────────────────────────────────────────────────────
-
-class _SupStatCard extends StatelessWidget {
-  final String label;
-  final String headline;
-  final String sub;
-  final double fill;
-  final Color barColor;
-
-  const _SupStatCard({
-    required this.label,
-    required this.headline,
-    required this.sub,
-    required this.fill,
-    required this.barColor,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
-      ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(label, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: Color(0xFF9CA3AF))),
-        const SizedBox(height: 4),
-        Text(headline, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
-        if (sub.isNotEmpty) ...[
-          const SizedBox(height: 2),
-          Text(sub, style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
-        ],
-        const SizedBox(height: 8),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(6),
-          child: LinearProgressIndicator(
-            value: fill,
-            minHeight: 10,
-            backgroundColor: const Color(0xFFF3F4F6),
-            color: barColor,
-          ),
-        ),
-      ]),
-    );
-  }
-}
-
-// ── Single payment row ────────────────────────────────────────────────────────
-
-class _PaymentRow extends StatelessWidget {
-  final Map<String, dynamic> payment;
-  const _PaymentRow({required this.payment});
-
-  @override
-  Widget build(BuildContext context) {
-    final amount = (payment['amount'] as num?)?.toDouble() ?? 0;
-    final mode   = payment['mode'] as String? ?? '';
-    final note   = payment['note'] as String?;
-    final atRaw  = payment['at'] as String?;
-    final at     = atRaw != null ? DateTime.tryParse(atRaw)?.toLocal() : null;
-    final atStr  = at != null ? _fmtPayDate(at) : '—';
-
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            '${_rupee(amount)} · $mode · $atStr',
-            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: Color(0xFF111827)),
-          ),
-          if (note != null && note.isNotEmpty)
-            Text(note, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
-        ],
-      ),
-    );
-  }
-
-  String _fmtPayDate(DateTime dt) {
-    final dd = dt.day.toString().padLeft(2, '0');
-    final mm = dt.month.toString().padLeft(2, '0');
-    final yy = (dt.year % 100).toString().padLeft(2, '0');
-    var h = dt.hour % 12;
-    if (h == 0) h = 12;
-    final min = dt.minute.toString().padLeft(2, '0');
-    final ampm = dt.hour >= 12 ? 'PM' : 'AM';
-    return '$dd/$mm/$yy $h:$min $ampm';
   }
 }
 
@@ -749,10 +594,3 @@ class _StatusBadge extends StatelessWidget {
   }
 }
 
-// ── Rupee formatter ───────────────────────────────────────────────────────────
-
-String _rupee(num? v) {
-  if (v == null) return '₹—';
-  final d = v.toDouble();
-  return d == d.truncateToDouble() ? '₹${v.toInt()}' : '₹${d.toStringAsFixed(2)}';
-}

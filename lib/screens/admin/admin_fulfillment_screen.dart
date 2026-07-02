@@ -71,6 +71,110 @@ const _stateFgMap = <String, Color>{
   'pending':  _kPendingFg,
 };
 
+// ── #331 VoiceCaps — daily 3h cap + 1h continuous stop ─────────────────────
+// One shared helper used by every voice counting surface (Shop, Warehouse, Pack).
+class _VoiceCaps {
+  static int _remainingToday = 3 * 3600;
+  static bool _lockedToday = false;
+
+  // Call before starting any counting voice session.
+  // Returns false if blocked (shows limit sheet internally).
+  static Future<bool> onSessionStart(BuildContext context, SupabaseClient supabase) async {
+    RenderLog.write('c331_caps', 'session_start;locked=$_lockedToday');
+    if (_lockedToday) {
+      _showLimitSheet(context);
+      return false;
+    }
+    try {
+      final raw = await supabase.rpc('voice_usage_today') as Map;
+      final res = Map<String, dynamic>.from(raw);
+      final remaining = (res['remaining_seconds'] as num?)?.toInt() ?? 0;
+      _remainingToday = remaining;
+      RenderLog.write('c331_caps', 'remaining=${remaining}s');
+      if (remaining <= 0) {
+        _lockedToday = true;
+        if (context.mounted) {
+          _showLimitSheet(context,
+              usedSecs: (res['used_seconds'] as num?)?.toInt() ?? 0,
+              capSecs: (res['daily_cap_seconds'] as num?)?.toInt() ?? 10800);
+        }
+        return false;
+      }
+    } catch (_) {}
+    return true;
+  }
+
+  // Call after each clip is uploaded to storage.
+  // No BuildContext needed — onLocked handles any UI feedback.
+  static Future<void> onClipSaved(
+    SupabaseClient supabase, {
+    required String ctxStr,
+    required String supplier,
+    required String path,
+    required int seconds,
+    required void Function() onLocked,
+  }) async {
+    try {
+      final raw = await supabase.rpc('voice_clip_register', params: {
+        'p_context': ctxStr,
+        'p_supplier': supplier,
+        'p_path': path,
+        'p_seconds': seconds.clamp(1, 3600),
+      }) as Map;
+      final res = Map<String, dynamic>.from(raw);
+      if (res['ok'] == true) {
+        _remainingToday = (res['remaining_seconds'] as num?)?.toInt() ?? _remainingToday;
+        RenderLog.write('c331_caps', 'clip_saved;remaining=${_remainingToday}s');
+      } else if (res['error'] == 'daily_cap') {
+        _lockedToday = true;
+        _remainingToday = 0;
+        onLocked();
+      }
+    } catch (_) {}
+  }
+
+  // Formatted remaining time label for display near mic.
+  static String remainingLabel() {
+    if (_remainingToday <= 0) return '0m left today';
+    final h = _remainingToday ~/ 3600;
+    final m = (_remainingToday % 3600) ~/ 60;
+    return h > 0 ? '${h}h ${m}m left today' : '${m}m left today';
+  }
+
+  static void _showLimitSheet(BuildContext context, {int? usedSecs, int? capSecs}) {
+    final used = usedSecs != null
+        ? '${usedSecs ~/ 3600}h ${(usedSecs % 3600) ~/ 60}m used'
+        : '';
+    final cap = capSecs != null ? '${capSecs ~/ 3600}h cap' : '3h cap';
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text('Daily voice-count limit reached (3h).',
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: _kText)),
+              const SizedBox(height: 8),
+              if (used.isNotEmpty || cap.isNotEmpty)
+                Text('$used · $cap. Try again tomorrow.',
+                    style: const TextStyle(fontSize: 13, color: _kSub)),
+              const SizedBox(height: 20),
+              FilledButton(
+                style: FilledButton.styleFrom(backgroundColor: _kGreen),
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 // ── Shared micro-widgets ────────────────────────────────────────────────────
 
 class _StatePill extends StatelessWidget {
@@ -129,6 +233,8 @@ class _MergedProduct {
   final String? imageUrl;
   final int orderedTotal;
   final int receivedTotal;
+  // #331: sum of shop_qty across all lines; null if any line has no shop count yet
+  final int? shopQtyTotal;
   final List<String> orderItemIds; // underlying line IDs — for dispute lookup only
   final String combinedState; // 'pending'|'received'|'short'|'wrong'|'not_coming'
   final bool hasArrived; // true if any underlying Arrivals line has received_locked=true
@@ -141,6 +247,7 @@ class _MergedProduct {
     this.imageUrl,
     required this.orderedTotal,
     required this.receivedTotal,
+    this.shopQtyTotal,
     required this.orderItemIds,
     required this.combinedState,
     this.hasArrived = false,
@@ -890,6 +997,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // ── Voice results ──
   Timer? _idleTimer;
   DateTime? _recStartTime;
+  // #331 VoiceCaps: continuous-session timer
+  int _continuousSecs = 0;
+  Timer? _capsTimer;
   int _voiceCallsDuringRecord = 0; // must stay 0; guard for B1
   int _voiceCallsAfterStop = 0;
   final Map<int, num> _tally = {};
@@ -963,6 +1073,15 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       final first = lines.first;
       final orderedTotal = lines.fold(0, (s, r) => s + ordQtyOf(r));
       final receivedTotal = lines.fold(0, (s, r) => s + recQtyOf(r));
+      // #331: shop_qty per product — null means at least one line uncounted at shop stage
+      int shopSum = 0;
+      bool anyUncounted = false;
+      for (final r in lines) {
+        final sq = (r['shop_qty'] as num?)?.toInt();
+        if (sq == null) { anyUncounted = true; break; }
+        shopSum += sq;
+      }
+      final shopQtyTotal = anyUncounted ? null : shopSum;
       final oiids = lines
           .map((r) => r['order_item_id']?.toString() ?? '')
           .where((s) => s.isNotEmpty)
@@ -991,6 +1110,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         imageUrl: first['image_url']?.toString(),
         orderedTotal: orderedTotal,
         receivedTotal: receivedTotal,
+        shopQtyTotal: shopQtyTotal,
         orderItemIds: oiids,
         combinedState: combinedState,
         hasArrived: hasArrived,
@@ -1921,23 +2041,25 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         await _reloadItemsFromDB();
         if (mounted) setState(() => _recording = false);
       } else if (!widget.arrivals && (state == 'received' || state == 'short')) {
+        // #331: Shop stage — absolute-set via set_voice_received; writes shop_qty, no bag.
         final productId = (item['product_id'] as num?)?.toInt();
         final supplier = _selectedSupplier ?? '';
         if (productId == null) throw Exception('missing product_id');
         final ordQty = ordQtyOf(item);
-        final curRec = recQtyOf(item);
-        final addQty = state == 'received'
-            ? (ordQty - curRec).clamp(1, ordQty).toDouble()
-            : (qty != null ? qty.toDouble() : 1.0);
-        final res = await Supabase.instance.client.rpc('receive_product_qty', params: {
+        // For 'received' set total = ordered; for 'short' set total = provided qty.
+        final setQty = state == 'received'
+            ? ordQty.toDouble()
+            : (qty != null ? qty.toDouble() : 0.0);
+        final rawVoice = await Supabase.instance.client.rpc('set_voice_received', params: {
           'p_supplier_name': supplier,
           'p_product_id': productId,
-          'p_add_qty': addQty,
-          'p_note': 'tap:$state',
-        }) as Map;
+          'p_qty': setQty,
+          'p_note': note ?? 'tap:$state',
+        });
+        final res2 = rawVoice is Map ? Map<String, dynamic>.from(rawVoice) : <String, dynamic>{};
         if (!mounted) return;
-        if (res['error'] != null) throw Exception(res['error'].toString());
-        RenderLog.write('c168_collect_tap_rpc', 'receive_product_qty');
+        if (res2['error'] != null) throw Exception(res2['error'].toString());
+        RenderLog.write('c168_collect_tap_rpc', 'set_voice_received_shop');
         await _reloadItemsFromDB();
         if (mounted) setState(() => _recording = false);
       } else {
@@ -1963,8 +2085,18 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _recording = false);
-      // CHANGE #276 — translate check_violation / no-bag backend rejections to friendly message
-      _showSnack(widget.arrivals ? _noBagFriendlyMessage(e) : 'Error: $e');
+      if (widget.arrivals) {
+        final msg = e.toString().toLowerCase();
+        if (msg.contains('no bag, no count') || msg.contains('check_violation') ||
+            msg.contains('must equal') || msg.contains('bag total')) {
+          // #331 D2: bag-required sheet for warehouse counting
+          _showBagRequiredSheet(item?['product_name']?.toString() ?? 'this item');
+        } else {
+          _showSnack(_noBagFriendlyMessage(e));
+        }
+      } else {
+        _showSnack('Error: $e');
+      }
     }
   }
 
@@ -2056,7 +2188,25 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   Future<void> _startRecording() async {
     if (!_voiceSupported || _voiceListening || _voiceProcessing) return;
+    // #331 VoiceCaps: check daily cap before starting (Shop + Warehouse surface)
+    final capsAllowed = await _VoiceCaps.onSessionStart(context, Supabase.instance.client);
+    if (!mounted || !capsAllowed) return;
     _voiceCallsDuringRecord = 0;
+    _continuousSecs = 0;
+    _capsTimer?.cancel();
+    _capsTimer = Timer.periodic(const Duration(seconds: 1), (t) {
+      if (!mounted || !_voiceListening) { t.cancel(); return; }
+      setState(() => _continuousSecs++);
+      if (_continuousSecs >= 3600) {
+        t.cancel();
+        _showSnack('1-hour clip limit — recording split/stopped');
+        _stopAndTranscribe();
+      } else if (_continuousSecs >= _VoiceCaps._remainingToday) {
+        t.cancel();
+        _showSnack('Daily 3-hour voice limit reached');
+        _stopAndTranscribe();
+      }
+    });
     setState(() {
       _voiceListening = true; _voiceInterim = 'Recording…'; _voiceError = '';
     });
@@ -2087,6 +2237,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // Single-shot: stop recording → ONE voice-receive call → idempotent set per product.
   Future<void> _stopAndTranscribe() async {
     if (!_voiceListening) return;
+    _capsTimer?.cancel(); // #331: stop continuous timer
     setState(() { _voiceListening = false; _voiceInterim = ''; });
     if (!_recStarted) return;
     _recStarted = false;
@@ -2139,6 +2290,14 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           );
           clipSaved = true;
           setState(() => _latestClipPath = clipPath);
+          // #331: register clip with caps backend (fire-and-forget)
+          final clipDurSecs = _recStartTime != null
+              ? DateTime.now().difference(_recStartTime!).inSeconds.clamp(1, 3600)
+              : _continuousSecs.clamp(1, 3600);
+          final capCtx = widget.arrivals ? 'warehouse' : 'collect';
+          _VoiceCaps.onClipSaved(Supabase.instance.client,
+              ctxStr: capCtx, supplier: supplier, path: clipPath, seconds: clipDurSecs,
+              onLocked: () { if (mounted) _showSnack('Daily 3-hour voice limit reached'); }).ignore();
         } catch (e) {
           RenderLog.write('c125_clip_upload_err', 'seq=$seq;err=${e.toString().substring(0, e.toString().length.clamp(0, 80))}');
           if (clipPath.isEmpty) {
@@ -2302,16 +2461,25 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         if (!ok) break; // bag error (no_bag, locked) — stop this clip
       }
     } else {
-      // Collect: ADD each product via receive_product_qty — partial mixed counts accumulate
+      // #331: Shop stage: absolute-set via set_voice_received (writes shop_qty, no bag needed).
+      // New total = current shop_qty across all lines for this product + clip qty.
       for (final entry in byProduct.entries) {
-        final ok = await _addVoiceQty(
+        // Sum existing shop_qty across all lines for this product
+        int existingShopQty = 0;
+        for (final row in _items) {
+          if ((row['product_id'] as num?)?.toInt() == entry.key) {
+            existingShopQty += (row['shop_qty'] as num?)?.toInt() ?? 0;
+          }
+        }
+        final newTotal = existingShopQty + entry.value.qty;
+        final ok = await _setShopVoiceQty(
           productId: entry.key,
           productName: entry.value.name,
-          qty: entry.value.qty,
+          newTotal: newTotal.toDouble(),
           rawSegment: entry.value.heard,
         );
         if (!mounted) return;
-        if (!ok) break; // locked or error — stop processing this clip
+        if (!ok) break;
       }
     }
 
@@ -2321,91 +2489,49 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     final done = _items.length - _pendingCount;
     RenderLog.write('84_progress', '$done/${_items.length}');
   }
-  // Called from text fallback field only (typed text → local parse → match)
-  // Idempotent SET via set_voice_received RPC, then re-pulls DB truth.
-  Future<void> _setVoiceReceived({
+  // #331: Shop-stage absolute-set via set_voice_received; writes shop_qty (no bag gate).
+  // Returns true on success, false on error.
+  Future<bool> _setShopVoiceQty({
     required int productId,
     required String productName,
-    required double qty,
-    required String rawSegment,
-  }) async {
-    final supplier = _selectedSupplier;
-    if (supplier == null) return;
-    if (widget.arrivals && _activeBag == null) {
-      _showSnack('Scan a bag first before counting');
-      return;
-    }
-    try {
-      Map<String, dynamic>? res;
-      if (widget.arrivals) {
-        final bagNo = _activeBag!['bag_no'];
-        final rawCount = await Supabase.instance.client.rpc('bag_count_set', params: {
-          'p_supplier_name': supplier,
-          'p_product_id': productId,
-          'p_qty': qty,
-          'p_note': 'voice: $rawSegment',
-        });
-        res = _normRpc(rawCount);
-        if (!mounted) return;
-        if (res['error'] != null) {
-          _showSnack(_bagCountError(res));
-          RenderLog.write('c254_gate_block', 'voice_count_error=${res['error']}');
-          return;
-        }
-        RenderLog.write('c253_bag_count', 'bag=$bagNo;product=$productId;qty=$qty');
-      } else {
-        final rawVoice = await Supabase.instance.client.rpc('set_voice_received', params: {
-          'p_supplier_name': supplier,
-          'p_product_id': productId,
-          'p_qty': qty,
-          'p_note': 'voice: $rawSegment',
-        });
-        res = rawVoice is Map ? Map<String, dynamic>.from(rawVoice) : null;
-        if (!mounted) return;
-        if (res != null && res['error'] != null) {
-          _showSnack(res['error'] == 'received_locked' ? 'Already received — locked' : 'Error: ${res['error']}');
-          return;
-        }
-      }
-      if (!mounted) return;
-      RenderLog.write('84_committed', '$productName:set${qty.toInt()}');
-      setState(() { _tally[productId] = qty; });
-      await _reloadItemsFromDB();
-    } catch (e) {
-      if (mounted) _showSnack('Commit error: $e');
-    }
-  }
-
-  // #93: ADDITIVE receive — counting mic uses this; each clip ADDS to received_qty.
-  // Returns true if the add succeeded, false on locked/error (caller stops loop).
-  Future<bool> _addVoiceQty({
-    required int productId,
-    required String productName,
-    required int qty,
+    required double newTotal,
     required String rawSegment,
   }) async {
     final supplier = _selectedSupplier;
     if (supplier == null) return false;
     try {
-      final res = await Supabase.instance.client.rpc('receive_product_qty', params: {
+      final rawRes = await Supabase.instance.client.rpc('set_voice_received', params: {
         'p_supplier_name': supplier,
         'p_product_id': productId,
-        'p_add_qty': qty,
-        'p_note': 'voice #93: $rawSegment',
-      }) as Map;
-
+        'p_qty': newTotal,
+        'p_note': 'voice: $rawSegment',
+      });
+      final res = rawRes is Map ? Map<String, dynamic>.from(rawRes) : <String, dynamic>{};
+      if (!mounted) return false;
       if (res['error'] != null) {
-        if (res['error'] == 'collect_locked') {
-          if (mounted) _showSnack('Count locked — unlock to edit.');
+        if (res['error'] == 'received_locked') {
+          _showSnack('Already received — locked');
+        } else {
+          _showSnack('Error: ${res['error']}');
         }
         return false;
       }
-
-      RenderLog.write('change_93_additive_mark', '1');
-      RenderLog.write('84_committed', '$productName:add$qty');
-
-      // Update tally additively (not replace)
-      setState(() { _tally[productId] = (_tally[productId] ?? 0) + qty; });
+      // Update shop_qty in local items from response rows
+      final rows = res['rows'] as List? ?? [];
+      if (rows.isNotEmpty) {
+        setState(() {
+          for (final row in rows) {
+            final oiid = row['order_item_id']?.toString();
+            if (oiid == null) continue;
+            final idx = _items.indexWhere((i) => i['order_item_id']?.toString() == oiid);
+            if (idx >= 0) {
+              final setTotal = row['shop_set'];
+              if (setTotal != null) _items[idx]['shop_qty'] = setTotal;
+            }
+          }
+        });
+      }
+      RenderLog.write('84_committed', '$productName:shopSet${newTotal.toInt()}');
       return true;
     } catch (e) {
       if (mounted) _showSnack('Commit error: $e');
@@ -2447,9 +2573,44 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       setState(() { _tally[productId] = (grandTotal as num?)?.toInt() ?? qty; });
       return true;
     } catch (e) {
-      if (mounted) _showSnack('Commit error: $e');
+      // #331 D2: catch bag-gate check_violation and show friendly sheet
+      final msg = e.toString();
+      if (mounted) {
+        if (msg.contains('no bag, no count') || msg.contains('check_violation')) {
+          _showBagRequiredSheet(productName);
+        } else {
+          _showSnack('Commit error: $e');
+        }
+      }
       return false;
     }
+  }
+
+  // #331 D2: friendly bag-required sheet when warehouse counting violates bag gate.
+  void _showBagRequiredSheet(String productName) {
+    RenderLog.write('c331_bag_prompt', 'product=$productName');
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (ctx) => Padding(
+        padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('Bag required',
+              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: _kText)),
+          const SizedBox(height: 8),
+          Text('Scan/select the bag for $productName so the bag total equals the counted qty, then count again.',
+              style: const TextStyle(fontSize: 13, color: _kSub)),
+          const SizedBox(height: 16),
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: _kGreen),
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('OK'),
+            ),
+          ),
+        ]),
+      ),
+    );
   }
 
   // #263: load voice clip mentions from DB → derive distinct-product count for "N spoken" badge.
@@ -3040,23 +3201,58 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       Expanded(
         child: SizedBox(
           height: _kFooterH,
-          child: FilledButton(
-            style: FilledButton.styleFrom(
-              backgroundColor: _kGreen,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-              padding: const EdgeInsets.symmetric(horizontal: 6),
-            ),
-            onPressed: _submittingCollect ? null : _fw_confirmCounting,
-            child: FittedBox(
-              fit: BoxFit.scaleDown,
-              child: Row(mainAxisSize: MainAxisSize.min, children: const [
-                Icon(Icons.check_circle_outline_rounded, size: 15, color: Colors.white),
-                SizedBox(width: 4),
-                Text('Confirm counting',
-                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.white)),
-              ]),
-            ),
-          ),
+          // #331: proactive affordance — outlined/muted when items not yet counted at shop
+          child: Builder(builder: (_) {
+            final uncounted = _shopUncountedCount;
+            final notReady = uncounted > 0;
+            return Column(mainAxisSize: MainAxisSize.min, children: [
+              SizedBox(
+                height: _kFooterH,
+                width: double.infinity,
+                child: notReady
+                    ? OutlinedButton(
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: _kSub,
+                          side: const BorderSide(color: _kBorder),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          padding: const EdgeInsets.symmetric(horizontal: 6),
+                        ),
+                        onPressed: _submittingCollect ? null : _fw_confirmCounting,
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Row(mainAxisSize: MainAxisSize.min, children: const [
+                            Icon(Icons.check_circle_outline_rounded, size: 15),
+                            SizedBox(width: 4),
+                            Text('Confirm counting',
+                                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+                          ]),
+                        ),
+                      )
+                    : FilledButton(
+                        style: FilledButton.styleFrom(
+                          backgroundColor: _kGreen,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          padding: const EdgeInsets.symmetric(horizontal: 6),
+                        ),
+                        onPressed: _submittingCollect ? null : _fw_confirmCounting,
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Row(mainAxisSize: MainAxisSize.min, children: const [
+                            Icon(Icons.check_circle_outline_rounded, size: 15, color: Colors.white),
+                            SizedBox(width: 4),
+                            Text('Confirm counting',
+                                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.white)),
+                          ]),
+                        ),
+                      ),
+              ),
+              if (notReady) ...[
+                const SizedBox(height: 2),
+                Text('$uncounted item(s) not counted',
+                    style: const TextStyle(fontSize: 10, color: _kSub)),
+              ],
+            ]);
+          }),
         ),
       ),
     ]);
@@ -3130,7 +3326,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     }
   }
 
-  // #137: Case 1 — staff counted at shop; snapshot shop_qty, set mode='shop', lock Collect.
+  // #331: count of items not yet shop-counted (shop_qty == null)
+  int get _shopUncountedCount =>
+      _items.where((i) => i['shop_qty'] == null).length;
+
+  // #137/#331: Confirm counting — every item must have a shop count first.
   Future<void> _fw_confirmCounting() async {
     if (_submittingCollect) return;
     final supplier = _selectedSupplier;
@@ -3139,7 +3339,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Confirm counting?'),
-        content: Text('This locks the Supplier Shop count for $supplier and sends it to Warehouse for double-check.'),
+        content: Text('This locks the Supplier Shop count for $supplier and forwards all items to the Warehouse for a bagged recount.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           FilledButton(
@@ -3155,18 +3355,63 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     try {
       final res = await Supabase.instance.client
           .rpc('fw_confirm_counting', params: {'p_supplier_name': supplier}) as Map;
+      // #331: handle uncounted items gate — RPC returns list of uncounted product names
+      if (res['error'] == 'uncounted_items') {
+        if (mounted) setState(() => _submittingCollect = false);
+        final names = (res['items'] as List? ?? []).cast<String>();
+        RenderLog.write('c331_confirm_gate', 'uncounted=${names.length}');
+        if (!mounted) return;
+        await showModalBottomSheet<void>(
+          context: context,
+          builder: (ctx) => Padding(
+            padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text('Count these first:',
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: _kText)),
+              const SizedBox(height: 8),
+              if (names.isNotEmpty)
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 200),
+                  child: SingleChildScrollView(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: names.map((n) => Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 3),
+                        child: Text('• $n', style: const TextStyle(fontSize: 13, color: _kText)),
+                      )).toList(),
+                    ),
+                  ),
+                ),
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  style: FilledButton.styleFrom(backgroundColor: _kGreen),
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('OK'),
+                ),
+              ),
+            ]),
+          ),
+        );
+        return;
+      }
       if (res['error'] != null) throw Exception(res['error'].toString());
+      final shortsDisputed = (res['shorts_disputed'] as num?)?.toInt() ?? 0;
       if (mounted) setState(() { _supplierMode = 'shop'; _submittingCollect = false; });
       await _reloadItemsFromDB();
       RenderLog.write('c137_collect_action', 'action=confirm;supplier=$supplier');
       RenderLog.write('c117_collect_confirm_text_mode', 'shop');
       RenderLog.write('c125_submit_refresh', 'true');
+      RenderLog.write('c331_confirm_gate', 'success;shorts=$shortsDisputed');
       _loadSupplierDots();
       _loadCollectModes(); // R2: badge P→C immediately
       context.findAncestorStateOfType<_AdminFulfillmentScreenState>()?._refreshArrivals(); // R2: supplier appears in Arrivals
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Counted and sent to warehouse')),
+          SnackBar(content: Text(
+            'Counting confirmed — $shortsDisputed short item(s) disputed. Items moved to Warehouse for recount.'
+          )),
         );
       }
     } catch (e) {
@@ -4445,16 +4690,17 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   }
 
   // #113: extracted so PinnedFooterList can pass items as List<Widget>
-  // #116: arrivals shop mode shows recQty/recQty (counted/counted), not recQty/ordQty
+  // #331: shop tab shows shop_qty/ordQty; warehouse shows recQty/expected (mode-aware)
   Widget _buildItemTile(Map<String, dynamic> item) {
     final state    = stateOf(item); // B2: derive — fw_get_state has no fulfillment_state
     final name     = item['product_name']?.toString() ?? '—';
     final ordQty   = ordQtyOf(item); // B1: dual-key ordered_qty ?? ordered
     final recQty   = (item['received_qty'] as num?)?.toInt() ?? 0;
+    final shopQty  = (item['shop_qty'] as num?)?.toInt(); // #331: null = not yet counted at shop
     final packType = item['pack_type']?.toString() ?? '';
     final imageUrl = item['image_url']?.toString();
-    final bool shopArrival = widget.arrivals && _supplierMode == 'shop';
-    final int denominator = shopArrival ? recQty : ordQty;
+    // #331: warehouse expected = forwarded (shop_qty) for mode='shop', else ordered
+    final int whExpected = (_supplierMode == 'shop') ? (shopQty ?? 0) : ordQty;
     // #132A/#189: open dispute badge
     final itemId = item['order_item_id']?.toString();
     final openDispute = itemId != null ? _disputeMap[itemId] : null;
@@ -4501,13 +4747,35 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 120),
             child: Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
-              // qty + status pill on one line
-              Row(mainAxisSize: MainAxisSize.min, children: [
-                Text('$recQty/$denominator',
-                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText)),
-                const SizedBox(width: 6),
-                _StatePill(state),
-              ]),
+              // #331: shop tab → shop_qty/ordered; warehouse → received/expected
+              if (!widget.arrivals) ...[
+                // Supplier Shop stage: show shop count progress
+                Builder(builder: (_) {
+                  RenderLog.write('c331_shop_rows', 'shop_qty=${shopQty ?? 'null'};ord=$ordQty');
+                  final label = '${shopQty ?? '–'}/$ordQty';
+                  return Row(mainAxisSize: MainAxisSize.min, children: [
+                    Text(label,
+                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText)),
+                    const SizedBox(width: 6),
+                    _StatePill(shopQty == null ? 'pending' : (shopQty >= ordQty ? 'received' : state)),
+                  ]);
+                }),
+              ] else if (whExpected == 0) ...[
+                // Warehouse: fully-short disputed line — muted row
+                const Text('in dispute · awaiting resolution',
+                    style: TextStyle(fontSize: 10, color: _kSub)),
+              ] else ...[
+                // Warehouse stage: show received/expected
+                Builder(builder: (_) {
+                  RenderLog.write('c331_wh_rows', 'rec=$recQty;expected=$whExpected;mode=${_supplierMode ?? ''}');
+                  return Row(mainAxisSize: MainAxisSize.min, children: [
+                    Text('$recQty/$whExpected',
+                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText)),
+                    const SizedBox(width: 6),
+                    _StatePill(recQty >= whExpected ? 'received' : state),
+                  ]);
+                }),
+              ],
               // dispute badge on its own constrained line below
               if (disputeItem != null) ...[
                 const SizedBox(height: 3),
@@ -4549,8 +4817,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // ── #197: Merged product card ─────────────────────────────────────────────
   Widget _buildMergedItemTile(_MergedProduct merged) {
     final state = merged.combinedState;
-    final bool shopArrival = widget.arrivals && _supplierMode == 'shop';
-    final int denominator = shopArrival ? merged.receivedTotal : merged.orderedTotal;
+    // #331: warehouse expected = forwarded (shopQtyTotal) for mode='shop', else ordered
+    final int whExpected = widget.arrivals
+        ? ((_supplierMode == 'shop') ? (merged.shopQtyTotal ?? 0) : merged.orderedTotal)
+        : merged.orderedTotal;
     // Dispute: first match across all underlying lines
     DisputeItem? disputeItem;
     Map<String, dynamic>? openDispute;
@@ -4686,12 +4956,34 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 120),
             child: Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
-              // line 1: qty (aligns with product name first line via Row crossAxisAlignment.start)
-              Text('${merged.receivedTotal}/$denominator',
-                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText)),
-              const SizedBox(height: 3),
-              // line 2: receive status pill
-              _StatePill(state),
+              // #331: shop tab → shop_qty/ordered; warehouse → received/expected
+              if (!widget.arrivals) ...[
+                Builder(builder: (_) {
+                  RenderLog.write('c331_shop_rows', 'shop=${merged.shopQtyTotal ?? 'null'};ord=${merged.orderedTotal}');
+                  final label = '${merged.shopQtyTotal ?? '–'}/${merged.orderedTotal}';
+                  final pillState = merged.shopQtyTotal == null
+                      ? 'pending'
+                      : (merged.shopQtyTotal! >= merged.orderedTotal ? 'received' : state);
+                  return Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
+                    Text(label, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText)),
+                    const SizedBox(height: 3),
+                    _StatePill(pillState),
+                  ]);
+                }),
+              ] else if (whExpected == 0) ...[
+                const Text('in dispute · awaiting resolution',
+                    style: TextStyle(fontSize: 10, color: _kSub, height: 1.3)),
+              ] else ...[
+                Builder(builder: (_) {
+                  RenderLog.write('c331_wh_rows', 'rec=${merged.receivedTotal};exp=$whExpected;mode=${_supplierMode ?? ''}');
+                  return Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
+                    Text('${merged.receivedTotal}/$whExpected',
+                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText)),
+                    const SizedBox(height: 3),
+                    _StatePill(merged.receivedTotal >= whExpected ? 'received' : state),
+                  ]);
+                }),
+              ],
               // #265: arrival status line removed — "Arrival pending"/"Arrived" not shown on Warehouse rows
               // line 4: awaiting dispute badge — ACTIVE disputes only (#199)
               if (disputeItem != null && disputeItem.isActive) ...[
@@ -5027,7 +5319,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c114_fulfillment_header_built', 'desktop');
     RenderLog.write('c114_spoken_chip_left', 'desktop');
     RenderLog.write('c114_progress_expanded', 'desktop');
-    final doneCount = _items.length - _pendingCount;
+    // #331: shop tab progress = items with a shop count; warehouse = items not pending
+    final doneCount = widget.arrivals
+        ? _items.length - _pendingCount
+        : _items.where((i) => i['shop_qty'] != null).length;
     final total = _items.length;
     // CHANGE #277: bag-missing is a silent noop, not a disabled state
     final countingDisabled = _agentPhase != AgentPhase.idle;
@@ -5135,6 +5430,23 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                 _toggleRecording();
               },
             ),
+          ),
+        ],
+
+        // #331: mm:ss continuous timer + daily remaining, shown only while recording
+        if (_voiceListening && _voiceSupported) ...[
+          const SizedBox(width: 8),
+          Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '${(_continuousSecs ~/ 60).toString().padLeft(2, '0')}:${(_continuousSecs % 60).toString().padLeft(2, '0')}',
+                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _kWrongFg),
+              ),
+              Text(_VoiceCaps.remainingLabel(),
+                  style: const TextStyle(fontSize: 10, color: _kSub)),
+            ],
           ),
         ],
 
@@ -5895,6 +6207,23 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
               supplierName: supplierForPopup,
               orderItems: orderSnapshot,
               onDismiss: dismiss,
+              // #331: apply voice_mention_set_status result to local items
+              onApplyUpdate: (applyRes) {
+                final rows = applyRes['rows'] as List? ?? [];
+                if (rows.isEmpty) return;
+                setState(() {
+                  for (final row in rows) {
+                    final oiid = row['order_item_id']?.toString();
+                    if (oiid == null) continue;
+                    final idx = _items.indexWhere((i) => i['order_item_id']?.toString() == oiid);
+                    if (idx < 0) continue;
+                    final shopSet = row['shop_set'];
+                    if (shopSet != null) _items[idx]['shop_qty'] = shopSet;
+                    final recSet = row['received_qty'];
+                    if (recSet != null) _items[idx]['received_qty'] = recSet;
+                  }
+                });
+              },
             ),
           ),
         ),
@@ -6253,11 +6582,14 @@ class _CountedMentionsPopup extends StatefulWidget {
   final String supplierName;
   final List<Map<String, dynamic>> orderItems;
   final VoidCallback onDismiss;
+  // #331: callback for when voice_mention_set_status returns an apply update
+  final void Function(Map<String, dynamic> applyRes)? onApplyUpdate;
   const _CountedMentionsPopup({
     super.key,
     required this.supplierName,
     required this.orderItems,
     required this.onDismiss,
+    this.onApplyUpdate,
   });
 
   @override
@@ -6265,8 +6597,8 @@ class _CountedMentionsPopup extends StatefulWidget {
 }
 
 // #119: per-mention entry retaining recording_seq + ord for pill coloring and reordering.
-// No timestamp fields — green state is purely seq-based.
-typedef _QtyEntry = ({int qty, int seq, int ord});
+// #331: id (uuid) and status ('counted'|'deleted'|'readded') added for delete/undo.
+typedef _QtyEntry = ({String id, int qty, int seq, int ord, String status});
 
 // #110/#111/#112 sentinels — must survive into compiled bundle for curl grep.
 // ignore: unused_field
@@ -6288,6 +6620,8 @@ const String _kC112CloseTap = 'c112_close_tap';
 class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
   List<Map<String, dynamic>>? _mentions;
   String? _error;
+  // #331: per-mention UUID in-flight set (prevents double-hold)
+  final Set<String> _mentionLoading = {};
 
   // #266 (v2): plain html.AudioElement — the SAME pattern that already plays TTS
   // reliably in this file. The earlier audioplayers attempt produced SILENT
@@ -6500,21 +6834,24 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
     return result;
   }
 
-  // #119: group rows by matched_name, retaining per-qty (recording_seq, ord) for pill coloring + reordering.
-  // No timestamp fields are read here.
+  // #119/#331: group rows by matched_name; deleted mentions excluded from All-tab totals.
   List<({String name, List<_QtyEntry> entries, int total, int ordered})>
       _groupMentions(List<Map<String, dynamic>> rows) {
+    // #331: All tab excludes deleted mentions from totals
+    final activeRows = rows.where((r) => r['status']?.toString() != 'deleted').toList();
     final nameOrder = <String>[];
     final byName = <String, List<_QtyEntry>>{};
-    for (final r in rows) {
+    for (final r in activeRows) {
       // #134: guard against null/empty matched_name — never show a blank product cell
       final rawName = r['matched_name']?.toString() ?? '';
       final name = rawName.trim().isEmpty ? 'Unknown item' : rawName;
       if (!byName.containsKey(name)) nameOrder.add(name);
       byName.putIfAbsent(name, () => []).add((
+        id: r['id']?.toString() ?? '',
         qty: (r['qty'] as num?)?.toInt() ?? 0,
         seq: (r['recording_seq'] as num?)?.toInt() ?? 0,
         ord: (r['ord'] as num?)?.toInt() ?? 0,
+        status: r['status']?.toString() ?? 'counted',
       ));
     }
     final orderedMap = <String, int>{};
@@ -6818,8 +7155,137 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
   }
 
   // #120: flat spoken-order list for the selected clip.
+  // #331: handle long-press on a Clip-tab mention row.
+  Future<void> _handleMentionHold(Map<String, dynamic> r) async {
+    final id = r['id']?.toString() ?? '';
+    final status = r['status']?.toString() ?? 'counted';
+    final name = (r['matched_name']?.toString() ?? '').trim().isEmpty
+        ? 'Unknown item'
+        : r['matched_name']!.toString();
+    final qty = (r['qty'] as num?)?.toInt() ?? 0;
+    if (id.isEmpty || _mentionLoading.contains(id)) return;
+    RenderLog.write('c331_mention_hold', 'id=${id.substring(0, id.length.clamp(0, 8))};status=$status');
+
+    final isDeleted = status == 'deleted';
+    final title = isDeleted
+        ? 'Re-add this count?'
+        : 'Remove this count?';
+    final body = isDeleted
+        ? '$name ×$qty'
+        : '$name ×$qty  The audio stays; only the count is removed.';
+    final confirmLabel = isDeleted ? 'Re-add' : 'Remove';
+    final action = isDeleted ? 'readd' : 'delete';
+
+    final confirmed = await showModalBottomSheet<bool>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(title,
+                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: _kText)),
+              const SizedBox(height: 8),
+              Text(body, style: const TextStyle(fontSize: 13, color: _kSub)),
+              const SizedBox(height: 20),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => Navigator.pop(ctx, false),
+                      child: const Text('Cancel'),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: FilledButton(
+                      style: FilledButton.styleFrom(
+                        backgroundColor: isDeleted ? const Color(0xFF1B7A43) : const Color(0xFF991B1B),
+                      ),
+                      onPressed: () => Navigator.pop(ctx, true),
+                      child: Text(confirmLabel),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _mentionLoading.add(id));
+    try {
+      final raw = await Supabase.instance.client.rpc('voice_mention_set_status', params: {
+        'p_id': id,
+        'p_action': action,
+      }) as Map;
+      final res = Map<String, dynamic>.from(raw);
+      if (!mounted) return;
+      if (res['ok'] == true) {
+        final newStatus = res['status']?.toString() ?? (action == 'delete' ? 'deleted' : 'readded');
+        // Update local mention status
+        setState(() {
+          final idx = _mentions?.indexWhere((m) => m['id']?.toString() == id) ?? -1;
+          if (idx >= 0) {
+            _mentions![idx] = Map<String, dynamic>.from(_mentions![idx])
+              ..['status'] = newStatus;
+          }
+        });
+        // Propagate apply update to parent (refreshes shop_qty / received_qty)
+        final applyRaw = res['apply'];
+        if (applyRaw != null && widget.onApplyUpdate != null) {
+          widget.onApplyUpdate!(Map<String, dynamic>.from(applyRaw as Map));
+        }
+      } else {
+        // H4: warehouse bag-gate
+        final err = res['error']?.toString() ?? '';
+        if (err.contains('no bag') || err.contains('check_violation') || err.contains('bag')) {
+          RenderLog.write('c331_bag_prompt', 'from_mention_hold;id=${id.substring(0, id.length.clamp(0, 8))}');
+          showModalBottomSheet<void>(
+            context: context,
+            builder: (ctx) => SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const Text('Bag required',
+                        style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: _kText)),
+                    const SizedBox(height: 8),
+                    const Text(
+                        'Adjust the bag total to match the new count, then hold the item again to retry.',
+                        style: TextStyle(fontSize: 13, color: _kSub)),
+                    const SizedBox(height: 20),
+                    FilledButton(
+                        style: FilledButton.styleFrom(backgroundColor: _kGreen),
+                        onPressed: () => Navigator.pop(ctx),
+                        child: const Text('OK')),
+                  ],
+                ),
+              ),
+            ),
+          );
+        } else {
+          // H5
+          _showSnackMsg(err.isNotEmpty ? 'Error: $err' : 'Could not update count');
+        }
+      }
+    } catch (e) {
+      if (mounted) _showSnackMsg('Error: $e');
+    } finally {
+      if (mounted) setState(() => _mentionLoading.remove(id));
+    }
+  }
+
+  // #120: flat spoken-order list for the selected clip.
   // One row per mention (no grouping), ordered by ord asc for that recording_seq.
   // No timestamps used — green is whole-clip (#119 rule).
+  // #331: long-press on each row → delete/re-add via voice_mention_set_status.
   Widget _buildFlatList(List<({int seq, String clipPath})> clips, int clipSeq) {
     final rows = (_mentions ?? [])
         .where((r) => (r['recording_seq'] as num?)?.toInt() == clipSeq)
@@ -6848,46 +7314,110 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
           ...rows.asMap().entries.map((e) {
             final n = e.key + 1;
             final r = e.value;
+            final mentionId = r['id']?.toString() ?? '';
             // #134: same fallback as grouped view — never a blank name cell
             final rawFlatName = r['matched_name']?.toString() ?? '';
             final name = rawFlatName.trim().isEmpty ? 'Unknown item' : rawFlatName;
             final qty = (r['qty'] as num?)?.toInt() ?? 0;
-            return Padding(
-              padding: const EdgeInsets.symmetric(vertical: 4),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  SizedBox(
-                    width: 28,
-                    child: Text('$n.',
-                        style: TextStyle(
-                          fontSize: 12, fontWeight: FontWeight.w500,
-                          color: isPlaying ? _kGreen : _kSub,
-                        )),
-                  ),
-                  Expanded(
-                    child: Text(name,
-                        style: TextStyle(
-                          fontSize: 12, fontWeight: FontWeight.w500,
-                          color: isPlaying ? _kGreen : _kText,
-                        ),
-                        maxLines: 2, overflow: TextOverflow.ellipsis),
-                  ),
-                  const SizedBox(width: 8),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: isPlaying ? _kGreen : const Color(0xFFF5F6F8),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: isPlaying ? _kGreen : _kBorder),
+            final status = r['status']?.toString() ?? 'counted';
+            final isDeleted = status == 'deleted';
+            final isReadded = status == 'readded';
+            final isLoading = _mentionLoading.contains(mentionId);
+
+            // #331 H2: red tint for deleted, yellow/amber tint for readded
+            Color? rowTint;
+            if (isDeleted) {
+              RenderLog.write('c331_mention_red', 'id=${mentionId.substring(0, mentionId.length.clamp(0, 8))}');
+              rowTint = const Color(0x17FF0000); // red @ ~9%
+            } else if (isReadded) {
+              RenderLog.write('c331_mention_yellow', 'id=${mentionId.substring(0, mentionId.length.clamp(0, 8))}');
+              rowTint = const Color(0x1AF59E0B); // amber @ ~10%
+            }
+
+            return GestureDetector(
+              onLongPress: () => _handleMentionHold(r),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                margin: const EdgeInsets.symmetric(vertical: 3),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                decoration: BoxDecoration(
+                  color: rowTint,
+                  borderRadius: BorderRadius.circular(8),
+                  boxShadow: isDeleted
+                      ? const [BoxShadow(color: Color(0x1AFF0000), blurRadius: 4, offset: Offset(0, 1))]
+                      : isReadded
+                          ? const [BoxShadow(color: Color(0x1AF59E0B), blurRadius: 4, offset: Offset(0, 1))]
+                          : null,
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SizedBox(
+                      width: 28,
+                      child: isLoading
+                          ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: _kGreen))
+                          : Text('$n.',
+                              style: TextStyle(
+                                fontSize: 12, fontWeight: FontWeight.w500,
+                                color: isPlaying ? _kGreen : _kSub,
+                              )),
                     ),
-                    child: Text('$qty',
-                        style: TextStyle(
-                          fontSize: 12, fontWeight: FontWeight.w600,
-                          color: isPlaying ? Colors.white : _kText,
-                        )),
-                  ),
-                ],
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(name,
+                              style: TextStyle(
+                                fontSize: 12, fontWeight: FontWeight.w500,
+                                color: isDeleted
+                                    ? const Color(0xFF991B1B)
+                                    : isReadded
+                                        ? const Color(0xFF92400E)
+                                        : isPlaying ? _kGreen : _kText,
+                              ),
+                              maxLines: 2, overflow: TextOverflow.ellipsis),
+                          if (isDeleted)
+                            const Text('removed', style: TextStyle(fontSize: 10, color: Color(0xFF991B1B)))
+                          else if (isReadded)
+                            const Text('re-added', style: TextStyle(fontSize: 10, color: Color(0xFF92400E))),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: isDeleted
+                            ? const Color(0xFFFEE2E2)
+                            : isReadded
+                                ? const Color(0xFFFEF3C7)
+                                : isPlaying ? _kGreen : const Color(0xFFF5F6F8),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: isDeleted
+                              ? const Color(0xFFEF4444)
+                              : isReadded
+                                  ? const Color(0xFFF59E0B)
+                                  : isPlaying ? _kGreen : _kBorder,
+                        ),
+                      ),
+                      child: isDeleted
+                          ? Text(qty.toString(),
+                              style: const TextStyle(
+                                fontSize: 12, fontWeight: FontWeight.w600,
+                                color: Color(0xFF991B1B),
+                                decoration: TextDecoration.lineThrough,
+                              ))
+                          : Text('$qty',
+                              style: TextStyle(
+                                fontSize: 12, fontWeight: FontWeight.w600,
+                                color: isReadded
+                                    ? const Color(0xFF92400E)
+                                    : isPlaying ? Colors.white : _kText,
+                              )),
+                    ),
+                  ],
+                ),
               ),
             );
           }),
@@ -9450,6 +9980,8 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
   void _refreshCollect() {
     _collectKey.currentState?._loadSuppliers();
     _collectKey.currentState?._loadCollectModes();
+    // #331 E1: after dispute re-forward, reload item box so shop/warehouse rows reflect new state
+    _collectKey.currentState?._reloadItemsFromDB();
   }
   // #125 R2/R3: called by Collect after submit/undo to refresh Arrivals list.
   void _refreshArrivals() {
@@ -9522,6 +10054,7 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
     final viewport = isWide ? 'desktop' : 'mobile';
     RenderLog.write('c113_fulfillment_built', viewport);
     RenderLog.write('c113_no_title_header', viewport);
+    RenderLog.write('c331_build', '331');
     RenderLog.write('c113_fulfillment_tabs_top', viewport);
     return Column(children: [
       Container(
@@ -10517,6 +11050,11 @@ class _PackTabState extends State<_PackTab>
   bool _recStarted = false;
   // CHANGE #301: synchronous in-flight lock — set before any await, reset in finally
   bool _packCounting = false;
+  // #331 VoiceCaps: continuous timer for Pack surface
+  int _continuousSecs = 0;
+  Timer? _capsTimer;
+  DateTime? _recStartTime;
+  String _activeVoiceOrderId = '';
   List<Map<String, dynamic>> _packMentions = [];
   int? _lastVoiceSeq;
 
@@ -10696,19 +11234,40 @@ class _PackTabState extends State<_PackTab>
     if (_voiceListening) {
       await _stopCountVoice(orderId);
     } else {
+      _activeVoiceOrderId = orderId; // store for caps timer
       await _startCountVoice();
     }
   }
 
   Future<void> _startCountVoice() async {
     if (_voiceListening || _voiceProcessing) return;
+    // #331 VoiceCaps: check daily cap before starting (Pack surface)
+    final capsAllowed = await _VoiceCaps.onSessionStart(context, Supabase.instance.client);
+    if (!mounted || !capsAllowed) return;
     try { RenderLog.write('c303_mic_on_tap', 'pack_count_voice'); } catch (_) {}
+    _continuousSecs = 0;
+    _recStartTime = DateTime.now();
+    _capsTimer?.cancel();
+    _capsTimer = Timer.periodic(const Duration(seconds: 1), (t) {
+      if (!mounted || !_voiceListening) { t.cancel(); return; }
+      setState(() => _continuousSecs++);
+      if (_continuousSecs >= 3600) {
+        t.cancel();
+        _showPackSnack('1-hour clip limit — recording split/stopped');
+        _stopCountVoice(_activeVoiceOrderId);
+      } else if (_continuousSecs >= _VoiceCaps._remainingToday) {
+        t.cancel();
+        _showPackSnack('Daily 3-hour voice limit reached');
+        _stopCountVoice(_activeVoiceOrderId);
+      }
+    });
     try {
       await _voiceService.start();
       _recStarted = true;
       try { RenderLog.write('c303_mic_result', 'granted'); } catch (_) {}
       if (mounted) setState(() => _voiceListening = true);
     } catch (e) {
+      _capsTimer?.cancel();
       if (e is MicPermissionException) {
         try { RenderLog.write('c303_mic_result', 'denied'); } catch (_) {}
         if (mounted) _showPackSnack('Mic access needed for voice — enable it in the browser site settings');
@@ -10720,6 +11279,7 @@ class _PackTabState extends State<_PackTab>
 
   Future<void> _stopCountVoice(String orderId) async {
     if (!_voiceListening) return;
+    _capsTimer?.cancel(); // #331: stop continuous timer
     // CHANGE #301: set in-flight lock synchronously before any await so that
     // a second call (double-tap, rebuild, realtime event) returns immediately.
     if (_packCounting) return;
@@ -10770,6 +11330,13 @@ class _PackTabState extends State<_PackTab>
           fileOptions: FileOptions(contentType: mimeUpload, upsert: true),
         );
         RenderLog.write('c301_upload', 'ok;path_tail=${clipPath.length >= 8 ? clipPath.substring(clipPath.length - 8) : clipPath}');
+        // #331: register clip with caps backend (fire-and-forget; supplier unknown for pack)
+        final packDurSecs = _recStartTime != null
+            ? DateTime.now().difference(_recStartTime!).inSeconds.clamp(1, 3600)
+            : _continuousSecs.clamp(1, 3600);
+        _VoiceCaps.onClipSaved(Supabase.instance.client,
+            ctxStr: 'pack', supplier: orderId, path: clipPath, seconds: packDurSecs,
+            onLocked: () { if (mounted) _showPackSnack('Daily 3-hour voice limit reached'); }).ignore();
       } catch (e) {
         RenderLog.write('c301_upload', 'err=${e.toString().substring(0, e.toString().length.clamp(0, 60))}');
         // clip path stays non-empty so pack_process_clip records it anyway

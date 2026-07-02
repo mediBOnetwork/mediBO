@@ -173,14 +173,6 @@ final _kSampleRows = <_MatchRow>[
   _MatchRow(lineItem: 'Vitamin D sachet', qty: 12, status: _MatchStatus.matched,  candidates: [], displaySku: 'D-Rise 60K IU Sachet',              displayPrice: '₹43.80'),
 ];
 
-// ─── WhatsApp cart line (pre-existing items) ─────────────────────────────────
-
-class _WaCartLine {
-  final Product product;
-  final int qty;
-  const _WaCartLine({required this.product, required this.qty});
-}
-
 // ─── WhatsApp convert session ─────────────────────────────────────────────────
 
 class _WaConvertSession {
@@ -232,11 +224,6 @@ class BulkUploadScreen extends StatefulWidget {
   // user tapped the cart's "Place Order" instead of "Place WhatsApp Order".
   static Future<void> Function(String orderId)? onWaOrderPlaced;
 
-  // Returns items from the active WA session (_bulkLineItemMap + checked
-  // pre-existing). cart_screen uses these instead of cart.lines when a session
-  // is active, so demo/cart items can never bleed into a WA order.
-  static List<Map<String, dynamic>> Function()? getWaOrderItems;
-
   /// Called by the Convert-to-Order handler in admin_customer_screen.dart.
   /// Stores the session and triggers the already-live state to pick it up.
   static void startWaConvert({
@@ -284,11 +271,6 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
   // ── CHANGE #322: WhatsApp Convert session ────────────────────────────────────
   _WaConvertSession? _waConvert;
-  // Items that were in the customer's cart BEFORE this session started.
-  List<_WaCartLine>? _preExistingCartItems;
-  // productIds of pre-existing items the admin has opted into this order.
-  final Set<String> _checkedPreExisting = {};
-  bool _placingWaOrder = false;
   // Maps row index (as string) → productId that row last added to cart.
   // Enables precise per-row removal: when a row changes product, only ITS old
   // product is removed — nothing else is touched. Persisted with session.
@@ -363,7 +345,6 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
   void dispose() {
     if (_gWaConvertTrigger == _checkAndStartConvert) _gWaConvertTrigger = null;
     if (BulkUploadScreen.onWaOrderPlaced == _doWaFinalize) BulkUploadScreen.onWaOrderPlaced = null;
-    if (BulkUploadScreen.getWaOrderItems == _buildActiveWaItems) BulkUploadScreen.getWaOrderItems = null;
     _scrollCtrl.dispose();
     super.dispose();
   }
@@ -425,8 +406,6 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     await _clearSession();
     setState(() {
       _waConvert = session;
-      _preExistingCartItems = null;
-      _checkedPreExisting.clear();
       // CHANGE #323: clear demo/prior rows immediately so they can never be
       // placed — they stay empty (loading spinner) until OCR match populates them.
       _rows = const [];
@@ -437,52 +416,13 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       _bulkLineItemMap = {};
       _isFromFile = true;
     });
-    // CHANGE #323: register hooks so cart_screen can finalize the WA order
-    // (source stamp + mark done) even if the user taps the cart Place Order.
+    // CHANGE #323: register hook so cart_screen can finalize the WA order
+    // (source stamp + mark done) when the user taps cart Place Order.
     BulkUploadScreen.onWaOrderPlaced = _doWaFinalize;
-    BulkUploadScreen.getWaOrderItems = _buildActiveWaItems;
-    // Load pre-existing cart in parallel with OCR.
-    unawaited(_loadPreExistingCart(session.userId));
     await _processImageBytesForConvert(session.imageBytes, session.mimeType, session.imageName);
   }
 
-  // CHANGE #323: items from the active WA session, matching _placeWaOrder logic.
-  // cart_screen calls this (via getWaOrderItems) when a session is active.
-  List<Map<String, dynamic>> _buildActiveWaItems() {
-    final items = <Map<String, dynamic>>[];
-    for (int i = 0; i < _rows.length; i++) {
-      final key = i.toString();
-      if (!_bulkLineItemMap.containsKey(key)) continue;
-      final row = _rows[i];
-      if (row.isHidden) continue;
-      final product = row.selectedProduct;
-      if (product == null) continue;
-      items.add({
-        'product_name': product.name,
-        'quantity': row.qty,
-        'price': product.b2bPrice,
-        'mrp': product.mrp,
-        'gst_percent': product.gstPercent,
-        'line_total': product.b2bPrice * row.qty,
-      });
-    }
-    for (final line in (_preExistingCartItems ?? [])) {
-      if (_checkedPreExisting.contains(line.product.id)) {
-        items.add({
-          'product_name': line.product.name,
-          'quantity': line.qty,
-          'price': line.product.b2bPrice,
-          'mrp': line.product.mrp,
-          'gst_percent': line.product.gstPercent,
-          'line_total': line.product.b2bPrice * line.qty,
-        });
-      }
-    }
-    return items;
-  }
-
-  // CHANGE #323: WA finalize — stamp source + mark image done.
-  // Called by both _placeWaOrder (WA-specific path) and cart_screen (cart path).
+  // CHANGE #323/#324: WA finalize — stamp source + mark image done.
   Future<void> _doWaFinalize(String orderId) async {
     final session = _waConvert;
     if (session == null) return;
@@ -501,14 +441,11 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         params: {'p_image_id': session.imageId, 'p_order_code': orderCode},
       );
     } catch (_) {}
-    // Unregister hooks — session is now complete.
+    // Unregister hook — session is now complete.
     BulkUploadScreen.onWaOrderPlaced = null;
-    BulkUploadScreen.getWaOrderItems = null;
     if (mounted) {
       setState(() {
         _waConvert = null;
-        _preExistingCartItems = null;
-        _checkedPreExisting.clear();
         _bulkLineItemMap = {};
         _rows = _kSampleRows;
       });
@@ -652,172 +589,6 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     });
     _saveSession();
     unawaited(_autoRetryUnrecognized());
-  }
-
-  Future<void> _loadPreExistingCart(String userId) async {
-    try {
-      final rows = await Supabase.instance.client
-          .rpc('admin_preview_customer_cart', params: {'p_user_id': userId}) as List;
-      if (!mounted) return;
-      final items = rows.map((row) {
-        final product = Product.fromCartData(
-          id: row['product_id'] as String,
-          name: row['product_name'] as String,
-          b2bPrice: (row['price'] as num).toDouble(),
-          mrp: (row['mrp'] as num).toDouble(),
-          imageUrl: (row['image_url'] as String?) ?? '',
-          manufacturer: (row['manufacturer'] as String?) ?? '',
-          packSize: (row['pack_size'] as String?) ?? '',
-          category: (row['category'] as String?) ?? 'Other',
-          gstPercent: (row['gst_percent'] as num?)?.toDouble() ?? 12.0,
-        );
-        return _WaCartLine(product: product, qty: row['quantity'] as int);
-      }).toList();
-      RenderLog.write('c322_cart_merge', 'preExisting:${items.length}');
-      if (mounted) setState(() => _preExistingCartItems = items);
-    } catch (_) {
-      if (mounted) setState(() => _preExistingCartItems = []);
-    }
-  }
-
-  Future<void> _placeWaOrder() async {
-    final session = _waConvert;
-    if (session == null) return;
-    RenderLog.write('c322_place_wa', 'imageId:${session.imageId} user:${session.userId}');
-
-    // Build the will-be-ordered set (E4): matched/manual items + checked pre-existing.
-    final items = <Map<String, dynamic>>[];
-
-    // 1. Matched items added this session (tracked by _bulkLineItemMap).
-    for (int i = 0; i < _rows.length; i++) {
-      final key = i.toString();
-      if (!_bulkLineItemMap.containsKey(key)) continue;
-      final row = _rows[i];
-      if (row.isHidden) continue;
-      final product = row.selectedProduct;
-      if (product == null) continue;
-      items.add({
-        'product_name': product.name,
-        'quantity': row.qty,
-        'price': product.b2bPrice,
-        'mrp': product.mrp,
-        'gst_percent': product.gstPercent,
-        'line_total': product.b2bPrice * row.qty,
-      });
-    }
-
-    // 2. Checked pre-existing items.
-    for (final line in (_preExistingCartItems ?? [])) {
-      if (_checkedPreExisting.contains(line.product.id)) {
-        items.add({
-          'product_name': line.product.name,
-          'quantity': line.qty,
-          'price': line.product.b2bPrice,
-          'mrp': line.product.mrp,
-          'gst_percent': line.product.gstPercent,
-          'line_total': line.product.b2bPrice * line.qty,
-        });
-      }
-    }
-
-    if (items.isEmpty) {
-      showToast(context, 'No items selected — add matched items first', isError: true);
-      return;
-    }
-
-    final total = items.fold(0.0, (s, i) => s + (i['line_total'] as double));
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Place WhatsApp order?',
-            style: TextStyle(fontWeight: FontWeight.w700)),
-        content: Text(
-          'Place a real order for ${session.pharmacy.isNotEmpty ? session.pharmacy : session.customerName} '
-          'with ${items.length} item${items.length == 1 ? '' : 's'} '
-          '(₹${total.toStringAsFixed(0)}).',
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43)),
-            child: const Text('Yes, Place Order'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true || !mounted) return;
-
-    setState(() => _placingWaOrder = true);
-    try {
-      final now = DateTime.now();
-      final d = '${(now.year % 100).toString().padLeft(2, '0')}'
-          '${now.month.toString().padLeft(2, '0')}'
-          '${now.day.toString().padLeft(2, '0')}';
-      final s = (now.millisecondsSinceEpoch % 10000).toString().padLeft(4, '0');
-      final orderNumber = 'PO-$d-$s';
-
-      final pharmacyName = session.pharmacy.isNotEmpty ? session.pharmacy : session.customerName;
-      final orderId = await Supabase.instance.client.rpc(
-        'admin_writeas_place_order',
-        params: {
-          'p_user_id':       session.userId,
-          'p_pharmacy_name': pharmacyName,
-          'p_phone':         session.phone,
-          'p_address':       session.address,
-          'p_items':         items,
-          'p_total_amount':  total,
-          'p_payment_id':    orderNumber,
-        },
-      );
-      if (orderId == null || !mounted) return;
-
-      // CHANGE #323: unified finalize (source stamp + mark done + clear session).
-      // Same function called by cart_screen when user taps cart Place Order in WA mode.
-      await _doWaFinalize(orderId.toString());
-      if (!mounted) return;
-      final orderCode = orderId.toString(); // display fallback; _doWaFinalize stamped the real code
-
-      // Remove ordered items from the customer's cart (leave unchecked pre-existing).
-      if (mounted) {
-        final cart = AppState.of(context);
-        for (final productId in _bulkLineItemMap.values) {
-          cart.removeById(productId);
-        }
-      }
-
-      // Exit ViewAs → customer shell disappears, cart reloads for admin.
-      if (mounted) {
-        try {
-          final va = ViewAsState.read(context);
-          if (va.isActive) va.exit();
-        } catch (_) {}
-      }
-
-      if (mounted) _clearSession();
-
-      if (mounted) {
-        showDialog(
-          context: context,
-          barrierDismissible: false,
-          builder: (_) => AlertDialog(
-            title: const Text('Order placed!', style: TextStyle(fontWeight: FontWeight.w700)),
-            content: Text('WhatsApp order $orderCode placed for $pharmacyName.'),
-            actions: [
-              FilledButton(
-                onPressed: () => Navigator.of(context).pop(),
-                style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43)),
-                child: const Text('Done'),
-              ),
-            ],
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) showToast(context, 'Could not place order: $e', isError: true);
-    } finally {
-      if (mounted) setState(() => _placingWaOrder = false);
-    }
   }
 
   Future<void> _loadSession() async {
@@ -2809,236 +2580,14 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
                     retryProgress: _retryProgress,
                     onRowRetry: _isFromFile ? _retryOneRow : null,
                   ),
-                  if (_waConvert != null) ...[
-                    const SizedBox(height: 24),
-                    _WaConvertSection(
-                      session: _waConvert!,
-                      preExistingItems: _preExistingCartItems,
-                      checkedIds: _checkedPreExisting,
-                      onToggle: (id) => setState(() {
-                        if (_checkedPreExisting.contains(id)) {
-                          _checkedPreExisting.remove(id);
-                        } else {
-                          _checkedPreExisting.add(id);
-                        }
-                      }),
-                      bulkLineItemMap: _bulkLineItemMap,
-                      rows: _rows,
-                      placing: _placingWaOrder,
-                      onPlaceOrder: _placeWaOrder,
-                    ),
-                  ],
+                  // CHANGE #324: c324_wa_box_gone — WA convert box removed;
+                  // cart drawer checkboxes now handle item selection + ordering.
                   const SizedBox(height: 48),
                 ],
               ),
             ),
           ),
         ),
-      ),
-    );
-  }
-}
-
-// ─── CHANGE #322: WA Convert section ─────────────────────────────────────────
-
-class _WaConvertSection extends StatelessWidget {
-  final _WaConvertSession session;
-  final List<_WaCartLine>? preExistingItems;
-  final Set<String> checkedIds;
-  final void Function(String id) onToggle;
-  final Map<String, String> bulkLineItemMap;
-  final List<_MatchRow> rows;
-  final bool placing;
-  final VoidCallback onPlaceOrder;
-
-  const _WaConvertSection({
-    required this.session,
-    required this.preExistingItems,
-    required this.checkedIds,
-    required this.onToggle,
-    required this.bulkLineItemMap,
-    required this.rows,
-    required this.placing,
-    required this.onPlaceOrder,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    // Count matched items added this session.
-    int matchedAdded = 0;
-    double sessionTotal = 0;
-    for (int i = 0; i < rows.length; i++) {
-      if (bulkLineItemMap.containsKey(i.toString()) && !rows[i].isHidden) {
-        final p = rows[i].selectedProduct;
-        if (p != null) {
-          matchedAdded++;
-          sessionTotal += p.b2bPrice * rows[i].qty;
-        }
-      }
-    }
-
-    // Count checked pre-existing.
-    int checkedCount = 0;
-    double checkedTotal = 0;
-    for (final line in (preExistingItems ?? [])) {
-      if (checkedIds.contains(line.product.id)) {
-        checkedCount++;
-        checkedTotal += line.product.b2bPrice * line.qty;
-      }
-    }
-
-    final totalItems = matchedAdded + checkedCount;
-    final grandTotal = sessionTotal + checkedTotal;
-    final customerName = session.pharmacy.isNotEmpty ? session.pharmacy : session.customerName;
-
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFF1B7A43).withValues(alpha: 0.4)),
-        boxShadow: const [BoxShadow(color: Color(0x0A000000), blurRadius: 8, offset: Offset(0, 2))],
-      ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        // Header
-        Container(
-          padding: const EdgeInsets.fromLTRB(20, 16, 20, 14),
-          decoration: BoxDecoration(
-            color: const Color(0xFF1B7A43).withValues(alpha: 0.06),
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-          ),
-          child: Row(children: [
-            const Icon(Icons.chat_outlined, color: Color(0xFF1B7A43), size: 18),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                'WhatsApp Order — $customerName',
-                style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF111827)),
-              ),
-            ),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              decoration: BoxDecoration(
-                color: const Color(0xFF1B7A43).withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Text(
-                '$totalItems item${totalItems == 1 ? '' : 's'} · ₹${grandTotal.toStringAsFixed(0)}',
-                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF1B7A43)),
-              ),
-            ),
-          ]),
-        ),
-
-        // Already in cart section
-        Padding(
-          padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
-          child: Text(
-            "Already in $customerName's cart",
-            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
-          ),
-        ),
-        if (preExistingItems == null)
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-            child: Row(children: [
-              SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
-              SizedBox(width: 10),
-              Text('Loading cart…', style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
-            ]),
-          )
-        else if (preExistingItems!.isEmpty)
-          const Padding(
-            padding: EdgeInsets.fromLTRB(20, 0, 20, 12),
-            child: Text('No items in cart yet.', style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
-          )
-        else ...[
-          ...preExistingItems!.map((line) => _WaCartLineRow(
-            line: line,
-            checked: checkedIds.contains(line.product.id),
-            onToggle: () => onToggle(line.product.id),
-          )),
-        ],
-
-        const Divider(height: 1, color: Color(0xFFE5E7EB)),
-
-        // Place Order button
-        Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            if (matchedAdded == 0) ...[
-              const Padding(
-                padding: EdgeInsets.only(bottom: 12),
-                child: Text(
-                  'Add matched items to cart first, then place the WhatsApp order.',
-                  style: TextStyle(fontSize: 13, color: Color(0xFF6B7280)),
-                  textAlign: TextAlign.center,
-                ),
-              ),
-            ],
-            SizedBox(
-              height: 48,
-              child: FilledButton.icon(
-                onPressed: (matchedAdded > 0 && !placing) ? onPlaceOrder : null,
-                style: FilledButton.styleFrom(
-                  backgroundColor: const Color(0xFF1B7A43),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                  elevation: 0,
-                ),
-                icon: placing
-                    ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                    : const Icon(Icons.check_circle_outline, size: 18),
-                label: placing
-                    ? const Text('Placing order…', style: TextStyle(fontWeight: FontWeight.w700))
-                    : Text(
-                        'Place WhatsApp Order ($totalItems item${totalItems == 1 ? '' : 's'} · ₹${grandTotal.toStringAsFixed(0)})',
-                        style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
-                      ),
-              ),
-            ),
-          ]),
-        ),
-      ]),
-    );
-  }
-}
-
-class _WaCartLineRow extends StatelessWidget {
-  final _WaCartLine line;
-  final bool checked;
-  final VoidCallback onToggle;
-  const _WaCartLineRow({required this.line, required this.checked, required this.onToggle});
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onToggle,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-        child: Row(children: [
-          Checkbox(
-            value: checked,
-            onChanged: (_) => onToggle(),
-            activeColor: const Color(0xFF1B7A43),
-            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(line.product.name,
-                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
-                  overflow: TextOverflow.ellipsis),
-              if (line.product.packSize.isNotEmpty)
-                Text(line.product.packSize,
-                    style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
-            ]),
-          ),
-          const SizedBox(width: 8),
-          Text('Qty: ${line.qty}',
-              style: const TextStyle(fontSize: 12, color: Color(0xFF374151))),
-          const SizedBox(width: 12),
-          Text('₹${(line.product.b2bPrice * line.qty).toStringAsFixed(0)}',
-              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF1B7A43))),
-        ]),
       ),
     );
   }

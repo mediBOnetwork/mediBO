@@ -99,8 +99,8 @@ class _HomeShellState extends State<HomeShell> {
       try { RenderLog.write('c311_login_built', 'panel_wired_#311'); } catch (_) {}
       try { RenderLog.write('c311_btn_wired', 'non_null_always'); } catch (_) {}
       try { RenderLog.write('c311_no_blocker', 'no_absorb_no_ignore_no_overlay'); } catch (_) {}
-      // CHANGE #323: load-time attestation — WA convert unified finalize wired.
-      try { RenderLog.write('c323_build', 323); } catch (_) {}
+      // CHANGE #324: load-time attestation — WA box removed, cart checkboxes in ViewAs.
+      try { RenderLog.write('c324_build', 324); } catch (_) {}
       // CHANGE #312: structural attestation — bulk upload split buttons compiled in.
       // Written here so it appears in ALL sessions without visiting the Bulk tab.
       try { RenderLog.write('c312_bulk_built', 'split_buttons_#312'); } catch (_) {}

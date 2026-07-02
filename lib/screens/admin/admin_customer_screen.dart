@@ -6348,8 +6348,8 @@ class _WaOrderPanelState extends State<_WaOrderPanel> {
   Map<String, dynamic>? _data;
   bool _loading = true;
   String? _error;
-  // Which order group index is expanded.
-  int? _expandedGroup;
+  // Which order group index is expanded. 0 = latest day (Order 1) expanded by default.
+  int? _expandedGroup = 0;
   // imageId → converting in-flight.
   final Set<String> _converting = {};
 

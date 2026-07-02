@@ -27,6 +27,28 @@ class CartScreen extends StatefulWidget {
 class _CartScreenState extends State<CartScreen> {
   bool _orderInProgress = false;
 
+  // CHANGE #324: ViewAs checkbox state — admin-added items checked, customer items unchecked.
+  final Set<String> _viewAsChecked = {};
+  bool _viewAsCheckedInited = false;
+
+  void _initViewAsChecked(List<CartLine> lines) {
+    _viewAsChecked.clear();
+    for (final line in lines) {
+      if (line.addedByAdmin) _viewAsChecked.add(line.product.id);
+    }
+    _viewAsCheckedInited = true;
+  }
+
+  void _toggleViewAsChecked(String productId) {
+    setState(() {
+      if (_viewAsChecked.contains(productId)) {
+        _viewAsChecked.remove(productId);
+      } else {
+        _viewAsChecked.add(productId);
+      }
+    });
+  }
+
   Future<void> _placeOrder() async {
     if (_orderInProgress) return;
 
@@ -80,22 +102,20 @@ class _CartScreenState extends State<CartScreen> {
           return;
         }
         final orderNumber = _generateOrderNumber();
-        // CHANGE #323: when a WA convert session is active, use the session's
-        // matched items (not cart.lines) so demo/pre-existing cart items can
-        // never bleed into a WhatsApp order.
-        final waItems = BulkUploadScreen.getWaOrderItems?.call();
-        final items = (waItems != null && waItems.isNotEmpty)
-            ? waItems
-            : cart.lines.map((l) => {
-                'product_name': l.product.name,
-                'quantity':     l.quantity,
-                'price':        l.product.b2bPrice,
-                'mrp':          l.product.mrp,
-                'gst_percent':  l.product.gstPercent,
-                'line_total':   l.lineTotal,
-              }).toList();
+        // CHANGE #324: build items from ONLY the checked (admin-added) rows.
+        final checkedLines = cart.lines
+            .where((l) => _viewAsChecked.contains(l.product.id))
+            .toList();
+        final items = checkedLines.map((l) => {
+          'product_name': l.product.name,
+          'quantity':     l.quantity,
+          'price':        l.product.b2bPrice,
+          'mrp':          l.product.mrp,
+          'gst_percent':  l.product.gstPercent,
+          'line_total':   l.product.b2bPrice * l.quantity,
+        }).toList();
         if (items.isEmpty) {
-          if (mounted) showToast(context, 'No items to order', isError: true);
+          if (mounted) showToast(context, 'Select at least one item to order', isError: true);
           return;
         }
         final netPayable = items.fold(0.0, (s, i) => s + (i['line_total'] as double));
@@ -111,11 +131,12 @@ class _CartScreenState extends State<CartScreen> {
             'p_payment_id':    orderNumber,
           },
         );
-        RenderLog.write('view_as_order_placed',
-            'order:$orderId:customer:$customerId:total:${netPayable.toStringAsFixed(0)}');
-        // CHANGE #323: WhatsApp convert finalize — stamp source='whatsapp' and
-        // mark the image done.  No-op when no WA session is active.
+        RenderLog.write('c324_place_selected',
+            'order:$orderId:customer:$customerId:checked:${checkedLines.length}:total:${netPayable.toStringAsFixed(0)}');
+        // CHANGE #323/#324: WhatsApp convert finalize — stamp source='whatsapp'
+        // and mark image done.  No-op when no WA session is active.
         if (orderId != null && BulkUploadScreen.onWaOrderPlaced != null) {
+          RenderLog.write('c324_wa_finalize', 'orderId:$orderId');
           await BulkUploadScreen.onWaOrderPlaced!(orderId.toString());
         }
         if (!mounted) return;
@@ -134,7 +155,12 @@ class _CartScreenState extends State<CartScreen> {
           }
         } catch (_) {}
         if (!mounted) return;
-        cart.clear(); // clears via admin_writeas_cart_clear
+        // CHANGE #324: remove ONLY the ordered (checked) rows; leave unchecked
+        // customer-added rows in the cart.
+        for (final line in checkedLines) {
+          cart.remove(line.product);
+        }
+        setState(() { _viewAsCheckedInited = false; }); // reinit after cart refreshes
         showDialog(
           context: context,
           barrierDismissible: false,
@@ -314,6 +340,27 @@ class _CartScreenState extends State<CartScreen> {
       return const _EmptyCart();
     }
 
+    // CHANGE #324: init ViewAs checkboxes once per session (admin-added → checked).
+    if (cart.isViewAs && !_viewAsCheckedInited && cart.lines.isNotEmpty) {
+      _initViewAsChecked(cart.lines);
+      RenderLog.write('c324_cart_checkbox', 'lines:${cart.lines.length} checked:${_viewAsChecked.length}');
+    }
+    if (!cart.isViewAs && _viewAsCheckedInited) {
+      _viewAsChecked.clear();
+      _viewAsCheckedInited = false;
+    }
+
+    // Compute selected total for ViewAs footer.
+    double viewAsSelectedTotal = 0;
+    if (cart.isViewAs) {
+      for (final l in cart.lines) {
+        if (_viewAsChecked.contains(l.product.id)) {
+          viewAsSelectedTotal += l.product.b2bPrice * l.quantity;
+        }
+      }
+    }
+    final double? selectedTotal = cart.isViewAs ? viewAsSelectedTotal : null;
+
     final banner = cart.hasSampleItems ? _SampleBanner(cart: cart) : null;
 
     return LayoutBuilder(
@@ -338,8 +385,9 @@ class _CartScreenState extends State<CartScreen> {
                             flex: 3,
                             child: _ItemList(
                               cart: cart,
-                              externalSearchQuery:
-                                  widget.externalSearchQuery,
+                              externalSearchQuery: widget.externalSearchQuery,
+                              viewAsChecked: cart.isViewAs ? _viewAsChecked : null,
+                              onViewAsToggle: cart.isViewAs ? _toggleViewAsChecked : null,
                             ),
                           ),
                           const SizedBox(width: 16),
@@ -348,6 +396,7 @@ class _CartScreenState extends State<CartScreen> {
                             child: _OrderSummaryPanel(
                               cart: cart,
                               onPlaceOrder: _placeOrder,
+                              selectedTotal: selectedTotal,
                             ),
                           ),
                         ],
@@ -369,9 +418,15 @@ class _CartScreenState extends State<CartScreen> {
                 cart: cart,
                 externalSearchQuery: widget.externalSearchQuery,
                 showBreakdown: true,
+                viewAsChecked: cart.isViewAs ? _viewAsChecked : null,
+                onViewAsToggle: cart.isViewAs ? _toggleViewAsChecked : null,
               ),
             ),
-            _CheckoutBar(cart: cart, onPlaceOrder: _placeOrder),
+            _CheckoutBar(
+              cart: cart,
+              onPlaceOrder: _placeOrder,
+              selectedTotal: selectedTotal,
+            ),
           ],
         );
       },
@@ -468,7 +523,16 @@ class _ItemList extends StatefulWidget {
   final CartModel cart;
   final String? externalSearchQuery;
   final bool showBreakdown;
-  const _ItemList({required this.cart, this.externalSearchQuery, this.showBreakdown = false});
+  // CHANGE #324: ViewAs checkbox state — null means not ViewAs (show X button).
+  final Set<String>? viewAsChecked;
+  final void Function(String productId)? onViewAsToggle;
+  const _ItemList({
+    required this.cart,
+    this.externalSearchQuery,
+    this.showBreakdown = false,
+    this.viewAsChecked,
+    this.onViewAsToggle,
+  });
 
   @override
   State<_ItemList> createState() => _ItemListState();
@@ -547,7 +611,16 @@ class _ItemListState extends State<_ItemList> {
           final line = filtered[i];
           return RepaintBoundary(
             key: ValueKey(line.product.id),
-            child: _CartItemCard(line: line, cart: widget.cart),
+            child: _CartItemCard(
+              line: line,
+              cart: widget.cart,
+              viewAsChecked: widget.viewAsChecked != null
+                  ? widget.viewAsChecked!.contains(line.product.id)
+                  : null,
+              onViewAsToggle: widget.onViewAsToggle != null
+                  ? () => widget.onViewAsToggle!(line.product.id)
+                  : null,
+            ),
           );
         }
 
@@ -584,7 +657,15 @@ class _ItemListState extends State<_ItemList> {
 class _CartItemCard extends StatelessWidget {
   final CartLine line;
   final CartModel cart;
-  const _CartItemCard({required this.line, required this.cart});
+  // CHANGE #324: ViewAs checkbox — null = normal mode (show X remove button).
+  final bool? viewAsChecked;
+  final VoidCallback? onViewAsToggle;
+  const _CartItemCard({
+    required this.line,
+    required this.cart,
+    this.viewAsChecked,
+    this.onViewAsToggle,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -663,23 +744,38 @@ class _CartItemCard extends StatelessWidget {
                             ),
                           ],
                           const SizedBox(width: 6),
-                          GestureDetector(
-                            onTap: () => cart.remove(p),
-                            child: Container(
-                              width: 22,
-                              height: 22,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                border: Border.all(
-                                    color: const Color(0xFFD1D5DB)),
-                                color: const Color(0xFFF9FAFB),
+                          // CHANGE #324: ViewAs → checkbox; normal → X remove.
+                          if (viewAsChecked != null)
+                            SizedBox(
+                              width: 24,
+                              height: 24,
+                              child: Checkbox(
+                                value: viewAsChecked,
+                                onChanged: (_) => onViewAsToggle?.call(),
+                                activeColor: const Color(0xFF1B7A43),
+                                materialTapTargetSize:
+                                    MaterialTapTargetSize.shrinkWrap,
+                                visualDensity: VisualDensity.compact,
                               ),
-                              child: const Center(
-                                child: Icon(Icons.close,
-                                    size: 11, color: Color(0xFF6B7280)),
+                            )
+                          else
+                            GestureDetector(
+                              onTap: () => cart.remove(p),
+                              child: Container(
+                                width: 22,
+                                height: 22,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  border: Border.all(
+                                      color: const Color(0xFFD1D5DB)),
+                                  color: const Color(0xFFF9FAFB),
+                                ),
+                                child: const Center(
+                                  child: Icon(Icons.close,
+                                      size: 11, color: Color(0xFF6B7280)),
+                                ),
                               ),
                             ),
-                          ),
                         ],
                       ),
                       const SizedBox(height: 3),
@@ -718,7 +814,35 @@ class _CartItemCard extends StatelessWidget {
                                   fontSize: 9, color: Color(0xFFEA580C))),
                         ),
                       ],
-                      if (line.addedByAdmin) ...[
+                      // CHANGE #324: in ViewAs, show which party added the item.
+                      if (viewAsChecked != null) ...[
+                        const SizedBox(height: 3),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 5, vertical: 1),
+                          decoration: BoxDecoration(
+                            color: line.addedByAdmin
+                                ? const Color(0xFFFEF08A)
+                                : const Color(0xFFEFF6FF),
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(
+                              color: line.addedByAdmin
+                                  ? const Color(0xFFFBBF24)
+                                  : const Color(0xFFBFDBFE),
+                            ),
+                          ),
+                          child: Text(
+                            line.addedByAdmin ? 'added by you' : "customer's item",
+                            style: TextStyle(
+                              fontSize: 9,
+                              fontWeight: FontWeight.w600,
+                              color: line.addedByAdmin
+                                  ? const Color(0xFF92400E)
+                                  : const Color(0xFF1E40AF),
+                            ),
+                          ),
+                        ),
+                      ] else if (line.addedByAdmin) ...[
                         const SizedBox(height: 3),
                         Container(
                           padding: const EdgeInsets.symmetric(
@@ -1294,7 +1418,9 @@ String? _orderGateMessage(AuthNotifier auth, [ViewAsNotifier? viewAs]) {
 class _CheckoutBar extends StatelessWidget {
   final CartModel cart;
   final VoidCallback onPlaceOrder;
-  const _CheckoutBar({required this.cart, required this.onPlaceOrder});
+  // CHANGE #324: when ViewAs, show selected-items total instead of full cart total.
+  final double? selectedTotal;
+  const _CheckoutBar({required this.cart, required this.onPlaceOrder, this.selectedTotal});
 
   @override
   Widget build(BuildContext context) {
@@ -1324,16 +1450,16 @@ class _CheckoutBar extends StatelessWidget {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    const Text(
-                      'Net Payable Amount',
-                      style: TextStyle(
+                    Text(
+                      selectedTotal != null ? 'Selected Total' : 'Net Payable Amount',
+                      style: const TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.w700,
                         color: Color(0xFF111827),
                       ),
                     ),
                     Text(
-                      rupees(cart.netPayable),
+                      rupees(selectedTotal ?? cart.netPayable),
                       style: const TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.w700,
@@ -2076,7 +2202,9 @@ class _GstGroup extends StatelessWidget {
 class _OrderSummaryPanel extends StatelessWidget {
   final CartModel cart;
   final VoidCallback onPlaceOrder;
-  const _OrderSummaryPanel({required this.cart, required this.onPlaceOrder});
+  // CHANGE #324: when ViewAs, show selected-items total instead of full cart total.
+  final double? selectedTotal;
+  const _OrderSummaryPanel({required this.cart, required this.onPlaceOrder, this.selectedTotal});
 
   @override
   Widget build(BuildContext context) {
@@ -2127,7 +2255,11 @@ class _OrderSummaryPanel extends StatelessWidget {
             valueColor: deliveryFee == 0 ? const Color(0xFF16A34A) : null,
           ),
           const Divider(height: 24),
-          _row('Net Payable Amount', rupees(cart.netPayable), bold: true),
+          _row(
+            selectedTotal != null ? 'Selected Total' : 'Net Payable Amount',
+            rupees(selectedTotal ?? cart.netPayable),
+            bold: true,
+          ),
           const SizedBox(height: 6),
           GestureDetector(
             onTap: () => _showBillDialog(context),

@@ -1191,6 +1191,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c168_helper_shapes', 'collect:ordQty=ordered_qty,state=explicit,locked=collect_locked;arrivals:ordQty=ordered,state=derived,locked=received_locked');
     RenderLog.write('c170_bugs_done', 'dispute_form_flat_list+3arg_submit+supplier_grouped_admin');
     RenderLog.write('c171_popup_per_item_send_removed', 'true');
+    RenderLog.write('c331_caps', 'wired=y'); // #331: static presence marker for VoiceCaps helper
   }
 
   @override

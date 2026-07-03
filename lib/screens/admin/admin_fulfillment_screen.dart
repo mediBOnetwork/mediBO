@@ -1405,8 +1405,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           if (m.containsKey('received_total')) {
             arrivalsReceivedMap[name] = (m['received_total'] as num?)?.toInt() ?? 0;
           }
-          RenderLog.write('c339_chip_state',
-              'supplier=$name;confirmed=${arrivalsConfirmedMap[name]};received=${arrivalsReceivedMap[name]}');
+          // #340: dot state logged (chip colour restored to response-status meaning)
+          RenderLog.write('c340_dot_state',
+              'supplier=$name;confirmed=${arrivalsConfirmedMap[name]};received=${arrivalsReceivedMap[name]};'
+              'state=${arrivalsConfirmedMap[name]==true?"confirmed":(arrivalsReceivedMap[name]??0)>0?"partial":"pending"}');
         }
         names.sort();
         // #117 badge counts render-log
@@ -4381,9 +4383,25 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // Replaces the accordion expanded view — name row is pinned; content scrolls.
   Widget _buildExpandedSupplierCard(String name, bool isAdmin) {
     final dot = _supplierDotMap[name] ?? 'yellow';
-    final dotFill = dot == 'green' ? _kDotGreen
-        : dot == 'light_yellow' ? _kDotLightYellow : _kDotYellow;
-    final dotBorder = dot == 'green' ? _kDotGreen : _kDotBorderLight;
+    // #340: warehouse dot binds to receiving state; shop dot keeps legacy 'dot' string.
+    final Color dotFill;
+    final Color dotBorder;
+    if (widget.arrivals) {
+      final confirmed = _arrivalsConfirmedMap[name];
+      final received = _arrivalsReceivedMap[name] ?? 0;
+      if (confirmed == true) {
+        dotFill = _kDotGreen; dotBorder = _kDotGreen;
+      } else if (received > 0) {
+        dotFill = _kDotYellow; dotBorder = _kDotBorderLight;
+      } else {
+        dotFill = dot == 'light_yellow' ? _kDotLightYellow : _kDotYellow;
+        dotBorder = _kDotBorderLight;
+      }
+    } else {
+      dotFill = dot == 'green' ? _kDotGreen
+          : dot == 'light_yellow' ? _kDotLightYellow : _kDotYellow;
+      dotBorder = dot == 'green' ? _kDotGreen : _kDotBorderLight;
+    }
     final locked = widget.arrivals ? _arrivalsLocked : _boxLocked;
     final safeBottom = MediaQuery.of(context).padding.bottom;
     final visibleItems = _visibleItems();
@@ -4464,8 +4482,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                 CountBadge(
                   mode: widget.arrivals ? _supplierModeMap[name] : _collectModeMap[name],
                   showPending: !widget.arrivals,
-                  arrivalsConfirmed: widget.arrivals ? _arrivalsConfirmedMap[name] : null,
-                  arrivalsReceived: widget.arrivals ? _arrivalsReceivedMap[name] : null,
                 ),
                 const SizedBox(width: 8),
                 Container(
@@ -8693,10 +8709,25 @@ class _SupplierAccordionShell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final dotFill   = dot == 'green'        ? _kDotGreen
-                    : dot == 'light_yellow' ? _kDotLightYellow
-                    : _kDotYellow;
-    final dotBorder = dot == 'green' ? _kDotGreen : _kDotBorderLight;
+    // #340: warehouse dot binds to receiving state; shop/collect keeps legacy dot string.
+    final Color dotFill;
+    final Color dotBorder;
+    if (arrivalsConfirmed != null) {
+      final received = arrivalsReceived ?? 0;
+      if (arrivalsConfirmed!) {
+        dotFill = _kDotGreen; dotBorder = _kDotGreen;
+      } else if (received > 0) {
+        dotFill = _kDotYellow; dotBorder = _kDotBorderLight;
+      } else {
+        dotFill = dot == 'light_yellow' ? _kDotLightYellow : _kDotYellow;
+        dotBorder = _kDotBorderLight;
+      }
+    } else {
+      dotFill = dot == 'green' ? _kDotGreen
+              : dot == 'light_yellow' ? _kDotLightYellow
+              : _kDotYellow;
+      dotBorder = dot == 'green' ? _kDotGreen : _kDotBorderLight;
+    }
     final bottomGap = anyExpanded ? 16.0 : 8.0;
 
     return Padding(
@@ -8742,8 +8773,6 @@ class _SupplierAccordionShell extends StatelessWidget {
                 CountBadge(
                   mode: mode,
                   showPending: showPending,
-                  arrivalsConfirmed: arrivalsConfirmed,
-                  arrivalsReceived: arrivalsReceived,
                 ),
                 const SizedBox(width: 8),
                 Container(
@@ -8831,18 +8860,9 @@ class _HoldToUndoState extends State<_HoldToUndo>
 // ── #117: Count badge — fixed-width chip shown on Arrivals accordion rows ─────
 
 class CountBadge extends StatelessWidget {
-  const CountBadge({
-    super.key,
-    required this.mode,
-    this.showPending = false,
-    this.arrivalsConfirmed,
-    this.arrivalsReceived,
-  });
+  const CountBadge({super.key, required this.mode, this.showPending = false});
   final String? mode;
   final bool showPending; // true = Collect tab; renders 'P' yellow when mode==null
-  // #339: arrivals chip colour binding (null = not provided by backend, use legacy colour)
-  final bool? arrivalsConfirmed;
-  final int? arrivalsReceived;
 
   @override
   Widget build(BuildContext context) {
@@ -8851,23 +8871,13 @@ class CountBadge extends StatelessWidget {
         : showPending ? 'P'
         : null;
     if (label == null) return const SizedBox(width: 38, height: 24);
-    // #339: server-truth chip colour for arrivals (when backend provides arrivals_confirmed)
-    final Color color;
-    if (arrivalsConfirmed != null) {
-      // Green if confirmed, amber if in-progress (received > 0), grey if not started
-      color = arrivalsConfirmed == true
-          ? const Color(0xFF065F46)  // green — receiving confirmed
-          : (arrivalsReceived != null && arrivalsReceived! > 0)
-              ? const Color(0xFFF59E0B)  // amber — in progress
-              : const Color(0xFF9CA3AF); // grey — not started
-    } else {
-      // #334 D2: legacy colour — C badge is amber while at shop stage; red for warehouse
-      color = mode == 'shop'
-          ? const Color(0xFFF59E0B)
-          : mode == 'warehouse'
-              ? const Color(0xFFD32F2F)
-              : const Color(0xFFF59E0B);
-    }
+    // #334 D2: C badge amber at shop stage (counting in progress); CR red for warehouse direct.
+    // #340: chip restored to supplier-response meaning (pre-#339); receiving state moved to dot.
+    final Color color = mode == 'shop'
+        ? const Color(0xFFF59E0B)
+        : mode == 'warehouse'
+            ? const Color(0xFFD32F2F)
+            : const Color(0xFFF59E0B);
     return SizedBox(
       width: 38,
       height: 24,

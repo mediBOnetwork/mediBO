@@ -2137,9 +2137,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     }
     if (_agentPhase != AgentPhase.idle) return; // agent active — counting mic disabled
     if (_voiceProcessing) return; // busy — ignore double-tap
-    if (_boxLocked) {
+    if (_boxLocked || (!widget.arrivals && _supplierMode == 'warehouse')) {
       RenderLog.write('change_91_edit_blocked', '1');
-      // c194: surface lock state so it's never a silent no-op
+      RenderLog.write('c337_shop_locked_card',
+          'supplier=${_selectedSupplier ?? ''};mode=${_supplierMode ?? 'unknown'};mic_blocked=y');
       if (mounted) _showSnack('Counting locked — unlock first to edit');
       return;
     }
@@ -3174,8 +3175,15 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       ]);
     }
 
-    if (locked) {
+    // A1 §2.7: _supplierMode=='warehouse' means supplier was forwarded — suppress ALL action
+    // buttons (Confirm counting / Count in warehouse / Send reminder). Render ONLY the lock
+    // line + hold-to-undo. _boxLocked is also checked for belt-and-suspenders.
+    final shopLocked = locked || _supplierMode == 'warehouse';
+    if (shopLocked) {
       RenderLog.write('change_91_locked', '1');
+      RenderLog.write('c337_shop_locked_card',
+          'supplier=${_selectedSupplier ?? ''};mode=${_supplierMode ?? 'unknown'};'
+          'boxLocked=$locked;forwarded=${_supplierMode == 'warehouse'}');
       if (isWide) {
         return Row(
           mainAxisAlignment: MainAxisAlignment.end,
@@ -3230,6 +3238,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     }
 
     // #147 FIX C: always side-by-side, both at _kFooterH — matches locked pill height.
+    // Reached only when shop is NOT forwarded and NOT box-locked.
     RenderLog.write('change_92_confirm_styled', '1');
     RenderLog.write('c137_collect_buttons', 'two=y;names=count_wh+confirm');
     // C171: short reminder button above collect footer buttons
@@ -3718,7 +3727,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       if (!mounted) return;
       RenderLog.write('change_85_agent_reply_spoken', '1');
       if (isConfirm) {
-        if (_boxLocked) {
+        if (_boxLocked || (!widget.arrivals && _supplierMode == 'warehouse')) {
           RenderLog.write('change_91_edit_blocked', '1');
           setState(() { _pendingAction = null; _agentPhase = AgentPhase.idle; });
         } else {
@@ -4607,8 +4616,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // Tally badge moved to _buildNarrowProgressRow.
   Widget _buildNarrowVoiceBar(bool isAdmin) {
     // CHANGE #277: bag-missing is a silent noop (no opacity/grey), not a disabled state
+    // A1 §2.7: shop forwarded to warehouse → mic disabled (same visual as arrivals confirmed)
+    final shopForwarded = !widget.arrivals && _supplierMode == 'warehouse';
     final countingDisabled = _agentPhase != AgentPhase.idle ||
-        (widget.arrivals && _arrivalsLocked); // #156: locked after confirm-all
+        (widget.arrivals && _arrivalsLocked) || // #156: locked after confirm-all
+        shopForwarded; // A1: shop forwarded → no counting
     final bool voiceBagPresent = _activeBag != null;
     if (widget.arrivals && !voiceBagPresent && !_loadingBox && _selectedSupplier != null) {
       RenderLog.write('c277_voice_gate_no_bag', 'narrow;supplier=$_selectedSupplier');

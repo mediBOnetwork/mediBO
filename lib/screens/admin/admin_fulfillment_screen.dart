@@ -7,7 +7,6 @@ import 'dart:js_interop';
 import 'dart:js_interop_unsafe';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
@@ -27,6 +26,7 @@ import '../../supabase_config.dart' show SupabaseConfig;
 import 'voice_receive.dart';
 import '../../widgets/pinned_footer_list.dart';
 import '../../widgets/fulfill_item_sheet.dart';
+import '../../widgets/mention_hold_row.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:image/image.dart' as img;
 import 'package:zxing2/qrcode.dart';
@@ -1182,6 +1182,62 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     return 'Collected and sent to warehouse';
   }
 
+  // #338: voice-vs-actual count audit per product_id (mismatch chips).
+  // Fetched on supplier expand (_loadBox) and after mention toggles; cleared
+  // by _reloadItemsFromDB (confirm/undo/manual edits make it stale). Never on hot path.
+  Map<String, Map<String, dynamic>> _auditMismatchMap = {};
+
+  Future<void> _fetchCountAudit(String supplier) async {
+    if (supplier.isEmpty) return;
+    final stage = widget.arrivals ? 'warehouse' : 'shop';
+    try {
+      final dynamic raw = await Supabase.instance.client.rpc(
+        'fw_count_source_audit',
+        params: {'p_supplier_name': supplier, 'p_stage': stage},
+      );
+      if (!mounted) return;
+      final res = raw is Map ? Map<String, dynamic>.from(raw) : <String, dynamic>{};
+      final rawList = res['products'] ?? res['items'];
+      final products = (rawList is List ? rawList : const [])
+          .whereType<Map>()
+          .map((p) => Map<String, dynamic>.from(p))
+          .toList();
+      final map = <String, Map<String, dynamic>>{};
+      var mismatches = 0;
+      for (final p in products) {
+        final pid = p['product_id']?.toString();
+        if (pid == null || pid.isEmpty) continue;
+        map[pid] = p;
+        if (p['mismatch'] == true) mismatches++;
+      }
+      setState(() => _auditMismatchMap = map);
+      RenderLog.write(stage == 'warehouse' ? 'c338_audit_wh' : 'c338_audit_shop',
+          'mismatches=$mismatches;supplier=$supplier');
+    } catch (_) {
+      // audit is advisory — never block the box on failure
+    }
+  }
+
+  // #338: small amber "voice X ≠ Y" chip when voice total disagrees with actual
+  Widget? _mismatchChip(int? productId) {
+    if (productId == null) return null;
+    final m = _auditMismatchMap['$productId'];
+    if (m == null || m['mismatch'] != true) return null;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFEF3C7),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: const Color(0xFFF59E0B), width: 0.5),
+      ),
+      child: Text(
+        'voice ${m['voice_total']} ≠ ${m['actual_total']}',
+        style: const TextStyle(
+            fontSize: 10, color: Color(0xFF92400E), fontWeight: FontWeight.w600),
+      ),
+    );
+  }
+
   // B8: session-only voice clip counter — reset on box open, increment per clip
   int _sessionVoiceCount = 0;
   // #263: spoken badge = distinct products (product_id) in voice clip mentions, not clip count
@@ -1616,6 +1672,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       _latestClipPath = null; // #115: reset clip state per supplier (#125: no local seq — comes from RPC)
       _arrivalsLocked = false; // #156: reset per-supplier lock when opening a new supplier
       _activeBag = null; // #253: reset active bag per supplier
+      _auditMismatchMap = {}; // #338: audit is per-supplier — clear on open
     });
 
     // #127 BUG1 FIX: Arrivals uses fw_get_state(supplier,'arrivals') items directly.
@@ -1680,6 +1737,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           }
         });
         _refreshVoiceMentions(); // #263: load today's mentions for distinct-product spoken count
+        _fetchCountAudit(supplier); // #338: voice-vs-actual mismatch chips (expand only)
         RenderLog.write('c127_arrivals_filter_removed', 'true');
         RenderLog.write('c127_arrivals_items_rendered', '${stateItems.length}');
         RenderLog.write('c159_sheet_rpc', 'uses=set_item_receiving');
@@ -1739,6 +1797,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         _voiceMentions = []; // clear stale; fresh fetch below
       });
       _refreshVoiceMentions(); // #263: load today's mentions for distinct-product spoken count
+      _fetchCountAudit(supplier); // #338: voice-vs-actual mismatch chips (expand only)
       RenderLog.write('c127_collect_footer_from_mode', 'true');
       RenderLog.write('c168_collect_spoken_open', '0');
       RenderLog.write('c168_collect_mode', '${_supplierMode ?? 'null'}');
@@ -2690,6 +2749,12 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   Future<void> _reloadItemsFromDB() async {
     final supplier = _selectedSupplier;
     if (supplier == null) return;
+    // #338: any reload (confirm/undo/manual edits) makes the voice-vs-actual
+    // audit stale — clear it (no extra RPC on this hot path; refetch happens
+    // on next expand or after a mention toggle).
+    if (_auditMismatchMap.isNotEmpty && mounted) {
+      setState(() => _auditMismatchMap = {});
+    }
     // #127 BUG1 FIX: Arrivals reload uses fw_get_state directly (no get_receiving_box).
     if (widget.arrivals) {
       try {
@@ -4929,6 +4994,12 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                   ]);
                 }),
               ],
+              // #338: voice-vs-actual mismatch chip (audit fetched on expand)
+              Builder(builder: (_) {
+                final chip = _mismatchChip((item['product_id'] as num?)?.toInt());
+                if (chip == null) return const SizedBox.shrink();
+                return Padding(padding: const EdgeInsets.only(top: 3), child: chip);
+              }),
               // dispute badge on its own constrained line below
               if (disputeItem != null) ...[
                 const SizedBox(height: 3),
@@ -5132,6 +5203,12 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                   ]);
                 }),
               ],
+              // #338: voice-vs-actual mismatch chip (audit fetched on expand)
+              Builder(builder: (_) {
+                final chip = _mismatchChip(merged.productId);
+                if (chip == null) return const SizedBox.shrink();
+                return Padding(padding: const EdgeInsets.only(top: 3), child: chip);
+              }),
               // #265: arrival status line removed — "Arrival pending"/"Arrived" not shown on Warehouse rows
               // line 4: awaiting dispute badge — ACTIVE disputes only (#199)
               if (disputeItem != null && disputeItem.isActive) ...[
@@ -6366,6 +6443,12 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
               stage: widget.arrivals ? 'warehouse' : 'shop',
               orderItems: orderSnapshot,
               onDismiss: dismiss,
+              // #338: frozen — shop: box locked or forwarded; warehouse: arrivals confirmed
+              frozen: widget.arrivals
+                  ? _arrivalsLocked
+                  : (_boxLocked || _supplierMode == 'warehouse'),
+              // #338: refresh voice-vs-actual audit after any delete/re-add toggle
+              onToggled: () => _fetchCountAudit(supplierForPopup),
               // #331: apply voice_mention_set_status result to local items
               onApplyUpdate: (applyRes) {
                 final rows = applyRes['rows'] as List? ?? [];
@@ -6744,6 +6827,10 @@ class _CountedMentionsPopup extends StatefulWidget {
   final VoidCallback onDismiss;
   // #331: callback for when voice_mention_set_status returns an apply update
   final void Function(Map<String, dynamic> applyRes)? onApplyUpdate;
+  // #338: frozen = counting confirmed/forwarded — rows dim + lock, hold disabled
+  final bool frozen;
+  // #338: fired after any successful delete/re-add toggle (audit cache refresh)
+  final VoidCallback? onToggled;
   const _CountedMentionsPopup({
     super.key,
     required this.supplierName,
@@ -6751,6 +6838,8 @@ class _CountedMentionsPopup extends StatefulWidget {
     required this.orderItems,
     required this.onDismiss,
     this.onApplyUpdate,
+    this.frozen = false,
+    this.onToggled,
   });
 
   @override
@@ -7428,6 +7517,14 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
     final id = r['id']?.toString() ?? '';
     final status = r['status']?.toString() ?? 'counted';
     if (id.isEmpty || _mentionLoading.contains(id)) return;
+    // #338: frozen popup (counting confirmed / forwarded) — toast, never call RPC
+    if (widget.frozen) {
+      RenderLog.write('c338_hold_err', 'code=frozen;stage=${widget.stage}');
+      _showSnackMsg(widget.stage == 'warehouse'
+          ? 'Locked — arrivals already confirmed'
+          : 'Locked — counting already confirmed');
+      return;
+    }
     RenderLog.write('c332_hold2s', 'id=${id.substring(0, id.length.clamp(0, 8))};status=$status');
 
     final isDeleted = status == 'deleted';
@@ -7469,6 +7566,13 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
         if (applyRaw != null && widget.onApplyUpdate != null) {
           widget.onApplyUpdate!(Map<String, dynamic>.from(applyRaw as Map));
         }
+        // #338: proof keys + refetch so totals reflect server truth, then audit refresh
+        final delKey = widget.stage == 'warehouse' ? 'c338_del_wh' : 'c338_del_shop';
+        final readdKey = widget.stage == 'warehouse' ? 'c338_readd_wh' : 'c338_readd_shop';
+        RenderLog.write(action == 'readd' ? readdKey : delKey,
+            'id=${id.substring(0, id.length.clamp(0, 8))};new_status=$newStatus');
+        await _fetchMentions();
+        widget.onToggled?.call();
       } else {
         // Revert optimistic on failure
         if (mounted) setState(() {
@@ -7479,6 +7583,8 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
           }
         });
         final err = res['error']?.toString() ?? '';
+        RenderLog.write('c338_hold_err',
+            'code=${err.isEmpty ? 'unknown' : err.substring(0, err.length.clamp(0, 60))};stage=${widget.stage}');
         if (err.contains('no bag') || err.contains('check_violation') || err.contains('bag')) {
           RenderLog.write('c331_bag_prompt', 'from_mention_hold;id=${id.substring(0, id.length.clamp(0, 8))}');
           showModalBottomSheet<void>(
@@ -7512,6 +7618,8 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
       }
     } catch (e) {
       // Revert optimistic on exception
+      RenderLog.write('c338_hold_err',
+          'code=exception;detail=${e.toString().substring(0, e.toString().length.clamp(0, 60))}');
       if (mounted) setState(() {
         final idx = _mentions?.indexWhere((m) => m['id']?.toString() == id) ?? -1;
         if (idx >= 0) {
@@ -7585,17 +7693,13 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
               rowTint = const Color(0x1AF59E0B); // amber @ ~10%
             }
 
-            // #332 C1: 2-second hold — RawGestureDetector + LongPressGestureRecognizer(duration:2s)
+            // #338: shared 2-second hold widget (Listener-based, progress ring, frozen lock)
             // #334 B1: tap on unmatched → item picker
             return GestureDetector(
               onTap: isUnmatched ? () => _showItemPicker(mentionId, qty) : null,
-              child: RawGestureDetector(
-              gestures: {
-                LongPressGestureRecognizer: GestureRecognizerFactoryWithHandlers<LongPressGestureRecognizer>(
-                  () => LongPressGestureRecognizer(duration: const Duration(seconds: 2)),
-                  (recognizer) { recognizer.onLongPress = isUnmatched ? null : () => _handleMentionHold(r); },
-                ),
-              },
+              child: MentionHoldRow(
+              frozen: widget.frozen,
+              onHoldComplete: isUnmatched ? null : () => _handleMentionHold(r),
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 200),
                 margin: const EdgeInsets.symmetric(vertical: 3),
@@ -7679,7 +7783,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
                   ],
                 ),
               ),
-            ), // RawGestureDetector
+            ), // MentionHoldRow (#338)
             ); // GestureDetector
           }),
         ],
@@ -11474,6 +11578,40 @@ class _PackTabState extends State<_PackTab>
     }
   }
 
+  // #338: voice-vs-actual audit per product for the expanded pack order.
+  // Fetched on order expand and after mention toggles — never on the rt hot path.
+  Map<String, Map<String, dynamic>> _packAuditMap = {};
+
+  Future<void> _fetchPackAudit(String orderId) async {
+    if (orderId.isEmpty) return;
+    try {
+      final dynamic raw = await Supabase.instance.client
+          .rpc('pack_count_source_audit', params: {'p_order_id': orderId});
+      if (!mounted) return;
+      final res = raw is String
+          ? (jsonDecode(raw) as Map).cast<String, dynamic>()
+          : (raw is Map ? Map<String, dynamic>.from(raw) : <String, dynamic>{});
+      final rawList = res['items'] ?? res['products'];
+      final rows = (rawList is List ? rawList : const [])
+          .whereType<Map>()
+          .map((p) => Map<String, dynamic>.from(p))
+          .toList();
+      final map = <String, Map<String, dynamic>>{};
+      var mismatches = 0;
+      for (final p in rows) {
+        final pid = p['product_id']?.toString();
+        if (pid == null || pid.isEmpty) continue;
+        map[pid] = p;
+        if (p['mismatch'] == true) mismatches++;
+      }
+      setState(() => _packAuditMap = map);
+      RenderLog.write('c338_audit_pack',
+          'mismatches=$mismatches;order=${orderId.substring(0, orderId.length.clamp(0, 8))}');
+    } catch (_) {
+      // advisory only
+    }
+  }
+
   Future<void> _refreshPackMentions(String orderId) async {
     try {
       final rows = await Supabase.instance.client
@@ -12092,8 +12230,10 @@ class _PackTabState extends State<_PackTab>
           setState(() {
             _expandedOrderId = orderId;
             _packMentions = [];
+            _packAuditMap = {}; // #338: audit is per-order — clear on open
           });
           _loadFromPackQueue(orderId);
+          _fetchPackAudit(orderId); // #338: mismatch chips (expand only)
           _subscribeOrderRt(orderId);
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (!mounted || !_scroll.hasClients) return;
@@ -12128,7 +12268,9 @@ class _PackTabState extends State<_PackTab>
         : total;
 
     // CHANGE #304: spokenCount = distinct products in today's mention rows (not counted_count).
+    // #338: deleted mentions no longer count as spoken.
     final spokenCount = _packMentions
+        .where((m) => m['status']?.toString() != 'deleted')
         .map((m) => m['product_id'])
         .where((id) => id != null)
         .toSet()
@@ -12428,6 +12570,32 @@ class _PackTabState extends State<_PackTab>
                 _packChip('Packed • $pk/$qty$pt', pk, qty),
                 const SizedBox(height: 4),
                 _packChip('Counted • $ct/$qty$pt', ct, qty),
+                // #338: voice-vs-actual mismatch chip (pack_count_source_audit)
+                Builder(builder: (_) {
+                  final pid = (item['product_id'] as num?)?.toInt();
+                  final m = pid != null ? _packAuditMap['$pid'] : null;
+                  if (m == null || m['mismatch'] != true) {
+                    return const SizedBox.shrink();
+                  }
+                  return Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFEF3C7),
+                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(color: const Color(0xFFF59E0B), width: 0.5),
+                      ),
+                      child: Text(
+                        'voice ${m['voice_total']} ≠ ${m['actual_total']}',
+                        style: const TextStyle(
+                            fontSize: 10,
+                            color: Color(0xFF92400E),
+                            fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                  );
+                }),
               ]),
         ),
       ]),
@@ -12655,7 +12823,17 @@ class _PackTabState extends State<_PackTab>
       backgroundColor: Colors.white,
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
-      builder: (_) => _PackMentionsSheet(mentions: mentions, packItems: packItems),
+      builder: (_) => _PackMentionsSheet(
+        mentions: mentions,
+        packItems: packItems,
+        orderId: orderId,
+        // #338: after any delete/re-add — reload queue (counted state), mentions and audit
+        onChanged: () {
+          _refreshPackMentions(orderId);
+          _loadFromPackQueue(orderId);
+          _fetchPackAudit(orderId);
+        },
+      ),
     );
   }
 }
@@ -12667,7 +12845,15 @@ class _PackTabState extends State<_PackTab>
 class _PackMentionsSheet extends StatefulWidget {
   final List<Map<String, dynamic>> mentions;
   final List<Map<String, dynamic>> packItems; // pack_get_queue items for ordered-qty lookup
-  const _PackMentionsSheet({required this.mentions, required this.packItems});
+  // #338: hold-to-delete needs the order id (refetch) + change notification
+  final String orderId;
+  final VoidCallback? onChanged;
+  const _PackMentionsSheet({
+    required this.mentions,
+    required this.packItems,
+    required this.orderId,
+    this.onChanged,
+  });
   @override
   State<_PackMentionsSheet> createState() => _PackMentionsSheetState();
 }
@@ -12675,6 +12861,79 @@ class _PackMentionsSheet extends StatefulWidget {
 class _PackMentionsSheetState extends State<_PackMentionsSheet> {
   int? _selectedSeq; // null = All
   final _chipScrollCtrl = ScrollController();
+
+  // #338: local mention list so hold toggles update in place (seeded from parent)
+  late List<Map<String, dynamic>> _mentions =
+      widget.mentions.map((m) => Map<String, dynamic>.from(m)).toList();
+  final Set<String> _mentionLoading = {};
+
+  // #338: packed products are frozen — hold disabled, pill dimmed with lock
+  Set<int> get _packedProductIds => widget.packItems
+      .where((i) => i['packed'] == true)
+      .map((i) => (i['product_id'] as num?)?.toInt())
+      .whereType<int>()
+      .toSet();
+
+  // #338: 2s hold on a qty pill → pack_mention_set_status delete/re-add
+  Future<void> _handlePackMentionHold(String id, String status) async {
+    if (id.isEmpty || _mentionLoading.contains(id)) return;
+    final isDeleted = status == 'deleted';
+    final action = isDeleted ? 'readd' : 'delete';
+    setState(() => _mentionLoading.add(id));
+    try {
+      final dynamic raw = await Supabase.instance.client.rpc(
+          'pack_mention_set_status',
+          params: {'p_id': id, 'p_action': action});
+      final res = raw is String
+          ? (jsonDecode(raw) as Map).cast<String, dynamic>()
+          : Map<String, dynamic>.from(raw as Map);
+      if (!mounted) return;
+      if (res['ok'] == true) {
+        final newStatus =
+            res['status']?.toString() ?? (isDeleted ? 'readded' : 'deleted');
+        RenderLog.write(action == 'readd' ? 'c338_readd_pack' : 'c338_del_pack',
+            'id=${id.substring(0, id.length.clamp(0, 8))};new_status=$newStatus;new_total=${res['new_total'] ?? 'null'}');
+        // Refetch from server so pills + totals reflect truth
+        try {
+          final rows = await Supabase.instance.client.rpc(
+              'get_pack_clip_mentions',
+              params: {'p_order_id': widget.orderId}) as List;
+          if (mounted) {
+            setState(() => _mentions =
+                rows.map((r) => Map<String, dynamic>.from(r as Map)).toList());
+          }
+        } catch (_) {
+          // fall back to local flip if refetch fails
+          if (mounted) {
+            setState(() {
+              final idx = _mentions.indexWhere((m) => m['id']?.toString() == id);
+              if (idx >= 0) _mentions[idx]['status'] = newStatus;
+            });
+          }
+        }
+        widget.onChanged?.call();
+      } else {
+        final err = res['error']?.toString() ?? '';
+        RenderLog.write('c338_hold_err',
+            'code=${err.isEmpty ? 'unknown' : err.substring(0, err.length.clamp(0, 60))};stage=pack');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+              content: Text(err == 'packed_locked'
+                  ? 'Locked — item already packed'
+                  : (err.isNotEmpty ? 'Error: $err' : 'Could not update count'))));
+        }
+      }
+    } catch (e) {
+      RenderLog.write('c338_hold_err',
+          'code=exception;detail=${e.toString().substring(0, e.toString().length.clamp(0, 60))}');
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Error: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _mentionLoading.remove(id));
+    }
+  }
 
   html.AudioElement? _clipAudio;
   final Map<String, String> _signedUrlCache = {};
@@ -12710,7 +12969,9 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
 
   // Group by product_id (known) or '(unnamed)' (null pid — unresolved by voice_match_product).
   // Qty sequence = one entry per mention (for the pill cluster).
-  List<({String name, List<({int qty, int seq})> entries, int total, int ordered})>
+  // #338: entries retain mention id + status for hold-to-delete; deleted
+  // mentions are excluded from the group total (still shown struck-through).
+  List<({int? pid, String name, List<({String id, int qty, int seq, String status})> entries, int total, int ordered})>
       _groupMentions(List<Map<String, dynamic>> rows) {
     final pidToName = <int, String>{};
     final nameToOrdered = <String, int>{};
@@ -12725,21 +12986,25 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
     }
     // key = product_id (as string) for known, '' for unknown
     final order = <String>[];
-    final byKey = <String, List<({int qty, int seq})>>{};
+    final byKey = <String, List<({String id, int qty, int seq, String status})>>{};
     for (final r in rows) {
       final pid = (r['product_id'] as num?)?.toInt();
       final key = pid != null ? '$pid' : '';
       if (!byKey.containsKey(key)) order.add(key);
       final qty = (r['qty'] as num?)?.toInt() ?? 0;
       final seq = (r['recording_seq'] as num?)?.toInt() ?? 0;
-      byKey.putIfAbsent(key, () => []).add((qty: qty, seq: seq));
+      final id = r['id']?.toString() ?? '';
+      final status = r['status']?.toString() ?? 'counted';
+      byKey.putIfAbsent(key, () => []).add((id: id, qty: qty, seq: seq, status: status));
     }
     return order.map((key) {
       final entries = byKey[key]!;
-      final total = entries.fold(0, (s, e) => s + e.qty);
+      final total = entries
+          .where((e) => e.status != 'deleted')
+          .fold(0, (s, e) => s + e.qty);
       final pid = key.isEmpty ? null : int.tryParse(key);
       final name = pid != null ? (pidToName[pid] ?? '(unnamed)') : '(unnamed)';
-      return (name: name, entries: entries, total: total, ordered: nameToOrdered[name] ?? 0);
+      return (pid: pid, name: name, entries: entries, total: total, ordered: nameToOrdered[name] ?? 0);
     }).toList();
   }
 
@@ -12783,7 +13048,7 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final allMentions = widget.mentions;
+    final allMentions = _mentions; // #338: local list — updates on hold toggles
     final clips = _distinctClips(allMentions);
     final filtered = _selectedSeq == null
         ? allMentions
@@ -12947,17 +13212,53 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
                                   spacing: 4, runSpacing: 4,
                                   children: g.entries.map((e) {
                                     final active = playSeq != null && e.seq == playSeq;
-                                    return Container(
+                                    // #338: status colours + 2s hold-to-delete/re-add
+                                    final isDeleted = e.status == 'deleted';
+                                    final isReadded = e.status == 'readded';
+                                    final frozen = g.pid != null &&
+                                        _packedProductIds.contains(g.pid);
+                                    final isLoading = _mentionLoading.contains(e.id);
+                                    final Color bg = isDeleted
+                                        ? const Color(0xFFFEE2E2)
+                                        : isReadded
+                                            ? const Color(0xFFFEF3C7)
+                                            : active ? _kGreen : const Color(0xFFF5F6F8);
+                                    final Color borderC = isDeleted
+                                        ? const Color(0xFFEF4444)
+                                        : isReadded
+                                            ? const Color(0xFFF59E0B)
+                                            : active ? _kGreen : _kBorder;
+                                    final Color fg = isDeleted
+                                        ? const Color(0xFF991B1B)
+                                        : isReadded
+                                            ? const Color(0xFF92400E)
+                                            : active ? Colors.white : _kText;
+                                    final pill = Container(
                                       padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
                                       decoration: BoxDecoration(
-                                        color: active ? _kGreen : const Color(0xFFF5F6F8),
+                                        color: bg,
                                         borderRadius: BorderRadius.circular(8),
-                                        border: Border.all(color: active ? _kGreen : _kBorder),
+                                        border: Border.all(color: borderC),
                                       ),
-                                      child: Text('${e.qty}',
-                                          style: TextStyle(
-                                              fontSize: 12, fontWeight: FontWeight.w600,
-                                              color: active ? Colors.white : _kText)),
+                                      child: isLoading
+                                          ? const SizedBox(
+                                              width: 12, height: 12,
+                                              child: CircularProgressIndicator(
+                                                  strokeWidth: 2, color: _kGreen))
+                                          : Text('${e.qty}',
+                                              style: TextStyle(
+                                                  fontSize: 12, fontWeight: FontWeight.w600,
+                                                  color: fg,
+                                                  decoration: isDeleted
+                                                      ? TextDecoration.lineThrough
+                                                      : null)),
+                                    );
+                                    return MentionHoldRow(
+                                      frozen: frozen,
+                                      onHoldComplete: e.id.isEmpty
+                                          ? null
+                                          : () => _handlePackMentionHold(e.id, e.status),
+                                      child: pill,
                                     );
                                   }).toList(),
                                 ),

@@ -1544,15 +1544,18 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       final itemsRes  = futures[0] as List;
       final modesRes  = futures[1] as List;
 
-      // Mode set: suppliers with a mode set
-      final modeSet = <String>{};
+      // Mode set: split by stage — shop (counting in progress) vs warehouse (forwarded)
+      final shopModeSet = <String>{};
+      final warehouseModeSet = <String>{};
       for (final m in modesRes) {
         final s = (m as Map)['assigned_supplier']?.toString();
         final mode = m['mode']?.toString();
-        if (s != null && mode != null && mode.isNotEmpty) modeSet.add(s);
+        if (s == null || mode == null || mode.isEmpty) continue;
+        if (mode == 'shop') shopModeSet.add(s);
+        else warehouseModeSet.add(s);
       }
 
-      // Per-supplier: any collect_locked + any received_qty > 0
+      // Per-supplier: any collect_locked (confirmed) + any received_qty > 0
       final lockedSet  = <String>{};
       final receivedSet = <String>{};
       for (final r in itemsRes) {
@@ -1563,18 +1566,21 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         if (recv > 0) receivedSet.add(s);
       }
 
+      // #334 D1: green = confirmed (locked or forwarded to warehouse); amber = shop counting in progress; grey = not started
       final dotMap = <String, String>{};
       for (final name in _suppliers) {
         final String dot;
-        if (lockedSet.contains(name) || modeSet.contains(name)) {
+        if (lockedSet.contains(name) || warehouseModeSet.contains(name)) {
           dot = 'green';
+        } else if (shopModeSet.contains(name)) {
+          dot = 'light_yellow'; // amber — counting in progress, not yet confirmed
         } else if (receivedSet.contains(name)) {
           dot = 'light_yellow';
         } else {
           dot = 'yellow';
         }
         dotMap[name] = dot;
-        RenderLog.write('c142_status_dot', 'supplier=$name;state=$dot');
+        RenderLog.write('c334_dot_rule', 'supplier=$name;state=$dot');
       }
       if (mounted) setState(() => _supplierDotMap = dotMap);
     } catch (_) {
@@ -2473,6 +2479,43 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           }
         }
       }
+      // #334 B1: backend phonetic/fuzzy fallback when local exact match fails
+      if (productId == null && matchedName != null && matchedName.isNotEmpty) {
+        try {
+          final matchRaw = await Supabase.instance.client.rpc('voice_match_product', params: {
+            'p_supplier': supplier,
+            'p_text': matchedName,
+          }) as Map;
+          final matchRes = Map<String, dynamic>.from(matchRaw);
+          if (matchRes['match'] == true) {
+            productId = (matchRes['product_id'] as num?)?.toInt();
+            final resolvedName = matchRes['product_name']?.toString();
+            if (productId != null && resolvedName != null) {
+              RenderLog.write('c334_voice_fallback', 'heard=$matchedName;resolved=$resolvedName;pid=$productId');
+              // override matchedName so byProduct uses the canonical name
+              item['matched_name'] = resolvedName;
+            }
+          }
+        } catch (_) {}
+      }
+
+      // #334 B2: qty sanity — if spoken qty > ordered*3, skip as unmatched
+      if (productId != null) {
+        final ordQtyForItem = () {
+          for (final row in _items) {
+            if ((row['product_id'] as num?)?.toInt() == productId) {
+              return (row['ordered_qty'] as num?)?.toInt() ?? 0;
+            }
+          }
+          return 0;
+        }();
+        if (ordQtyForItem > 0 && receivedQty > ordQtyForItem * 3) {
+          RenderLog.write('c334_qty_sanity', 'pid=$productId;spoken=$receivedQty;ord=$ordQtyForItem');
+          skipped++;
+          continue;
+        }
+      }
+
       if (productId == null) { skipped++; continue; }
 
       if (byProduct.containsKey(productId)) {
@@ -4807,8 +4850,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
               if (!widget.arrivals) ...[
                 // Supplier Shop stage: show shop count progress
                 Builder(builder: (_) {
-                  RenderLog.write('c331_shop_rows', 'shop_qty=${shopQty ?? 'null'};ord=$ordQty');
-                  final label = '${shopQty ?? '–'}/$ordQty';
+                  RenderLog.write('c334_zero_counter', 'shop_qty=${shopQty ?? '0'};ord=$ordQty');
+                  final label = '${shopQty ?? 0}/$ordQty';
                   return Row(mainAxisSize: MainAxisSize.min, children: [
                     Text(label,
                         style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText)),
@@ -5009,8 +5052,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
               // #331: shop tab → shop_qty/ordered; warehouse → received/expected
               if (!widget.arrivals) ...[
                 Builder(builder: (_) {
-                  RenderLog.write('c331_shop_rows', 'shop=${merged.shopQtyTotal ?? 'null'};ord=${merged.orderedTotal}');
-                  final label = '${merged.shopQtyTotal ?? '–'}/${merged.orderedTotal}';
+                  RenderLog.write('c334_zero_counter', 'shop=${merged.shopQtyTotal ?? '0'};ord=${merged.orderedTotal}');
+                  final label = '${merged.shopQtyTotal ?? 0}/${merged.orderedTotal}';
                   final pillState = merged.shopQtyTotal == null
                       ? 'pending'
                       : (merged.shopQtyTotal! >= merged.orderedTotal ? 'received' : state);
@@ -6900,6 +6943,93 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
     return result;
   }
 
+  // #334 B1: tap-to-fix for unmatched mention rows — shows supplier item picker.
+  Future<void> _showItemPicker(String mentionId, int mentionQty) async {
+    if (!mounted) return;
+    final items = widget.orderItems;
+    if (items.isEmpty) { _showSnackMsg('No items loaded'); return; }
+
+    Map<String, dynamic>? picked;
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (ctx) {
+        String query = '';
+        return StatefulBuilder(builder: (ctx2, setSt) {
+          final filtered = query.isEmpty
+              ? items
+              : items.where((i) {
+                  final n = (i['product_name'] ?? '').toString().toLowerCase();
+                  return n.contains(query.toLowerCase());
+                }).toList();
+          return Padding(
+            padding: EdgeInsets.only(bottom: MediaQuery.of(ctx2).viewInsets.bottom),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              const SizedBox(height: 12),
+              Container(width: 36, height: 4, decoration: BoxDecoration(color: const Color(0xFFE5E7EB), borderRadius: BorderRadius.circular(2))),
+              const SizedBox(height: 12),
+              const Text('Pick product', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                child: TextField(
+                  autofocus: true,
+                  decoration: const InputDecoration(hintText: 'Search…', isDense: true, border: OutlineInputBorder()),
+                  onChanged: (v) => setSt(() => query = v),
+                ),
+              ),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 300),
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: filtered.length,
+                  itemBuilder: (_, i) {
+                    final item = filtered[i];
+                    return ListTile(
+                      dense: true,
+                      title: Text(item['product_name']?.toString() ?? '', style: const TextStyle(fontSize: 13)),
+                      onTap: () { picked = item; Navigator.pop(ctx); },
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(height: 16),
+            ]),
+          );
+        });
+      },
+    );
+
+    if (picked == null || !mounted) return;
+    final productId = (picked!['product_id'] as num?)?.toInt();
+    final productName = picked!['product_name']?.toString() ?? '';
+    if (productId == null) return;
+
+    try {
+      await Supabase.instance.client
+          .from('voice_clip_mentions')
+          .update({'matched_name': productName, 'product_id': productId})
+          .eq('id', mentionId);
+      RenderLog.write('c334_voice_fallback', 'mention_fixed=$productName;qty=$mentionQty');
+
+      // Apply the count via set_voice_received
+      await Supabase.instance.client.rpc('set_voice_received', params: {
+        'p_supplier_name': widget.supplierName,
+        'p_product_id': productId,
+        'p_qty': mentionQty.toDouble(),
+        'p_note': 'voice: tap-fix to $productName',
+      });
+
+      if (mounted) {
+        _showSnackMsg('Assigned to $productName');
+        await _fetchMentions();
+      }
+    } catch (e) {
+      if (mounted) _showSnackMsg('Error updating mention');
+    }
+  }
+
   // #119/#331: group rows by matched_name; deleted mentions excluded from All-tab totals.
   List<({String name, List<_QtyEntry> entries, int total, int ordered})>
       _groupMentions(List<Map<String, dynamic>> rows) {
@@ -6909,7 +7039,9 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
     final byName = <String, List<_QtyEntry>>{};
     for (final r in activeRows) {
       // #134: guard against null/empty matched_name — never show a blank product cell
+      // #334 B1: product_id==null → unmatched; exclude from counts but show amber in flat view
       final rawName = r['matched_name']?.toString() ?? '';
+      if (r['product_id'] == null) continue; // unmatched — shown separately in clip flat view only
       final name = rawName.trim().isEmpty ? 'Unknown item' : rawName;
       if (!byName.containsKey(name)) nameOrder.add(name);
       byName.putIfAbsent(name, () => []).add((
@@ -7357,7 +7489,11 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
             final mentionId = r['id']?.toString() ?? '';
             // #134: same fallback as grouped view — never a blank name cell
             final rawFlatName = r['matched_name']?.toString() ?? '';
-            final name = rawFlatName.trim().isEmpty ? 'Unknown item' : rawFlatName;
+            // #334 B1: product_id==null → unmatched (backend failed to identify item)
+            final isUnmatched = r['product_id'] == null && (r['status']?.toString() ?? '') != 'deleted';
+            final name = isUnmatched
+                ? (rawFlatName.trim().isEmpty ? 'Unmatched ×tap to fix' : 'Unmatched: $rawFlatName')
+                : (rawFlatName.trim().isEmpty ? 'Unknown item' : rawFlatName);
             final qty = (r['qty'] as num?)?.toInt() ?? 0;
             final status = r['status']?.toString() ?? 'counted';
             final isDeleted = status == 'deleted';
@@ -7365,8 +7501,11 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
             final isLoading = _mentionLoading.contains(mentionId);
 
             // #331 H2: red tint for deleted, yellow/amber tint for readded
+            // #334 B1: amber tint for unmatched
             Color? rowTint;
-            if (isDeleted) {
+            if (isUnmatched) {
+              rowTint = const Color(0x28F59E0B); // amber @ ~16%
+            } else if (isDeleted) {
               RenderLog.write('c331_mention_red', 'id=${mentionId.substring(0, mentionId.length.clamp(0, 8))}');
               rowTint = const Color(0x17FF0000); // red @ ~9%
             } else if (isReadded) {
@@ -7375,12 +7514,14 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
             }
 
             // #332 C1: 2-second hold — RawGestureDetector + LongPressGestureRecognizer(duration:2s)
-            // No tooltip, no hint, no confirmation dialog.
-            return RawGestureDetector(
+            // #334 B1: tap on unmatched → item picker
+            return GestureDetector(
+              onTap: isUnmatched ? () => _showItemPicker(mentionId, qty) : null,
+              child: RawGestureDetector(
               gestures: {
                 LongPressGestureRecognizer: GestureRecognizerFactoryWithHandlers<LongPressGestureRecognizer>(
                   () => LongPressGestureRecognizer(duration: const Duration(seconds: 2)),
-                  (recognizer) { recognizer.onLongPress = () => _handleMentionHold(r); },
+                  (recognizer) { recognizer.onLongPress = isUnmatched ? null : () => _handleMentionHold(r); },
                 ),
               },
               child: AnimatedContainer(
@@ -7466,7 +7607,8 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
                   ],
                 ),
               ),
-            );
+            ), // RawGestureDetector
+            ); // GestureDetector
           }),
         ],
       ),
@@ -8634,8 +8776,9 @@ class CountBadge extends StatelessWidget {
         : showPending ? 'P'
         : null;
     if (label == null) return const SizedBox(width: 38, height: 24);
+    // #334 D2: C badge is amber while at shop stage (not confirmed); only green post-confirm (warehouse)
     final Color color = mode == 'shop'
-        ? const Color(0xFF1B7A43)
+        ? const Color(0xFFF59E0B) // amber — counting in progress, not yet confirmed
         : mode == 'warehouse'
             ? const Color(0xFFD32F2F)
             : const Color(0xFFF59E0B); // amber — matches pending dot
@@ -10104,6 +10247,7 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
     RenderLog.write('c331_build', '331');
     RenderLog.write('c332_build', '332');
     RenderLog.write('c333_build', '333');
+    RenderLog.write('c334_build', '334');
     RenderLog.write('c113_fulfillment_tabs_top', viewport);
     return Column(children: [
       Container(

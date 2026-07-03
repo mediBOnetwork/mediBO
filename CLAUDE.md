@@ -13,7 +13,8 @@
 - NEVER add a second `wrangler pages deploy` call. Exactly one per run.
 
 ## After every code change:
-Run ~/deploy.sh — builds + wrangler Direct Upload → live in ~30s on medibo.in.
+Run ~/deploy.sh — does `flutter clean` then build + wrangler Direct Upload → live in ~3min on medibo.in.
+NEVER skip `flutter clean`: skipping it produces corrupt dart2js bundles that boot-hang even with identical source (proven 2026-07-03).
 
 ## HEADLESS SELF-VERIFICATION RULE (PERMANENT — overrides all prior habits)
 - After every deploy, ~/deploy.sh runs `node ~/render_verify.js --keys boot_status` automatically.

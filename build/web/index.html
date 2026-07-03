@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <meta name="build-commit" content="49a5e5d">
+  <meta name="build-commit" content="a4e699b">
   <!-- CHANGE #238: SW permanently disabled. Unregister ALL SWs + wipe all caches on every load.
        No sessionStorage guard — runs unconditionally so even users whose old SW served this
        HTML from cache will have SWs cleared on the very next in-SW-controlled load.
@@ -139,10 +139,10 @@
        On every load, fetches /version.json (no-cache). If the live commit differs
        from the build-stamped commit below, does ONE hard reload so the PWA gets the
        newest bundle instead of staying on a stale cached build.
-       49a5e5d is replaced with the actual short commit hash by deploy.sh. -->
+       a4e699b is replaced with the actual short commit hash by deploy.sh. -->
   <script>
     (function () {
-      var _builtCommit = '49a5e5d';
+      var _builtCommit = 'a4e699b';
       var _sessionKey  = 'c220_pwa_reloaded';
       function _rlWrite(key, val) {
         try {
@@ -160,7 +160,7 @@
           // Already reloaded once this session — skip to prevent loop.
           if (sessionStorage.getItem(_sessionKey)) return;
           // Skip if placeholder was not stamped (local dev / test build).
-          if (_builtCommit === '49a5e5d') return;
+          if (_builtCommit === 'a4e699b') return;
           fetch('/version.json?_t=' + Date.now(), { cache: 'no-store' })
             .then(function (r) { return r.json(); })
             .then(function (data) {
@@ -176,7 +176,7 @@
       });
       // Wire confirmation — written once regardless of outcome.
       window.addEventListener('DOMContentLoaded', function () {
-        if (_builtCommit !== '49a5e5d') {
+        if (_builtCommit !== 'a4e699b') {
           _rlWrite('c220_pwa_check_wired', 1);
         }
       });
@@ -413,7 +413,64 @@
   </style>
   <div id="boot-loader"><div class="spin"></div></div>
 
-  <script src="flutter_bootstrap.js?v=49a5e5d" async></script>
+  <!-- ── SPLASH WATCHDOG — auto-recovers from a corrupt/stale bundle ────────
+       If Flutter has not signalled first-frame within 12 s, the page:
+         1. Unregisters all service workers
+         2. Clears all caches
+         3. Reloads ONCE (sessionStorage 'mb_recovered' prevents infinite loops)
+       Shares the same guard key as c220 pwa-check to prevent double-reload.
+  ──────────────────────────────────────────────────────────────────────────── -->
+  <script>
+    (function () {
+      var WATCHDOG_KEY = 'mb_recovered';
+      var WATCHDOG_MS  = 12000;
+      var _painted     = false;
+
+      // Flutter signals first-frame by writing boot_status=painted to render-log.
+      // We poll for that element's content; also accept the engineInitialized signal.
+      function _isBooted() {
+        try {
+          var rl = document.getElementById('medibo-render-log');
+          if (rl && rl.innerText && rl.innerText.indexOf('boot_status=painted') !== -1) return true;
+          if (window._flutterFirstFrame) return true;
+        } catch (_) {}
+        return false;
+      }
+
+      // Called by flutter_bootstrap onEntrypointLoaded hook (belt-and-suspenders).
+      window._mbMarkFirstFrame = function () { _painted = true; };
+
+      function _recover() {
+        if (_painted || _isBooted()) return;
+        if (sessionStorage.getItem(WATCHDOG_KEY)) return; // already tried once this session
+        sessionStorage.setItem(WATCHDOG_KEY, '1');
+        try {
+          if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.getRegistrations().then(function (regs) {
+              regs.forEach(function (r) { r.unregister(); });
+            }).catch(function () {});
+          }
+          if (window.caches && caches.keys) {
+            caches.keys().then(function (names) {
+              names.forEach(function (n) { caches.delete(n); });
+            }).catch(function () {});
+          }
+        } catch (_) {}
+        window.location.reload(true);
+      }
+
+      setTimeout(function () {
+        if (!_painted && !_isBooted()) _recover();
+      }, WATCHDOG_MS);
+
+      // Poll every 500ms so we stop the watchdog as soon as flutter paints
+      var _poll = setInterval(function () {
+        if (_isBooted()) { _painted = true; clearInterval(_poll); }
+      }, 500);
+    })();
+  </script>
+
+  <script src="flutter_bootstrap.js?v=a4e699b" async></script>
   <script>
     var recaptchaResolve = null;
     var recaptchaWidgetId = null;

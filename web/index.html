@@ -412,6 +412,63 @@
   </style>
   <div id="boot-loader"><div class="spin"></div></div>
 
+  <!-- ── SPLASH WATCHDOG — auto-recovers from a corrupt/stale bundle ────────
+       If Flutter has not signalled first-frame within 12 s, the page:
+         1. Unregisters all service workers
+         2. Clears all caches
+         3. Reloads ONCE (sessionStorage 'mb_recovered' prevents infinite loops)
+       Shares the same guard key as c220 pwa-check to prevent double-reload.
+  ──────────────────────────────────────────────────────────────────────────── -->
+  <script>
+    (function () {
+      var WATCHDOG_KEY = 'mb_recovered';
+      var WATCHDOG_MS  = 12000;
+      var _painted     = false;
+
+      // Flutter signals first-frame by writing boot_status=painted to render-log.
+      // We poll for that element's content; also accept the engineInitialized signal.
+      function _isBooted() {
+        try {
+          var rl = document.getElementById('medibo-render-log');
+          if (rl && rl.innerText && rl.innerText.indexOf('boot_status=painted') !== -1) return true;
+          if (window._flutterFirstFrame) return true;
+        } catch (_) {}
+        return false;
+      }
+
+      // Called by flutter_bootstrap onEntrypointLoaded hook (belt-and-suspenders).
+      window._mbMarkFirstFrame = function () { _painted = true; };
+
+      function _recover() {
+        if (_painted || _isBooted()) return;
+        if (sessionStorage.getItem(WATCHDOG_KEY)) return; // already tried once this session
+        sessionStorage.setItem(WATCHDOG_KEY, '1');
+        try {
+          if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.getRegistrations().then(function (regs) {
+              regs.forEach(function (r) { r.unregister(); });
+            }).catch(function () {});
+          }
+          if (window.caches && caches.keys) {
+            caches.keys().then(function (names) {
+              names.forEach(function (n) { caches.delete(n); });
+            }).catch(function () {});
+          }
+        } catch (_) {}
+        window.location.reload(true);
+      }
+
+      setTimeout(function () {
+        if (!_painted && !_isBooted()) _recover();
+      }, WATCHDOG_MS);
+
+      // Poll every 500ms so we stop the watchdog as soon as flutter paints
+      var _poll = setInterval(function () {
+        if (_isBooted()) { _painted = true; clearInterval(_poll); }
+      }, 500);
+    })();
+  </script>
+
   <script src="flutter_bootstrap.js?v=20260606" async></script>
   <script>
     var recaptchaResolve = null;

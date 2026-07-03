@@ -11622,8 +11622,9 @@ class _PackTabState extends State<_PackTab>
       final Map<String, dynamic> m = raw is String
           ? (jsonDecode(raw) as Map).cast<String, dynamic>()
           : Map<String, dynamic>.from(raw as Map);
-      final total  = (m['total_items']  as num?)?.toInt() ?? 0;
-      final packed = (m['packed_count'] as num?)?.toInt() ?? 0;
+      final rollup = m['rollup'] is Map ? Map<String, dynamic>.from(m['rollup'] as Map) : <String, dynamic>{};
+      final total  = (rollup['ordered'] as num?)?.toInt() ?? 0;
+      final packed = (rollup['packed']  as num?)?.toInt() ?? 0;
       try {
         RenderLog.write('c291_pack_counts',
             'order=${orderId.substring(0, orderId.length.clamp(0, 8))};total=$total;packed=$packed');
@@ -11646,9 +11647,10 @@ class _PackTabState extends State<_PackTab>
       final Map<String, dynamic> m = raw is String
           ? (jsonDecode(raw) as Map).cast<String, dynamic>()
           : Map<String, dynamic>.from(raw as Map);
-      final total   = (m['total_items']  as num?)?.toInt() ?? 0;
-      final packed  = (m['packed_count'] as num?)?.toInt() ?? 0;
-      final counted = (m['counted_count'] as num?)?.toInt() ?? 0;
+      final rollup  = m['rollup'] is Map ? Map<String, dynamic>.from(m['rollup'] as Map) : <String, dynamic>{};
+      final total   = (rollup['ordered'] as num?)?.toInt() ?? 0;
+      final packed  = (rollup['packed']  as num?)?.toInt() ?? 0;
+      final counted = (rollup['counted'] as num?)?.toInt() ?? 0;
       final items   = ((m['items'] as List?) ?? const [])
           .map((i) => Map<String, dynamic>.from(i as Map))
           .toList();
@@ -11656,10 +11658,12 @@ class _PackTabState extends State<_PackTab>
         RenderLog.write('c299_rows_src',
             'order=${orderId.substring(0, orderId.length.clamp(0, 8))};total=$total;packed=$packed;counted=$counted');
         RenderLog.write('c299_counts', 'total=$total;packed=$packed;counted=$counted');
+        RenderLog.write('c346_pack_queue',
+            'order=${orderId.substring(0, orderId.length.clamp(0, 8))};items=${items.length};rollup=supplier:${rollup["supplier"]},transit:${rollup["transit"]},warehouse:${rollup["warehouse"]},packed:${rollup["packed"]},counted:${rollup["counted"]},ordered:${rollup["ordered"]}');
         if (items.isNotEmpty) {
           final fi = items.first;
           RenderLog.write('c299_row0',
-              'name=${fi["product_name"]};qty=${fi["qty"]};packed=${fi["packed"]};counted_qty=${fi["counted_qty"]}');
+              'name=${fi["product_name"]};ordered=${fi["ordered"]};packed=${fi["packed"]};counted_qty=${fi["counted_qty"]};received=${fi["received"]}');
         }
       } catch (_) {}
       if (!mounted) return;
@@ -11975,6 +11979,7 @@ class _PackTabState extends State<_PackTab>
         RenderLog.write('c301_process',
             'counts_set=${resMap["counts_set"]};mentions=${resMap["mentions"]};seq=$seq');
         try { RenderLog.write('c306_counted', 'counts_set=${resMap["counts_set"]};mentions=${resMap["mentions"]}'); } catch (_) {}
+        try { RenderLog.write('c346_pack_voice_set', 'counts_set=${resMap["counts_set"]};seq=$seq'); } catch (_) {}
       } catch (e) {
         RenderLog.write('c301_process', 'err=${e.toString().substring(0, e.toString().length.clamp(0, 60))}');
       }
@@ -12363,11 +12368,11 @@ class _PackTabState extends State<_PackTab>
             .map((i) => Map<String, dynamic>.from(i as Map))
             .toList()
         : <Map<String, dynamic>>[];
-    final countedCount =
-        qData != null ? (qData['counted_count'] as num?)?.toInt() ?? 0 : 0;
-    final totalItems = qData != null
-        ? (qData['total_items'] as num?)?.toInt() ?? total
-        : total;
+    final rollup = qData != null && qData['rollup'] is Map
+        ? Map<String, dynamic>.from(qData['rollup'] as Map)
+        : <String, dynamic>{};
+    final countedCount = (rollup['counted'] as num?)?.toInt() ?? 0;
+    final totalItems   = (rollup['ordered'] as num?)?.toInt() ?? total;
 
     // CHANGE #304: spokenCount = distinct products in today's mention rows (not counted_count).
     // #338: deleted mentions no longer count as spoken.
@@ -12441,8 +12446,8 @@ class _PackTabState extends State<_PackTab>
         const Divider(height: 1, color: _kBorder),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-          // CHANGE #304: footer driven by pack_get_queue packed_count/total_items/dispatch_ready
-          child: _buildPackFooter(orderId, qData),
+          // #346: footer reads rollup + dispatch_ready from qData
+          child: _buildPackFooter(orderId, qData, rollup),
         ),
       ] else
         const SizedBox(height: 8),
@@ -12632,18 +12637,26 @@ class _PackTabState extends State<_PackTab>
     );
   }
 
-  // CHANGE #299: redesigned tile — bigger image left, 3 info lines, no bag chip
+  // #346: item card — Received/Packed/Counted with pack_type units + Bag tag + direct mismatch
   Widget _buildPackItemTile(Map<String, dynamic> item) {
     final name       = item['product_name']?.toString() ?? '—';
-    final packType   = item['pack_type']?.toString() ?? '';
+    final packType   = (item['pack_type']?.toString() ?? '').trim();
+    final pt         = packType.isNotEmpty ? ' $packType' : ' unit';
     final imageUrl   = item['image_url']?.toString();
-    final qty        = (item['qty'] as num?)?.toInt() ?? 0;
-    final packed     = item['packed'] == true;
-    final countedQty = (item['counted_qty'] as num?)?.toInt() ?? 0;
+    final ordered    = (item['ordered'] as num?)?.toInt() ?? 0;
+    final received   = (item['received'] as num?)?.toInt() ?? 0;
+    final packedQty  = (item['packed_qty'] as num?)?.toInt() ?? 0;
+    final countedQty = (item['counted_qty'] as num?)?.toInt();
+    final bagNo      = item['bag_no']?.toString();
+    final ct         = countedQty ?? 0;
 
-    final pk = packed ? qty : 0;
-    final ct = countedQty;
-    final pt = packType.isNotEmpty ? ' $packType' : '';
+    // mismatch: counted is not null and differs from received (server caps counted at received)
+    final hasMismatch = countedQty != null && countedQty != received;
+
+    try {
+      RenderLog.write('c346_item_card',
+          'name=${name.substring(0, name.length.clamp(0, 20))};recv=$received/$ordered;packed=$packedQty/$ordered;counted=$ct/$ordered;bag=${bagNo ?? "-"}');
+    } catch (_) {}
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -12660,26 +12673,40 @@ class _PackTabState extends State<_PackTab>
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text(name,
-                    style: const TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
-                        color: _kText),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis),
+                Row(children: [
+                  Expanded(
+                    child: Text(name,
+                        style: const TextStyle(
+                            fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis),
+                  ),
+                  if (bagNo != null && bagNo.isNotEmpty) ...[
+                    const SizedBox(width: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFEFF6FF),
+                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(color: const Color(0xFF3B82F6), width: 0.5),
+                      ),
+                      child: Text('Bag $bagNo',
+                          style: const TextStyle(fontSize: 10, color: Color(0xFF1E40AF), fontWeight: FontWeight.w600)),
+                    ),
+                  ],
+                ]),
                 const SizedBox(height: 5),
-                // CHANGE #304: shared colour helper — 0=grey, partial=yellow, full=green
-                _packChip('Packed • $pk/$qty$pt', pk, qty),
+                // Received
+                _packChip('Received • $received/$ordered$pt', received, ordered),
                 const SizedBox(height: 4),
-                _packChip('Counted • $ct/$qty$pt', ct, qty),
-                // #338: voice-vs-actual mismatch chip (pack_count_source_audit)
-                Builder(builder: (_) {
-                  final pid = (item['product_id'] as num?)?.toInt();
-                  final m = pid != null ? _packAuditMap['$pid'] : null;
-                  if (m == null || m['mismatch'] != true) {
-                    return const SizedBox.shrink();
-                  }
-                  return Padding(
+                // Packed
+                _packChip('Packed • $packedQty/$ordered$pt', packedQty, ordered),
+                const SizedBox(height: 4),
+                // Counted
+                _packChip('Counted • $ct/$ordered$pt', ct, ordered),
+                // mismatch chip: counted_qty != received (server capped)
+                if (hasMismatch)
+                  Padding(
                     padding: const EdgeInsets.only(top: 4),
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
@@ -12689,15 +12716,11 @@ class _PackTabState extends State<_PackTab>
                         border: Border.all(color: const Color(0xFFF59E0B), width: 0.5),
                       ),
                       child: Text(
-                        'voice ${m['voice_total']} ≠ ${m['actual_total']}',
-                        style: const TextStyle(
-                            fontSize: 10,
-                            color: Color(0xFF92400E),
-                            fontWeight: FontWeight.w600),
+                        'voice $ct ≠ $received',
+                        style: const TextStyle(fontSize: 10, color: Color(0xFF92400E), fontWeight: FontWeight.w600),
                       ),
                     ),
-                  );
-                }),
+                  ),
               ]),
         ),
       ]),
@@ -12740,13 +12763,13 @@ class _PackTabState extends State<_PackTab>
     );
   }
 
-  // CHANGE #304: FOOTER STATE MACHINE — driven by pack_get_queue fields.
+  // #346: footer = master rollup list + dispatch button.
   // dispatch_ready=true → GREEN 5s-hold "Ready to Dispatch"
-  // packed==total>0     → YELLOW tap "Fully packed"
-  // otherwise           → muted "Pack all items (x/y)"
-  Widget _buildPackFooter(String orderId, Map<String, dynamic>? qData) {
-    final int packedCount = (qData?['packed_count'] as num?)?.toInt() ?? 0;
-    final int totalItems  = (qData?['total_items']  as num?)?.toInt() ?? 0;
+  // packed==ordered>0   → YELLOW tap "Fully packed — mark Ready"
+  // otherwise           → muted "Packing in progress"
+  Widget _buildPackFooter(String orderId, Map<String, dynamic>? qData, Map<String, dynamic> rollup) {
+    final int packedCount    = (rollup['packed']  as num?)?.toInt() ?? 0;
+    final int totalItems     = (rollup['ordered'] as num?)?.toInt() ?? 0;
     final bool dispatchReady = qData?['dispatch_ready'] == true;
 
     final String state = dispatchReady
@@ -12754,6 +12777,63 @@ class _PackTabState extends State<_PackTab>
         : (totalItems > 0 && packedCount >= totalItems ? 'fullypacked' : 'progress');
     try { RenderLog.write('c304_footer', 'state=$state'); } catch (_) {}
 
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _buildPackMasterRollup(rollup),
+        const SizedBox(height: 12),
+        _buildPackDispatchButton(orderId, dispatchReady, packedCount, totalItems),
+      ],
+    );
+  }
+
+  // #346: 5-row master rollup list — reads ONLY from rollup map (never sums items).
+  Widget _buildPackMasterRollup(Map<String, dynamic> rollup) {
+    final ord = (rollup['ordered']   as num?)?.toInt() ?? 0;
+    final sup = (rollup['supplier']  as num?)?.toInt() ?? 0;
+    final trn = (rollup['transit']   as num?)?.toInt() ?? 0;
+    final wh  = (rollup['warehouse'] as num?)?.toInt() ?? 0;
+    final pk  = (rollup['packed']    as num?)?.toInt() ?? 0;
+    final ct  = (rollup['counted']   as num?)?.toInt() ?? 0;
+    try { RenderLog.write('c346_master_rollup', 'supplier=$sup;transit=$trn;warehouse=$wh;packed=$pk;counted=$ct;ordered=$ord'); } catch (_) {}
+    Widget row(String label, int x) {
+      final full = ord > 0 && x >= ord;
+      final none = x == 0;
+      final Color fg = full ? const Color(0xFF166534) : none ? _kSub : const Color(0xFF92400E);
+      final Color bg = full ? const Color(0xFFDCFCE7) : none ? const Color(0xFFF3F4F6) : const Color(0xFFFEF3C7);
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 3),
+        child: Row(children: [
+          Expanded(child: Text(label,
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: _kSub))),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+            decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(6)),
+            child: Text('$x / $ord items',
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: fg)),
+          ),
+        ]),
+      );
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF9FAFB),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: _kBorder),
+      ),
+      child: Column(children: [
+        row('Supplier', sup),
+        row('Transit', trn),
+        row('Warehouse', wh),
+        row('Packed', pk),
+        row('Counted', ct),
+      ]),
+    );
+  }
+
+  // #346: dispatch button extracted from old _buildPackFooter state machine.
+  Widget _buildPackDispatchButton(String orderId, bool dispatchReady, int packedCount, int totalItems) {
     if (dispatchReady) {
       // ── GREEN: hold 5 s to un-mark ────────────────────────────────────────
       return Stack(children: [
@@ -12866,7 +12946,7 @@ class _PackTabState extends State<_PackTab>
         const SizedBox(width: 8),
         Expanded(
             child: Text(
-          'Pack all items ($packedCount/$totalItems)',
+          'Packing in progress ($packedCount/$totalItems items)',
           style: const TextStyle(
               fontSize: 13, fontWeight: FontWeight.w600, color: _kSub),
         )),
@@ -12890,6 +12970,8 @@ class _PackTabState extends State<_PackTab>
       try {
         RenderLog.write('c304_dispatch',
             'ready=$ready;status=${resMap['status']};dispatch_ready=${resMap['dispatch_ready']}');
+        RenderLog.write('c346_dispatch_ready',
+            'ready=$ready;status=${resMap['status']}');
       } catch (_) {}
       if (!mounted) return;
       if (resMap['error'] != null) {
@@ -13101,7 +13183,8 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
     for (final it in widget.packItems) {
       final pid = (it['product_id'] as num?)?.toInt();
       final name = it['product_name']?.toString() ?? '';
-      final qty = (it['qty'] as num?)?.toInt() ?? 0;
+      // #346: field renamed qty→ordered in pack_get_queue items
+      final qty = (it['ordered'] as num?)?.toInt() ?? (it['qty'] as num?)?.toInt() ?? 0;
       if (pid != null && name.isNotEmpty) {
         pidToName[pid] = name;
         nameToOrdered[name] = qty;
@@ -13314,7 +13397,8 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
               final orderedMap = <String, int>{};
               for (final it in widget.packItems) {
                 final name = it['product_name']?.toString();
-                if (name != null) orderedMap[name] = (it['qty'] as num?)?.toInt() ?? 0;
+                // #346: field renamed qty→ordered in pack_get_queue items
+                if (name != null) orderedMap[name] = (it['ordered'] as num?)?.toInt() ?? (it['qty'] as num?)?.toInt() ?? 0;
               }
               return Expanded(
                 child: filtered.isEmpty
@@ -13504,10 +13588,12 @@ class _PackingScreenState extends State<_PackingScreen>
       final items    = ((m['items'] as List?) ?? const [])
           .map((i) => Map<String, dynamic>.from(i as Map))
           .toList();
-      final packed   = (m['packed_count'] as num?)?.toInt() ?? 0;
-      final total    = (m['total_items']  as num?)?.toInt() ?? 0;
-      final left     = (m['left_count']   as num?)?.toInt() ?? 0;
-      final bagCount = (m['bag_count']    as num?)?.toInt() ?? 0;
+      final rollup   = m['rollup'] is Map ? Map<String, dynamic>.from(m['rollup'] as Map) : <String, dynamic>{};
+      // #346: old flat fields gone; derive navigation counters from items[]
+      final packed   = (rollup['packed']  as num?)?.toInt() ?? items.where((i) => i['packed'] == true).length;
+      final total    = items.length;
+      final left     = items.where((i) => i['packed'] != true).length;
+      final bagCount = items.map((i) => i['bag_no']).where((b) => b != null).toSet().length;
       final startIdx = items.indexWhere((i) => i['packed'] != true);
       final allDone  = startIdx == -1;
       final startPage = allDone ? 0 : startIdx;
@@ -13917,7 +14003,7 @@ class _PackingScreenState extends State<_PackingScreen>
             children: items.map((item) {
               final name     = item['product_name']?.toString() ?? '—';
               final packType = item['pack_type']?.toString() ?? '';
-              final qty      = (item['qty'] as num?)?.toInt() ?? 0;
+              final qty      = (item['ordered'] as num?)?.toInt() ?? (item['qty'] as num?)?.toInt() ?? 0;
               final isPacked = item['packed'] == true;
               final qtyLabel = packType.isNotEmpty ? '$qty $packType' : '$qty';
               return Container(
@@ -14110,7 +14196,7 @@ class _PackingScreenState extends State<_PackingScreen>
     final item      = _items[index];
     final name      = item['product_name']?.toString() ?? '—';
     final packType  = item['pack_type']?.toString() ?? '';
-    final qty       = (item['qty'] as num?)?.toInt() ?? 0;
+    final qty       = (item['ordered'] as num?)?.toInt() ?? (item['qty'] as num?)?.toInt() ?? 0;
     final bagNo     = (item['bag_no'] as num?)?.toInt() ?? 0;
     final qtyLabel  = packType.isNotEmpty ? 'x$qty $packType' : 'x$qty';
     final itemId    = item['order_item_id']?.toString() ?? '';
@@ -14694,7 +14780,7 @@ class _BagQuickViewSheetState extends State<_BagQuickViewSheet> {
   Widget _buildTableRow(Map<String, dynamic> item) {
     final name     = item['product_name']?.toString() ?? '—';
     final packType = item['pack_type']?.toString() ?? '';
-    final qty      = (item['qty'] as num?)?.toInt() ?? 0;
+    final qty      = (item['ordered'] as num?)?.toInt() ?? (item['qty'] as num?)?.toInt() ?? 0;
     final isPacked = item['packed'] == true;
     final qtyLabel = packType.isNotEmpty ? '$qty $packType' : '$qty';
 

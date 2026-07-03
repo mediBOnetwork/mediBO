@@ -1,13 +1,19 @@
 # RULES - NEVER BREAK THESE
 
 ## Deploy Rules
-- NEVER deploy anything to Netlify. Netlify is permanently abandoned. The ONLY deploy target is Cloudflare Pages via git push origin main.
-- NEVER use wrangler pages deploy
-- NEVER use netlify deploy or any netlify CLI command
-- Cloudflare Pages auto-deploys medibo.in from the GitHub repo (build/web is committed)
+- NEVER deploy anything to Netlify. Netlify is permanently abandoned.
+- NEVER use netlify deploy or any netlify CLI command.
+- Deploy = `bash ~/deploy.sh` — ONE command, always. It builds Flutter, fingerprints the
+  bundle, then does ONE `npx wrangler pages deploy build/web` (Direct Upload to Cloudflare
+  Pages project "medibo", branch "main"). This bypasses the Cloudflare git-build queue
+  that was causing 30+ min delays. Live in ~30s after upload.
+- `git push` runs in the BACKGROUND after wrangler succeeds — it is history/rollback only
+  and NEVER gates the deploy. Do NOT wait on it. Do NOT add a second deploy step.
+- Token lives in ~/.medibo/cf.env (chmod 600, never committed). deploy.sh sources it.
+- NEVER add a second `wrangler pages deploy` call. Exactly one per run.
 
 ## After every code change:
-Run ~/deploy.sh — this builds, commits, pushes to production (Cloudflare Pages → medibo.in), and automatically runs ~/render_verify.js to self-load the page and confirm the render-log.
+Run ~/deploy.sh — builds + wrangler Direct Upload → live in ~30s on medibo.in.
 
 ## HEADLESS SELF-VERIFICATION RULE (PERMANENT — overrides all prior habits)
 - After every deploy, ~/deploy.sh runs `node ~/render_verify.js --keys boot_status` automatically.

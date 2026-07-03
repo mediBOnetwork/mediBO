@@ -10,12 +10,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:url_launcher/url_launcher.dart';
-
 import '../utils/render_log.dart';
 import '../utils/safe_parse.dart';
 import '../utils/toast.dart';
 import 'fullscreen_image.dart';
+import 'upi_pay_sheet.dart';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -69,7 +68,6 @@ class SupPayPanel extends StatefulWidget {
 
 class _SupPayPanelState extends State<SupPayPanel> {
   int _tab      = 0;
-  bool _launching = false;
   bool _uploading = false;
 
   // ── Data accessors ───────────────────────────────────────────────────────────
@@ -94,47 +92,21 @@ class _SupPayPanelState extends State<SupPayPanel> {
       ? '₹${v.toInt()}'
       : '₹${v.toStringAsFixed(2)}';
 
-  // ── UPI deep link ────────────────────────────────────────────────────────────
-  Future<void> _launchUpi(double due, String kind) async {
-    final uri = Uri.parse(
-      'upi://pay'
-      '?pa=${Uri.encodeComponent(_vpa)}'
-      '&pn=${Uri.encodeComponent(_supplierName)}'
-      '&am=${due.toStringAsFixed(0)}'
-      '&cu=INR'
-      '&tn=${Uri.encodeComponent('${kind == 'advance' ? 'Advance' : 'Balance'} $_orderCode')}',
-    );
-    bool ok = false;
-    try {
-      ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
-    } catch (_) {}
-    if (!ok && mounted) _showUpiCopyFallback(due);
-  }
-
-  void _showUpiCopyFallback(double due) {
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        title: const Text('Pay via UPI',
-            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
-        content: Column(mainAxisSize: MainAxisSize.min, children: [
-          const Text(
-            'Pay from your UPI app, then upload the screenshot below.',
-            style: TextStyle(fontSize: 13, color: Color(0xFF6B7280)),
-          ),
-          const SizedBox(height: 12),
-          C330CopyRow(label: 'Supplier', value: _supplierName),
-          C330CopyRow(label: 'UPI ID',   value: _vpa),
-          C330CopyRow(label: 'Amount',   value: due.toStringAsFixed(0)),
-        ]),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Close'),
-          ),
-        ],
-      ),
+  // ── UPI pay sheet ────────────────────────────────────────────────────────────
+  Future<void> _openPaySheet(double due, String kind) async {
+    if (_vpa.isEmpty) {
+      RenderLog.write('c336_vpa_missing', 'order=$_orderCode');
+      return;
+    }
+    final note = '${kind == 'advance' ? 'Advance' : 'Balance'} $_orderCode';
+    RenderLog.write('c330_pay_$kind',
+        'due=${due.toStringAsFixed(2)};vpa=$_vpa');
+    await showUpiPaySheet(
+      context,
+      vpa: _vpa,
+      payeeName: _supplierName,
+      amount: due,
+      note: note,
     );
   }
 
@@ -458,32 +430,15 @@ class _SupPayPanelState extends State<SupPayPanel> {
           ),
         ] else ...[
           FilledButton(
-            onPressed: _launching
-                ? null
-                : () async {
-                    setState(() => _launching = true);
-                    try {
-                      RenderLog.write('c330_pay_advance',
-                          'due=${due.toStringAsFixed(0)};vpa=$_vpa');
-                      await _launchUpi(due, 'advance');
-                    } finally {
-                      if (mounted) setState(() => _launching = false);
-                    }
-                  },
+            onPressed: () => _openPaySheet(due, 'advance'),
             style: FilledButton.styleFrom(
               backgroundColor: const Color(0xFF1B7A43),
               minimumSize: const Size(double.infinity, 44),
               shape:
                   RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
             ),
-            child: _launching
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(
-                        strokeWidth: 2, color: Colors.white))
-                : Text('Pay Advance ${_r(due)}',
-                    style: const TextStyle(color: Colors.white)),
+            child: Text('Pay Advance ${_r(due)}',
+                style: const TextStyle(color: Colors.white)),
           ),
         ],
         const SizedBox(height: 10),
@@ -587,32 +542,15 @@ class _SupPayPanelState extends State<SupPayPanel> {
           ),
         ] else ...[
           FilledButton(
-            onPressed: _launching
-                ? null
-                : () async {
-                    setState(() => _launching = true);
-                    try {
-                      RenderLog.write('c330_pay_balance',
-                          'due=${remDue.toStringAsFixed(0)};vpa=$_vpa');
-                      await _launchUpi(remDue, 'balance');
-                    } finally {
-                      if (mounted) setState(() => _launching = false);
-                    }
-                  },
+            onPressed: () => _openPaySheet(remDue, 'balance'),
             style: FilledButton.styleFrom(
               backgroundColor: const Color(0xFF1B7A43),
               minimumSize: const Size(double.infinity, 44),
               shape:
                   RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
             ),
-            child: _launching
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(
-                        strokeWidth: 2, color: Colors.white))
-                : Text('Pay Remaining ${_r(remDue)}',
-                    style: const TextStyle(color: Colors.white)),
+            child: Text('Pay Remaining ${_r(remDue)}',
+                style: const TextStyle(color: Colors.white)),
           ),
         ],
         const SizedBox(height: 10),

@@ -115,6 +115,7 @@ class _VoiceCaps {
     required int seconds,
     required void Function() onLocked,
     String? sessionKey,
+    String? stage, // §0.12: 'shop'|'warehouse'; omit for pack context
   }) async {
     try {
       final raw = await supabase.rpc('voice_clip_register', params: {
@@ -123,6 +124,7 @@ class _VoiceCaps {
         'p_path': path,
         'p_seconds': seconds.clamp(1, 3600),
         if (sessionKey != null) 'p_session_key': sessionKey,
+        if (stage != null) 'p_stage': stage,
       }) as Map;
       final res = Map<String, dynamic>.from(raw);
       if (res['ok'] == true) {
@@ -979,6 +981,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   bool _confirmingAll = false;
   bool _submittingCollect = false; // #125: Z1 guard — disables both Collect submit buttons mid-flight
   bool _sendingShortReminder = false; // C171
+  // §2.5: uncounted items blocking shop confirm — shown inline below confirm button
+  List<String> _shopBlockedItems = [];
 
   // #116: supplier count mode from fw_get_state ('shop'|'warehouse'|null)
   String? _supplierMode;
@@ -1397,6 +1401,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         RenderLog.write('c117_dot_flush_right', 'true');
         RenderLog.write('c140_arrivals_source',
             'rpc=fw_list_arrivals;count=${names.length}');
+        RenderLog.write('c337_wh_list', 'count=${names.length}');
         RenderLog.write('arrivals_area_rendered', '${names.length}');
         RenderLog.write('c155_ready', 'arrivals_v6=y');
         RenderLog.write('c156_ready', 'arrivals_v7=y');
@@ -1838,6 +1843,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           params: {'p_supplier_name': supplier});
       if (!mounted) return;
       RenderLog.write('c125_undo_hold_fired', 'true');
+      RenderLog.write('c337_undo_wh', 'supplier=$supplier');
       setState(() => _arrivalsLocked = false);
       _loadSuppliers(); // refresh dot
       await _reloadItemsFromDB();
@@ -2020,7 +2026,18 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         });
         final res2 = rawVoice is Map ? Map<String, dynamic>.from(rawVoice) : <String, dynamic>{};
         if (!mounted) return;
-        if (res2['error'] != null) throw Exception(res2['error'].toString());
+        final err2 = res2['error']?.toString();
+        if (err2 == 'collect_locked') {
+          if (mounted) setState(() => _recording = false);
+          _showSnack('Counting locked — already forwarded to warehouse');
+          return;
+        }
+        if (err2 == 'warehouse_only_state') {
+          if (mounted) setState(() => _recording = false);
+          _showSnack('This item is counted at warehouse only');
+          return;
+        }
+        if (err2 != null) throw Exception(err2);
         RenderLog.write('c168_collect_tap_rpc', 'set_voice_received_shop');
         await _reloadItemsFromDB();
         if (mounted) setState(() => _recording = false);
@@ -2057,7 +2074,13 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           _showSnack(_noBagFriendlyMessage(e));
         }
       } else {
-        _showSnack('Error: $e');
+        final msg = e.toString();
+        if (msg.contains('not forwarded')) {
+          RenderLog.write('c337_gate_notforwarded', 'supplier=${_selectedSupplier ?? ''}');
+          _showSnack('Supplier not forwarded — count in warehouse instead');
+        } else {
+          _showSnack('Error: $e');
+        }
       }
     }
   }
@@ -2283,6 +2306,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           _VoiceCaps.onClipSaved(Supabase.instance.client,
               ctxStr: capCtx, supplier: supplier, path: clipPath, seconds: clipDurSecs,
               sessionKey: _sessionKey,
+              stage: _sessionStage ?? (widget.arrivals ? 'warehouse' : 'shop'),
               onLocked: () { if (mounted) _showSnack('Daily 3-hour voice limit reached'); }).ignore();
         } catch (e) {
           RenderLog.write('c125_clip_upload_err', 'seq=$seq;err=${e.toString().substring(0, e.toString().length.clamp(0, 80))}');
@@ -2644,7 +2668,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     if (supplier == null) return;
     try {
       final rows = await Supabase.instance.client
-          .rpc('get_voice_clip_mentions', params: {'p_supplier_name': supplier}) as List;
+          .rpc('get_voice_clip_mentions', params: {
+            'p_supplier_name': supplier,
+            'p_stage': widget.arrivals ? 'warehouse' : 'shop',
+          }) as List;
       if (!mounted) return;
       final mentions = rows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
       final distinct = mentions.map((m) => m['product_id']).where((id) => id != null).toSet().length;
@@ -3288,6 +3315,24 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                 Text('$uncounted item(s) not counted',
                     style: const TextStyle(fontSize: 10, color: _kSub)),
               ],
+              if (_shopBlockedItems.isNotEmpty) ...[
+                const SizedBox(height: 4),
+                Container(
+                  padding: const EdgeInsets.fromLTRB(10, 6, 10, 6),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFEF3C7),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: const Color(0xFFF59E0B).withValues(alpha: 0.4)),
+                  ),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    const Text('Count these first:',
+                        style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: Color(0xFF92400E))),
+                    const SizedBox(height: 2),
+                    ..._shopBlockedItems.map((n) => Text('• $n',
+                        style: const TextStyle(fontSize: 10, color: Color(0xFF92400E)))),
+                  ]),
+                ),
+              ],
             ]);
           }),
         ),
@@ -3333,6 +3378,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       // R3: if already confirmed in Arrivals, show specific toast and bail
       final errVal = (res is Map) ? res['error']?.toString() : null;
       if (errVal == 'already_confirmed_in_arrivals') {
+        RenderLog.write('c337_undo_shop_blocked', 'reason=already_confirmed_in_arrivals;supplier=$supplier');
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Undo from Warehouse first')),
@@ -3342,6 +3388,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       }
       if (!mounted) return;
       RenderLog.write('c125_undo_hold_fired', 'true');
+      RenderLog.write('c337_undo_shop', 'supplier=$supplier');
       setState(() { _supplierMode = null; });
       _loadCollectModes(); // refresh badge map → P
       _loadSuppliers();
@@ -3395,58 +3442,26 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     try {
       final res = await Supabase.instance.client
           .rpc('fw_confirm_counting', params: {'p_supplier_name': supplier}) as Map;
-      // #331: handle uncounted items gate — RPC returns list of uncounted product names
+      // §2.5: handle uncounted items gate — show inline below confirm button
       if (res['error'] == 'uncounted_items') {
-        if (mounted) setState(() => _submittingCollect = false);
         final names = (res['items'] as List? ?? []).cast<String>();
         RenderLog.write('c331_confirm_gate', 'uncounted=${names.length}');
-        if (!mounted) return;
-        await showModalBottomSheet<void>(
-          context: context,
-          builder: (ctx) => Padding(
-            padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
-            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const Text('Count these first:',
-                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: _kText)),
-              const SizedBox(height: 8),
-              if (names.isNotEmpty)
-                ConstrainedBox(
-                  constraints: const BoxConstraints(maxHeight: 200),
-                  child: SingleChildScrollView(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: names.map((n) => Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 3),
-                        child: Text('• $n', style: const TextStyle(fontSize: 13, color: _kText)),
-                      )).toList(),
-                    ),
-                  ),
-                ),
-              const SizedBox(height: 16),
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton(
-                  style: FilledButton.styleFrom(backgroundColor: _kGreen),
-                  onPressed: () => Navigator.pop(ctx),
-                  child: const Text('OK'),
-                ),
-              ),
-            ]),
-          ),
-        );
+        RenderLog.write('c337_shop_uncounted', 'count=${names.length}');
+        if (mounted) setState(() { _submittingCollect = false; _shopBlockedItems = names; });
         return;
       }
       if (res['error'] != null) throw Exception(res['error'].toString());
       final shortsDisputed = (res['shorts_disputed'] as num?)?.toInt() ?? 0;
       // #335 BUG-6: removed _supplierMode='shop' — after confirm supplier is at warehouse stage;
       // _reloadItemsFromDB() will re-fetch fw_get_state and set _supplierMode correctly
-      if (mounted) setState(() => _submittingCollect = false);
+      if (mounted) setState(() { _submittingCollect = false; _shopBlockedItems = []; });
       await _reloadItemsFromDB();
       RenderLog.write('c137_collect_action', 'action=confirm;supplier=$supplier');
       RenderLog.write('c117_collect_confirm_text_mode', 'warehouse');
       RenderLog.write('c125_submit_refresh', 'true');
       RenderLog.write('c331_confirm_gate', 'success;shorts=$shortsDisputed');
       RenderLog.write('c335_confirm', 'shop_confirm_ok=y;shorts=$shortsDisputed');
+      RenderLog.write('c337_shop_confirmed', 'supplier=$supplier;shorts=$shortsDisputed');
       _loadSupplierDots();
       _loadCollectModes(); // R2: badge P→C immediately
       _loadDisputes(); // #332 D1: refresh Disputes tab so new short-item disputes appear immediately
@@ -3502,6 +3517,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       RenderLog.write('c137_collect_action', 'action=warehouse;supplier=$supplier');
       RenderLog.write('c117_collect_confirm_text_mode', 'warehouse');
       RenderLog.write('c125_submit_refresh', 'true');
+      RenderLog.write('c337_skip_to_wh', 'supplier=$supplier');
       _loadSupplierDots();
       _loadCollectModes(); // R2: badge P→CR immediately
       context.findAncestorStateOfType<_AdminFulfillmentScreenState>()?._refreshArrivals(); // R2: supplier appears in Arrivals
@@ -4377,10 +4393,35 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
               child: Row(children: [
                 Expanded(
-                  child: Text(name,
-                      style: const TextStyle(
-                          fontSize: 15, fontWeight: FontWeight.w600, color: _kGreen),
-                      maxLines: 2, overflow: TextOverflow.ellipsis),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+                    Text(name,
+                        style: const TextStyle(
+                            fontSize: 15, fontWeight: FontWeight.w600, color: _kGreen),
+                        maxLines: 2, overflow: TextOverflow.ellipsis),
+                    if (widget.arrivals && _supplierMode != null) ...[
+                      const SizedBox(height: 2),
+                      Builder(builder: (_) {
+                        final chip = _supplierMode == 'shop' ? 'via Shop' : 'direct';
+                        RenderLog.write('c337_mode_chip', 'mode=${_supplierMode ?? ''};supplier=$name;chip=$chip');
+                        return Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: _supplierMode == 'shop'
+                                ? const Color(0xFFD1FAE5)
+                                : const Color(0xFFEFF6FF),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(chip,
+                              style: TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w600,
+                                  color: _supplierMode == 'shop'
+                                      ? const Color(0xFF065F46)
+                                      : const Color(0xFF1E40AF))),
+                        );
+                      }),
+                    ],
+                  ]),
                 ),
                 const SizedBox(width: 8),
                 const Icon(Icons.keyboard_arrow_up_rounded, size: 18, color: _kSub),
@@ -4820,7 +4861,12 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                 Builder(builder: (_) {
                   RenderLog.write('c331_wh_rows', 'rec=$recQty;expected=$whExpected;mode=${_supplierMode ?? ''}');
                   RenderLog.write('c335_wh_row', 'rec=$recQty;exp=$whExpected');
+                  final isRowLocked = lockedOf(item);
                   return Row(mainAxisSize: MainAxisSize.min, children: [
+                    if (isRowLocked) ...[
+                      const Icon(Icons.lock_rounded, size: 12, color: _kReceivedFg),
+                      const SizedBox(width: 3),
+                    ],
                     Text('$recQty/$whExpected',
                         style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText)),
                     const SizedBox(width: 6),
@@ -6262,6 +6308,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             child: _CountedMentionsPopup(
               key: _popupKey,
               supplierName: supplierForPopup,
+              stage: widget.arrivals ? 'warehouse' : 'shop',
               orderItems: orderSnapshot,
               onDismiss: dismiss,
               // #331: apply voice_mention_set_status result to local items
@@ -6637,6 +6684,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 // One ▶/⏸ button per distinct recording_seq plays that clip from 0:00 to end.
 class _CountedMentionsPopup extends StatefulWidget {
   final String supplierName;
+  final String stage; // §0.12: 'shop' | 'warehouse'
   final List<Map<String, dynamic>> orderItems;
   final VoidCallback onDismiss;
   // #331: callback for when voice_mention_set_status returns an apply update
@@ -6644,6 +6692,7 @@ class _CountedMentionsPopup extends StatefulWidget {
   const _CountedMentionsPopup({
     super.key,
     required this.supplierName,
+    required this.stage,
     required this.orderItems,
     required this.onDismiss,
     this.onApplyUpdate,
@@ -6750,7 +6799,10 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
       } catch (_) {}
 
       final rows = await Supabase.instance.client
-          .rpc('get_voice_clip_mentions', params: {'p_supplier_name': widget.supplierName}) as List;
+          .rpc('get_voice_clip_mentions', params: {
+            'p_supplier_name': widget.supplierName,
+            'p_stage': widget.stage,
+          }) as List;
       if (!mounted) return;
       var mentions = rows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
       // #332: filter to current session only (prevents last order's clips mixing in)
@@ -14336,6 +14388,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     } finally {
       if (mounted) {
         setState(() => _resolving.remove(item.disputeId));
+        RenderLog.write('c337_dispute_sync', 'both_stages_reloaded=y;outcome=${action.code}');
         widget.onRefreshCollect();
         widget.onRefreshArrivals();
       }

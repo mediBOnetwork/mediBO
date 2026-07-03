@@ -7514,7 +7514,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
     );
   }
 
-  // #342: tap icon handler — replaces #338 hold. Called by MentionActionIcon onTap.
+  // #343: tap icon handler — no optimistic flip (§4.2: colour only changes on ok:true).
   Future<void> _handleMentionToggle(Map<String, dynamic> r) async {
     final id = r['id']?.toString() ?? '';
     final status = r['status']?.toString() ?? 'counted';
@@ -7523,17 +7523,9 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
 
     final isDeleted = status == 'deleted';
     final action = isDeleted ? 'readd' : 'delete';
-    final previousStatus = status;
-    final optimisticStatus = isDeleted ? 'readded' : 'deleted';
 
-    setState(() {
-      _mentionLoading.add(id);
-      final idx = _mentions?.indexWhere((m) => m['id']?.toString() == id) ?? -1;
-      if (idx >= 0) {
-        _mentions![idx] = Map<String, dynamic>.from(_mentions![idx])
-          ..['status'] = optimisticStatus;
-      }
-    });
+    // No optimistic flip — spinner only; colour updates only after server ok:true
+    setState(() => _mentionLoading.add(id));
     try {
       final raw = await Supabase.instance.client.rpc('voice_mention_set_status', params: {
         'p_id': id,
@@ -7542,7 +7534,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
       final res = Map<String, dynamic>.from(raw);
       if (!mounted) return;
       if (res['ok'] == true) {
-        final newStatus = res['status']?.toString() ?? optimisticStatus;
+        final newStatus = res['status']?.toString() ?? (isDeleted ? 'readded' : 'deleted');
         setState(() {
           final idx = _mentions?.indexWhere((m) => m['id']?.toString() == id) ?? -1;
           if (idx >= 0) {
@@ -7566,19 +7558,19 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
         await _fetchMentions();
         widget.onToggled?.call();
       } else {
-        if (mounted) setState(() {
-          final idx = _mentions?.indexWhere((m) => m['id']?.toString() == id) ?? -1;
-          if (idx >= 0) {
-            _mentions![idx] = Map<String, dynamic>.from(_mentions![idx])
-              ..['status'] = previousStatus;
-          }
-        });
+        // Row colour unchanged — server auto-reverts; just show friendly toast
         final err = res['error']?.toString() ?? '';
-        RenderLog.write('c342_toggle_err',
-            'code=${err.isEmpty ? 'unknown' : err.substring(0, err.length.clamp(0, 60))};stage=${widget.stage}');
+        final applyErr = (res['apply'] as Map?)?['error']?.toString() ?? '';
+        RenderLog.write('c343_toggle_err_${err.isEmpty ? 'unknown' : err.substring(0, err.length.clamp(0, 20))}',
+            'stage=${widget.stage}');
         if (err.contains('shop_locked_undo_first')) {
           _showSnackMsg('Shop counts frozen — undo submit first');
-        } else if (err.contains('no bag') || err.contains('check_violation') || err.contains('bag')) {
+        } else if (err.contains('exceeds_ordered')) {
+          final max = res['max_qty']?.toString();
+          _showSnackMsg(max != null
+              ? "Can't re-add — bag limit reached (max $max)"
+              : "Can't re-add — ordered quantity already reached");
+        } else if (err.contains('no_bag_selected') || err.contains('no bag') || err.contains('check_violation')) {
           RenderLog.write('c331_bag_prompt', 'from_mention_icon;id=${id.substring(0, id.length.clamp(0, 8))}');
           showModalBottomSheet<void>(
             context: context,
@@ -7605,23 +7597,18 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
               ),
             ),
           );
+        } else if (applyErr.contains('received_locked')) {
+          _showSnackMsg('Line locked — Undo receiving first');
         } else if (err.contains('already_deleted') || err.contains('not_deleted')) {
-          await _fetchMentions(); // silent reconcile
+          await _fetchMentions(); // silent reconcile — state drift
         } else {
-          _showSnackMsg(err.isNotEmpty ? 'Error: $err' : 'Could not update count');
+          _showSnackMsg("Couldn't update count — try again");
         }
       }
     } catch (e) {
-      RenderLog.write('c342_toggle_err',
-          'code=exception;detail=${e.toString().substring(0, e.toString().length.clamp(0, 60))}');
-      if (mounted) setState(() {
-        final idx = _mentions?.indexWhere((m) => m['id']?.toString() == id) ?? -1;
-        if (idx >= 0) {
-          _mentions![idx] = Map<String, dynamic>.from(_mentions![idx])
-            ..['status'] = previousStatus;
-        }
-      });
-      if (mounted) _showSnackMsg('Error: $e');
+      RenderLog.write('c343_toggle_err_exception',
+          'detail=${e.toString().substring(0, e.toString().length.clamp(0, 60))};stage=${widget.stage}');
+      if (mounted) _showSnackMsg("Couldn't update count — try again");
     } finally {
       if (mounted) setState(() => _mentionLoading.remove(id));
     }
@@ -7644,8 +7631,9 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
 
     RenderLog.write('c120_flat_built',
         'clip_seq=$clipSeq;rows=${rows.length};ord_sorted=y');
-    // #342: registration proof — icon row built for shop/warehouse
+    // #342/#343: clip view with action icons
     RenderLog.write('c342_row_icon', 'stage=${widget.stage};rows=${rows.length}');
+    RenderLog.write('c343_clip_actions', 'stage=${widget.stage};clip=$clipSeq;rows=${rows.length}');
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(14, 8, 14, 8),
@@ -7813,6 +7801,8 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
   Widget _buildTable(
       List<({String name, List<_QtyEntry> entries, int total, int ordered})> groups) {
     final playSeq = _playingSeq;
+    // #343: All view is read-only aggregate — no action icons present
+    RenderLog.write('c343_all_readonly', 'stage=${widget.stage};groups=${groups.length}');
     RenderLog.write('c132_table_responsive', 'cols_fit=y;total_visible=y');
     RenderLog.write('c133_cols_proportional', 'product_flex=expanded;qty_fixed=${_kBadgeClusterMaxW.toInt()};total_fixed=y');
     RenderLog.write('c110_row_spacing', 'name_left=y;badges_grouped_right=y;gap_badge_total=${_kBadgeToTotalGap.toInt()}');
@@ -12921,15 +12911,26 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
         }
         widget.onChanged?.call();
       } else {
+        // Row colour unchanged — server auto-reverts; just show friendly toast
         final err = res['error']?.toString() ?? '';
-        RenderLog.write('c342_toggle_err',
-            'code=${err.isEmpty ? 'unknown' : err.substring(0, err.length.clamp(0, 60))};stage=pack');
+        final applyErr = (res['apply'] as Map?)?['error']?.toString() ?? '';
+        RenderLog.write('c343_toggle_err_${err.isEmpty ? 'unknown' : err.substring(0, err.length.clamp(0, 20))}',
+            'stage=pack');
         if (mounted) {
           if (err.contains('packed_locked')) {
             ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(content: Text('Item packed — unpack to edit voice counts')));
+          } else if (err.contains('exceeds_ordered')) {
+            final max = res['max_qty']?.toString();
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                content: Text(max != null
+                    ? "Can't re-add — bag limit reached (max $max)"
+                    : "Can't re-add — ordered quantity already reached")));
+          } else if (applyErr.contains('received_locked')) {
+            ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Line locked — Undo receiving first')));
           } else if (err.contains('already_deleted') || err.contains('not_deleted')) {
-            // silent reconcile
+            // silent reconcile — state drift
             try {
               final rows = await Supabase.instance.client.rpc(
                   'get_pack_clip_mentions',
@@ -12938,16 +12939,16 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
             } catch (_) {}
           } else {
             ScaffoldMessenger.of(context)
-                .showSnackBar(SnackBar(content: Text(err.isNotEmpty ? 'Error: $err' : 'Could not update count')));
+                .showSnackBar(const SnackBar(content: Text("Couldn't update count — try again")));
           }
         }
       }
     } catch (e) {
-      RenderLog.write('c342_toggle_err',
-          'code=exception;detail=${e.toString().substring(0, e.toString().length.clamp(0, 60))}');
+      RenderLog.write('c343_toggle_err_exception',
+          'detail=${e.toString().substring(0, e.toString().length.clamp(0, 60))};stage=pack');
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Error: $e')));
+            .showSnackBar(const SnackBar(content: Text("Couldn't update count — try again")));
       }
     } finally {
       if (mounted) setState(() => _mentionLoading.remove(id));
@@ -13075,6 +13076,8 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
         : allMentions.where((m) => (m['recording_seq'] as num?)?.toInt() == _selectedSeq).toList();
     final groups = _groupMentions(filtered);
     final playSeq = _playingSeq;
+    // #343: icons only in per-clip view; All view is a read-only aggregate
+    final showActions = _selectedSeq != null;
 
     return DraggableScrollableSheet(
       initialChildSize: 0.65,
@@ -13199,9 +13202,15 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
             ]),
           ),
           const Divider(height: 1),
-          // #342: registration proof for pack icon rows
+          // #343: log whether this build is All (read-only) or per-clip (actions on)
           Builder(builder: (_) {
-            RenderLog.write('c342_row_icon', 'stage=pack;groups=${groups.length}');
+            if (showActions) {
+              RenderLog.write('c342_row_icon', 'stage=pack;groups=${groups.length}');
+              RenderLog.write('c343_clip_actions', 'stage=pack;seq=${_selectedSeq ?? 0};groups=${groups.length}');
+              RenderLog.write('c343_pack_colour', 'actions=y;groups=${groups.length}');
+            } else {
+              RenderLog.write('c343_all_readonly', 'stage=pack;groups=${groups.length}');
+            }
             return const SizedBox.shrink();
           }),
           // Table body
@@ -13278,7 +13287,8 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
                                                       ? TextDecoration.lineThrough
                                                       : null)),
                                     );
-                                    // #342: icon left of pill; tap = toggle RPC
+                                    // #343: icons only in per-clip view; All = pill only
+                                    if (!showActions) return pill;
                                     return Row(
                                       mainAxisSize: MainAxisSize.min,
                                       children: [

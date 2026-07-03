@@ -26,7 +26,7 @@ import '../../supabase_config.dart' show SupabaseConfig;
 import 'voice_receive.dart';
 import '../../widgets/pinned_footer_list.dart';
 import '../../widgets/fulfill_item_sheet.dart';
-import '../../widgets/mention_hold_row.dart';
+import '../../widgets/mention_hold_row.dart'; // #342: MentionActionIcon + mentionRowDecoration
 import 'package:file_picker/file_picker.dart';
 import 'package:image/image.dart' as img;
 import 'package:zxing2/qrcode.dart';
@@ -6870,8 +6870,10 @@ const String _kC112CloseTap = 'c112_close_tap';
 class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
   List<Map<String, dynamic>>? _mentions;
   String? _error;
-  // #331: per-mention UUID in-flight set (prevents double-hold)
+  // #331: per-mention UUID in-flight set (prevents double-tap during RPC)
   final Set<String> _mentionLoading = {};
+  // #342: track frozen-tap log so icon tap is handled silently in the icon handler
+  final Set<String> _frozenTappedIds = {};
 
   // #266 (v2): plain html.AudioElement — the SAME pattern that already plays TTS
   // reliably in this file. The earlier audioplayers attempt produced SILENT
@@ -7512,27 +7514,18 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
     );
   }
 
-  // #332: handle 2-second hold on a Clip-tab mention row — no popup, optimistic colour flip.
-  Future<void> _handleMentionHold(Map<String, dynamic> r) async {
+  // #342: tap icon handler — replaces #338 hold. Called by MentionActionIcon onTap.
+  Future<void> _handleMentionToggle(Map<String, dynamic> r) async {
     final id = r['id']?.toString() ?? '';
     final status = r['status']?.toString() ?? 'counted';
     if (id.isEmpty || _mentionLoading.contains(id)) return;
-    // #338: frozen popup (counting confirmed / forwarded) — toast, never call RPC
-    if (widget.frozen) {
-      RenderLog.write('c338_hold_err', 'code=frozen;stage=${widget.stage}');
-      _showSnackMsg(widget.stage == 'warehouse'
-          ? 'Locked — arrivals already confirmed'
-          : 'Locked — counting already confirmed');
-      return;
-    }
-    RenderLog.write('c332_hold2s', 'id=${id.substring(0, id.length.clamp(0, 8))};status=$status');
+    RenderLog.write('c342_toggle', 'id=${id.substring(0, id.length.clamp(0, 8))};status=$status;stage=${widget.stage}');
 
     final isDeleted = status == 'deleted';
     final action = isDeleted ? 'readd' : 'delete';
     final previousStatus = status;
     final optimisticStatus = isDeleted ? 'readded' : 'deleted';
 
-    // Optimistic instant colour flip (no popup)
     setState(() {
       _mentionLoading.add(id);
       final idx = _mentions?.indexWhere((m) => m['id']?.toString() == id) ?? -1;
@@ -7566,15 +7559,13 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
         if (applyRaw != null && widget.onApplyUpdate != null) {
           widget.onApplyUpdate!(Map<String, dynamic>.from(applyRaw as Map));
         }
-        // #338: proof keys + refetch so totals reflect server truth, then audit refresh
-        final delKey = widget.stage == 'warehouse' ? 'c338_del_wh' : 'c338_del_shop';
-        final readdKey = widget.stage == 'warehouse' ? 'c338_readd_wh' : 'c338_readd_shop';
+        final delKey = widget.stage == 'warehouse' ? 'c342_del_wh' : 'c342_del_shop';
+        final readdKey = widget.stage == 'warehouse' ? 'c342_readd_wh' : 'c342_readd_shop';
         RenderLog.write(action == 'readd' ? readdKey : delKey,
             'id=${id.substring(0, id.length.clamp(0, 8))};new_status=$newStatus');
         await _fetchMentions();
         widget.onToggled?.call();
       } else {
-        // Revert optimistic on failure
         if (mounted) setState(() {
           final idx = _mentions?.indexWhere((m) => m['id']?.toString() == id) ?? -1;
           if (idx >= 0) {
@@ -7583,10 +7574,12 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
           }
         });
         final err = res['error']?.toString() ?? '';
-        RenderLog.write('c338_hold_err',
+        RenderLog.write('c342_toggle_err',
             'code=${err.isEmpty ? 'unknown' : err.substring(0, err.length.clamp(0, 60))};stage=${widget.stage}');
-        if (err.contains('no bag') || err.contains('check_violation') || err.contains('bag')) {
-          RenderLog.write('c331_bag_prompt', 'from_mention_hold;id=${id.substring(0, id.length.clamp(0, 8))}');
+        if (err.contains('shop_locked_undo_first')) {
+          _showSnackMsg('Shop counts frozen — undo submit first');
+        } else if (err.contains('no bag') || err.contains('check_violation') || err.contains('bag')) {
+          RenderLog.write('c331_bag_prompt', 'from_mention_icon;id=${id.substring(0, id.length.clamp(0, 8))}');
           showModalBottomSheet<void>(
             context: context,
             builder: (ctx) => SafeArea(
@@ -7600,7 +7593,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
                         style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: _kText)),
                     const SizedBox(height: 8),
                     const Text(
-                        'Adjust the bag total to match the new count, then hold the item again to retry.',
+                        'Adjust the bag total to match the new count, then tap the icon to retry.',
                         style: TextStyle(fontSize: 13, color: _kSub)),
                     const SizedBox(height: 20),
                     FilledButton(
@@ -7612,13 +7605,14 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
               ),
             ),
           );
+        } else if (err.contains('already_deleted') || err.contains('not_deleted')) {
+          await _fetchMentions(); // silent reconcile
         } else {
           _showSnackMsg(err.isNotEmpty ? 'Error: $err' : 'Could not update count');
         }
       }
     } catch (e) {
-      // Revert optimistic on exception
-      RenderLog.write('c338_hold_err',
+      RenderLog.write('c342_toggle_err',
           'code=exception;detail=${e.toString().substring(0, e.toString().length.clamp(0, 60))}');
       if (mounted) setState(() {
         final idx = _mentions?.indexWhere((m) => m['id']?.toString() == id) ?? -1;
@@ -7650,6 +7644,8 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
 
     RenderLog.write('c120_flat_built',
         'clip_seq=$clipSeq;rows=${rows.length};ord_sorted=y');
+    // #342: registration proof — icon row built for shop/warehouse
+    RenderLog.write('c342_row_icon', 'stage=${widget.stage};rows=${rows.length}');
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(14, 8, 14, 8),
@@ -7693,14 +7689,9 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
               rowTint = const Color(0x1AF59E0B); // amber @ ~10%
             }
 
-            // #338: shared 2-second hold widget (Listener-based, progress ring, frozen lock)
-            // #334 B1: tap on unmatched → item picker
-            return GestureDetector(
-              onTap: isUnmatched ? () => _showItemPicker(mentionId, qty) : null,
-              child: MentionHoldRow(
-              frozen: widget.frozen,
-              onHoldComplete: isUnmatched ? null : () => _handleMentionHold(r),
-              child: AnimatedContainer(
+            // #342: icon-tap row (replaces #338 hold). MentionActionIcon sits left of qty chip.
+            // #334 B1: tap on unmatched → item picker (GestureDetector only for unmatched)
+            final rowWidget = AnimatedContainer(
                 duration: const Duration(milliseconds: 200),
                 margin: const EdgeInsets.symmetric(vertical: 3),
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
@@ -7714,23 +7705,23 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
                           : null,
                 ),
                 child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                  crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
                     SizedBox(
                       width: 28,
-                      child: isLoading
-                          ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: _kGreen))
-                          : Text('$n.',
-                              style: TextStyle(
-                                fontSize: 12, fontWeight: FontWeight.w500,
-                                color: isPlaying ? _kGreen : _kSub,
-                              )),
+                      child: Text('$n.',
+                          style: TextStyle(
+                            fontSize: 12, fontWeight: FontWeight.w500,
+                            color: isPlaying ? _kGreen : _kSub,
+                          )),
                     ),
+                    // #342: Expanded name — maxLines:2, softWrap, never overlaps icon/qty
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(name,
+                              softWrap: true,
                               style: TextStyle(
                                 fontSize: 12, fontWeight: FontWeight.w500,
                                 color: isDeleted
@@ -7747,7 +7738,21 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
                         ],
                       ),
                     ),
-                    const SizedBox(width: 8),
+                    // #342: tap icon — remove (red) or re-add (green), frozen at 40% opacity
+                    MentionActionIcon(
+                      status: status,
+                      isBusy: isLoading,
+                      frozen: widget.frozen || isUnmatched,
+                      onTap: widget.frozen
+                          ? () {
+                              if (!_frozenTappedIds.contains(mentionId)) {
+                                _frozenTappedIds.add(mentionId);
+                                RenderLog.write('c342_frozen_tap', 'id=${mentionId.substring(0, mentionId.length.clamp(0, 8))};stage=${widget.stage}');
+                              }
+                            }
+                          : () => _handleMentionToggle(r),
+                    ),
+                    const SizedBox(width: 4),
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                       decoration: BoxDecoration(
@@ -7782,9 +7787,14 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
                     ),
                   ],
                 ),
-              ),
-            ), // MentionHoldRow (#338)
-            ); // GestureDetector
+              );
+            // unmatched rows keep the picker tap on the whole row
+            return isUnmatched
+                ? GestureDetector(
+                    onTap: () => _showItemPicker(mentionId, qty),
+                    child: rowWidget,
+                  )
+                : rowWidget;
           }),
         ],
       ),
@@ -12874,8 +12884,8 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
       .whereType<int>()
       .toSet();
 
-  // #338: 2s hold on a qty pill → pack_mention_set_status delete/re-add
-  Future<void> _handlePackMentionHold(String id, String status) async {
+  // #342: icon-tap handler for pack mentions (replaces #338 hold).
+  Future<void> _handlePackMentionToggle(String id, String status) async {
     if (id.isEmpty || _mentionLoading.contains(id)) return;
     final isDeleted = status == 'deleted';
     final action = isDeleted ? 'readd' : 'delete';
@@ -12891,9 +12901,8 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
       if (res['ok'] == true) {
         final newStatus =
             res['status']?.toString() ?? (isDeleted ? 'readded' : 'deleted');
-        RenderLog.write(action == 'readd' ? 'c338_readd_pack' : 'c338_del_pack',
+        RenderLog.write(action == 'readd' ? 'c342_readd_pack' : 'c342_del_pack',
             'id=${id.substring(0, id.length.clamp(0, 8))};new_status=$newStatus;new_total=${res['new_total'] ?? 'null'}');
-        // Refetch from server so pills + totals reflect truth
         try {
           final rows = await Supabase.instance.client.rpc(
               'get_pack_clip_mentions',
@@ -12903,7 +12912,6 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
                 rows.map((r) => Map<String, dynamic>.from(r as Map)).toList());
           }
         } catch (_) {
-          // fall back to local flip if refetch fails
           if (mounted) {
             setState(() {
               final idx = _mentions.indexWhere((m) => m['id']?.toString() == id);
@@ -12914,17 +12922,28 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
         widget.onChanged?.call();
       } else {
         final err = res['error']?.toString() ?? '';
-        RenderLog.write('c338_hold_err',
+        RenderLog.write('c342_toggle_err',
             'code=${err.isEmpty ? 'unknown' : err.substring(0, err.length.clamp(0, 60))};stage=pack');
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-              content: Text(err == 'packed_locked'
-                  ? 'Locked — item already packed'
-                  : (err.isNotEmpty ? 'Error: $err' : 'Could not update count'))));
+          if (err.contains('packed_locked')) {
+            ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Item packed — unpack to edit voice counts')));
+          } else if (err.contains('already_deleted') || err.contains('not_deleted')) {
+            // silent reconcile
+            try {
+              final rows = await Supabase.instance.client.rpc(
+                  'get_pack_clip_mentions',
+                  params: {'p_order_id': widget.orderId}) as List;
+              if (mounted) setState(() => _mentions = rows.map((r) => Map<String, dynamic>.from(r as Map)).toList());
+            } catch (_) {}
+          } else {
+            ScaffoldMessenger.of(context)
+                .showSnackBar(SnackBar(content: Text(err.isNotEmpty ? 'Error: $err' : 'Could not update count')));
+          }
         }
       }
     } catch (e) {
-      RenderLog.write('c338_hold_err',
+      RenderLog.write('c342_toggle_err',
           'code=exception;detail=${e.toString().substring(0, e.toString().length.clamp(0, 60))}');
       if (mounted) {
         ScaffoldMessenger.of(context)
@@ -12941,7 +12960,8 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
   int? _playingSeq;
 
   static const double _kTotalColW = 52.0;
-  static const double _kBadgeClusterMaxW = 108.0;
+  // #342: widened from 108 → 148 to accommodate icon(34) + gap(4) + pill(~40) per entry
+  static const double _kBadgeClusterMaxW = 148.0;
   static const double _kBadgeToTotalGap = 6.0;
   static const double _kNameToBadgeMinGap = 10.0;
 
@@ -13179,6 +13199,11 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
             ]),
           ),
           const Divider(height: 1),
+          // #342: registration proof for pack icon rows
+          Builder(builder: (_) {
+            RenderLog.write('c342_row_icon', 'stage=pack;groups=${groups.length}');
+            return const SizedBox.shrink();
+          }),
           // Table body
           Expanded(
             child: groups.isEmpty
@@ -13253,12 +13278,21 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
                                                       ? TextDecoration.lineThrough
                                                       : null)),
                                     );
-                                    return MentionHoldRow(
-                                      frozen: frozen,
-                                      onHoldComplete: e.id.isEmpty
-                                          ? null
-                                          : () => _handlePackMentionHold(e.id, e.status),
-                                      child: pill,
+                                    // #342: icon left of pill; tap = toggle RPC
+                                    return Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        MentionActionIcon(
+                                          status: e.status,
+                                          isBusy: isLoading,
+                                          frozen: frozen,
+                                          onTap: e.id.isEmpty || frozen
+                                              ? null
+                                              : () => _handlePackMentionToggle(e.id, e.status),
+                                        ),
+                                        const SizedBox(width: 4),
+                                        pill,
+                                      ],
                                     );
                                   }).toList(),
                                 ),

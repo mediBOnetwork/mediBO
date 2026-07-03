@@ -1,109 +1,82 @@
-// CHANGE #338: shared 2-second hold-to-delete/re-add row wrapper for voice
-// mention rows (Shop / Warehouse counted popup + Pack counted sheet).
-//
-// Uses Listener (raw pointer events), NOT GestureDetector.onLongPress — the
-// platform long-press threshold is ~500 ms which is too short. The 2000 ms
-// timer starts on pointer-down and is cancelled on pointer-up/cancel or if
-// the pointer moves more than ~24 px (scroll intent).
-//
-// frozen=true → row is dimmed with a lock glyph and the hold is disabled
-// (post-confirm shop/warehouse rows, packed pack items).
-import 'dart:async';
+// CHANGE #342: shared tap-icon widget for voice mention rows (Shop/Warehouse/Pack).
+// Replaces the #338 hold gesture entirely — one tap = delete or re-add.
 import 'package:flutter/material.dart';
 
-class MentionHoldRow extends StatefulWidget {
-  final Widget child;
-  final VoidCallback? onHoldComplete; // null = hold disabled
-  final bool frozen; // if true: show lock glyph, dim child, disable hold
+// Tap icon shown left of the qty chip on every mention row.
+// status 'deleted' → green add icon; else → red remove icon.
+// frozen → 40% opacity, tap logs c342_frozen_tap but does nothing else.
+// isBusy → 16px spinner in icon position (prevents double-tap via parent busy flag).
+class MentionActionIcon extends StatelessWidget {
+  final String status;
+  final bool isBusy;
+  final bool frozen;
+  final VoidCallback? onTap; // null when frozen or busy is handled by parent
 
-  const MentionHoldRow({
+  const MentionActionIcon({
     super.key,
-    required this.child,
-    this.onHoldComplete,
+    required this.status,
+    this.isBusy = false,
     this.frozen = false,
+    this.onTap,
   });
 
   @override
-  State<MentionHoldRow> createState() => _MentionHoldRowState();
-}
-
-class _MentionHoldRowState extends State<MentionHoldRow> {
-  Timer? _timer;
-  bool _holding = false;
-  Offset? _startPos;
-
-  void _start(Offset pos) {
-    if (widget.frozen || widget.onHoldComplete == null) return;
-    _startPos = pos;
-    setState(() => _holding = true);
-    _timer = Timer(const Duration(milliseconds: 2000), () {
-      _timer = null;
-      if (!mounted) return;
-      setState(() => _holding = false);
-      widget.onHoldComplete!();
-    });
-  }
-
-  void _cancel() {
-    _timer?.cancel();
-    _timer = null;
-    _startPos = null;
-    if (_holding && mounted) setState(() => _holding = false);
-  }
-
-  @override
-  void dispose() {
-    _timer?.cancel();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
-    return Listener(
-      behavior: HitTestBehavior.opaque,
-      onPointerDown: (e) => _start(e.position),
-      onPointerUp: (_) => _cancel(),
-      onPointerCancel: (_) => _cancel(),
-      onPointerMove: (e) {
-        if (_startPos != null && (e.position - _startPos!).distance > 24) {
-          _cancel();
-        }
-      },
-      child: Stack(
-        alignment: Alignment.centerRight,
-        children: [
-          widget.frozen
-              ? Opacity(opacity: 0.45, child: widget.child)
-              : widget.child,
-          if (widget.frozen)
-            const Padding(
-              padding: EdgeInsets.only(right: 8),
-              child: Icon(Icons.lock_rounded, size: 14, color: Color(0xFF9CA3AF)),
-            )
-          else if (_holding)
-            const Padding(
-              padding: EdgeInsets.only(right: 8),
-              child: SizedBox(
-                width: 18,
-                height: 18,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  color: Color(0xFF1B7A43),
-                ),
-              ),
+    if (isBusy) {
+      return const SizedBox(
+        width: 34,
+        height: 34,
+        child: Center(
+          child: SizedBox(
+            width: 16,
+            height: 16,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              color: Color(0xFF1B7A43),
             ),
-        ],
+          ),
+        ),
+      );
+    }
+
+    final isDeleted = status == 'deleted';
+    final icon = isDeleted
+        ? Icons.add_circle_outline
+        : Icons.remove_circle_outline;
+    final color = isDeleted
+        ? const Color(0xFF1B7A43) // app primary green
+        : const Color(0xFFDC2626); // app danger red
+
+    Widget child = InkWell(
+      onTap: frozen ? null : onTap,
+      borderRadius: BorderRadius.circular(18),
+      splashColor: isDeleted
+          ? const Color(0xFF1B7A43).withValues(alpha: 0.12)
+          : const Color(0xFFDC2626).withValues(alpha: 0.12),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
+        child: Padding(
+          padding: EdgeInsets.zero,
+          child: Center(
+            child: Semantics(
+              label: isDeleted ? 'Re-add count' : 'Remove count',
+              child: Icon(icon, size: 22, color: frozen ? color.withValues(alpha: 0.4) : color),
+            ),
+          ),
+        ),
       ),
     );
+
+    return child;
   }
 }
 
-// #338 §2.3: row background by mention status ('deleted' | 'readded' | other).
+// #338 §2.3 (kept): row background by mention status ('deleted' | 'readded' | other).
 BoxDecoration? mentionRowDecoration(String? status) {
   switch (status) {
     case 'deleted':
       return BoxDecoration(
-        color: const Color(0xFFFEE2E2), // light red
+        color: const Color(0xFFFEE2E2),
         borderRadius: BorderRadius.circular(8),
         boxShadow: [
           BoxShadow(color: Colors.red.withValues(alpha: 0.08), blurRadius: 4),
@@ -111,7 +84,7 @@ BoxDecoration? mentionRowDecoration(String? status) {
       );
     case 'readded':
       return BoxDecoration(
-        color: const Color(0xFFFEF3C7), // light amber
+        color: const Color(0xFFFEF3C7),
         borderRadius: BorderRadius.circular(8),
       );
     default:

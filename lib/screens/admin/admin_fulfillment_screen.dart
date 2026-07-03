@@ -11660,6 +11660,15 @@ class _PackTabState extends State<_PackTab>
         RenderLog.write('c299_counts', 'total=$total;packed=$packed;counted=$counted');
         RenderLog.write('c346_pack_queue',
             'order=${orderId.substring(0, orderId.length.clamp(0, 8))};items=${items.length};rollup=supplier:${rollup["supplier"]},transit:${rollup["transit"]},warehouse:${rollup["warehouse"]},packed:${rollup["packed"]},counted:${rollup["counted"]},ordered:${rollup["ordered"]}');
+        // §4: detect server-clamped counts (counted < received and counted > 0 = capped)
+        final clampedItems = items.where((i) {
+          final cv = (i['counted_qty'] as num?)?.toInt();
+          final rv = (i['received'] as num?)?.toInt() ?? 0;
+          return cv != null && cv > 0 && cv < rv;
+        }).length;
+        if (clampedItems > 0) {
+          RenderLog.write('c347_counted_clamp', 'clamped_items=$clampedItems;order=${orderId.substring(0, orderId.length.clamp(0, 8))}');
+        }
         if (items.isNotEmpty) {
           final fi = items.first;
           RenderLog.write('c299_row0',
@@ -12637,7 +12646,7 @@ class _PackTabState extends State<_PackTab>
     );
   }
 
-  // #346: item card — Received/Packed/Counted with pack_type units + Bag tag + direct mismatch
+  // #347: item card — stacked multi-bag tags; mismatch chip removed; Counted colour vs received
   Widget _buildPackItemTile(Map<String, dynamic> item) {
     final name       = item['product_name']?.toString() ?? '—';
     final packType   = (item['pack_type']?.toString() ?? '').trim();
@@ -12647,16 +12656,43 @@ class _PackTabState extends State<_PackTab>
     final received   = (item['received'] as num?)?.toInt() ?? 0;
     final packedQty  = (item['packed_qty'] as num?)?.toInt() ?? 0;
     final countedQty = (item['counted_qty'] as num?)?.toInt();
-    final bagNo      = item['bag_no']?.toString();
     final ct         = countedQty ?? 0;
 
-    // mismatch: counted is not null and differs from received (server caps counted at received)
-    final hasMismatch = countedQty != null && countedQty != received;
+    // §2: bags[] array — stacked tags. Falls back to bag_no if bags not present.
+    final rawBags = item['bags'];
+    final bags = rawBags is List
+        ? rawBags.whereType<Map>().map((b) => Map<String, dynamic>.from(b)).toList()
+        : <Map<String, dynamic>>[];
+    final bagNums = bags.isNotEmpty
+        ? bags.map((b) => (b['bag_no'] as num?)?.toInt() ?? 0).where((n) => n > 0).toList()
+        : (() {
+            final fallback = (item['bag_no'] as num?)?.toInt();
+            return fallback != null && fallback > 0 ? [fallback] : <int>[];
+          })();
 
     try {
+      if (bagNums.length >= 2) {
+        RenderLog.write('c347_bag_stack', 'name=${name.substring(0, name.length.clamp(0, 16))};bags=${bagNums.join(",")}');
+      } else if (bagNums.length == 1) {
+        RenderLog.write('c347_bag_single', 'name=${name.substring(0, name.length.clamp(0, 16))};bag=${bagNums[0]}');
+      }
       RenderLog.write('c346_item_card',
-          'name=${name.substring(0, name.length.clamp(0, 20))};recv=$received/$ordered;packed=$packedQty/$ordered;counted=$ct/$ordered;bag=${bagNo ?? "-"}');
+          'name=${name.substring(0, name.length.clamp(0, 20))};recv=$received/$ordered;packed=$packedQty/$ordered;counted=$ct/$ordered;bags=${bagNums.length}');
     } catch (_) {}
+
+    // §3: mismatch chip removed — counted is server-clamped to received; chip was misleading.
+
+    Widget bagTag(int n) => Container(
+      margin: const EdgeInsets.only(top: 3),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: const Color(0xFFEFF6FF),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: const Color(0xFF3B82F6), width: 0.5),
+      ),
+      child: Text('Bag $n',
+          style: const TextStyle(fontSize: 10, color: Color(0xFF1E40AF), fontWeight: FontWeight.w600)),
+    );
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -12673,7 +12709,7 @@ class _PackTabState extends State<_PackTab>
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Row(children: [
+                Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Expanded(
                     child: Text(name,
                         style: const TextStyle(
@@ -12681,17 +12717,13 @@ class _PackTabState extends State<_PackTab>
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis),
                   ),
-                  if (bagNo != null && bagNo.isNotEmpty) ...[
+                  if (bagNums.isNotEmpty) ...[
                     const SizedBox(width: 6),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFEFF6FF),
-                        borderRadius: BorderRadius.circular(4),
-                        border: Border.all(color: const Color(0xFF3B82F6), width: 0.5),
-                      ),
-                      child: Text('Bag $bagNo',
-                          style: const TextStyle(fontSize: 10, color: Color(0xFF1E40AF), fontWeight: FontWeight.w600)),
+                    // §2: stacked bag tags — one per bag, top-aligned Column
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      mainAxisSize: MainAxisSize.min,
+                      children: bagNums.map(bagTag).toList(),
                     ),
                   ],
                 ]),
@@ -12702,28 +12734,35 @@ class _PackTabState extends State<_PackTab>
                 // Packed
                 _packChip('Packed • $packedQty/$ordered$pt', packedQty, ordered),
                 const SizedBox(height: 4),
-                // Counted
-                _packChip('Counted • $ct/$ordered$pt', ct, ordered),
-                // mismatch chip: counted_qty != received (server capped)
-                if (hasMismatch)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 4),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFFEF3C7),
-                        borderRadius: BorderRadius.circular(4),
-                        border: Border.all(color: const Color(0xFFF59E0B), width: 0.5),
-                      ),
-                      child: Text(
-                        'voice $ct ≠ $received',
-                        style: const TextStyle(fontSize: 10, color: Color(0xFF92400E), fontWeight: FontWeight.w600),
-                      ),
-                    ),
-                  ),
+                // §4: Counted colour vs received (not ordered) — green when fully counted what arrived
+                _packChipVs('Counted • $ct/$ordered$pt', ct, received),
               ]),
         ),
       ]),
+    );
+  }
+
+  // §4: colour variant that uses a separate denominator for colour vs display value.
+  // Used for Counted: display x/ordered but colour against received (server-capped).
+  Widget _packChipVs(String label, int x, int colourDenominator) {
+    final s = _fillStateFor(x, colourDenominator);
+    final (bg, text) = _fillColors(s);
+    final Color border = switch (s) {
+      _FillState.empty   => const Color(0xFFD1D5DB),
+      _FillState.partial => const Color(0xFFD97706).withValues(alpha: 0.4),
+      _FillState.full    => const Color(0xFF166534).withValues(alpha: 0.4),
+    };
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: border),
+      ),
+      child: Text(label,
+          style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: text),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis),
     );
   }
 

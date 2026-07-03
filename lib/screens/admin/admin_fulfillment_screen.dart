@@ -7,6 +7,7 @@ import 'dart:js_interop';
 import 'dart:js_interop_unsafe';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
@@ -113,6 +114,7 @@ class _VoiceCaps {
     required String path,
     required int seconds,
     required void Function() onLocked,
+    String? sessionKey,
   }) async {
     try {
       final raw = await supabase.rpc('voice_clip_register', params: {
@@ -120,6 +122,7 @@ class _VoiceCaps {
         'p_supplier': supplier,
         'p_path': path,
         'p_seconds': seconds.clamp(1, 3600),
+        if (sessionKey != null) 'p_session_key': sessionKey,
       }) as Map;
       final res = Map<String, dynamic>.from(raw);
       if (res['ok'] == true) {
@@ -1002,6 +1005,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   Timer? _capsTimer;
   int _voiceCallsDuringRecord = 0; // must stay 0; guard for B1
   int _voiceCallsAfterStop = 0;
+  // #332: background session key from fw_count_session (SS1/SS2… WH1…)
+  String? _sessionKey;
+  String? _sessionStage;
   final Map<int, num> _tally = {};
 
   // ── supplier_orders items for reconciliation expected list ──
@@ -2192,6 +2198,28 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     // #331 VoiceCaps: check daily cap before starting (Shop + Warehouse surface)
     final capsAllowed = await _VoiceCaps.onSessionStart(context, Supabase.instance.client);
     if (!mounted || !capsAllowed) return;
+    // #332: obtain background session key — never record without one (prevents session mixing)
+    final supplier332 = _selectedSupplier;
+    if (supplier332 == null || supplier332.isEmpty) {
+      _showSnack('No supplier selected');
+      return;
+    }
+    try {
+      final sessionRaw = await Supabase.instance.client
+          .rpc('fw_count_session', params: {'p_supplier': supplier332}) as Map;
+      final sessionRes = Map<String, dynamic>.from(sessionRaw);
+      if (sessionRes['status'] != 'ok') throw Exception('session_error');
+      _sessionKey = sessionRes['session_key']?.toString();
+      _sessionStage = sessionRes['stage']?.toString();
+      RenderLog.write('c332_session_key', 'key=${_sessionKey ?? ''};stage=${_sessionStage ?? ''}');
+    } catch (e) {
+      if (mounted) _showSnack('Voice session error — retry');
+      return;
+    }
+    if (_sessionKey == null || _sessionKey!.isEmpty) {
+      if (mounted) _showSnack('Voice session error — retry');
+      return;
+    }
     _voiceCallsDuringRecord = 0;
     _continuousSecs = 0;
     _capsTimer?.cancel();
@@ -2298,6 +2326,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           final capCtx = widget.arrivals ? 'warehouse' : 'collect';
           _VoiceCaps.onClipSaved(Supabase.instance.client,
               ctxStr: capCtx, supplier: supplier, path: clipPath, seconds: clipDurSecs,
+              sessionKey: _sessionKey,
               onLocked: () { if (mounted) _showSnack('Daily 3-hour voice limit reached'); }).ignore();
         } catch (e) {
           RenderLog.write('c125_clip_upload_err', 'seq=$seq;err=${e.toString().substring(0, e.toString().length.clamp(0, 80))}');
@@ -2325,6 +2354,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           clipPath: clipPath,
           recordingSeq: seq,
           orderItems: _items,
+          sessionKey: _sessionKey,
         ).ignore();
         RenderLog.write('c125_mentions_inserted', 'seq=$seq;rows=${mentions.length}');
       }
@@ -3407,6 +3437,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       RenderLog.write('c331_confirm_gate', 'success;shorts=$shortsDisputed');
       _loadSupplierDots();
       _loadCollectModes(); // R2: badge P→C immediately
+      _loadDisputes(); // #332 D1: refresh Disputes tab so new short-item disputes appear immediately
       context.findAncestorStateOfType<_AdminFulfillmentScreenState>()?._refreshArrivals(); // R2: supplier appears in Arrivals
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -6681,10 +6712,26 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
 
   Future<void> _fetchMentions() async {
     try {
+      // #332: get current session key (idempotent — returns the open session)
+      String? sessionKey;
+      try {
+        final sessionRaw = await Supabase.instance.client
+            .rpc('fw_count_session', params: {'p_supplier': widget.supplierName}) as Map;
+        final sessionRes = Map<String, dynamic>.from(sessionRaw);
+        if (sessionRes['status'] == 'ok') {
+          sessionKey = sessionRes['session_key']?.toString();
+          RenderLog.write('c332_review_scoped', 'key=${sessionKey ?? ''};supplier=${widget.supplierName}');
+        }
+      } catch (_) {}
+
       final rows = await Supabase.instance.client
           .rpc('get_voice_clip_mentions', params: {'p_supplier_name': widget.supplierName}) as List;
       if (!mounted) return;
-      final mentions = rows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
+      var mentions = rows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
+      // #332: filter to current session only (prevents last order's clips mixing in)
+      if (sessionKey != null && sessionKey.isNotEmpty) {
+        mentions = mentions.where((r) => r['session_key']?.toString() == sessionKey).toList();
+      }
       final distinctClips = mentions.map((r) => r['clip_path']?.toString() ?? '').toSet().length;
       RenderLog.write('c119_popup_built',
           'clips=$distinctClips;products=${_uniqueNames(mentions)};total_mentions=${mentions.length};retains_seq=y');
@@ -7155,70 +7202,27 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
     );
   }
 
-  // #120: flat spoken-order list for the selected clip.
-  // #331: handle long-press on a Clip-tab mention row.
+  // #332: handle 2-second hold on a Clip-tab mention row — no popup, optimistic colour flip.
   Future<void> _handleMentionHold(Map<String, dynamic> r) async {
     final id = r['id']?.toString() ?? '';
     final status = r['status']?.toString() ?? 'counted';
-    final name = (r['matched_name']?.toString() ?? '').trim().isEmpty
-        ? 'Unknown item'
-        : r['matched_name']!.toString();
-    final qty = (r['qty'] as num?)?.toInt() ?? 0;
     if (id.isEmpty || _mentionLoading.contains(id)) return;
-    RenderLog.write('c331_mention_hold', 'id=${id.substring(0, id.length.clamp(0, 8))};status=$status');
+    RenderLog.write('c332_hold2s', 'id=${id.substring(0, id.length.clamp(0, 8))};status=$status');
 
     final isDeleted = status == 'deleted';
-    final title = isDeleted
-        ? 'Re-add this count?'
-        : 'Remove this count?';
-    final body = isDeleted
-        ? '$name ×$qty'
-        : '$name ×$qty  The audio stays; only the count is removed.';
-    final confirmLabel = isDeleted ? 'Re-add' : 'Remove';
     final action = isDeleted ? 'readd' : 'delete';
+    final previousStatus = status;
+    final optimisticStatus = isDeleted ? 'readded' : 'deleted';
 
-    final confirmed = await showModalBottomSheet<bool>(
-      context: context,
-      builder: (ctx) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(title,
-                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: _kText)),
-              const SizedBox(height: 8),
-              Text(body, style: const TextStyle(fontSize: 13, color: _kSub)),
-              const SizedBox(height: 20),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: () => Navigator.pop(ctx, false),
-                      child: const Text('Cancel'),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: FilledButton(
-                      style: FilledButton.styleFrom(
-                        backgroundColor: isDeleted ? const Color(0xFF1B7A43) : const Color(0xFF991B1B),
-                      ),
-                      onPressed: () => Navigator.pop(ctx, true),
-                      child: Text(confirmLabel),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-    if (confirmed != true || !mounted) return;
-
-    setState(() => _mentionLoading.add(id));
+    // Optimistic instant colour flip (no popup)
+    setState(() {
+      _mentionLoading.add(id);
+      final idx = _mentions?.indexWhere((m) => m['id']?.toString() == id) ?? -1;
+      if (idx >= 0) {
+        _mentions![idx] = Map<String, dynamic>.from(_mentions![idx])
+          ..['status'] = optimisticStatus;
+      }
+    });
     try {
       final raw = await Supabase.instance.client.rpc('voice_mention_set_status', params: {
         'p_id': id,
@@ -7227,22 +7231,32 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
       final res = Map<String, dynamic>.from(raw);
       if (!mounted) return;
       if (res['ok'] == true) {
-        final newStatus = res['status']?.toString() ?? (action == 'delete' ? 'deleted' : 'readded');
-        // Update local mention status
+        final newStatus = res['status']?.toString() ?? optimisticStatus;
         setState(() {
           final idx = _mentions?.indexWhere((m) => m['id']?.toString() == id) ?? -1;
           if (idx >= 0) {
             _mentions![idx] = Map<String, dynamic>.from(_mentions![idx])
               ..['status'] = newStatus;
           }
+          if (isDeleted) {
+            RenderLog.write('c331_mention_yellow', 'id=${id.substring(0, id.length.clamp(0, 8))}');
+          } else {
+            RenderLog.write('c331_mention_red', 'id=${id.substring(0, id.length.clamp(0, 8))}');
+          }
         });
-        // Propagate apply update to parent (refreshes shop_qty / received_qty)
         final applyRaw = res['apply'];
         if (applyRaw != null && widget.onApplyUpdate != null) {
           widget.onApplyUpdate!(Map<String, dynamic>.from(applyRaw as Map));
         }
       } else {
-        // H4: warehouse bag-gate
+        // Revert optimistic on failure
+        if (mounted) setState(() {
+          final idx = _mentions?.indexWhere((m) => m['id']?.toString() == id) ?? -1;
+          if (idx >= 0) {
+            _mentions![idx] = Map<String, dynamic>.from(_mentions![idx])
+              ..['status'] = previousStatus;
+          }
+        });
         final err = res['error']?.toString() ?? '';
         if (err.contains('no bag') || err.contains('check_violation') || err.contains('bag')) {
           RenderLog.write('c331_bag_prompt', 'from_mention_hold;id=${id.substring(0, id.length.clamp(0, 8))}');
@@ -7272,11 +7286,18 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
             ),
           );
         } else {
-          // H5
           _showSnackMsg(err.isNotEmpty ? 'Error: $err' : 'Could not update count');
         }
       }
     } catch (e) {
+      // Revert optimistic on exception
+      if (mounted) setState(() {
+        final idx = _mentions?.indexWhere((m) => m['id']?.toString() == id) ?? -1;
+        if (idx >= 0) {
+          _mentions![idx] = Map<String, dynamic>.from(_mentions![idx])
+            ..['status'] = previousStatus;
+        }
+      });
       if (mounted) _showSnackMsg('Error: $e');
     } finally {
       if (mounted) setState(() => _mentionLoading.remove(id));
@@ -7335,8 +7356,15 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
               rowTint = const Color(0x1AF59E0B); // amber @ ~10%
             }
 
-            return GestureDetector(
-              onLongPress: () => _handleMentionHold(r),
+            // #332 C1: 2-second hold — RawGestureDetector + LongPressGestureRecognizer(duration:2s)
+            // No tooltip, no hint, no confirmation dialog.
+            return RawGestureDetector(
+              gestures: {
+                LongPressGestureRecognizer: GestureRecognizerFactoryWithHandlers<LongPressGestureRecognizer>(
+                  () => LongPressGestureRecognizer(duration: const Duration(seconds: 2)),
+                  (recognizer) { recognizer.onLongPress = () => _handleMentionHold(r); },
+                ),
+              },
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 200),
                 margin: const EdgeInsets.symmetric(vertical: 3),
@@ -10056,6 +10084,7 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
     RenderLog.write('c113_fulfillment_built', viewport);
     RenderLog.write('c113_no_title_header', viewport);
     RenderLog.write('c331_build', '331');
+    RenderLog.write('c332_build', '332');
     RenderLog.write('c113_fulfillment_tabs_top', viewport);
     return Column(children: [
       Container(

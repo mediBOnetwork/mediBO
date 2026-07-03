@@ -103,6 +103,7 @@ class VoiceReceiveService {
     required String clipPath,
     required int recordingSeq,
     required List<Map<String, dynamic>> orderItems,
+    String? sessionKey,
   }) async {
     if (mentions.isEmpty) return;
 
@@ -129,6 +130,7 @@ class VoiceReceiveService {
         't_start_sec': (m['t_start'] as num?)?.toDouble(),
         't_end_sec': (m['t_end'] as num?)?.toDouble(),
         if (id != null) 'product_id': id,
+        if (sessionKey != null) 'session_key': sessionKey,
       };
     }).toList();
 

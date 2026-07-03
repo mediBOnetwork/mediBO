@@ -7618,6 +7618,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
   // One row per mention (no grouping), ordered by ord asc for that recording_seq.
   // No timestamps used — green is whole-clip (#119 rule).
   // #331: long-press on each row → delete/re-add via voice_mention_set_status.
+  // #344: delegates to shared _MentionClipTable (3-column Product|Qty spoken|Total)
   Widget _buildFlatList(List<({int seq, String clipPath})> clips, int clipSeq) {
     final rows = (_mentions ?? [])
         .where((r) => (r['recording_seq'] as num?)?.toInt() == clipSeq)
@@ -7625,167 +7626,32 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
       ..sort((a, b) => ((a['ord'] as num?)?.toInt() ?? 0)
           .compareTo((b['ord'] as num?)?.toInt() ?? 0));
 
-    final clipIdx = clips.indexWhere((c) => c.seq == clipSeq);
-    final clipLabel = clipIdx >= 0 ? 'Clip ${clipIdx + 1}' : 'Clip';
-    final isPlaying = _playingSeq == clipSeq;
-
-    RenderLog.write('c120_flat_built',
-        'clip_seq=$clipSeq;rows=${rows.length};ord_sorted=y');
-    // #342/#343: clip view with action icons
+    RenderLog.write('c120_flat_built', 'clip_seq=$clipSeq;rows=${rows.length};ord_sorted=y');
     RenderLog.write('c342_row_icon', 'stage=${widget.stage};rows=${rows.length}');
     RenderLog.write('c343_clip_actions', 'stage=${widget.stage};clip=$clipSeq;rows=${rows.length}');
 
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(14, 8, 14, 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: Text('$clipLabel — spoken order',
-                style: const TextStyle(
-                    fontSize: 11, fontWeight: FontWeight.w600, color: _kSub)),
-          ),
-          ...rows.asMap().entries.map((e) {
-            final n = e.key + 1;
-            final r = e.value;
-            final mentionId = r['id']?.toString() ?? '';
-            // #134: same fallback as grouped view — never a blank name cell
-            final rawFlatName = r['matched_name']?.toString() ?? '';
-            // #334 B1: product_id==null → unmatched (backend failed to identify item)
-            final isUnmatched = r['product_id'] == null && (r['status']?.toString() ?? '') != 'deleted';
-            final name = isUnmatched
-                ? (rawFlatName.trim().isEmpty ? 'Unmatched ×tap to fix' : 'Unmatched: $rawFlatName')
-                : (rawFlatName.trim().isEmpty ? '(unnamed)' : rawFlatName);
-            final qty = (r['qty'] as num?)?.toInt() ?? 0;
-            final status = r['status']?.toString() ?? 'counted';
-            final isDeleted = status == 'deleted';
-            final isReadded = status == 'readded';
-            final isLoading = _mentionLoading.contains(mentionId);
+    final orderedMap = <String, int>{};
+    for (final item in widget.orderItems) {
+      final name = item['product_name']?.toString();
+      if (name != null) orderedMap[name] = (item['ordered_qty'] as num?)?.toInt() ?? 0;
+    }
 
-            // #331 H2: red tint for deleted, yellow/amber tint for readded
-            // #334 B1: amber tint for unmatched
-            Color? rowTint;
-            if (isUnmatched) {
-              RenderLog.write('c335_unresolved_row', 'id=${mentionId.substring(0, mentionId.length.clamp(0, 8))}');
-              rowTint = const Color(0x28F59E0B); // amber @ ~16%
-            } else if (isDeleted) {
-              RenderLog.write('c331_mention_red', 'id=${mentionId.substring(0, mentionId.length.clamp(0, 8))}');
-              rowTint = const Color(0x17FF0000); // red @ ~9%
-            } else if (isReadded) {
-              RenderLog.write('c331_mention_yellow', 'id=${mentionId.substring(0, mentionId.length.clamp(0, 8))}');
-              rowTint = const Color(0x1AF59E0B); // amber @ ~10%
-            }
-
-            // #342: icon-tap row (replaces #338 hold). MentionActionIcon sits left of qty chip.
-            // #334 B1: tap on unmatched → item picker (GestureDetector only for unmatched)
-            final rowWidget = AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                margin: const EdgeInsets.symmetric(vertical: 3),
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-                decoration: BoxDecoration(
-                  color: rowTint,
-                  borderRadius: BorderRadius.circular(8),
-                  boxShadow: isDeleted
-                      ? const [BoxShadow(color: Color(0x1AFF0000), blurRadius: 4, offset: Offset(0, 1))]
-                      : isReadded
-                          ? const [BoxShadow(color: Color(0x1AF59E0B), blurRadius: 4, offset: Offset(0, 1))]
-                          : null,
-                ),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    SizedBox(
-                      width: 28,
-                      child: Text('$n.',
-                          style: TextStyle(
-                            fontSize: 12, fontWeight: FontWeight.w500,
-                            color: isPlaying ? _kGreen : _kSub,
-                          )),
-                    ),
-                    // #342: Expanded name — maxLines:2, softWrap, never overlaps icon/qty
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(name,
-                              softWrap: true,
-                              style: TextStyle(
-                                fontSize: 12, fontWeight: FontWeight.w500,
-                                color: isDeleted
-                                    ? const Color(0xFF991B1B)
-                                    : isReadded
-                                        ? const Color(0xFF92400E)
-                                        : isPlaying ? _kGreen : _kText,
-                              ),
-                              maxLines: 2, overflow: TextOverflow.ellipsis),
-                          if (isDeleted)
-                            const Text('removed', style: TextStyle(fontSize: 10, color: Color(0xFF991B1B)))
-                          else if (isReadded)
-                            const Text('re-added', style: TextStyle(fontSize: 10, color: Color(0xFF92400E))),
-                        ],
-                      ),
-                    ),
-                    // #342: tap icon — remove (red) or re-add (green), frozen at 40% opacity
-                    MentionActionIcon(
-                      status: status,
-                      isBusy: isLoading,
-                      frozen: widget.frozen || isUnmatched,
-                      onTap: widget.frozen
-                          ? () {
-                              if (!_frozenTappedIds.contains(mentionId)) {
-                                _frozenTappedIds.add(mentionId);
-                                RenderLog.write('c342_frozen_tap', 'id=${mentionId.substring(0, mentionId.length.clamp(0, 8))};stage=${widget.stage}');
-                              }
-                            }
-                          : () => _handleMentionToggle(r),
-                    ),
-                    const SizedBox(width: 4),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: isDeleted
-                            ? const Color(0xFFFEE2E2)
-                            : isReadded
-                                ? const Color(0xFFFEF3C7)
-                                : isPlaying ? _kGreen : const Color(0xFFF5F6F8),
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(
-                          color: isDeleted
-                              ? const Color(0xFFEF4444)
-                              : isReadded
-                                  ? const Color(0xFFF59E0B)
-                                  : isPlaying ? _kGreen : _kBorder,
-                        ),
-                      ),
-                      child: isDeleted
-                          ? Text(qty.toString(),
-                              style: const TextStyle(
-                                fontSize: 12, fontWeight: FontWeight.w600,
-                                color: Color(0xFF991B1B),
-                                decoration: TextDecoration.lineThrough,
-                              ))
-                          : Text('$qty',
-                              style: TextStyle(
-                                fontSize: 12, fontWeight: FontWeight.w600,
-                                color: isReadded
-                                    ? const Color(0xFF92400E)
-                                    : isPlaying ? Colors.white : _kText,
-                              )),
-                    ),
-                  ],
-                ),
-              );
-            // unmatched rows keep the picker tap on the whole row
-            return isUnmatched
-                ? GestureDetector(
-                    onTap: () => _showItemPicker(mentionId, qty),
-                    child: rowWidget,
-                  )
-                : rowWidget;
-          }),
-        ],
-      ),
+    return _MentionClipTable(
+      rows: rows,
+      frozenAll: widget.frozen,
+      mentionLoading: _mentionLoading,
+      onToggle: _handleMentionToggle,
+      onUnmatchedTap: _showItemPicker,
+      onFrozenTap: (id) {
+        if (!_frozenTappedIds.contains(id)) {
+          _frozenTappedIds.add(id);
+          RenderLog.write('c342_frozen_tap',
+              'id=${id.substring(0, id.length.clamp(0, 8))};stage=${widget.stage}');
+        }
+      },
+      productOrdered: orderedMap,
+      stage: widget.stage,
+      playingSeq: _playingSeq,
     );
   }
 
@@ -7843,6 +7709,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
               // Minimum gap between name and badge cluster
               const SizedBox(width: _kNameToBadgeMinGap),
               // Badge cluster — FIXED width so header "Qty sequence" aligns above it (#111)
+              // #344: colour qty number by status (readded=amber; deleted filtered out by _groupMentions)
               SizedBox(
                 width: _kBadgeClusterMaxW,
                 child: Padding(
@@ -7852,17 +7719,30 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
                     runSpacing: 4,
                     children: g.entries.map((e) {
                       final active = playSeq != null && e.seq == playSeq;
+                      final isReadded = e.status == 'readded';
+                      if (isReadded) {
+                        RenderLog.write('c344_all_qty_colour', 'status=readded;stage=${widget.stage}');
+                      }
+                      final Color bg = active ? _kGreen
+                          : isReadded ? const Color(0xFFFEF3C7)
+                          : const Color(0xFFF5F6F8);
+                      final Color border = active ? _kGreen
+                          : isReadded ? const Color(0xFFF59E0B)
+                          : _kBorder;
+                      final Color fg = active ? Colors.white
+                          : isReadded ? const Color(0xFF92400E)
+                          : _kText;
                       return Container(
                         padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
                         decoration: BoxDecoration(
-                          color: active ? _kGreen : const Color(0xFFF5F6F8),
+                          color: bg,
                           borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: active ? _kGreen : _kBorder),
+                          border: Border.all(color: border),
                         ),
                         child: Text('${e.qty}',
                             style: TextStyle(
                               fontSize: 12, fontWeight: FontWeight.w600,
-                              color: active ? Colors.white : _kText,
+                              color: fg,
                             )),
                       );
                     }).toList(),
@@ -7912,6 +7792,228 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
         textAlign: TextAlign.right,
         style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _kSub)),
   );
+}
+
+// ── CHANGE #344: shared 3-column clip-table for Shop / Warehouse / Pack ──────────────
+// Product | Qty spoken (icon + chip) | Total (per-product, non-deleted)
+// One row per mention (sorted by ord). Whole-row tint from mention.status.
+class _MentionClipTable extends StatelessWidget {
+  final List<Map<String, dynamic>> rows;       // this clip's mentions, sorted by ord
+  final bool frozenAll;                        // true = whole sheet frozen (shop/wh confirm)
+  final bool Function(Map<String, dynamic>)? isFrozenRow; // per-row (pack: per product)
+  final Set<String> mentionLoading;
+  final Future<void> Function(Map<String, dynamic> r) onToggle;
+  final void Function(String id, int qty)? onUnmatchedTap;
+  final void Function(String id)? onFrozenTap; // called on frozen-row tap
+  final Map<String, int> productOrdered;       // matched_name → ordered qty
+  final String stage;
+  final int? playingSeq;
+
+  static const double _kBW = 148.0; // badge cluster width (icon 34 + gap 4 + chip ~40+)
+  static const double _kTW = 52.0;
+  static const double _kG1 = 10.0;
+  static const double _kG2 = 6.0;
+
+  const _MentionClipTable({
+    required this.rows,
+    required this.mentionLoading,
+    required this.onToggle,
+    required this.stage,
+    this.frozenAll = false,
+    this.isFrozenRow,
+    this.onUnmatchedTap,
+    this.onFrozenTap,
+    this.productOrdered = const {},
+    this.playingSeq,
+  });
+
+  // Per-product non-deleted totals for the Total column.
+  Map<String, int> _totals() {
+    final m = <String, int>{};
+    for (final r in rows) {
+      if (r['status']?.toString() == 'deleted') continue;
+      final k = r['matched_name']?.toString() ?? '';
+      m[k] = (m[k] ?? 0) + ((r['qty'] as num?)?.toInt() ?? 0);
+    }
+    return m;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    RenderLog.write('c344_clip_table', 'stage=$stage;rows=${rows.length}');
+    final totals = _totals();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // Header
+        Container(
+          color: const Color(0xFFF5F6F8),
+          child: Row(children: [
+            Expanded(child: Padding(
+              padding: const EdgeInsets.fromLTRB(14, 6, 4, 6),
+              child: const Text('Product',
+                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _kSub)),
+            )),
+            const SizedBox(width: _kG1),
+            SizedBox(width: _kBW, child: const Text('Qty spoken',
+                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _kSub))),
+            const SizedBox(width: _kG2),
+            SizedBox(width: _kTW, child: Padding(
+              padding: const EdgeInsets.only(right: 10),
+              child: const Text('Total', textAlign: TextAlign.right,
+                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _kSub)),
+            )),
+          ]),
+        ),
+        const Divider(height: 1, color: _kBorder),
+        // One row per mention
+        ...rows.map((r) {
+          final id = r['id']?.toString() ?? '';
+          final rawName = r['matched_name']?.toString() ?? '';
+          final isUnmatched = r['product_id'] == null &&
+              (r['status']?.toString() ?? '') != 'deleted';
+          final name = isUnmatched
+              ? (rawName.trim().isEmpty ? 'Unmatched ×tap to fix' : 'Unmatched: $rawName')
+              : (rawName.trim().isEmpty ? '(unnamed)' : rawName);
+          final qty = (r['qty'] as num?)?.toInt() ?? 0;
+          final status = r['status']?.toString() ?? 'counted';
+          final isDeleted = status == 'deleted';
+          final isReadded = status == 'readded';
+          final isBusy = mentionLoading.contains(id);
+          final isPlaying = playingSeq != null &&
+              (r['recording_seq'] as num?)?.toInt() == playingSeq;
+          final frozen = frozenAll || (isFrozenRow?.call(r) ?? false) || isUnmatched;
+          final prodTotal = totals[rawName] ?? 0;
+          final ordered = productOrdered[rawName] ?? 0;
+          final full = ordered > 0 && prodTotal >= ordered;
+
+          // Whole-row tint — §3.1
+          Color? rowTint;
+          if (isUnmatched) {
+            rowTint = const Color(0x28F59E0B);
+          } else if (isDeleted) {
+            rowTint = const Color(0x17FF0000);
+            RenderLog.write('c344_row_colour', 'status=deleted;stage=$stage');
+          } else if (isReadded) {
+            rowTint = const Color(0x1AF59E0B);
+            RenderLog.write('c344_row_colour', 'status=readded;stage=$stage');
+          }
+
+          // Qty chip colours
+          final Color chipBg = isDeleted ? const Color(0xFFFEE2E2)
+              : isReadded ? const Color(0xFFFEF3C7)
+              : isPlaying ? _kGreen : const Color(0xFFF5F6F8);
+          final Color chipBorder = isDeleted ? const Color(0xFFEF4444)
+              : isReadded ? const Color(0xFFF59E0B)
+              : isPlaying ? _kGreen : _kBorder;
+          final Color chipFg = isDeleted ? const Color(0xFF991B1B)
+              : isReadded ? const Color(0xFF92400E)
+              : isPlaying ? Colors.white : _kText;
+
+          final pill = Container(
+            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+            decoration: BoxDecoration(
+              color: chipBg,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: chipBorder),
+            ),
+            child: isBusy
+                ? const SizedBox(width: 12, height: 12,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: _kGreen))
+                : Text('$qty',
+                    style: TextStyle(
+                      fontSize: 12, fontWeight: FontWeight.w600,
+                      color: chipFg,
+                      decoration: isDeleted ? TextDecoration.lineThrough : null,
+                    )),
+          );
+
+          final rowWidget = AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            decoration: BoxDecoration(
+              color: rowTint,
+              border: const Border(bottom: BorderSide(color: _kBorder)),
+              boxShadow: isDeleted
+                  ? const [BoxShadow(color: Color(0x1AFF0000), blurRadius: 3, offset: Offset(0, 1))]
+                  : isReadded
+                      ? const [BoxShadow(color: Color(0x1AF59E0B), blurRadius: 3, offset: Offset(0, 1))]
+                      : null,
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Expanded(child: Padding(
+                  padding: const EdgeInsets.fromLTRB(14, 8, 4, 8),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(name,
+                          softWrap: true, maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 12, fontWeight: FontWeight.w500,
+                            color: isDeleted ? const Color(0xFF991B1B)
+                                : isReadded ? const Color(0xFF92400E)
+                                : isPlaying ? _kGreen : _kText,
+                          )),
+                      if (isDeleted)
+                        const Text('removed',
+                            style: TextStyle(fontSize: 10, color: Color(0xFF991B1B)))
+                      else if (isReadded)
+                        const Text('re-added',
+                            style: TextStyle(fontSize: 10, color: Color(0xFF92400E))),
+                    ],
+                  ),
+                )),
+                const SizedBox(width: _kG1),
+                SizedBox(
+                  width: _kBW,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 6),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        MentionActionIcon(
+                          status: status,
+                          isBusy: isBusy,
+                          frozen: frozen,
+                          onTap: frozen
+                              ? (frozenAll ? () => onFrozenTap?.call(id) : null)
+                              : () => onToggle(r),
+                        ),
+                        const SizedBox(width: 4),
+                        pill,
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(width: _kG2),
+                SizedBox(
+                  width: _kTW,
+                  child: Padding(
+                    padding: const EdgeInsets.only(right: 10),
+                    child: Text(
+                      ordered > 0 ? '$prodTotal/$ordered' : '$prodTotal',
+                      style: TextStyle(
+                        fontSize: 12, fontWeight: FontWeight.w700,
+                        color: full ? _kGreen : _kText,
+                      ),
+                      textAlign: TextAlign.right,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+
+          return (isUnmatched && onUnmatchedTap != null)
+              ? GestureDetector(onTap: () => onUnmatchedTap!(id, qty), child: rowWidget)
+              : rowWidget;
+        }),
+      ],
+    );
+  }
 }
 
 // Compact ▶/⏸ button for a whole-clip recording.
@@ -13202,132 +13304,130 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
             ]),
           ),
           const Divider(height: 1),
-          // #343: log whether this build is All (read-only) or per-clip (actions on)
-          Builder(builder: (_) {
-            if (showActions) {
-              RenderLog.write('c342_row_icon', 'stage=pack;groups=${groups.length}');
-              RenderLog.write('c343_clip_actions', 'stage=pack;seq=${_selectedSeq ?? 0};groups=${groups.length}');
-              RenderLog.write('c343_pack_colour', 'actions=y;groups=${groups.length}');
-            } else {
-              RenderLog.write('c343_all_readonly', 'stage=pack;groups=${groups.length}');
-            }
-            return const SizedBox.shrink();
-          }),
-          // Table body
-          Expanded(
-            child: groups.isEmpty
-                ? const Center(child: Text('No mentions for this selection',
-                    style: TextStyle(color: _kSub)))
-                : ListView.builder(
-                    controller: ctrl,
-                    padding: const EdgeInsets.only(bottom: 24),
-                    itemCount: groups.length,
-                    itemBuilder: (_, i) {
-                      final g = groups[i];
-                      final full = g.ordered > 0 && g.total >= g.ordered;
-                      return Container(
-                        decoration: const BoxDecoration(
-                            border: Border(bottom: BorderSide(color: _kBorder))),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.center,
-                          children: [
-                            Expanded(child: Padding(
-                              padding: const EdgeInsets.fromLTRB(14, 8, 4, 8),
-                              child: Text(g.name,
-                                  style: const TextStyle(fontSize: 12, color: _kText),
-                                  overflow: TextOverflow.ellipsis, maxLines: 2),
-                            )),
-                            const SizedBox(width: _kNameToBadgeMinGap),
-                            SizedBox(
-                              width: _kBadgeClusterMaxW,
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(vertical: 6),
-                                child: Wrap(
-                                  spacing: 4, runSpacing: 4,
-                                  children: g.entries.map((e) {
-                                    final active = playSeq != null && e.seq == playSeq;
-                                    // #338: status colours + 2s hold-to-delete/re-add
-                                    final isDeleted = e.status == 'deleted';
-                                    final isReadded = e.status == 'readded';
-                                    final frozen = g.pid != null &&
-                                        _packedProductIds.contains(g.pid);
-                                    final isLoading = _mentionLoading.contains(e.id);
-                                    final Color bg = isDeleted
-                                        ? const Color(0xFFFEE2E2)
-                                        : isReadded
-                                            ? const Color(0xFFFEF3C7)
-                                            : active ? _kGreen : const Color(0xFFF5F6F8);
-                                    final Color borderC = isDeleted
-                                        ? const Color(0xFFEF4444)
-                                        : isReadded
-                                            ? const Color(0xFFF59E0B)
-                                            : active ? _kGreen : _kBorder;
-                                    final Color fg = isDeleted
-                                        ? const Color(0xFF991B1B)
-                                        : isReadded
-                                            ? const Color(0xFF92400E)
-                                            : active ? Colors.white : _kText;
-                                    final pill = Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                                      decoration: BoxDecoration(
-                                        color: bg,
-                                        borderRadius: BorderRadius.circular(8),
-                                        border: Border.all(color: borderC),
-                                      ),
-                                      child: isLoading
-                                          ? const SizedBox(
-                                              width: 12, height: 12,
-                                              child: CircularProgressIndicator(
-                                                  strokeWidth: 2, color: _kGreen))
-                                          : Text('${e.qty}',
-                                              style: TextStyle(
-                                                  fontSize: 12, fontWeight: FontWeight.w600,
-                                                  color: fg,
-                                                  decoration: isDeleted
-                                                      ? TextDecoration.lineThrough
-                                                      : null)),
-                                    );
-                                    // #343: icons only in per-clip view; All = pill only
-                                    if (!showActions) return pill;
-                                    return Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        MentionActionIcon(
-                                          status: e.status,
-                                          isBusy: isLoading,
-                                          frozen: frozen,
-                                          onTap: e.id.isEmpty || frozen
-                                              ? null
-                                              : () => _handlePackMentionToggle(e.id, e.status),
-                                        ),
-                                        const SizedBox(width: 4),
-                                        pill,
-                                      ],
-                                    );
-                                  }).toList(),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: _kBadgeToTotalGap),
-                            SizedBox(
-                              width: _kTotalColW,
-                              child: Padding(
-                                padding: const EdgeInsets.only(right: 10),
-                                child: Text(
-                                  g.ordered > 0 ? '${g.total}/${g.ordered}' : '${g.total}',
-                                  style: TextStyle(
-                                      fontSize: 12, fontWeight: FontWeight.w700,
-                                      color: full ? _kGreen : _kText),
-                                  textAlign: TextAlign.right,
-                                ),
-                              ),
-                            ),
-                          ],
+          // #344: clip view → shared _MentionClipTable; All view → grouped read-only table
+          if (showActions) ...[
+            // Per-clip view: one row per mention, whole-row tint, shared widget
+            Builder(builder: (_) {
+              RenderLog.write('c342_row_icon', 'stage=pack;rows=${filtered.length}');
+              RenderLog.write('c343_clip_actions', 'stage=pack;seq=${_selectedSeq ?? 0};rows=${filtered.length}');
+              RenderLog.write('c344_clip_table', 'stage=pack;rows=${filtered.length}');
+              final orderedMap = <String, int>{};
+              for (final it in widget.packItems) {
+                final name = it['product_name']?.toString();
+                if (name != null) orderedMap[name] = (it['qty'] as num?)?.toInt() ?? 0;
+              }
+              return Expanded(
+                child: filtered.isEmpty
+                    ? const Center(child: Text('No mentions for this selection',
+                        style: TextStyle(color: _kSub)))
+                    : SingleChildScrollView(
+                        controller: ctrl,
+                        padding: const EdgeInsets.only(bottom: 24),
+                        child: _MentionClipTable(
+                          rows: filtered,
+                          frozenAll: false,
+                          isFrozenRow: (r) {
+                            final pid = (r['product_id'] as num?)?.toInt();
+                            return pid != null && _packedProductIds.contains(pid);
+                          },
+                          mentionLoading: _mentionLoading,
+                          onToggle: (r) => _handlePackMentionToggle(
+                              r['id']?.toString() ?? '',
+                              r['status']?.toString() ?? 'counted'),
+                          productOrdered: orderedMap,
+                          stage: 'pack',
+                          playingSeq: _playingSeq,
                         ),
-                      );
-                    },
-                  ),
-          ),
+                      ),
+              );
+            }),
+          ] else ...[
+            // All view: grouped by product, read-only pills with status colour
+            Builder(builder: (_) {
+              RenderLog.write('c343_all_readonly', 'stage=pack;groups=${groups.length}');
+              RenderLog.write('c344_all_qty_colour', 'stage=pack;groups=${groups.length}');
+              return Expanded(
+                child: groups.isEmpty
+                    ? const Center(child: Text('No mentions for this selection',
+                        style: TextStyle(color: _kSub)))
+                    : ListView.builder(
+                        controller: ctrl,
+                        padding: const EdgeInsets.only(bottom: 24),
+                        itemCount: groups.length,
+                        itemBuilder: (_, i) {
+                          final g = groups[i];
+                          final full = g.ordered > 0 && g.total >= g.ordered;
+                          return Container(
+                            decoration: const BoxDecoration(
+                                border: Border(bottom: BorderSide(color: _kBorder))),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                Expanded(child: Padding(
+                                  padding: const EdgeInsets.fromLTRB(14, 8, 4, 8),
+                                  child: Text(g.name,
+                                      style: const TextStyle(fontSize: 12, color: _kText),
+                                      overflow: TextOverflow.ellipsis, maxLines: 2),
+                                )),
+                                const SizedBox(width: _kNameToBadgeMinGap),
+                                SizedBox(
+                                  width: _kBadgeClusterMaxW,
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(vertical: 6),
+                                    child: Wrap(
+                                      spacing: 4, runSpacing: 4,
+                                      children: g.entries.map((e) {
+                                        final active = playSeq != null && e.seq == playSeq;
+                                        final isDeleted = e.status == 'deleted';
+                                        final isReadded = e.status == 'readded';
+                                        final Color bg = isDeleted ? const Color(0xFFFEE2E2)
+                                            : isReadded ? const Color(0xFFFEF3C7)
+                                            : active ? _kGreen : const Color(0xFFF5F6F8);
+                                        final Color borderC = isDeleted ? const Color(0xFFEF4444)
+                                            : isReadded ? const Color(0xFFF59E0B)
+                                            : active ? _kGreen : _kBorder;
+                                        final Color fg = isDeleted ? const Color(0xFF991B1B)
+                                            : isReadded ? const Color(0xFF92400E)
+                                            : active ? Colors.white : _kText;
+                                        return Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                                          decoration: BoxDecoration(
+                                            color: bg, borderRadius: BorderRadius.circular(8),
+                                            border: Border.all(color: borderC),
+                                          ),
+                                          child: Text('${e.qty}',
+                                              style: TextStyle(
+                                                fontSize: 12, fontWeight: FontWeight.w600,
+                                                color: fg,
+                                                decoration: isDeleted ? TextDecoration.lineThrough : null,
+                                              )),
+                                        );
+                                      }).toList(),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: _kBadgeToTotalGap),
+                                SizedBox(
+                                  width: _kTotalColW,
+                                  child: Padding(
+                                    padding: const EdgeInsets.only(right: 10),
+                                    child: Text(
+                                      g.ordered > 0 ? '${g.total}/${g.ordered}' : '${g.total}',
+                                      style: TextStyle(
+                                          fontSize: 12, fontWeight: FontWeight.w700,
+                                          color: full ? _kGreen : _kText),
+                                      textAlign: TextAlign.right,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                      ),
+              );
+            }),
+          ],
         ],
       ),
     );

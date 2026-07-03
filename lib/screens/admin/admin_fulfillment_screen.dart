@@ -238,6 +238,8 @@ class _MergedProduct {
   final int receivedTotal;
   // #331: sum of shop_qty across all lines; null if any line has no shop count yet
   final int? shopQtyTotal;
+  // #333: sum of expected across all lines (forwarded qty at warehouse; ordered at shop)
+  final int? expectedTotal;
   final List<String> orderItemIds; // underlying line IDs — for dispute lookup only
   final String combinedState; // 'pending'|'received'|'short'|'wrong'|'not_coming'
   final bool hasArrived; // true if any underlying Arrivals line has received_locked=true
@@ -251,6 +253,7 @@ class _MergedProduct {
     required this.orderedTotal,
     required this.receivedTotal,
     this.shopQtyTotal,
+    this.expectedTotal,
     required this.orderItemIds,
     required this.combinedState,
     this.hasArrived = false,
@@ -1088,6 +1091,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         shopSum += sq;
       }
       final shopQtyTotal = anyUncounted ? null : shopSum;
+      // #333: expected per product — sum of backend 'expected' field (forwarded qty at warehouse)
+      final expectedTotal = lines.fold(0, (s, r) => s + ((r['expected'] as num?)?.toInt() ?? ordQtyOf(r)));
       final oiids = lines
           .map((r) => r['order_item_id']?.toString() ?? '')
           .where((s) => s.isNotEmpty)
@@ -1117,6 +1122,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         orderedTotal: orderedTotal,
         receivedTotal: receivedTotal,
         shopQtyTotal: shopQtyTotal,
+        expectedTotal: expectedTotal,
         orderItemIds: oiids,
         combinedState: combinedState,
         hasArrived: hasArrived,
@@ -1150,8 +1156,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     return 'pending';
   }
   // RC3: mode is top-level in fw_get_state response, never per-item
+  // #333: backend now returns 'stage' (not 'mode'); keep 'mode' as fallback for legacy shapes
   static String? supplierModeOf(Map<String, dynamic> stateRes) =>
-      stateRes['mode']?.toString();
+      (stateRes['stage'] ?? stateRes['mode'])?.toString();
   static String? oiidOf(Map<String, dynamic> item) =>
       item['order_item_id']?.toString();
 
@@ -1677,28 +1684,31 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     }
 
     try {
-      final res = await Supabase.instance.client
-          .rpc('get_receiving_box', params: {'p_supplier_name': supplier}) as List;
+      // #333: fw_get_state('collect') returns items WITH shop_qty and top-level stage
+      final dynamic _rawCollect = await Supabase.instance.client
+          .rpc('fw_get_state', params: {'p_supplier_name': supplier, 'p_stage': 'collect'});
       if (!mounted) return;
-      final items = res.map((r) => Map<String, dynamic>.from(r as Map)).toList();
+      Map<String, dynamic> collectState;
+      if (_rawCollect is Map) {
+        collectState = Map<String, dynamic>.from(_rawCollect);
+      } else if (_rawCollect is List && _rawCollect.isNotEmpty && _rawCollect[0] is Map) {
+        final first = _rawCollect[0] as Map;
+        final inner = first['fw_get_state'];
+        collectState = inner is Map ? Map<String, dynamic>.from(inner) : Map<String, dynamic>.from(first);
+      } else {
+        collectState = {};
+      }
+      final rawItems = collectState['items'];
+      final items = (rawItems is List ? rawItems : <dynamic>[])
+          .map((r) => Map<String, dynamic>.from(r as Map))
+          .toList();
       // CHANGE #269 — strict A-Z, no status or bag grouping
       items.sort((a, b) => (a['product_name'] ?? '').toString().toLowerCase()
           .compareTo((b['product_name'] ?? '').toString().toLowerCase()));
       RenderLog.write('c269_alpha_sort', 'collect;count=${items.length}');
       final firstPending = items.indexWhere((i) => stateOf(i) == 'pending');
-      // B7: fetch a fresh mode so _supplierMode is never stale mid-session
-      String? freshMode = _collectModeMap[supplier];
-      try {
-        final modeRes = await Supabase.instance.client.rpc('fw_supplier_modes') as Map;
-        if (mounted) {
-          final modes = (modeRes['modes'] as Map? ?? {});
-          for (final e in modes.entries) {
-            final v = e.value?.toString();
-            _collectModeMap[e.key.toString()] = (v != null && v.isNotEmpty) ? v : null;
-          }
-          freshMode = _collectModeMap[supplier];
-        }
-      } catch (_) {}
+      final freshMode = supplierModeOf(collectState); // #333: reads top-level stage field
+      RenderLog.write('c333_state_stage', 'stage=${freshMode ?? 'null'};supplier=$supplier');
       if (!mounted) return;
       setState(() {
         _items = items;
@@ -1706,6 +1716,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         _loadingBox = false;
         _showListView = false;
         _supplierMode = freshMode;
+        if (freshMode != null) _collectModeMap[supplier] = freshMode;
         _sessionVoiceCount = 0;
         _voiceMentions = []; // clear stale; fresh fetch below
       });
@@ -2719,20 +2730,32 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       return;
     }
     try {
-      final res = await Supabase.instance.client
-          .rpc('get_receiving_box', params: {'p_supplier_name': supplier}) as List;
+      // #333: fw_get_state('collect') returns items WITH shop_qty and top-level stage
+      final dynamic _rawReloadCollect = await Supabase.instance.client
+          .rpc('fw_get_state', params: {'p_supplier_name': supplier, 'p_stage': 'collect'});
       if (!mounted) return;
-      final items = res.map((r) => Map<String, dynamic>.from(r as Map)).toList();
-      items.sort((a, b) {
-        final aPend = stateOf(a) == 'pending' ? 0 : 1;
-        final bPend = stateOf(b) == 'pending' ? 0 : 1;
-        if (aPend != bPend) return aPend - bPend;
-        return (a['product_name'] ?? '').toString().compareTo((b['product_name'] ?? '').toString());
-      });
+      Map<String, dynamic> reloadState;
+      if (_rawReloadCollect is Map) {
+        reloadState = Map<String, dynamic>.from(_rawReloadCollect);
+      } else if (_rawReloadCollect is List && _rawReloadCollect.isNotEmpty && _rawReloadCollect[0] is Map) {
+        final first = _rawReloadCollect[0] as Map;
+        final inner = first['fw_get_state'];
+        reloadState = inner is Map ? Map<String, dynamic>.from(inner) : Map<String, dynamic>.from(first);
+      } else {
+        reloadState = {};
+      }
+      final rawReloadItems = reloadState['items'];
+      final reloadItems = (rawReloadItems is List ? rawReloadItems : <dynamic>[])
+          .map((r) => Map<String, dynamic>.from(r as Map))
+          .toList();
+      reloadItems.sort((a, b) => (a['product_name'] ?? '').toString().toLowerCase()
+          .compareTo((b['product_name'] ?? '').toString().toLowerCase()));
+      final reloadedMode = supplierModeOf(reloadState); // #333: reads stage field
       setState(() {
-        _items = items;
+        _items = reloadItems;
         // B5: always assign (even null) so mode clears correctly after undo
-        _supplierMode = _collectModeMap[supplier];
+        _supplierMode = reloadedMode ?? _supplierMode;
+        if (reloadedMode != null) _collectModeMap[supplier] = reloadedMode;
         // B9: clamp focus after reload to prevent _currentItem returning null
         if (_items.isNotEmpty && _focusIdx >= _items.length) {
           _focusIdx = _items.length - 1;
@@ -4731,8 +4754,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     final shopQty  = (item['shop_qty'] as num?)?.toInt(); // #331: null = not yet counted at shop
     final packType = item['pack_type']?.toString() ?? '';
     final imageUrl = item['image_url']?.toString();
-    // #331: warehouse expected = forwarded (shop_qty) for mode='shop', else ordered
-    final int whExpected = (_supplierMode == 'shop') ? (shopQty ?? 0) : ordQty;
+    // #333: use backend 'expected' field (stage-aware: forwarded qty at warehouse, ordered at shop)
+    final int whExpected = (item['expected'] as num?)?.toInt() ?? ordQty;
+    RenderLog.write('c333_shop_field', 'shopQty=${shopQty ?? 'null'};expected=$whExpected;stage=${_supplierMode ?? ''}');
     // #132A/#189: open dispute badge
     final itemId = item['order_item_id']?.toString();
     final openDispute = itemId != null ? _disputeMap[itemId] : null;
@@ -4832,13 +4856,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                   ),
                 ),
               ],
-              if (widget.arrivals && item['count_mismatch'] == true) ...[
-                const SizedBox(height: 2),
-                Text(
-                  'shop ${(item['shop_qty'] as num?)?.toInt() ?? '?'}',
-                  style: const TextStyle(fontSize: 10, color: Color(0xFF92400E)),
-                ),
-              ],
+              // #333: count_mismatch is a dead field — removed
             ]),
           ), // ConstrainedBox
         ]),
@@ -4849,9 +4867,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // ── #197: Merged product card ─────────────────────────────────────────────
   Widget _buildMergedItemTile(_MergedProduct merged) {
     final state = merged.combinedState;
-    // #331: warehouse expected = forwarded (shopQtyTotal) for mode='shop', else ordered
+    // #333: use backend 'expected' field sum for warehouse rows; ordered for collect rows
     final int whExpected = widget.arrivals
-        ? ((_supplierMode == 'shop') ? (merged.shopQtyTotal ?? 0) : merged.orderedTotal)
+        ? (merged.expectedTotal ?? merged.orderedTotal)
         : merged.orderedTotal;
     // Dispute: first match across all underlying lines
     DisputeItem? disputeItem;
@@ -10085,6 +10103,7 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
     RenderLog.write('c113_no_title_header', viewport);
     RenderLog.write('c331_build', '331');
     RenderLog.write('c332_build', '332');
+    RenderLog.write('c333_build', '333');
     RenderLog.write('c113_fulfillment_tabs_top', viewport);
     return Column(children: [
       Container(

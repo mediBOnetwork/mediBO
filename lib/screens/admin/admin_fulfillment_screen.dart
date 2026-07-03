@@ -1527,55 +1527,36 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   Future<void> _loadSupplierDots() async {
     if (_suppliers.isEmpty || !mounted) return;
     try {
-      // Parallel queries: order_items summary + supplier_count_mode
-      final futures = await Future.wait([
-        Supabase.instance.client
-            .from('order_items')
-            .select('assigned_supplier, collect_locked, received_qty')
-            .inFilter('assigned_supplier', _suppliers)
-            .not('fulfillment_state', 'in', '("shipped","cancelled")') as Future,
-        Supabase.instance.client
-            .from('supplier_count_mode')
-            .select('assigned_supplier, mode')
-            .inFilter('assigned_supplier', _suppliers) as Future,
-      ]);
+      // #335 BUG-1: derive dot from order_items only — never read supplier_count_mode for stage/colour
+      // collect_locked=true → confirmed/forwarded → green
+      // any shop_qty > 0 → counting started → amber
+      // neither → not started → yellow
+      final itemsRes = await Supabase.instance.client
+          .from('order_items')
+          .select('assigned_supplier, collect_locked, shop_qty')
+          .inFilter('assigned_supplier', _suppliers)
+          .not('fulfillment_state', 'in', '("shipped","cancelled")') as List;
       if (!mounted) return;
 
-      final itemsRes  = futures[0] as List;
-      final modesRes  = futures[1] as List;
-
-      // Mode set: split by stage — shop (counting in progress) vs warehouse (forwarded)
-      final shopModeSet = <String>{};
-      final warehouseModeSet = <String>{};
-      for (final m in modesRes) {
-        final s = (m as Map)['assigned_supplier']?.toString();
-        final mode = m['mode']?.toString();
-        if (s == null || mode == null || mode.isEmpty) continue;
-        if (mode == 'shop') shopModeSet.add(s);
-        else warehouseModeSet.add(s);
-      }
-
-      // Per-supplier: any collect_locked (confirmed) + any received_qty > 0
+      // Per-supplier: confirmed (locked) or any shop_qty set
       final lockedSet  = <String>{};
-      final receivedSet = <String>{};
+      final countedSet = <String>{}; // any shop_qty > 0
       for (final r in itemsRes) {
         final s = (r as Map)['assigned_supplier']?.toString();
         if (s == null) continue;
         if (r['collect_locked'] == true) lockedSet.add(s);
-        final recv = (r['received_qty'] as num?)?.toInt() ?? 0;
-        if (recv > 0) receivedSet.add(s);
+        final sq = (r['shop_qty'] as num?)?.toInt();
+        if (sq != null && sq > 0) countedSet.add(s);
       }
 
-      // #334 D1: green = confirmed (locked or forwarded to warehouse); amber = shop counting in progress; grey = not started
+      // #335 D1: green = confirmed; amber = counting in progress; yellow = not started
       final dotMap = <String, String>{};
       for (final name in _suppliers) {
         final String dot;
-        if (lockedSet.contains(name) || warehouseModeSet.contains(name)) {
+        if (lockedSet.contains(name)) {
           dot = 'green';
-        } else if (shopModeSet.contains(name)) {
-          dot = 'light_yellow'; // amber — counting in progress, not yet confirmed
-        } else if (receivedSet.contains(name)) {
-          dot = 'light_yellow';
+        } else if (countedSet.contains(name)) {
+          dot = 'light_yellow'; // amber — counting started, not yet confirmed
         } else {
           dot = 'yellow';
         }
@@ -1807,78 +1788,35 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         return;
       }
 
-      // Branch 2 — WARN: mismatches exist, not forced
-      if (res['status'] == 'has_mismatch') {
+      // #335 BUG-4: has_mismatch branch removed — re-audited backend allows partial confirm (§0.7)
+      // Branch 2 → Branch 3 (success): read locked_items + disputes_raised per §D3 contract
+      // Branch 2 — OK / partial confirm: re-audited backend (§0.7) — just fall through to success
+      if (res['error'] != null) {
+        // Unknown error not handled by Branch 1
         setState(() => _confirmingAll = false);
-        final mismatches = (res['mismatches'] as List? ?? []);
-        final lines = mismatches.take(10)
-            .map((m) {
-              final mm = m as Map;
-              return '• ${mm['product_name']}: shop ${mm['shop_qty']} / counted ${mm['counted']}';
-            })
-            .join('\n');
-        final overflow = mismatches.length > 10 ? '\n… +${mismatches.length - 10} more' : '';
-        RenderLog.write('c158_confirm_warn', 'lists_mismatch=y;force_path=y');
-        if (!mounted) return;
-        final proceed = await showDialog<bool>(
-          context: context,
-          builder: (ctx) => AlertDialog(
-            title: const Text('Mismatch — confirm anyway?'),
-            content: Text(
-                'Some counts differ from the shop:\n$lines$overflow\n\n'
-                'Warehouse counts are final. Proceed?'),
-            actions: [
-              TextButton(
-                  onPressed: () => Navigator.pop(ctx, false),
-                  child: const Text('Cancel')),
-              FilledButton(
-                style: FilledButton.styleFrom(backgroundColor: _kGreen),
-                onPressed: () => Navigator.pop(ctx, true),
-                child: const Text('Confirm anyway'),
-              ),
-            ],
-          ),
-        );
-        if (proceed != true || !mounted) return;
-        // Force-confirm
-        setState(() => _confirmingAll = true);
-        try {
-          await Supabase.instance.client.rpc('fw_confirm_all_received',
-              params: {'p_supplier_name': supplier, 'p_force': true});
-          if (!mounted) return;
-          setState(() { _arrivalsLocked = true; _confirmingAll = false;
-            // #261 5F: confirm-all auto-detaches bags; clear any pending change progress
-            if (supplier != null) _changeProgressBySupplier.remove(supplier); });
-          _loadSuppliers();
-          await _reloadItemsFromDB();
-          RenderLog.write('c158_confirm_lock',
-              'ok_locks=y;undo=fw_unconfirm_all_received');
-          context.findAncestorStateOfType<_AdminFulfillmentScreenState>()?._refreshCollect();
-        } catch (e) {
-          if (mounted) {
-            setState(() => _confirmingAll = false);
-            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                content: Text('Error: ${e.toString().substring(0, e.toString().length.clamp(0, 80))}')));
-          }
-        }
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: ${res['error']}')));
         return;
       }
 
-      // Branch 3 — OK: all counted, no mismatch (or forced above exited early)
+      // Branch 3 — Success
+      // #261 5F: confirm-all auto-detaches bags; clear any pending change progress
+      if (supplier != null) _changeProgressBySupplier.remove(supplier);
       setState(() { _arrivalsLocked = true; _confirmingAll = false; });
       _loadSuppliers();
       await _reloadItemsFromDB();
       RenderLog.write('c158_confirm_lock',
           'ok_locks=y;undo=fw_unconfirm_all_received');
       RenderLog.write('c125_confirm_refresh', 'true');
+      RenderLog.write('c335_confirm', 'wh_confirm_ok=y');
       // #125 R6: refresh Collect so re-sourced shortfall lines appear
       context.findAncestorStateOfType<_AdminFulfillmentScreenState>()?._refreshCollect();
-      // #125 R6: surface shortfall snackbar
-      final shortfallsResourced = (res['shortfalls_resourced'] as num?)?.toInt() ?? 0;
-      final resourcedQty = (res['resourced_qty'] as num?)?.toInt() ?? 0;
-      if (shortfallsResourced > 0 && mounted) {
+      // #335 BUG-5: read re-audited backend keys locked_items/disputes_raised
+      final lockedItems = (res['locked_items'] as num?)?.toInt() ?? 0;
+      final disputesRaised = (res['disputes_raised'] as num?)?.toInt() ?? 0;
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('$shortfallsResourced item(s) short — re-sourcing $resourcedQty from next supplier'),
+          content: Text('$lockedItems locked · $disputesRaised new dispute(s)'),
         ));
       }
     } catch (e) {
@@ -2229,6 +2167,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       _sessionKey = sessionRes['session_key']?.toString();
       _sessionStage = sessionRes['stage']?.toString();
       RenderLog.write('c332_session_key', 'key=${_sessionKey ?? ''};stage=${_sessionStage ?? ''}');
+      RenderLog.write('c335_session', 'key=${_sessionKey ?? ''};stage=${_sessionStage ?? ''}');
     } catch (e) {
       if (mounted) _showSnack('Voice session error — retry');
       return;
@@ -2492,6 +2431,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             final resolvedName = matchRes['product_name']?.toString();
             if (productId != null && resolvedName != null) {
               RenderLog.write('c334_voice_fallback', 'heard=$matchedName;resolved=$resolvedName;pid=$productId');
+              RenderLog.write('c335_voice_match', 'heard=$matchedName;resolved=$resolvedName');
               // override matchedName so byProduct uses the canonical name
               item['matched_name'] = resolvedName;
             }
@@ -3426,6 +3366,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // #331: count of items not yet shop-counted (shop_qty == null)
   int get _shopUncountedCount =>
       _items.where((i) => i['shop_qty'] == null).length;
+  // #335 B2: items with a shop count — drives tracker/progress at shop stage
+  int get _shopCountedCount =>
+      _items.where((i) => i['shop_qty'] != null).length;
 
   // #137/#331: Confirm counting — every item must have a shop count first.
   Future<void> _fw_confirmCounting() async {
@@ -3495,20 +3438,26 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       }
       if (res['error'] != null) throw Exception(res['error'].toString());
       final shortsDisputed = (res['shorts_disputed'] as num?)?.toInt() ?? 0;
-      if (mounted) setState(() { _supplierMode = 'shop'; _submittingCollect = false; });
+      // #335 BUG-6: removed _supplierMode='shop' — after confirm supplier is at warehouse stage;
+      // _reloadItemsFromDB() will re-fetch fw_get_state and set _supplierMode correctly
+      if (mounted) setState(() => _submittingCollect = false);
       await _reloadItemsFromDB();
       RenderLog.write('c137_collect_action', 'action=confirm;supplier=$supplier');
-      RenderLog.write('c117_collect_confirm_text_mode', 'shop');
+      RenderLog.write('c117_collect_confirm_text_mode', 'warehouse');
       RenderLog.write('c125_submit_refresh', 'true');
       RenderLog.write('c331_confirm_gate', 'success;shorts=$shortsDisputed');
+      RenderLog.write('c335_confirm', 'shop_confirm_ok=y;shorts=$shortsDisputed');
       _loadSupplierDots();
       _loadCollectModes(); // R2: badge P→C immediately
       _loadDisputes(); // #332 D1: refresh Disputes tab so new short-item disputes appear immediately
       context.findAncestorStateOfType<_AdminFulfillmentScreenState>()?._refreshArrivals(); // R2: supplier appears in Arrivals
+      // #335 BUG-7: include counted qty in toast per contract B4
+      final countedItems = _items.length;
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(
-            'Counting confirmed — $shortsDisputed short item(s) disputed. Items moved to Warehouse for recount.'
+            'Counting confirmed — $shortsDisputed short item(s) disputed. '
+            'Moved to Warehouse (0/$countedItems).'
           )),
         );
       }
@@ -4715,7 +4664,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   Widget _buildNarrowProgressRow() {
     RenderLog.write('change_90_progress_below', '1');
     RenderLog.write('change_97_spoken_mobile', '1');
-    final doneCount = _items.length - _pendingCount;
+    // #335 BUG-2: shop stage uses shop_qty-based count; warehouse/arrivals uses stateOf-based count
+    final doneCount = widget.arrivals ? _items.length - _pendingCount : _shopCountedCount;
     final total = _items.length;
     // #97: pill ALWAYS visible on mobile — constant 100px slot, always green
     return Padding(
@@ -4749,7 +4699,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   Widget _buildNarrowItemList({bool showFooter = true, bool shrinkWrap = false}) {
     RenderLog.write('change_89_dense_items', '1');
     RenderLog.write('81_item_list_rendered', '${_items.length}');
-    RenderLog.write('81_progress', '${_items.length - _pendingCount}/${_items.length}');
+    RenderLog.write('81_progress', '${widget.arrivals ? _items.length - _pendingCount : _shopCountedCount}/${_items.length}');
     final locked = _boxLocked;
     if (locked) RenderLog.write('change_91_locked', '1');
     else RenderLog.write('change_91_confirm_present', '1');
@@ -4851,12 +4801,14 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                 // Supplier Shop stage: show shop count progress
                 Builder(builder: (_) {
                   RenderLog.write('c334_zero_counter', 'shop_qty=${shopQty ?? '0'};ord=$ordQty');
+                  RenderLog.write('c335_shop_row', 'shop=${shopQty ?? 0};ord=$ordQty');
                   final label = '${shopQty ?? 0}/$ordQty';
                   return Row(mainAxisSize: MainAxisSize.min, children: [
                     Text(label,
                         style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText)),
                     const SizedBox(width: 6),
-                    _StatePill(shopQty == null ? 'pending' : (shopQty >= ordQty ? 'received' : state)),
+                    // #335 BUG-3: derive pill ONLY from shop_qty vs ordered — never fulfillment_state at shop stage
+                    _StatePill(shopQty == null ? 'pending' : (shopQty >= ordQty ? 'received' : 'short')),
                   ]);
                 }),
               ] else if (whExpected == 0) ...[
@@ -4867,6 +4819,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                 // Warehouse stage: show received/expected
                 Builder(builder: (_) {
                   RenderLog.write('c331_wh_rows', 'rec=$recQty;expected=$whExpected;mode=${_supplierMode ?? ''}');
+                  RenderLog.write('c335_wh_row', 'rec=$recQty;exp=$whExpected');
                   return Row(mainAxisSize: MainAxisSize.min, children: [
                     Text('$recQty/$whExpected',
                         style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText)),
@@ -5054,9 +5007,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                 Builder(builder: (_) {
                   RenderLog.write('c334_zero_counter', 'shop=${merged.shopQtyTotal ?? '0'};ord=${merged.orderedTotal}');
                   final label = '${merged.shopQtyTotal ?? 0}/${merged.orderedTotal}';
+                  // #335 BUG-3: shop stage pill derived from shop_qty only — never fulfillment_state
                   final pillState = merged.shopQtyTotal == null
                       ? 'pending'
-                      : (merged.shopQtyTotal! >= merged.orderedTotal ? 'received' : state);
+                      : (merged.shopQtyTotal! >= merged.orderedTotal ? 'received' : 'short');
                   return Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
                     Text(label, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText)),
                     const SizedBox(height: 3),
@@ -5142,6 +5096,16 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       bagBreakdown: merged.bagBreakdown,
       bagCountFn: widget.arrivals ? (pid, qty) async {
         if (_activeBag == null) return 'Scan a bag first before counting';
+        // #335 BUG-8 E1: guard against bag actions at shop stage
+        try {
+          final guardRaw = await Supabase.instance.client.rpc('bag_guard_shop_stage',
+              params: {'p_supplier_name': supplier}) as Map;
+          final guardRes = Map<String, dynamic>.from(guardRaw);
+          if (guardRes['error'] == 'shop_stage_no_bags') {
+            RenderLog.write('c335_bag_guard', 'blocked=shop_stage_no_bags;supplier=$supplier');
+            return 'Bags are a warehouse step — confirm counting at the supplier shop first.';
+          }
+        } catch (_) {} // guard RPC failure = silently allow (not shop stage or guard unavailable)
         try {
           final raw = await Supabase.instance.client.rpc('bag_count_set', params: {
             'p_supplier_name': supplier,
@@ -6525,7 +6489,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   Widget _buildItemList() {
     RenderLog.write('81_item_list_rendered', '${_items.length}');
-    RenderLog.write('81_progress', '${_items.length - _pendingCount}/${_items.length}');
+    RenderLog.write('81_progress', '${widget.arrivals ? _items.length - _pendingCount : _shopCountedCount}/${_items.length}');
 
     return Column(children: [
       if (widget.arrivals) _buildBagControl(),
@@ -7042,7 +7006,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
       // #334 B1: product_id==null → unmatched; exclude from counts but show amber in flat view
       final rawName = r['matched_name']?.toString() ?? '';
       if (r['product_id'] == null) continue; // unmatched — shown separately in clip flat view only
-      final name = rawName.trim().isEmpty ? 'Unknown item' : rawName;
+      final name = rawName.trim().isEmpty ? '(unnamed)' : rawName;
       if (!byName.containsKey(name)) nameOrder.add(name);
       byName.putIfAbsent(name, () => []).add((
         id: r['id']?.toString() ?? '',
@@ -7493,7 +7457,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
             final isUnmatched = r['product_id'] == null && (r['status']?.toString() ?? '') != 'deleted';
             final name = isUnmatched
                 ? (rawFlatName.trim().isEmpty ? 'Unmatched ×tap to fix' : 'Unmatched: $rawFlatName')
-                : (rawFlatName.trim().isEmpty ? 'Unknown item' : rawFlatName);
+                : (rawFlatName.trim().isEmpty ? '(unnamed)' : rawFlatName);
             final qty = (r['qty'] as num?)?.toInt() ?? 0;
             final status = r['status']?.toString() ?? 'counted';
             final isDeleted = status == 'deleted';
@@ -7504,6 +7468,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
             // #334 B1: amber tint for unmatched
             Color? rowTint;
             if (isUnmatched) {
+              RenderLog.write('c335_unresolved_row', 'id=${mentionId.substring(0, mentionId.length.clamp(0, 8))}');
               rowTint = const Color(0x28F59E0B); // amber @ ~16%
             } else if (isDeleted) {
               RenderLog.write('c331_mention_red', 'id=${mentionId.substring(0, mentionId.length.clamp(0, 8))}');
@@ -10248,6 +10213,7 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
     RenderLog.write('c332_build', '332');
     RenderLog.write('c333_build', '333');
     RenderLog.write('c334_build', '334');
+    RenderLog.write('c335_build', '335');
     RenderLog.write('c113_fulfillment_tabs_top', viewport);
     return Column(children: [
       Container(
@@ -11324,6 +11290,7 @@ class _PackTabState extends State<_PackTab>
       try {
         RenderLog.write('c291_pack_counts',
             'order=${orderId.substring(0, orderId.length.clamp(0, 8))};total=$total;packed=$packed');
+        RenderLog.write('c335_pack', 'order=${orderId.substring(0, orderId.length.clamp(0, 8))};total=$total;packed=$packed');
       } catch (_) {}
       if (mounted) setState(() => _packStatus[orderId] = {'packed': packed, 'total': total});
     } catch (e) {
@@ -12610,7 +12577,7 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
     return result;
   }
 
-  // Group by product_id (known) or 'Unknown item' (null pid).
+  // Group by product_id (known) or '(unnamed)' (null pid — unresolved by voice_match_product).
   // Qty sequence = one entry per mention (for the pill cluster).
   List<({String name, List<({int qty, int seq})> entries, int total, int ordered})>
       _groupMentions(List<Map<String, dynamic>> rows) {
@@ -12640,7 +12607,7 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
       final entries = byKey[key]!;
       final total = entries.fold(0, (s, e) => s + e.qty);
       final pid = key.isEmpty ? null : int.tryParse(key);
-      final name = pid != null ? (pidToName[pid] ?? 'Unknown item') : 'Unknown item';
+      final name = pid != null ? (pidToName[pid] ?? '(unnamed)') : '(unnamed)';
       return (name: name, entries: entries, total: total, ordered: nameToOrdered[name] ?? 0);
     }).toList();
   }

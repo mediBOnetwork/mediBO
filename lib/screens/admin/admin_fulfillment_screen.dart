@@ -1436,7 +1436,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           _loadingSuppliers = false;
           _supplierDotMap = {..._supplierDotMap, ...dotMap};
           _supplierModeMap = {..._supplierModeMap, ...modeMap};
-          _arrivalsLocked = false;
+          // Do NOT reset _arrivalsLocked here — it is set by _checkArrivalsLocked()
+          // after _loadBox(). Resetting it here clobbers the locked state immediately
+          // after fw_confirm_all_received sets it to true. (bug fix #337-A)
         });
       } catch (e) {
         if (!mounted) return;
@@ -1764,44 +1766,26 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           params: {'p_supplier_name': supplier}) as Map;
       if (!mounted) return;
 
-      // Branch 1 — BLOCK: some items have received_qty == 0
-      if (res['error'] == 'uncounted_items') {
-        setState(() => _confirmingAll = false);
-        final rawItems = (res['items'] as List? ?? []);
-        final preview = rawItems.take(5)
-            .map((i) => '• ${(i as Map)['product_name'] ?? 'item'}')
-            .join('\n');
-        final overflow = rawItems.length > 5 ? '\n… +${rawItems.length - 5} more' : '';
-        RenderLog.write('c158_confirm_block', 'blocks_uncounted=y');
-        if (!mounted) return;
-        await showDialog<void>(
-          context: context,
-          builder: (ctx) => AlertDialog(
-            title: const Text('Count all items first'),
-            content: Text(
-                '${rawItems.length} item(s) not yet counted'
-                '${preview.isNotEmpty ? ':\n$preview$overflow' : '.'}'),
-            actions: [
-              FilledButton(
-                style: FilledButton.styleFrom(backgroundColor: _kGreen),
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('OK'),
-              ),
-            ],
-          ),
-        );
-        return;
-      }
-
-      // #335 BUG-4: has_mismatch branch removed — re-audited backend allows partial confirm (§0.7)
-      // Branch 2 → Branch 3 (success): read locked_items + disputes_raised per §D3 contract
-      // Branch 2 — OK / partial confirm: re-audited backend (§0.7) — just fall through to success
-      if (res['error'] != null) {
-        // Unknown error not handled by Branch 1
+      // A2+§0.7: backend now allows partial confirms (stale blocking overload dropped).
+      // uncounted_items is a soft warning only — fall through to success branch.
+      // Hard-unknown errors are still surfaced.
+      if (res['error'] != null && res['error'] != 'uncounted_items') {
         setState(() => _confirmingAll = false);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Error: ${res['error']}')));
         return;
+      }
+      if (res['error'] == 'uncounted_items') {
+        final rawItems = (res['items'] as List? ?? []);
+        RenderLog.write('c158_confirm_block', 'blocks_uncounted=n;partial_ok=y;count=${rawItems.length}');
+        // Show as a non-blocking snack — admin may confirm with partial counts
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('${rawItems.length} item(s) uncounted — confirming partial receipt'),
+            duration: const Duration(seconds: 3),
+          ));
+        }
+        // Fall through to success handling below
       }
 
       // Branch 3 — Success
@@ -1814,6 +1798,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           'ok_locks=y;undo=fw_unconfirm_all_received');
       RenderLog.write('c125_confirm_refresh', 'true');
       RenderLog.write('c335_confirm', 'wh_confirm_ok=y');
+      RenderLog.write('c337_wh_confirmed', 'supplier=$supplier;locked_items=${(res['locked_items'] as num?)?.toInt() ?? 0}');
       // #125 R6: refresh Collect so re-sourced shortfall lines appear
       context.findAncestorStateOfType<_AdminFulfillmentScreenState>()?._refreshCollect();
       // #335 BUG-5: read re-audited backend keys locked_items/disputes_raised

@@ -983,6 +983,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   bool _sendingShortReminder = false; // C171
   // §2.5: uncounted items blocking shop confirm — shown inline below confirm button
   List<String> _shopBlockedItems = [];
+  // #339: uncounted items blocking warehouse confirm — shown inline below confirm button
+  List<String> _whBlockedItems = [];
+  // #339: per-supplier arrivals confirmed/received state from fw_list_arrivals (for chip colour)
+  Map<String, bool> _arrivalsConfirmedMap = {};
+  Map<String, int> _arrivalsReceivedMap = {};
 
   // #116: supplier count mode from fw_get_state ('shop'|'warehouse'|null)
   String? _supplierMode;
@@ -1382,6 +1387,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         final rawList = (res['suppliers'] as List? ?? []);
         final dotMap = <String, String>{};
         final modeMap = <String, String?>{};
+        final arrivalsConfirmedMap = <String, bool>{};
+        final arrivalsReceivedMap = <String, int>{};
         final names = <String>[];
         for (final r in rawList) {
           final m = r as Map;
@@ -1391,6 +1398,15 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           dotMap[name] = m['dot']?.toString() ?? 'yellow';
           final mv = m['mode']?.toString();
           modeMap[name] = (mv != null && mv.isNotEmpty) ? mv : null;
+          // #339: chip colour — extract if backend provides these fields
+          if (m.containsKey('arrivals_confirmed')) {
+            arrivalsConfirmedMap[name] = m['arrivals_confirmed'] == true;
+          }
+          if (m.containsKey('received_total')) {
+            arrivalsReceivedMap[name] = (m['received_total'] as num?)?.toInt() ?? 0;
+          }
+          RenderLog.write('c339_chip_state',
+              'supplier=$name;confirmed=${arrivalsConfirmedMap[name]};received=${arrivalsReceivedMap[name]}');
         }
         names.sort();
         // #117 badge counts render-log
@@ -1436,6 +1452,12 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           _loadingSuppliers = false;
           _supplierDotMap = {..._supplierDotMap, ...dotMap};
           _supplierModeMap = {..._supplierModeMap, ...modeMap};
+          if (arrivalsConfirmedMap.isNotEmpty) {
+            _arrivalsConfirmedMap = {..._arrivalsConfirmedMap, ...arrivalsConfirmedMap};
+          }
+          if (arrivalsReceivedMap.isNotEmpty) {
+            _arrivalsReceivedMap = {..._arrivalsReceivedMap, ...arrivalsReceivedMap};
+          }
           // Do NOT reset _arrivalsLocked here — it is set by _checkArrivalsLocked()
           // after _loadBox(). Resetting it here clobbers the locked state immediately
           // after fw_confirm_all_received sets it to true. (bug fix #337-A)
@@ -1766,44 +1788,41 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           params: {'p_supplier_name': supplier}) as Map;
       if (!mounted) return;
 
-      // A2+§0.7: backend now allows partial confirms (stale blocking overload dropped).
-      // uncounted_items is a soft warning only — fall through to success branch.
-      // Hard-unknown errors are still surfaced.
-      if (res['error'] != null && res['error'] != 'uncounted_items') {
+      // #339 BUG-1: uncounted_items is a HARD BLOCK — do NOT fall through to success.
+      // Branch 1 — BLOCK: some items have received_qty == 0
+      if (res['error'] == 'uncounted_items') {
+        final rawItems = (res['items'] as List? ?? []);
+        final names = rawItems
+            .map((i) => (i as Map)['product_name']?.toString() ?? 'item')
+            .toList();
+        RenderLog.write('c339_wh_uncounted', 'count=${names.length}');
+        setState(() { _confirmingAll = false; _whBlockedItems = names; });
+        return;
+      }
+      // Branch 2 — Hard unknown error
+      if (res['error'] != null) {
+        RenderLog.write('c339_wh_confirm_fail', 'error=${res['error']}');
         setState(() => _confirmingAll = false);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Error: ${res['error']}')));
         return;
       }
-      if (res['error'] == 'uncounted_items') {
-        final rawItems = (res['items'] as List? ?? []);
-        RenderLog.write('c158_confirm_block', 'blocks_uncounted=n;partial_ok=y;count=${rawItems.length}');
-        // Show as a non-blocking snack — admin may confirm with partial counts
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text('${rawItems.length} item(s) uncounted — confirming partial receipt'),
-            duration: const Duration(seconds: 3),
-          ));
-        }
-        // Fall through to success handling below
-      }
 
-      // Branch 3 — Success
+      // Branch 3 — Success: server truth via _reloadItemsFromDB sets _arrivalsLocked
       // #261 5F: confirm-all auto-detaches bags; clear any pending change progress
       if (supplier != null) _changeProgressBySupplier.remove(supplier);
-      setState(() { _arrivalsLocked = true; _confirmingAll = false; });
+      setState(() { _confirmingAll = false; _whBlockedItems = []; });
       _loadSuppliers();
-      await _reloadItemsFromDB();
+      await _reloadItemsFromDB(); // sets _arrivalsLocked = true via fw_get_state response
+      final lockedItems = (res['locked_items'] as num?)?.toInt() ?? 0;
+      final disputesRaised = (res['disputes_raised'] as num?)?.toInt() ?? 0;
       RenderLog.write('c158_confirm_lock',
           'ok_locks=y;undo=fw_unconfirm_all_received');
       RenderLog.write('c125_confirm_refresh', 'true');
       RenderLog.write('c335_confirm', 'wh_confirm_ok=y');
-      RenderLog.write('c337_wh_confirmed', 'supplier=$supplier;locked_items=${(res['locked_items'] as num?)?.toInt() ?? 0}');
+      RenderLog.write('c339_wh_confirmed', 'locked_items=$lockedItems;disputes=$disputesRaised');
       // #125 R6: refresh Collect so re-sourced shortfall lines appear
       context.findAncestorStateOfType<_AdminFulfillmentScreenState>()?._refreshCollect();
-      // #335 BUG-5: read re-audited backend keys locked_items/disputes_raised
-      final lockedItems = (res['locked_items'] as num?)?.toInt() ?? 0;
-      final disputesRaised = (res['disputes_raised'] as num?)?.toInt() ?? 0;
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text('$lockedItems locked · $disputesRaised new dispute(s)'),
@@ -1829,7 +1848,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       if (!mounted) return;
       RenderLog.write('c125_undo_hold_fired', 'true');
       RenderLog.write('c337_undo_wh', 'supplier=$supplier');
-      setState(() => _arrivalsLocked = false);
+      setState(() { _arrivalsLocked = false; _whBlockedItems = []; });
       _loadSuppliers(); // refresh dot
       await _reloadItemsFromDB();
     } catch (e) {
@@ -3114,7 +3133,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                 Icon(Icons.lock_rounded, size: 15, color: _kReceivedFg),
                 SizedBox(width: 8),
                 Expanded(
-                  child: Text('All items received ✓',
+                  child: Text('Receiving confirmed ✓',
                       style: TextStyle(
                           fontSize: 13, fontWeight: FontWeight.w600, color: _kReceivedFg)),
                 ),
@@ -3157,6 +3176,24 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                   ]),
           ),
         ),
+        if (_whBlockedItems.isNotEmpty) ...[
+          const SizedBox(height: 4),
+          Container(
+            padding: const EdgeInsets.fromLTRB(10, 6, 10, 6),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFEF3C7),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0xFFF59E0B).withValues(alpha: 0.4)),
+            ),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text('Count these first:',
+                  style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: Color(0xFF92400E))),
+              const SizedBox(height: 2),
+              ..._whBlockedItems.map((n) => Text('• $n',
+                  style: const TextStyle(fontSize: 10, color: Color(0xFF92400E)))),
+            ]),
+          ),
+        ],
       ]);
     }
 
@@ -4334,6 +4371,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       expandedContent: isExpanded ? _buildExpandedSupplierBody(name, isAdmin) : const SizedBox.shrink(),
       mode: widget.arrivals ? _supplierModeMap[name] : _collectModeMap[name],
       showPending: !widget.arrivals,
+      // #339: pass server-truth arrivals state for chip colour (null if backend doesn't provide)
+      arrivalsConfirmed: widget.arrivals ? _arrivalsConfirmedMap[name] : null,
+      arrivalsReceived: widget.arrivals ? _arrivalsReceivedMap[name] : null,
     );
   }
 
@@ -4424,6 +4464,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                 CountBadge(
                   mode: widget.arrivals ? _supplierModeMap[name] : _collectModeMap[name],
                   showPending: !widget.arrivals,
+                  arrivalsConfirmed: widget.arrivals ? _arrivalsConfirmedMap[name] : null,
+                  arrivalsReceived: widget.arrivals ? _arrivalsReceivedMap[name] : null,
                 ),
                 const SizedBox(width: 8),
                 Container(
@@ -8626,6 +8668,9 @@ class _SupplierAccordionShell extends StatelessWidget {
   final Widget expandedContent; // AnimatedSize handles show/hide
   final String? mode;         // #117: arrivals mode ('shop'|'warehouse'|null)
   final bool showPending;     // #121: true = Collect tab, renders P when mode==null
+  // #339: arrivals chip colour from server truth (null = not available, use legacy)
+  final bool? arrivalsConfirmed;
+  final int? arrivalsReceived;
 
   const _SupplierAccordionShell({
     required this.name,
@@ -8637,6 +8682,8 @@ class _SupplierAccordionShell extends StatelessWidget {
     required this.expandedContent,
     this.mode,
     this.showPending = false,
+    this.arrivalsConfirmed,
+    this.arrivalsReceived,
   });
 
   static const _kDotGreen       = Color(0xFF1B7A43);
@@ -8692,7 +8739,12 @@ class _SupplierAccordionShell extends StatelessWidget {
                 ),
                 const SizedBox(width: 12),
                 // Constant-width badge slot (38px) — flush right next to dot.
-                CountBadge(mode: mode, showPending: showPending),
+                CountBadge(
+                  mode: mode,
+                  showPending: showPending,
+                  arrivalsConfirmed: arrivalsConfirmed,
+                  arrivalsReceived: arrivalsReceived,
+                ),
                 const SizedBox(width: 8),
                 Container(
                   width: 12, height: 12,
@@ -8779,9 +8831,18 @@ class _HoldToUndoState extends State<_HoldToUndo>
 // ── #117: Count badge — fixed-width chip shown on Arrivals accordion rows ─────
 
 class CountBadge extends StatelessWidget {
-  const CountBadge({super.key, required this.mode, this.showPending = false});
+  const CountBadge({
+    super.key,
+    required this.mode,
+    this.showPending = false,
+    this.arrivalsConfirmed,
+    this.arrivalsReceived,
+  });
   final String? mode;
   final bool showPending; // true = Collect tab; renders 'P' yellow when mode==null
+  // #339: arrivals chip colour binding (null = not provided by backend, use legacy colour)
+  final bool? arrivalsConfirmed;
+  final int? arrivalsReceived;
 
   @override
   Widget build(BuildContext context) {
@@ -8790,12 +8851,23 @@ class CountBadge extends StatelessWidget {
         : showPending ? 'P'
         : null;
     if (label == null) return const SizedBox(width: 38, height: 24);
-    // #334 D2: C badge is amber while at shop stage (not confirmed); only green post-confirm (warehouse)
-    final Color color = mode == 'shop'
-        ? const Color(0xFFF59E0B) // amber — counting in progress, not yet confirmed
-        : mode == 'warehouse'
-            ? const Color(0xFFD32F2F)
-            : const Color(0xFFF59E0B); // amber — matches pending dot
+    // #339: server-truth chip colour for arrivals (when backend provides arrivals_confirmed)
+    final Color color;
+    if (arrivalsConfirmed != null) {
+      // Green if confirmed, amber if in-progress (received > 0), grey if not started
+      color = arrivalsConfirmed == true
+          ? const Color(0xFF065F46)  // green — receiving confirmed
+          : (arrivalsReceived != null && arrivalsReceived! > 0)
+              ? const Color(0xFFF59E0B)  // amber — in progress
+              : const Color(0xFF9CA3AF); // grey — not started
+    } else {
+      // #334 D2: legacy colour — C badge is amber while at shop stage; red for warehouse
+      color = mode == 'shop'
+          ? const Color(0xFFF59E0B)
+          : mode == 'warehouse'
+              ? const Color(0xFFD32F2F)
+              : const Color(0xFFF59E0B);
+    }
     return SizedBox(
       width: 38,
       height: 24,

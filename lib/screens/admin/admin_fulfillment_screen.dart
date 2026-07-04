@@ -4601,16 +4601,19 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                 else
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        for (int i = 0; i < visibleItems.length; i++) ...[
-                          _buildItemTile(visibleItems[i]),
-                          if (i < visibleItems.length - 1)
-                            const SizedBox(height: 4),
+                    child: Builder(builder: (_) {
+                      RenderLog.write('c351_ready', 'ui=v2');
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          for (int i = 0; i < visibleItems.length; i++) ...[
+                            _buildItemTile(visibleItems[i]),
+                            if (i < visibleItems.length - 1)
+                              const SizedBox(height: 4),
+                          ],
                         ],
-                      ],
-                    ),
+                      );
+                    }),
                   ),
               ],
               footer: (!_loadingBox && _items.isNotEmpty)
@@ -5000,6 +5003,37 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                 if (chip == null) return const SizedBox.shrink();
                 return Padding(padding: const EdgeInsets.only(top: 3), child: chip);
               }),
+              // C351: count_issue amber chip from payload (no new network calls)
+              Builder(builder: (_) {
+                final issue = item['count_issue']?.toString() ?? '';
+                if (issue.isEmpty || issue == 'null') return const SizedBox.shrink();
+                final qty = (item['issue_qty'] as num?)?.toInt() ?? 0;
+                final label = switch (issue) {
+                  'wrong'      => 'Wrong',
+                  'few_wrong'  => 'Few wrong${qty > 0 ? " ($qty)" : ""}',
+                  'damaged'    => 'Damaged${qty > 0 ? " ($qty)" : ""}',
+                  'excess'     => 'Excess${qty > 0 ? " (+$qty)" : ""}',
+                  'not_coming' => 'Not coming',
+                  _ => issue,
+                };
+                RenderLog.write('c351_chip', 'kind=$issue');
+                return Padding(
+                  padding: const EdgeInsets.only(top: 3),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFEF3C7),
+                      border: Border.all(color: const Color(0xFFF59E0B), width: 1),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(label,
+                        style: const TextStyle(
+                            fontSize: 10, fontWeight: FontWeight.w700,
+                            color: Color(0xFF92400E)),
+                        maxLines: 1, overflow: TextOverflow.ellipsis),
+                  ),
+                );
+              }),
               // dispute badge on its own constrained line below
               if (disputeItem != null) ...[
                 const SizedBox(height: 3),
@@ -5208,6 +5242,49 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                 final chip = _mismatchChip(merged.productId);
                 if (chip == null) return const SizedBox.shrink();
                 return Padding(padding: const EdgeInsets.only(top: 3), child: chip);
+              }),
+              // C351: count_issue amber chip — show for first underlying line that has an issue flag
+              Builder(builder: (_) {
+                String issue = '';
+                int qty = 0;
+                for (final oiid in merged.orderItemIds) {
+                  // _items contains raw maps; find first with count_issue
+                  final raw = _items.where((i) => i['order_item_id']?.toString() == oiid).firstOrNull;
+                  if (raw != null) {
+                    final ci = raw['count_issue']?.toString() ?? '';
+                    if (ci.isNotEmpty && ci != 'null') {
+                      issue = ci;
+                      qty = (raw['issue_qty'] as num?)?.toInt() ?? 0;
+                      break;
+                    }
+                  }
+                }
+                if (issue.isEmpty) return const SizedBox.shrink();
+                final label = switch (issue) {
+                  'wrong'      => 'Wrong',
+                  'few_wrong'  => 'Few wrong${qty > 0 ? " ($qty)" : ""}',
+                  'damaged'    => 'Damaged${qty > 0 ? " ($qty)" : ""}',
+                  'excess'     => 'Excess${qty > 0 ? " (+$qty)" : ""}',
+                  'not_coming' => 'Not coming',
+                  _ => issue,
+                };
+                RenderLog.write('c351_chip', 'kind=$issue');
+                return Padding(
+                  padding: const EdgeInsets.only(top: 3),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFEF3C7),
+                      border: Border.all(color: const Color(0xFFF59E0B), width: 1),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(label,
+                        style: const TextStyle(
+                            fontSize: 10, fontWeight: FontWeight.w700,
+                            color: Color(0xFF92400E)),
+                        maxLines: 1, overflow: TextOverflow.ellipsis),
+                  ),
+                );
               }),
               // #265: arrival status line removed — "Arrival pending"/"Arrived" not shown on Warehouse rows
               // line 4: awaiting dispute badge — ACTIVE disputes only (#199)
@@ -6806,9 +6883,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       }
       return;
     }
-    // C174/B15: refresh dispute badges after sheet closes (user may have flagged/recorded)
+    // C174/B15: refresh dispute badges + issue chips after sheet closes
     if (mounted) {
       await _loadDisputes();
+      await _reloadItemsFromDB(); // C351: refresh count_issue chips
       context.findAncestorStateOfType<_AdminFulfillmentScreenState>()?._refreshDisputeState();
     }
   }
@@ -9124,6 +9202,7 @@ class _DisputeStrip extends StatelessWidget {
           'dispute=${item.disputeId};status=${item.disputeStatus}');
     }
     RenderLog.write('c349_item_chip', 'tab=$surface');
+    RenderLog.write('c352_item_chip', 'tab=$surface');
 
     // B2 (#349): red-outline chip "In dispute — <item_status_label>" (24-char truncated)
     const kRed = Color(0xFFDC2626);
@@ -15040,6 +15119,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
         // Retry with note dialog
         setState(() => _resolving.remove(item.disputeId));
         RenderLog.write('c349_note_gate', 'forced=n');
+        RenderLog.write('c352_note_gate', 'forced=false');
         final retryNote = await _showNoteDialog(
           action.label,
           '${item.productName} — ${item.supplier}.\nA note is required for this action.',
@@ -15053,6 +15133,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $err')));
       } else {
         RenderLog.write('c349_resolved', 'code=${action.code}');
+        RenderLog.write('c352_resolved', 'code=${action.code}');
         final newStatus = res['new_status']?.toString() ?? action.label;
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Updated: $newStatus')));
         Future.delayed(const Duration(seconds: 1), () {
@@ -15281,6 +15362,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
 
     // ── Render-log sentinels ────────────────────────────────────────────────
     RenderLog.write('c349_ready', 'a3=v2');
+    RenderLog.write('c352_ready', 'a3=v2');
     RenderLog.write('c188_disputes_tab_built', 'active=${activeDisputes.length};closed=${closedDisputes.length}');
     RenderLog.write('c170_disputes_built', 'true');
     RenderLog.write('c170_supplier_card_count', '${activeGroups.length}');
@@ -15581,6 +15663,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     RenderLog.write('c192_dispute_card_rendered',
         'dispute=${item.disputeId};status=${item.statusCode}');
     RenderLog.write('c349_row', 'kind=${item.kind}');
+    RenderLog.write('c352_row', 'kind=${item.kind}');
 
     return InkWell(
       onTap: () => _openDisputeActionSheet(item),
@@ -15748,6 +15831,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
       await closeReturnNoteRpc(disputeId: item.disputeId);
       if (!mounted) return;
       RenderLog.write('c349_return_close', 'ok=y');
+      RenderLog.write('c352_return_close', 'ok=1');
       ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Return note closed ✓')));
       _load();
@@ -15783,6 +15867,7 @@ class _DisputeActionSheetState extends State<_DisputeActionSheet> {
     String? note;
     if (action.noteRequired) {
       RenderLog.write('c349_note_gate', 'forced=y');
+      RenderLog.write('c352_note_gate', 'forced=true');
       final noteCtrl = TextEditingController();
       final confirmed = await showDialog<bool>(
         context: context,
@@ -16017,6 +16102,7 @@ class _DisputeActionSheetState extends State<_DisputeActionSheet> {
             RenderLog.write('c192_dispute_sheet_buttons',
                 'dispute=${item.disputeId};count=${item.actions.length}');
             RenderLog.write('c349_actions', 'n=${item.actions.length}');
+            RenderLog.write('c352_actions', 'n=${item.actions.length}');
             return Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: item.actions.asMap().entries.map((e) {

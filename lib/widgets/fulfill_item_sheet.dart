@@ -177,13 +177,15 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
   String? _wrongUploadError;
   final TextEditingController _wrongNameCtrl = TextEditingController();
 
-  // C347: unified report-issue section
+  // C351: unified report-issue section
   String? _selectedIssue;   // 'wrong'|'few_wrong'|'damaged'|'excess'|'not_coming'
   int _issueQty = 1;
   bool _issueSaving = false;
   String? _issueProofUrl;
   bool _issueProofUploading = false;
+  String? _issueUploadError;
   bool _initiallyLocked = false;
+  bool _issueExpanded = false;
   final TextEditingController _issueNameCtrl = TextEditingController();
 
   @override
@@ -226,6 +228,7 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
     } else if (_localFsState == 'not_coming') {
       _selectedIssue = 'not_coming';
     }
+    if (_selectedIssue != null) _issueExpanded = true;
 
     _dispute = widget.existingDispute;
     _logOpen();
@@ -457,7 +460,7 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
             SnackBar(content: Text('Error: $err'), backgroundColor: const Color(0xFFDC2626)));
           return;
         }
-        RenderLog.write('c347_flag_cleared', 'ok=y');
+        RenderLog.write('c351_flag_cleared', 'ok=1');
         if (mounted) Navigator.of(context).pop();
         return;
       }
@@ -485,7 +488,7 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
             SnackBar(content: Text('Error: $err'), backgroundColor: const Color(0xFFDC2626)));
           return;
         }
-        RenderLog.write('c347_typed_raise', 'kind=$kind');
+        RenderLog.write('c351_typed', 'kind=$kind');
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Dispute raised')));
         if (mounted) Navigator.of(context).pop();
@@ -513,7 +516,7 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
           SnackBar(content: Text('Error: $err'), backgroundColor: const Color(0xFFDC2626)));
         return;
       }
-      RenderLog.write('c347_flag_saved', 'issue=$issue,qty=$qty');
+      RenderLog.write('c351_flag_saved', 'issue=$issue,qty=$qty');
       if (mounted) Navigator.of(context).pop();
     } catch (e) {
       if (!mounted) return;
@@ -1166,200 +1169,8 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
               _buildMissingInlineRow(),
             const SizedBox(height: 8),
 
-            // Few item wrong (#194 dropdown panel)
-            if (!_showFewWrongPanel)
-              _ActionRow(
-                label: 'Few item wrong',
-                color: _kPartialFg,
-                icon: Icons.remove_circle_outline_rounded,
-                filled: false,
-                loading: false,
-                onTap: () => setState(() {
-                  _showFewWrongPanel = true;
-                  _showMissingInline = false;
-                  final ordQty = _ordQty;
-                  final maxCounted = ordQty > 1 ? ordQty - 1 : 0;
-                  // Default: current received if valid, else ordered-1
-                  final defaultCounted = (_localRecQty > 0 &&
-                          _localRecQty < ordQty)
-                      ? _localRecQty.clamp(0, maxCounted)
-                      : maxCounted;
-                  _fewWrongCountedDraft = defaultCounted;
-                  _fewWrongCountedCtrl.text = '$_fewWrongCountedDraft';
-                  _fewWrongProofUrl = null;
-                  _fewWrongUploadError = null;
-                  _fewWrongNameCtrl.clear();
-                  RenderLog.write('c194_fewwrong_panel_opened',
-                      'order_item_id=${_itemId ?? ''};default=$_fewWrongCountedDraft');
-                }),
-              )
-            else
-              _buildFewWrongPanel(),
-            const SizedBox(height: 8),
-
-            // Wrong item — dialog with proof (updated C194)
-            if (!_flaggingWrong) ...[
-              _ActionRow(
-                label: 'Wrong item',
-                color: _kWrongFg,
-                icon: Icons.close_rounded,
-                filled: false,
-                loading: false,
-                onTap: widget.recording ? null : () => setState(() {
-                  _flaggingWrong = true;
-                  _wrongNameCtrl.clear();
-                  _wrongProofUrl = null;
-                  _wrongUploadError = null;
-                }),
-              ),
-            ] else ...[
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFFF2F2),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: const Color(0xFFFECACA)),
-                ),
-                child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                  const Text('What did they send instead? (optional)',
-                      style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: _kWrongFg)),
-                  const SizedBox(height: 8),
-                  TextField(
-                    controller: _wrongNameCtrl,
-                    autofocus: true,
-                    decoration: const InputDecoration(
-                      hintText: 'e.g. Paracetamol 500mg instead',
-                      hintStyle: TextStyle(fontSize: 13, color: _kSub),
-                      isDense: true,
-                      contentPadding: EdgeInsets.symmetric(
-                          horizontal: 10, vertical: 10),
-                      filled: true,
-                      fillColor: Color(0xFFFFF8F8),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.all(Radius.circular(8)),
-                        borderSide:
-                            BorderSide(color: Color(0xFFFECACA)),
-                      ),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.all(Radius.circular(8)),
-                        borderSide:
-                            BorderSide(color: Color(0xFFFECACA)),
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.all(Radius.circular(8)),
-                        borderSide:
-                            BorderSide(color: _kWrongFg, width: 1.5),
-                      ),
-                    ),
-                    style: const TextStyle(fontSize: 13),
-                    textCapitalization: TextCapitalization.sentences,
-                    onSubmitted: (_) =>
-                        _flaggingWrongLoading ? null : _fw_flagWrongItem(),
-                  ),
-                  const SizedBox(height: 10),
-
-                  // Proof attach for Wrong item
-                  const Text('Attach photo proof (optional)',
-                      style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                          color: _kSub)),
-                  const SizedBox(height: 6),
-                  _buildProofAttach(
-                    proofUrl: _wrongProofUrl,
-                    uploading: _wrongUploading,
-                    uploadError: _wrongUploadError,
-                    onPick: _flaggingWrongLoading
-                        ? null
-                        : () => _pickAndUpload(
-                              setUploading: (v) => _wrongUploading = v,
-                              setError: (v) => _wrongUploadError = v,
-                              onUploaded: (url) => _wrongProofUrl = url,
-                            ),
-                    onRemove: _flaggingWrongLoading
-                        ? null
-                        : () => setState(() {
-                              _wrongProofUrl = null;
-                              _wrongUploadError = null;
-                            }),
-                  ),
-                  const SizedBox(height: 10),
-
-                  Row(children: [
-                    Expanded(
-                      child: SizedBox(
-                        height: 40,
-                        child: FilledButton(
-                          onPressed: _flaggingWrongLoading
-                              ? null
-                              : _fw_flagWrongItem,
-                          style: FilledButton.styleFrom(
-                            backgroundColor: _kWrongFg,
-                            disabledBackgroundColor:
-                                _kWrongFg.withValues(alpha: 0.4),
-                            shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8)),
-                          ),
-                          child: _flaggingWrongLoading
-                              ? const SizedBox(
-                                  width: 14, height: 14,
-                                  child: CircularProgressIndicator(
-                                      color: Colors.white,
-                                      strokeWidth: 2))
-                              : const Text('Confirm',
-                                  style: TextStyle(
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w700)),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: SizedBox(
-                        height: 40,
-                        child: OutlinedButton(
-                          onPressed: _flaggingWrongLoading
-                              ? null
-                              : () => setState(() {
-                                    _flaggingWrong = false;
-                                    _wrongNameCtrl.clear();
-                                    _wrongProofUrl = null;
-                                    _wrongUploadError = null;
-                                  }),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: _kSub,
-                            side: const BorderSide(color: _kBorder),
-                            shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8)),
-                          ),
-                          child: const Text('Cancel',
-                              style: TextStyle(fontSize: 13)),
-                        ),
-                      ),
-                    ),
-                  ]),
-                ]),
-              ),
-            ],
-            const SizedBox(height: 8),
-
-            // Not coming — unchanged
-            _ActionRow(
-              label: 'Not coming',
-              color: _kNotComingFg,
-              icon: Icons.block_outlined,
-              filled: false,
-              loading: false,
-              onTap: widget.recording ? null : () async {
-                await _doRecord('not_coming');
-                if (mounted) Navigator.of(context).pop();
-              },
-            ),
+            // C351: unified 5-option report-issue section
+            _buildReportIssueSection(),
           ]
 
           // ── RECEIVED FULL ─────────────────────────────────────────────────
@@ -1602,7 +1413,7 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
       _ItemSheetState state, bool oiidPresent, String token) {
     switch (state) {
       case _ItemSheetState.pending:
-        return 5; // Got all / Report missing / Few item wrong / Wrong / Not coming
+        return 3; // Got all / Report missing / Report issue section
       case _ItemSheetState.receivedFull:   return 2;
       case _ItemSheetState.shortfall:      return 2;
       case _ItemSheetState.disputeActive:  return token.isNotEmpty ? 3 : 2;
@@ -1611,6 +1422,293 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
       case _ItemSheetState.notComing:      return 2;
       case _ItemSheetState.fallback:       return 2;
     }
+  }
+
+  // ── C351: Unified 5-option report-issue section ───────────────────────────
+
+  static const _kIssueOptions = [
+    ('wrong',      'Wrong item (whole line)',    Icons.swap_horiz_rounded),
+    ('few_wrong',  'Few units wrong',            Icons.remove_circle_outline_rounded),
+    ('damaged',    'Damaged / expired units',    Icons.broken_image_outlined),
+    ('excess',     'Excess received',            Icons.add_circle_outline_rounded),
+    ('not_coming', 'Not coming',                 Icons.block_outlined),
+  ];
+
+  Widget _buildReportIssueSection() {
+    final hasExisting = _selectedIssue != null;
+    const kAmber = Color(0xFFD97706);
+
+    // ── Collapsed entry ────────────────────────────────────────────────────
+    if (!_issueExpanded) {
+      return _ActionRow(
+        label: 'Report issue',
+        color: kAmber,
+        icon: Icons.flag_outlined,
+        filled: false,
+        loading: false,
+        onTap: widget.recording ? null : () => setState(() {
+          _issueExpanded = true;
+          _issueQty = 1;
+          _issueProofUrl = null;
+          _issueUploadError = null;
+        }),
+      );
+    }
+
+    // ── Expanded section ───────────────────────────────────────────────────
+    final ordQty = _ordQty;
+    final recQty = _localRecQty;
+    final maxQty = (ordQty - recQty).clamp(1, ordQty > 0 ? ordQty : 999);
+
+    return Builder(builder: (ctx) {
+      RenderLog.write('c351_section', 'n=5');
+      return Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFFFBEB),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: const Color(0xFFFCD34D)),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          // Header row
+          Row(children: [
+            const Icon(Icons.flag_outlined, size: 15, color: kAmber),
+            const SizedBox(width: 6),
+            const Expanded(
+              child: Text('Report issue',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: kAmber)),
+            ),
+            if (!hasExisting)
+              GestureDetector(
+                onTap: () => setState(() {
+                  _issueExpanded = false;
+                  _selectedIssue = null;
+                }),
+                child: const Icon(Icons.close, size: 18, color: _kSub),
+              ),
+          ]),
+
+          // Clear issue (if existing flag)
+          if (hasExisting) ...[
+            const SizedBox(height: 8),
+            GestureDetector(
+              onTap: _issueSaving ? null : () => _doSetLineIssue(clear: true),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFEE2E2),
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: const Color(0xFFFCA5A5)),
+                ),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  const Icon(Icons.close, size: 13, color: Color(0xFFDC2626)),
+                  const SizedBox(width: 4),
+                  Text(
+                    _issueSaving ? 'Clearing…' : 'Clear issue',
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFFDC2626)),
+                  ),
+                ]),
+              ),
+            ),
+          ],
+
+          const SizedBox(height: 10),
+
+          // 5 option buttons
+          for (final (code, label, icon) in _kIssueOptions) ...[
+            GestureDetector(
+              onTap: () => setState(() {
+                _selectedIssue = _selectedIssue == code ? null : code;
+                if (_selectedIssue != null) {
+                  _issueQty = 1;
+                  _issueProofUrl = null;
+                  _issueUploadError = null;
+                  if (_selectedIssue != 'few_wrong' && _selectedIssue != 'wrong') {
+                    _issueNameCtrl.clear();
+                  }
+                }
+              }),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+                margin: const EdgeInsets.only(bottom: 4),
+                decoration: BoxDecoration(
+                  color: _selectedIssue == code
+                      ? kAmber.withValues(alpha: 0.12)
+                      : Colors.white,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: _selectedIssue == code ? kAmber : _kBorder,
+                    width: _selectedIssue == code ? 1.5 : 1.0,
+                  ),
+                ),
+                child: Row(children: [
+                  Icon(icon, size: 16,
+                      color: _selectedIssue == code ? kAmber : _kSub),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(label,
+                        style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: _selectedIssue == code
+                                ? FontWeight.w700 : FontWeight.w500,
+                            color: _selectedIssue == code ? kAmber : _kText)),
+                  ),
+                  if (_selectedIssue == code)
+                    const Icon(Icons.check_circle_rounded,
+                        size: 16, color: kAmber),
+                ]),
+              ),
+            ),
+
+            // Conditional inputs for selected option
+            if (_selectedIssue == code) ...[
+              const SizedBox(height: 4),
+              _buildIssueInputs(code, ordQty, maxQty),
+              const SizedBox(height: 8),
+            ],
+          ],
+
+          // Save button
+          if (_selectedIssue != null) ...[
+            const SizedBox(height: 4),
+            Builder(builder: (_) {
+              final canSave = _issueCanSave();
+              return SizedBox(
+                height: 44,
+                child: FilledButton(
+                  onPressed: (_issueSaving || !canSave) ? null : () => _doSetLineIssue(),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: kAmber,
+                    disabledBackgroundColor: kAmber.withValues(alpha: 0.4),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8)),
+                  ),
+                  child: _issueSaving
+                      ? const SizedBox(width: 16, height: 16,
+                          child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                      : Text(
+                          _initiallyLocked ? 'Save (raises dispute)' : 'Save issue',
+                          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+                ),
+              );
+            }),
+          ],
+        ]),
+      );
+    });
+  }
+
+  bool _issueCanSave() {
+    final issue = _selectedIssue;
+    if (issue == null) return false;
+    if (issue == 'few_wrong') {
+      return _issueQty >= 1 && _issueNameCtrl.text.trim().isNotEmpty;
+    }
+    return true;
+  }
+
+  Widget _buildIssueInputs(String code, int ordQty, int maxQty) {
+    const kAmber = Color(0xFFD97706);
+    final unit = _unit.isNotEmpty ? ' $_unit' : '';
+
+    if (code == 'not_coming') {
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(10, 0, 10, 0),
+        child: Text(
+          'Item will leave the counting list.',
+          style: const TextStyle(fontSize: 12, color: _kSub),
+        ),
+      );
+    }
+
+    // Stepper needed for few_wrong, damaged, excess
+    final needsStepper = code == 'few_wrong' || code == 'damaged' || code == 'excess';
+    // Name field needed for few_wrong (required) and wrong (optional)
+    final needsName = code == 'few_wrong' || code == 'wrong';
+    final nameRequired = code == 'few_wrong';
+    // Photo always optional
+    final stepperLabel = code == 'few_wrong' ? 'Wrong units'
+                       : code == 'damaged'   ? 'Damaged units'
+                       : 'Excess units';
+    final stepperMax = code == 'excess' ? 999 : maxQty;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(4, 0, 4, 0),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if (needsStepper) ...[
+          Row(children: [
+            Text('$stepperLabel (max $stepperMax):',
+                style: const TextStyle(fontSize: 12, color: _kSub)),
+            const SizedBox(width: 8),
+            _InlineStepBtn(
+              icon: Icons.remove,
+              enabled: _issueQty > 1,
+              color: kAmber,
+              onTap: () => setState(() => _issueQty = (_issueQty - 1).clamp(1, stepperMax)),
+            ),
+            Container(
+              width: 36,
+              alignment: Alignment.center,
+              child: Text('$_issueQty',
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText)),
+            ),
+            _InlineStepBtn(
+              icon: Icons.add,
+              enabled: _issueQty < stepperMax,
+              color: kAmber,
+              onTap: () => setState(() => _issueQty = (_issueQty + 1).clamp(1, stepperMax)),
+            ),
+          ]),
+          const SizedBox(height: 8),
+        ],
+        if (needsName) ...[
+          TextField(
+            controller: _issueNameCtrl,
+            decoration: InputDecoration(
+              hintText: nameRequired
+                  ? 'What item did they send? (required)'
+                  : 'What item did they send? (optional)',
+              hintStyle: const TextStyle(fontSize: 12, color: _kSub),
+              isDense: true,
+              contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+              filled: true,
+              fillColor: Colors.white,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+                borderSide: const BorderSide(color: _kBorder),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+                borderSide: const BorderSide(color: _kBorder),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+                borderSide: const BorderSide(color: kAmber, width: 1.5),
+              ),
+            ),
+            style: const TextStyle(fontSize: 13),
+            textCapitalization: TextCapitalization.sentences,
+            onChanged: (_) => setState(() {}),
+          ),
+          const SizedBox(height: 8),
+        ],
+        // Photo (optional for all except not_coming)
+        _buildProofAttach(
+          proofUrl: _issueProofUrl,
+          uploading: _issueProofUploading,
+          uploadError: _issueUploadError,
+          onPick: _issueSaving ? null : () => _pickAndUpload(
+            setUploading: (v) => _issueProofUploading = v,
+            setError: (v) => _issueUploadError = v,
+            onUploaded: (url) => _issueProofUrl = url,
+          ),
+          onRemove: _issueSaving ? null : () => setState(() {
+            _issueProofUrl = null;
+            _issueUploadError = null;
+          }),
+        ),
+      ]),
+    );
   }
 }
 

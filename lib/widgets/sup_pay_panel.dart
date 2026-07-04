@@ -335,6 +335,7 @@ class _SupPayPanelState extends State<SupPayPanel> {
         const SizedBox(height: 12),
         Builder(builder: (_) {
           RenderLog.write('c349_bill_adj', 'n=${_adjustments.length}');
+          RenderLog.write('c352_bill_adj', 'n=${_adjustments.length}');
           return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             const Text('Adjustments',
                 style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,

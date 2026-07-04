@@ -36,7 +36,6 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
   String _supplierName = '';
   List<DisputeItem> _items = [];
   final Map<String, bool> _submitting = {};
-  bool _closedExpanded = false;
 
   @override
   void initState() {
@@ -214,101 +213,40 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
   }
 
   Widget _buildPage() {
-    // C362 point-8: ITEM-WISE — aggregate by product (summed disputed qty; Active if any).
+    // C363-F: ITEM-WISE — aggregate by product (summed disputed qty; Active if any).
+    // NO Active/Closed sections — one flat list, active rows first; each row's
+    // Active(red)/Inactive(green) badge conveys status.
     final aggregated = aggregateDisputesByProduct(_items);
-    final activeItems = aggregated.where((a) => a.active).toList();
-    final closedItems = aggregated.where((a) => !a.active).toList();
+    final rows = [
+      ...aggregated.where((a) => a.active),
+      ...aggregated.where((a) => !a.active),
+    ];
     RenderLog.write('c362_disp_group', 'where=token;items=${aggregated.length}');
+    RenderLog.write('c363_disp_group', 'where=supplier;items=${rows.length}');
 
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(16, 20, 16, 48),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         _buildHeader(),
         const SizedBox(height: 16),
-        const Text('Please confirm the short items below.',
+        const Text('Please confirm the disputed items below.',
             style: TextStyle(fontSize: 15, color: _kTextMuted, height: 1.35)),
         const SizedBox(height: 12),
-
-        // ── Active section ─────────────────────────────────────────────────
-        _buildSectionLabel('Active', activeItems.length, active: true),
-        const SizedBox(height: 8),
-        if (activeItems.isEmpty)
+        if (rows.isEmpty)
           const Padding(
             padding: EdgeInsets.symmetric(vertical: 12),
-            child: Text('No active disputes.',
+            child: Text('No disputes.',
                 style: TextStyle(fontSize: 13, color: _kTextMuted)),
           )
         else
-          ...activeItems.map((item) => Padding(
+          ...rows.map((item) => Padding(
             padding: const EdgeInsets.only(bottom: 10),
             child: _buildItemCard(item),
           )),
-
-        // ── Closed section ─────────────────────────────────────────────────
-        if (closedItems.isNotEmpty) ...[
-          const SizedBox(height: 8),
-          GestureDetector(
-            onTap: () => setState(() => _closedExpanded = !_closedExpanded),
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
-              Text(
-                _closedExpanded
-                    ? 'Hide closed (${closedItems.length})'
-                    : 'Show closed (${closedItems.length})',
-                style: const TextStyle(fontSize: 13, color: _kTextMuted,
-                    fontWeight: FontWeight.w600),
-              ),
-              const SizedBox(width: 4),
-              AnimatedRotation(
-                turns: _closedExpanded ? 0.5 : 0.0,
-                duration: const Duration(milliseconds: 280),
-                curve: Curves.easeInOutCubic,
-                child: const Icon(Icons.keyboard_arrow_down_rounded,
-                    size: 16, color: _kTextMuted),
-              ),
-            ]),
-          ),
-          AnimatedSize(
-            duration: const Duration(milliseconds: 280),
-            curve: Curves.easeInOutCubic,
-            clipBehavior: Clip.antiAlias,
-            child: _closedExpanded
-                ? Padding(
-                    padding: const EdgeInsets.only(top: 8),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: closedItems.map((item) => Padding(
-                        padding: const EdgeInsets.only(bottom: 10),
-                        child: _buildItemCard(item),
-                      )).toList(),
-                    ),
-                  )
-                : const SizedBox.shrink(),
-          ),
-        ],
-
         const SizedBox(height: 24),
         _footer(),
       ]),
     );
-  }
-
-  Widget _buildSectionLabel(String label, int count, {required bool active}) {
-    return Row(children: [
-      Container(
-        width: 8, height: 8,
-        decoration: BoxDecoration(
-          color: active ? _kGreen : _kTextMuted,
-          shape: BoxShape.circle,
-        ),
-      ),
-      const SizedBox(width: 6),
-      Text(label,
-          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
-              color: active ? _kTextPrimary : _kTextMuted)),
-      const SizedBox(width: 4),
-      Text('($count)',
-          style: const TextStyle(fontSize: 12, color: _kTextMuted)),
-    ]);
   }
 
   Widget _buildItemCard(AggregatedDispute agg) {
@@ -367,7 +305,7 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
                 // C362 point-8: Active = RED / Inactive = GREEN badge — replaces the verbose
                 // "Awaiting supplier response" item_status_label pill.
                 Builder(builder: (_) {
-                  RenderLog.write('c362_badge', 'where=supplier,active=$isActive');
+                  RenderLog.write('c363_badge', 'where=supplier,active=$isActive');
                   return Container(
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                     decoration: BoxDecoration(

@@ -25,6 +25,9 @@ String _pq(num n, String? packType) {
 // onRespond is null → card is read-only (no action buttons rendered).
 class DisputeCard extends StatelessWidget {
   final DisputeItem item;
+  // C363-F: when non-null, the row is item-wise — show this product's SUMMED qtys +
+  // Active-if-any state (item is the representative line; agg carries the totals).
+  final AggregatedDispute? agg;
   // Called with (disputeId, actionCode) when supplier taps a button.
   final Future<void> Function(String disputeId, String code)? onRespond;
   final bool isResponding;
@@ -32,6 +35,7 @@ class DisputeCard extends StatelessWidget {
   const DisputeCard({
     super.key,
     required this.item,
+    this.agg,
     this.onRespond,
     this.isResponding = false,
   });
@@ -41,9 +45,7 @@ class DisputeCard extends StatelessWidget {
     // c350_card emitted once per card in build
     RenderLog.write('c350_card', 'kind=${item.kind}');
 
-    final isActive = item.isActive;
-    final statusBg  = isActive ? _kAmberBg : _kNeutral;
-    final statusFg  = isActive ? _kAmberText : _kSub;
+    final isActive = agg?.active ?? item.isActive;
     final hasImage  = (item.imageUrl ?? '').isNotEmpty;
     final isWrong   = item.kind == 'wrong_item' || item.kind == 'few_wrong';
 
@@ -88,18 +90,27 @@ class DisputeCard extends StatelessWidget {
                   ]),
                 ),
                 const SizedBox(width: 6),
-                // Status pill: item_status_label verbatim; amber=active, grey=closed
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: statusBg,
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Text(
-                    item.itemStatusLabel,
-                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: statusFg),
-                  ),
-                ),
+                // C363-F: Active = RED / Inactive = GREEN badge — replaces the verbose
+                // "Awaiting supplier response" item_status_label pill.
+                Builder(builder: (_) {
+                  RenderLog.write('c363_badge', 'where=supplier,active=$isActive');
+                  return Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: isActive
+                          ? const Color(0xFFFEE2E2)
+                          : const Color(0xFFD1FAE5),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(isActive ? 'Active' : 'Inactive',
+                        style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            color: isActive
+                                ? const Color(0xFF991B1B)
+                                : const Color(0xFF065F46))),
+                  );
+                }),
               ]),
               // dispute_code: small + muted
               if ((item.disputeCode ?? '').isNotEmpty) ...[
@@ -130,11 +141,11 @@ class DisputeCard extends StatelessWidget {
         const SizedBox(height: 12),
         _qtyTable(),
 
-        // "In dispute: N units" when disputeQty is meaningful
-        if (item.disputeQty != null && item.disputeQty! > 0) ...[
+        // "In dispute: N units" when disputeQty is meaningful (summed when item-wise)
+        if ((agg?.disputedQty ?? item.disputeQty ?? 0) > 0) ...[
           const SizedBox(height: 6),
           Text(
-            'In dispute: ${item.disputeQty!.toInt()} units',
+            'In dispute: ${(agg?.disputedQty ?? item.disputeQty ?? 0).toInt()} units',
             style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kAmberText),
           ),
         ],
@@ -201,11 +212,12 @@ class DisputeCard extends StatelessWidget {
         ])),
         const Divider(height: 1, color: Color(0xFFE5E7EB)),
         IntrinsicHeight(child: Row(children: [
-          _qtyCell(_pq(item.ordered, item.packType), header: false, amber: false),
+          // C363-F: item-wise → show the product's SUMMED ordered/received/disputed totals.
+          _qtyCell(_pq(agg?.orderedQty ?? item.ordered, item.packType), header: false, amber: false),
           _vDiv(),
-          _qtyCell(_pq(item.received, item.packType), header: false, amber: false),
+          _qtyCell(_pq(agg?.receivedQty ?? item.received, item.packType), header: false, amber: false),
           _vDiv(),
-          _qtyCell(_pq(item.short, item.packType), header: false, amber: true, bold: true),
+          _qtyCell(_pq(agg?.disputedQty ?? item.short, item.packType), header: false, amber: true, bold: true),
         ])),
       ]),
     );

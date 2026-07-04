@@ -82,11 +82,6 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
       }
       _proofUrl = widget.existingProofUrl;
       _expanded = true;
-    } else if (widget.isShort && widget.onReportMissing != null) {
-      // C359: line already marked short — pre-select the short option (qty = received).
-      _selected = 'short';
-      _qty = widget.receivedQty;
-      _expanded = true;
     }
   }
 
@@ -331,7 +326,7 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
         onPressed: () => setState(() => _expanded = true),
         icon: const Icon(Icons.flag_outlined, size: 16),
         label: Text(
-            isEdit ? 'Change issue' : (_gateMode == 'excess' ? 'Report excess' : 'Report issue'),
+            isEdit ? 'Change issue' : 'Report issue',
             style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
         style: OutlinedButton.styleFrom(
           foregroundColor: _kAmber,
@@ -343,9 +338,10 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
     );
   }
 
+  // C363-B: exactly FIVE dispute options, shown ALWAYS with NO count-based exceptions.
+  // "Report missing / Short" is intentionally NOT here — a plain short is detected by
+  // voice counting (counted < ordered) and auto-raised at confirm.
   static const _options = [
-    // C359: "Report missing / Short" — moved in from the old standalone button.
-    ('short',      Icons.content_cut_rounded,        'Report missing / Short', 'Fewer units arrived than ordered'),
     ('wrong',      Icons.swap_horiz_rounded,         'Wrong item',        'Whole line is wrong'),
     ('few_wrong',  Icons.remove_circle_outline,      'Few units wrong',   'Some units are wrong'),
     ('damaged',    Icons.broken_image_outlined,      'Damaged / expired', 'Units are damaged or expired'),
@@ -353,55 +349,17 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
     ('not_coming', Icons.block_outlined,             'Not coming',        'Item will leave the counting list'),
   ];
 
-  // C359/C360: the short option is only offered when the parent wired the
-  // report-missing callback AND the line can actually be short (received < the
-  // stage reference — expected at warehouse, ordered at shop).
-  bool get _shortOffered =>
-      widget.onReportMissing != null && widget.receivedQty < _ref;
-
-  // C353 B2: probable-dispute gating — only offer issues that are actually
-  // possible for the line's current ordered/received state. An existing flag
-  // keeps the full list so it can be changed or cleared.
-  String get _gateMode {
-    if (_cleanIssue(widget.existingIssue) != null) return 'flagged';
-    if (widget.isShort && widget.onReportMissing != null) return 'flagged';
-    // C360: excess boundary is the stage REFERENCE (expected at warehouse), not raw
-    // ordered — so an over-forward warehouse line can pick 'excess' and balance.
-    if (widget.receivedQty >= _ref && _ref > 0) return 'excess';
-    if (widget.receivedQty > 0) return 'partial';
-    return 'full';
-  }
-
-  List<(String, IconData, String, String)> get _gatedOptions {
-    Iterable<(String, IconData, String, String)> opts;
-    switch (_gateMode) {
-      case 'excess':
-        opts = _options.where((o) => o.$1 == 'excess');
-        break;
-      case 'partial':
-        opts = _options.where((o) =>
-            o.$1 == 'short' || o.$1 == 'wrong' || o.$1 == 'few_wrong' || o.$1 == 'damaged');
-        break;
-      case 'full':
-        opts = _options.where((o) => o.$1 != 'excess');
-        break;
-      default: // flagged
-        opts = _options;
-    }
-    // C359: only offer the short option when the parent wired the report-missing flow.
-    if (!_shortOffered) opts = opts.where((o) => o.$1 != 'short');
-    return opts.toList();
-  }
+  // C363-B: no count-based gating — every option is always offered.
+  List<(String, IconData, String, String)> get _gatedOptions => _options.toList();
 
   Widget _buildExpandedSection() {
     return Builder(builder: (_) {
       final opts = _gatedOptions;
       RenderLog.write('c351_section', 'n=${opts.length}');
-      RenderLog.write('c353_gate', 'mode=$_gateMode');
-      RenderLog.write('c354_gate', 'tab=${widget.tab ?? "?"},mode=$_gateMode');
-      final hasExisting = _cleanIssue(widget.existingIssue) != null ||
-          (widget.isShort && widget.onReportMissing != null);
-      final title = _gateMode == 'excess' ? 'Report excess' : 'Report issue';
+      // C363-B: all five options always shown (n must be 5).
+      RenderLog.write('c363_opts5', 'n=${opts.length}');
+      final hasExisting = _cleanIssue(widget.existingIssue) != null;
+      const title = 'Report issue';
       return Container(
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(

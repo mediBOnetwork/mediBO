@@ -9,7 +9,6 @@ import '../widgets/dispute_card.dart';
 
 const _kGreen = Color(0xFF1B7A43);
 const _kSub   = Color(0xFF6B7280);
-const _kText  = Color(0xFF111827);
 
 class SupplierDisputesPage extends StatefulWidget {
   // View-As support: supply non-null to act as that supplier name.
@@ -33,7 +32,6 @@ class _SupplierDisputesPageState extends State<SupplierDisputesPage> {
   List<DisputeItem> _disputes = [];
   String _supplierName = '';
   bool _acting = false;
-  bool _closedExpanded = false;
   final Map<String, bool> _responding = {};
 
   @override
@@ -76,19 +74,24 @@ class _SupplierDisputesPageState extends State<SupplierDisputesPage> {
     }
   }
 
-  Future<void> _respond(String disputeId, String code) async {
-    if (_responding[disputeId] == true) return;
-    setState(() => _responding[disputeId] = true);
+  // C363-F: item-wise response — a product row aggregates several order-line disputes, so
+  // one action fans out to ALL active underlying dispute ids (mirrors DisputeFormScreen).
+  Future<void> _respondAgg(AggregatedDispute agg, String code) async {
+    final ids = agg.allActiveDisputeIds;
+    if (ids.isEmpty || ids.any((id) => _responding[id] == true)) return;
+    setState(() { for (final id in ids) { _responding[id] = true; } });
     try {
-      final res = await supplierRespondDisputeRpc(
-        disputeId: disputeId,
-        response: code,
-        actingSupplier: widget.viewAsSupplierName,
-      );
+      String msg = 'Recorded';
+      for (final id in ids) {
+        final res = await supplierRespondDisputeRpc(
+          disputeId: id,
+          response: code,
+          actingSupplier: widget.viewAsSupplierName,
+        );
+        msg = res['result']?.toString() ?? msg;
+      }
       if (!mounted) return;
-      // c350_responded: emitted from _respond handler on success
-      RenderLog.write('c350_responded', 'code=$code');
-      final msg = res['result']?.toString() ?? 'Recorded';
+      RenderLog.write('c350_responded', 'code=$code;n=${ids.length}');
       showToast(context, msg);
       await Future.delayed(const Duration(milliseconds: 600));
       if (mounted) _load();
@@ -100,7 +103,7 @@ class _SupplierDisputesPageState extends State<SupplierDisputesPage> {
       if (!mounted) return;
       showToast(context, e.toString().substring(0, e.toString().length.clamp(0, 80)));
     } finally {
-      if (mounted) setState(() => _responding.remove(disputeId));
+      if (mounted) setState(() { for (final id in ids) { _responding.remove(id); } });
     }
   }
 
@@ -157,8 +160,14 @@ class _SupplierDisputesPageState extends State<SupplierDisputesPage> {
       );
     }
 
-    final active = _disputes.where((d) => d.isActive).toList();
-    final closed = _disputes.where((d) => !d.isActive).toList();
+    // C363-F: ITEM-WISE — one row per product (summed disputed qty), NO Active/Closed
+    // sections; each row's Active(red)/Inactive(green) badge conveys status. Active first.
+    final aggregated = aggregateDisputesByProduct(_disputes);
+    final rows = [
+      ...aggregated.where((a) => a.active),
+      ...aggregated.where((a) => !a.active),
+    ];
+    RenderLog.write('c363_disp_group', 'where=supplier;items=${rows.length}');
 
     return RefreshIndicator(
       onRefresh: _load,
@@ -192,89 +201,23 @@ class _SupplierDisputesPageState extends State<SupplierDisputesPage> {
                 ),
               ],
 
-              // Active section
-              _sectionLabel('Active', active.length, isActive: true),
-              const SizedBox(height: 8),
-              if (active.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 8),
-                  child: Text('No active disputes.',
-                      style: TextStyle(fontSize: 13, color: _kSub)),
-                )
-              else
-                ...active.map((item) => Padding(
+              // Item-wise rows (active first); Active/Inactive badge per row.
+              ...rows.map((agg) {
+                final busy = agg.allActiveDisputeIds.any((id) => _responding[id] == true);
+                return Padding(
                   padding: const EdgeInsets.only(bottom: 10),
                   child: DisputeCard(
-                    item: item,
-                    onRespond: _respond,
-                    isResponding: _responding[item.disputeId] == true,
+                    item: agg.representative,
+                    agg: agg,
+                    onRespond: agg.active ? (_, code) => _respondAgg(agg, code) : null,
+                    isResponding: busy,
                   ),
-                )),
-
-              // Closed section (collapsible)
-              if (closed.isNotEmpty) ...[
-                const SizedBox(height: 8),
-                GestureDetector(
-                  onTap: () => setState(() => _closedExpanded = !_closedExpanded),
-                  child: Row(mainAxisSize: MainAxisSize.min, children: [
-                    Text(
-                      _closedExpanded
-                          ? 'Hide closed (${closed.length})'
-                          : 'Show closed (${closed.length})',
-                      style: const TextStyle(fontSize: 13, color: _kSub,
-                          fontWeight: FontWeight.w600),
-                    ),
-                    const SizedBox(width: 4),
-                    AnimatedRotation(
-                      turns: _closedExpanded ? 0.5 : 0.0,
-                      duration: const Duration(milliseconds: 280),
-                      curve: Curves.easeInOutCubic,
-                      child: const Icon(Icons.keyboard_arrow_down_rounded, size: 16, color: _kSub),
-                    ),
-                  ]),
-                ),
-                AnimatedSize(
-                  duration: const Duration(milliseconds: 280),
-                  curve: Curves.easeInOutCubic,
-                  clipBehavior: Clip.antiAlias,
-                  child: _closedExpanded
-                      ? Padding(
-                          padding: const EdgeInsets.only(top: 8),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: closed.map((item) => Padding(
-                              padding: const EdgeInsets.only(bottom: 10),
-                              child: DisputeCard(item: item), // read-only
-                            )).toList(),
-                          ),
-                        )
-                      : const SizedBox.shrink(),
-                ),
-              ],
+                );
+              }),
             ],
           ),
         ),
       ),
     );
-  }
-
-  Widget _sectionLabel(String title, int count, {required bool isActive}) {
-    return Row(children: [
-      Text(title,
-          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _kText)),
-      const SizedBox(width: 8),
-      Container(
-        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-        decoration: BoxDecoration(
-          color: isActive ? const Color(0xFFFEE2E2) : const Color(0xFFF1F3F4),
-          borderRadius: BorderRadius.circular(20),
-        ),
-        child: Text('$count',
-            style: TextStyle(
-              fontSize: 12, fontWeight: FontWeight.w700,
-              color: isActive ? const Color(0xFFDC2626) : _kSub,
-            )),
-      ),
-    ]);
   }
 }

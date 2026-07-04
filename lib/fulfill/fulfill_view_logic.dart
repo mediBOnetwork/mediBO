@@ -305,3 +305,65 @@ ResponseButtonState responseButtonState({
       ? ResponseButtonState.normal
       : ResponseButtonState.yellowDisabled;
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// CHANGE #363 — CONFIRM-BUTTON GATE + COLOR (spec A). SINGLE SOURCE for BOTH
+// layouts. The confirm button ("Confirm counting" @ shop / "Confirm all received"
+// @ warehouse) is GREEN + clickable ONLY when EVERY line satisfies
+//     ordered_qty <= counted + disputed_qty
+// (equivalently: the line is counted AND its discrepancy is fully reconciled),
+// otherwise RED + disabled. This intentionally SUBSUMES the old two gates:
+//   - un-counted lines (counting still pending) now block (were only backend-gated), AND
+//   - un-balanced dispute candidates block (as in #359-#362).
+// The math reuses the MCP-verified stage reference (ordered @ shop, expected @
+// warehouse) via lineBalanced/_isCounted359 — NOT raw ordered @ warehouse — so the
+// #360 over-forward warehouse fix is preserved.
+// ════════════════════════════════════════════════════════════════════════════
+
+/// #363-A: does ONE line satisfy the confirm gate (ordered <= counted + disputed)?
+///   - Warehouse "awaiting resolution" rows (expected==0, already disputed at shop):
+///     satisfied — not admin-actionable, must never block.
+///   - Un-counted line (counting still pending): NOT satisfied → blocks.
+///   - Counted line: satisfied iff its discrepancy is balanced (lineBalanced).
+/// A fully-received line with no dispute is counted + balanced → satisfied.
+bool lineSatisfiesConfirmGate({
+  required bool arrivals,
+  required int ordered,
+  int? shopQty,
+  required int received,
+  int? expected,
+  String? countIssue,
+  int? issueQty,
+  required String state,
+}) {
+  if (arrivals && (expected ?? ordered) == 0) return true; // already disputed
+  // A terminal 'received' line is DONE (Got-all / fully received) even if shop_qty is
+  // null — treat it as counted so it never deadlocks the gate. lineBalanced still
+  // evaluates it (and blocks a genuine unflagged excess, which never has state=='received').
+  final counted = state == 'received' ||
+      _isCounted359(
+          arrivals: arrivals, shopQty: shopQty, received: received,
+          countIssue: countIssue, state: state);
+  if (!counted) {
+    return false; // uncounted → blocks
+  }
+  return lineBalanced(
+      arrivals: arrivals, ordered: ordered, shopQty: shopQty, received: received,
+      expected: expected, countIssue: countIssue, issueQty: issueQty, state: state);
+}
+
+/// #363-A: the confirm button's visual — GREEN + enabled when NO line is unsatisfied,
+/// else RED + disabled. Caller counts unsatisfied lines via [lineSatisfiesConfirmGate]
+/// so mobile + web agree by construction.
+class ConfirmButtonVisual {
+  /// true → button is clickable (all lines satisfy the gate).
+  final bool enabled;
+  /// true → paint RED (disabled); false → paint GREEN (enabled).
+  final bool red;
+  const ConfirmButtonVisual({required this.enabled, required this.red});
+}
+
+ConfirmButtonVisual confirmButtonVisual({required int unsatisfiedLines}) {
+  final enabled = unsatisfiedLines == 0;
+  return ConfirmButtonVisual(enabled: enabled, red: !enabled);
+}

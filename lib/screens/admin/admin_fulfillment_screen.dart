@@ -26,6 +26,7 @@ import '../../supabase_config.dart' show SupabaseConfig;
 import 'voice_receive.dart';
 import '../../widgets/pinned_footer_list.dart';
 import '../../widgets/fulfill_item_sheet.dart';
+import '../../widgets/report_issue_section.dart';
 import '../../widgets/mention_hold_row.dart'; // #342: MentionActionIcon + mentionRowDecoration
 import 'package:file_picker/file_picker.dart';
 import 'package:image/image.dart' as img;
@@ -246,6 +247,7 @@ class _MergedProduct {
   final String combinedState; // 'pending'|'received'|'short'|'wrong'|'not_coming'
   final bool hasArrived; // true if any underlying Arrivals line has received_locked=true
   final List<Map>? bagBreakdown; // #254: per-bag breakdown for Arrivals
+  final Map<String, dynamic>? firstLineData; // raw first-line payload for issue section
 
   const _MergedProduct({
     required this.productId,
@@ -260,6 +262,7 @@ class _MergedProduct {
     required this.combinedState,
     this.hasArrived = false,
     this.bagBreakdown,
+    this.firstLineData,
   });
 }
 
@@ -1136,6 +1139,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         combinedState: combinedState,
         hasArrived: hasArrived,
         bagBreakdown: bagBreakdown,
+        firstLineData: Map<String, dynamic>.from(first),
       ));
     }
     // CHANGE #269 — strict A-Z, no status grouping
@@ -4601,19 +4605,16 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                 else
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: Builder(builder: (_) {
-                      RenderLog.write('c351_ready', 'ui=v2');
-                      return Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          for (int i = 0; i < visibleItems.length; i++) ...[
-                            _buildItemTile(visibleItems[i]),
-                            if (i < visibleItems.length - 1)
-                              const SizedBox(height: 4),
-                          ],
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        for (int i = 0; i < visibleItems.length; i++) ...[
+                          _buildItemTile(visibleItems[i]),
+                          if (i < visibleItems.length - 1)
+                            const SizedBox(height: 4),
                         ],
-                      );
-                    }),
+                      ],
+                    ),
                   ),
               ],
               footer: (!_loadingBox && _items.isNotEmpty)
@@ -5003,37 +5004,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                 if (chip == null) return const SizedBox.shrink();
                 return Padding(padding: const EdgeInsets.only(top: 3), child: chip);
               }),
-              // C351: count_issue amber chip from payload (no new network calls)
-              Builder(builder: (_) {
-                final issue = item['count_issue']?.toString() ?? '';
-                if (issue.isEmpty || issue == 'null') return const SizedBox.shrink();
-                final qty = (item['issue_qty'] as num?)?.toInt() ?? 0;
-                final label = switch (issue) {
-                  'wrong'      => 'Wrong',
-                  'few_wrong'  => 'Few wrong${qty > 0 ? " ($qty)" : ""}',
-                  'damaged'    => 'Damaged${qty > 0 ? " ($qty)" : ""}',
-                  'excess'     => 'Excess${qty > 0 ? " (+$qty)" : ""}',
-                  'not_coming' => 'Not coming',
-                  _ => issue,
-                };
-                RenderLog.write('c351_chip', 'kind=$issue');
-                return Padding(
-                  padding: const EdgeInsets.only(top: 3),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFFEF3C7),
-                      border: Border.all(color: const Color(0xFFF59E0B), width: 1),
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    child: Text(label,
-                        style: const TextStyle(
-                            fontSize: 10, fontWeight: FontWeight.w700,
-                            color: Color(0xFF92400E)),
-                        maxLines: 1, overflow: TextOverflow.ellipsis),
-                  ),
-                );
-              }),
               // dispute badge on its own constrained line below
               if (disputeItem != null) ...[
                 const SizedBox(height: 3),
@@ -5058,6 +5028,35 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                   ),
                 ),
               ],
+              // C351: count_issue amber chip from payload
+              Builder(builder: (_) {
+                final ci = item['count_issue']?.toString();
+                if (ci == null || ci.isEmpty || ci == 'null') return const SizedBox.shrink();
+                final lbl = switch (ci) {
+                  'wrong'      => 'Wrong',
+                  'few_wrong'  => 'Few wrong',
+                  'damaged'    => 'Damaged',
+                  'excess'     => 'Excess',
+                  'not_coming' => 'Not coming',
+                  _            => ci,
+                };
+                RenderLog.write('c351_chip', 'kind=$ci');
+                return Padding(
+                  padding: const EdgeInsets.only(top: 3),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFEF3C7),
+                      border: Border.all(color: const Color(0xFFFCD34D), width: 1),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(lbl,
+                        style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700,
+                            color: Color(0xFFB45309)),
+                        maxLines: 1, overflow: TextOverflow.ellipsis),
+                  ),
+                );
+              }),
               // #333: count_mismatch is a dead field — removed
             ]),
           ), // ConstrainedBox
@@ -5243,49 +5242,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                 if (chip == null) return const SizedBox.shrink();
                 return Padding(padding: const EdgeInsets.only(top: 3), child: chip);
               }),
-              // C351: count_issue amber chip — show for first underlying line that has an issue flag
-              Builder(builder: (_) {
-                String issue = '';
-                int qty = 0;
-                for (final oiid in merged.orderItemIds) {
-                  // _items contains raw maps; find first with count_issue
-                  final raw = _items.where((i) => i['order_item_id']?.toString() == oiid).firstOrNull;
-                  if (raw != null) {
-                    final ci = raw['count_issue']?.toString() ?? '';
-                    if (ci.isNotEmpty && ci != 'null') {
-                      issue = ci;
-                      qty = (raw['issue_qty'] as num?)?.toInt() ?? 0;
-                      break;
-                    }
-                  }
-                }
-                if (issue.isEmpty) return const SizedBox.shrink();
-                final label = switch (issue) {
-                  'wrong'      => 'Wrong',
-                  'few_wrong'  => 'Few wrong${qty > 0 ? " ($qty)" : ""}',
-                  'damaged'    => 'Damaged${qty > 0 ? " ($qty)" : ""}',
-                  'excess'     => 'Excess${qty > 0 ? " (+$qty)" : ""}',
-                  'not_coming' => 'Not coming',
-                  _ => issue,
-                };
-                RenderLog.write('c351_chip', 'kind=$issue');
-                return Padding(
-                  padding: const EdgeInsets.only(top: 3),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFFEF3C7),
-                      border: Border.all(color: const Color(0xFFF59E0B), width: 1),
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    child: Text(label,
-                        style: const TextStyle(
-                            fontSize: 10, fontWeight: FontWeight.w700,
-                            color: Color(0xFF92400E)),
-                        maxLines: 1, overflow: TextOverflow.ellipsis),
-                  ),
-                );
-              }),
               // #265: arrival status line removed — "Arrival pending"/"Arrived" not shown on Warehouse rows
               // line 4: awaiting dispute badge — ACTIVE disputes only (#199)
               if (disputeItem != null && disputeItem.isActive) ...[
@@ -5385,6 +5341,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         _reloadItemsFromDB();
       } : null,
       onReload: _reloadItemsFromDB,
+      itemData: merged.firstLineData,
     );
     if (isWide) {
       await showDialog<void>(
@@ -5996,6 +5953,35 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                                   const SizedBox(height: 2),
                                   DisputeBadge(status: deskDispute['status']?.toString() ?? ''),
                                 ],
+                                // C351: count_issue amber chip (desktop row)
+                                Builder(builder: (_) {
+                                  final ci = mp.firstLineData?['count_issue']?.toString();
+                                  if (ci == null || ci.isEmpty || ci == 'null') return const SizedBox.shrink();
+                                  final lbl = switch (ci) {
+                                    'wrong'      => 'Wrong',
+                                    'few_wrong'  => 'Few wrong',
+                                    'damaged'    => 'Damaged',
+                                    'excess'     => 'Excess',
+                                    'not_coming' => 'Not coming',
+                                    _            => ci,
+                                  };
+                                  RenderLog.write('c351_chip', 'kind=$ci');
+                                  return Padding(
+                                    padding: const EdgeInsets.only(top: 2),
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFFFEF3C7),
+                                        border: Border.all(color: const Color(0xFFFCD34D), width: 1),
+                                        borderRadius: BorderRadius.circular(4),
+                                      ),
+                                      child: Text(lbl,
+                                          style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700,
+                                              color: Color(0xFFB45309)),
+                                          maxLines: 1, overflow: TextOverflow.ellipsis),
+                                    ),
+                                  );
+                                }),
                                 // #203: proof thumbnail in desktop tile
                                 if (deskDisputeItem != null && (deskDisputeItem.proofUrl ?? '').isNotEmpty) ...[
                                   const SizedBox(height: 4),
@@ -6883,10 +6869,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       }
       return;
     }
-    // C174/B15: refresh dispute badges + issue chips after sheet closes
+    // C174/B15: refresh dispute badges after sheet closes (user may have flagged/recorded)
     if (mounted) {
       await _loadDisputes();
-      await _reloadItemsFromDB(); // C351: refresh count_issue chips
       context.findAncestorStateOfType<_AdminFulfillmentScreenState>()?._refreshDisputeState();
     }
   }
@@ -9297,6 +9282,8 @@ class _ProductReceiveSheet extends StatefulWidget {
   // #261: undo clears bag breakdown — called by snackbar UNDO handler
   final Future<void> Function(int productId)? bagCountClearFn;
   final VoidCallback? onReload;
+  // C351: raw first-line payload for issue section (order_item_id, count_issue, etc.)
+  final Map<String, dynamic>? itemData;
 
   const _ProductReceiveSheet({
     required this.supplierName,
@@ -9314,6 +9301,7 @@ class _ProductReceiveSheet extends StatefulWidget {
     this.bagCountFn,
     this.bagCountClearFn,
     this.onReload,
+    this.itemData,
   });
 
   @override
@@ -10253,57 +10241,22 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
           const SizedBox(height: 8),
         ],
 
-        // Action: Few item wrong — inline panel (#200: hidden when T == 1; #203: expands inline)
-        if (showFewWrong && !_showMissingInline && !_showWrongItemInline) ...[
-          if (!_showFewWrongInline)
-            SizedBox(
-              width: double.infinity,
-              child: _buildActionBtn(
-                label: 'Few item wrong',
-                onTap: isBusy ? null : () => setState(() {
-                  _showFewWrongInline = true;
-                  _wrongDraft = 1;
-                  _fewWrongCtrl.text = '1';
-                  _fewWrongNameCtrl.clear();
-                  _fewWrongProofUrl = null;
-                }),
-                bg: const Color(0xFFD97706),
-              ),
-            )
-          else
-            _buildFewWrongPanel(),
-          const SizedBox(height: 8),
-        ],
-
-        // Action: Wrong item — inline panel (#203: expands inline)
-        if (!_showMissingInline && !_showFewWrongInline) ...[
-          if (!_showWrongItemInline)
-            SizedBox(
-              width: double.infinity,
-              child: _buildActionBtn(
-                label: 'Wrong item',
-                onTap: isBusy ? null : () => setState(() {
-                  _showWrongItemInline = true;
-                  _wrongItemNameCtrl.clear();
-                  _wrongItemProofUrl = null;
-                }),
-                bg: _kWrongFg,
-              ),
-            )
-          else
-            _buildWrongItemPanel(),
-          const SizedBox(height: 8),
-        ],
-
-        // Action: Not coming (#200: hidden when fully received)
-        if (showNotComing && !anyPanelOpen) ...[
-          SizedBox(
-            width: double.infinity,
-            child: _buildActionBtn(
-              label: 'Not coming',
-              onTap: isBusy ? null : _doNotComing,
-              bg: _kNotComingFg,
-            ),
+        // C351: unified 5-option report-issue section
+        if (widget.itemData != null) ...[
+          ReportIssueSection(
+            orderItemId: widget.itemData!['order_item_id']?.toString() ?? '',
+            orderedQty: widget.orderedTotal,
+            receivedQty: widget.receivedTotal,
+            isLocked: widget.itemData!['received_locked'] == true ||
+                widget.itemData!['collect_locked'] == true,
+            existingIssue: widget.itemData!['count_issue']?.toString(),
+            existingIssueQty: (widget.itemData!['issue_qty'] as num?)?.toInt(),
+            existingWrongName: widget.itemData!['wrong_received_note']?.toString(),
+            existingProofUrl: widget.itemData!['wrong_proof_url']?.toString(),
+            onSaved: () {
+              widget.onReload?.call();
+              if (mounted) Navigator.of(context).pop();
+            },
           ),
           const SizedBox(height: 8),
         ],
@@ -15119,7 +15072,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
         // Retry with note dialog
         setState(() => _resolving.remove(item.disputeId));
         RenderLog.write('c349_note_gate', 'forced=n');
-        RenderLog.write('c352_note_gate', 'forced=false');
+        RenderLog.write('c352_note_gate', 'forced=n');
         final retryNote = await _showNoteDialog(
           action.label,
           '${item.productName} — ${item.supplier}.\nA note is required for this action.',
@@ -15593,6 +15546,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
                           const SizedBox(width: 8),
                           Builder(builder: (_) {
                             RenderLog.write('c349_nudge', 'pending=y');
+                            RenderLog.write('c352_nudge', 'p=1');
                             return Container(
                               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
                               decoration: BoxDecoration(
@@ -15772,6 +15726,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
                 // Nudge badge
                 if (item.nudgePending) Builder(builder: (_) {
                   RenderLog.write('c349_nudge', 'pending=y');
+                  RenderLog.write('c352_nudge', 'p=1');
                   return Container(
                     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                     decoration: BoxDecoration(
@@ -15867,7 +15822,7 @@ class _DisputeActionSheetState extends State<_DisputeActionSheet> {
     String? note;
     if (action.noteRequired) {
       RenderLog.write('c349_note_gate', 'forced=y');
-      RenderLog.write('c352_note_gate', 'forced=true');
+      RenderLog.write('c352_note_gate', 'forced=y');
       final noteCtrl = TextEditingController();
       final confirmed = await showDialog<bool>(
         context: context,

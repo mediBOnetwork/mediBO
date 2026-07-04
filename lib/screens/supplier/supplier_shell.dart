@@ -1,13 +1,13 @@
 import 'package:flutter/material.dart';
 
+import '../../pages/supplier_disputes_page.dart';
 import '../../user_state.dart';
 import '../../utils/render_log.dart';
 import '../../utils/toast.dart';
+import 'supplier_add_medicine_screen.dart';
 import 'supplier_home_screen.dart';
 import 'supplier_inquiry_screen.dart';
 import 'supplier_orders_screen.dart';
-import 'supplier_add_medicine_screen.dart';
-import 'supplier_disputes_screen.dart';
 
 class SupplierShell extends StatefulWidget {
   // When set, the shell runs in View-As preview mode using admin preview RPCs.
@@ -29,6 +29,7 @@ class SupplierShell extends StatefulWidget {
 class _SupplierShellState extends State<SupplierShell> {
   int _index = 0;
   int _pendingInquiryCount = 0;
+  int _activeDisputeCount = 0;
   bool _bannerDismissed = false;
 
   // Keys to allow deep-linking into child screens
@@ -39,7 +40,7 @@ class _SupplierShellState extends State<SupplierShell> {
     _NavItem(icon: Icons.add_circle_outline,       label: 'Add Medicine'),
     _NavItem(icon: Icons.question_answer_outlined, label: 'Inquiry'),
     _NavItem(icon: Icons.receipt_long_outlined,    label: 'Orders'),
-    _NavItem(icon: Icons.flag_outlined,            label: 'Reminders'),
+    _NavItem(icon: Icons.gavel_outlined,           label: 'Disputes'),
   ];
 
   @override
@@ -56,6 +57,11 @@ class _SupplierShellState extends State<SupplierShell> {
         if (count > 0) _bannerDismissed = false;
       });
     }
+  }
+
+  void _onDisputeCount(int count) {
+    if (!mounted) return;
+    if (count != _activeDisputeCount) setState(() => _activeDisputeCount = count);
   }
 
   void _goToInquiry() {
@@ -81,9 +87,9 @@ class _SupplierShellState extends State<SupplierShell> {
         onPendingCount: _onPendingCount,
       ),
       SupplierOrdersScreen(viewAsSupplierId: viewAsSupplierId, supplierName: supplierName),
-      SupplierDisputesScreen(
-        viewAsSupplierId: viewAsSupplierId,
+      SupplierDisputesPage(
         viewAsSupplierName: widget.viewAsSupplierName,
+        onActiveCount: _onDisputeCount,
       ),
     ];
 
@@ -110,6 +116,8 @@ class _SupplierShellState extends State<SupplierShell> {
           _DesktopTabBar(
             index: _index,
             items: _navItems,
+            pendingInquiry: _pendingInquiryCount,
+            activeDisputes: _activeDisputeCount,
             onTap: (i) => setState(() => _index = i),
           ),
         Expanded(
@@ -120,6 +128,7 @@ class _SupplierShellState extends State<SupplierShell> {
         index: _index,
         items: _navItems,
         pendingInquiry: _pendingInquiryCount,
+        activeDisputes: _activeDisputeCount,
         onTap: (i) => setState(() => _index = i),
       ),
     );
@@ -233,9 +242,17 @@ class _InquiryBanner extends StatelessWidget {
 class _DesktopTabBar extends StatelessWidget {
   final int index;
   final List<_NavItem> items;
+  final int pendingInquiry;
+  final int activeDisputes;
   final ValueChanged<int> onTap;
 
-  const _DesktopTabBar({required this.index, required this.items, required this.onTap});
+  const _DesktopTabBar({
+    required this.index,
+    required this.items,
+    required this.pendingInquiry,
+    required this.activeDisputes,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -257,10 +274,23 @@ class _DesktopTabBar extends StatelessWidget {
                 )),
               ),
               child: Row(children: [
-                Icon(item.icon,
-                  size: 18,
-                  color: selected ? const Color(0xFF1B7A43) : const Color(0xFF6B7280),
-                ),
+                Stack(clipBehavior: Clip.none, children: [
+                  Icon(item.icon,
+                    size: 18,
+                    color: selected ? const Color(0xFF1B7A43) : const Color(0xFF6B7280),
+                  ),
+                  if ((i == 2 && pendingInquiry > 0) || (i == 4 && activeDisputes > 0))
+                    Positioned(
+                      right: -5, top: -3,
+                      child: Container(
+                        width: 8, height: 8,
+                        decoration: const BoxDecoration(
+                          color: Color(0xFFDC2626),
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                    ),
+                ]),
                 const SizedBox(width: 6),
                 Text(item.label,
                   style: TextStyle(
@@ -284,12 +314,14 @@ class _MobileBottomNav extends StatelessWidget {
   final int index;
   final List<_NavItem> items;
   final int pendingInquiry;
+  final int activeDisputes;
   final ValueChanged<int> onTap;
 
   const _MobileBottomNav({
     required this.index,
     required this.items,
     required this.pendingInquiry,
+    required this.activeDisputes,
     required this.onTap,
   });
 
@@ -307,7 +339,8 @@ class _MobileBottomNav extends StatelessWidget {
             children: List.generate(items.length, (i) {
               final item = items[i];
               final selected = i == index;
-              final showBadge = i == 2 && pendingInquiry > 0;
+              final showBadge = (i == 2 && pendingInquiry > 0) ||
+                               (i == 4 && activeDisputes > 0);
               return Expanded(
                 child: InkWell(
                   onTap: () => onTap(i),
@@ -328,8 +361,10 @@ class _MobileBottomNav extends StatelessWidget {
                                 color: Color(0xFFDC2626),
                                 shape: BoxShape.circle,
                               ),
-                              child: Text('$pendingInquiry',
-                                style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.w700),
+                              child: Text(
+                                i == 4 ? '$activeDisputes' : '$pendingInquiry',
+                                style: const TextStyle(color: Colors.white, fontSize: 9,
+                                    fontWeight: FontWeight.w700),
                               ),
                             ),
                           ),

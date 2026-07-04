@@ -18,6 +18,7 @@ import 'models/cart_model.dart';
 import 'screens/auth/login_screen.dart';
 import 'screens/home_shell.dart';
 import 'screens/public/inquiry_form_screen.dart';
+import 'pages/dispute_token_page.dart';
 import 'screens/public/dispute_form_screen.dart';
 import 'screens/public/public_order_page.dart';
 import 'screens/code_resolver_page.dart';
@@ -362,7 +363,7 @@ class _PharmaB2BAppState extends State<PharmaB2BApp> {
                 if (token.isNotEmpty) {
                   return MaterialPageRoute(
                     settings: settings,
-                    builder: (_) => DisputeFormScreen(token: token),
+                    builder: (_) => DisputeTokenPage(token: token),
                   );
                 }
               }

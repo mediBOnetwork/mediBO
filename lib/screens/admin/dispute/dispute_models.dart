@@ -185,6 +185,111 @@ class DisputeItem {
   }
 }
 
+// ── C362 point-7/8: ITEM-WISE dispute aggregation ─────────────────────────────
+// Multiple order-lines of the SAME product for the SAME supplier (different customers)
+// collapse into ONE row: disputed qty summed; the group is Active if ANY line is active.
+// Shared by the admin Disputes tab, the supplier portal, and the token page so all three
+// render one row per product with the total disputed qty (no per-line duplication).
+
+class AggregatedDispute {
+  final String supplier;
+  final String productName;
+  final String kind;
+  final num disputedQty; // Σ short_qty (dispute_qty) across the group's lines
+  final num orderedQty; // Σ ordered
+  final num receivedQty; // Σ received
+  final bool active; // true if ANY underlying line is active
+  final String itemStatusLabel;
+  final String? wrongProductName;
+  final String? proofUrl;
+  final List<DisputeItem> lines; // underlying per-line disputes (for action fan-out)
+  final DisputeItem representative; // drives kind label + action buttons (prefers active)
+
+  const AggregatedDispute({
+    required this.supplier,
+    required this.productName,
+    required this.kind,
+    required this.disputedQty,
+    required this.orderedQty,
+    required this.receivedQty,
+    required this.active,
+    required this.itemStatusLabel,
+    this.wrongProductName,
+    this.proofUrl,
+    required this.lines,
+    required this.representative,
+  });
+
+  List<DisputeAction> get actions => representative.actions;
+  String get disputeId => representative.disputeId;
+  String? get token => representative.token;
+  String? get response => representative.response;
+  String? get resolutionOutcome => representative.resolutionOutcome;
+
+  /// C362: the ACTIVE underlying dispute ids — an action on the aggregated row fans out to
+  /// each ACTIVE line only. Never re-touch a settled/inactive line: the special 'close'
+  /// outcome skips the backend allow-list check and would clobber a closed line's
+  /// resolution record (resolution_outcome/resolved_at). The representative is always an
+  /// active line when any line is active, so its own id is included here.
+  List<String> get allActiveDisputeIds => lines
+      .where((d) => d.isActive)
+      .map((d) => d.disputeId)
+      .where((id) => id.isNotEmpty)
+      .toList();
+}
+
+/// Collapse per-line disputes into ONE row per (supplier, product). Disputed qty is
+/// summed; the representative (kind label + actions) prefers an ACTIVE line so the row
+/// keeps live actions while any line is unresolved.
+List<AggregatedDispute> aggregateDisputesByProduct(List<DisputeItem> items) {
+  final groups = <String, List<DisputeItem>>{};
+  final order = <String>[];
+  for (final d in items) {
+    final key = '${d.supplier}${d.kind}${d.productName.toLowerCase().trim()}';
+    if (!groups.containsKey(key)) order.add(key);
+    groups.putIfAbsent(key, () => []).add(d);
+  }
+  final out = <AggregatedDispute>[];
+  for (final key in order) {
+    final lines = groups[key]!;
+    final active = lines.any((d) => d.isActive);
+    final rep = lines.firstWhere((d) => d.isActive, orElse: () => lines.first);
+    num disputed = 0, ordered = 0, received = 0;
+    for (final d in lines) {
+      disputed += (d.disputeQty ?? d.short);
+      ordered += d.ordered;
+      received += d.received;
+    }
+    out.add(AggregatedDispute(
+      supplier: rep.supplier,
+      productName: rep.productName,
+      kind: rep.kind,
+      disputedQty: disputed,
+      orderedQty: ordered,
+      receivedQty: received,
+      active: active,
+      itemStatusLabel: rep.itemStatusLabel,
+      wrongProductName: rep.wrongProductName,
+      proofUrl: rep.proofUrl,
+      lines: lines,
+      representative: rep,
+    ));
+  }
+  return out;
+}
+
+/// Group aggregated rows by supplier (per-supplier header + dispute link).
+Map<String, List<AggregatedDispute>> groupAggregatedBySupplier(
+    List<AggregatedDispute> rows) {
+  final map = <String, List<AggregatedDispute>>{};
+  final order = <String>[];
+  for (final r in rows) {
+    if (!map.containsKey(r.supplier)) order.add(r.supplier);
+    map.putIfAbsent(r.supplier, () => []).add(r);
+  }
+  return {for (final s in order) s: map[s]!};
+}
+
 // ── Supplier disputes result wrapper (#189) ───────────────────────────────────
 
 class SupplierDisputesResult {

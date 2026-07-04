@@ -122,7 +122,8 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
   }
 
   // Supplier button tap (actions)
-  Future<void> _respondSupplier(DisputeItem item, DisputeAction action) async {
+  Future<void> _respondSupplier(DisputeItem item, DisputeAction action,
+      {List<String> alsoIds = const []}) async {
     if (_responding[item.disputeId] == true) return;
     setState(() => _responding[item.disputeId] = true);
     RenderLog.write('c189_supplier_respond_called',
@@ -160,6 +161,17 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
       if (!mounted) return;
       RenderLog.write('c348_responded', 'code=${action.code}');
       final result = res['result']?.toString() ?? action.label;
+      // C362 point-8: fan the SAME response to the OTHER lines of this aggregated product.
+      final others = alsoIds.where((id) => id != item.disputeId).toList();
+      for (final id in others) {
+        try {
+          await supplierRespondDisputeRpc(
+              disputeId: id, response: action.code, actingSupplier: _actingSupplier);
+        } catch (_) {}
+      }
+      if (others.isNotEmpty) {
+        RenderLog.write('c362_disp_group', 'supplier_fanout=${others.length}');
+      }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Recorded: $result')));
       Future.delayed(const Duration(seconds: 1), () {
@@ -232,8 +244,12 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
       );
     }
 
-    final activeItems = _disputes.where((d) => d.isActive).toList();
-    final closedItems = _disputes.where((d) => !d.isActive).toList();
+    // C362 point-8: ITEM-WISE — aggregate by product (one row per product; disputed qty
+    // summed). Active if ANY line active; keep the active/closed grouping for the supplier.
+    final aggregated = aggregateDisputesByProduct(_disputes);
+    final activeItems = aggregated.where((a) => a.active).toList();
+    final closedItems = aggregated.where((a) => !a.active).toList();
+    RenderLog.write('c362_disp_group', 'where=supplier;items=${aggregated.length}');
     RenderLog.write('c191_reminder_no_admin_buttons', 'admin_buttons_removed=true;items=${_disputes.length}');
 
     return RefreshIndicator(
@@ -352,15 +368,15 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
     ]);
   }
 
-  Widget _buildItemCard(DisputeItem item) {
+  Widget _buildItemCard(AggregatedDispute agg) {
+    // C362 point-8: item-wise — representative drives labels/actions; qty summed; the row
+    // is Active if ANY underlying line is active.
+    final item = agg.representative;
     final isWrong    = item.kind == 'wrong_item';
     final hasFewWrong = item.kind == 'few_wrong';
-    final isActive   = item.isActive;
+    final isActive   = agg.active;
     final hasImage   = (item.imageUrl ?? '').isNotEmpty;
     final isResponding = _responding[item.disputeId] == true;
-    // active = amber pill; closed = grey/green
-    final statusBgColor  = isActive ? _kAmberBg : const Color(0xFFD1FAE5);
-    final statusTxtColor = isActive ? _kAmberText : const Color(0xFF065F46);
 
     RenderLog.write('c348_card', 'kind=${item.kind}');
 
@@ -408,17 +424,27 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
                   ]),
                 ),
                 const SizedBox(width: 6),
-                // Status pill = item_status_label verbatim, amber/grey-green by dispute_status
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: statusBgColor,
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Text(item.itemStatusLabel,
-                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
-                          color: statusTxtColor)),
-                ),
+                // C362 point-8: Active = RED / Inactive = GREEN badge — replaces the verbose
+                // "Awaiting supplier response" item_status_label pill.
+                Builder(builder: (_) {
+                  RenderLog.write('c362_badge', 'where=supplier,active=$isActive');
+                  return Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: isActive
+                          ? const Color(0xFFFEE2E2)
+                          : const Color(0xFFD1FAE5),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(isActive ? 'Active' : 'Inactive',
+                        style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            color: isActive
+                                ? const Color(0xFF991B1B)
+                                : const Color(0xFF065F46))),
+                  );
+                }),
               ]),
               if ((item.disputeCode ?? '').isNotEmpty) ...[
                 const SizedBox(height: 3),
@@ -453,10 +479,12 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
 
         // (c) Quantities table + "In dispute: N units"
         const SizedBox(height: 12),
-        _buildQtyTable(item.ordered, item.received, item.short, item.packType),
-        if (item.disputeQty != null && item.disputeQty! > 0) ...[
+        _buildQtyTable(agg.orderedQty, agg.receivedQty, agg.disputedQty, item.packType),
+        if (agg.disputedQty > 0) ...[
           const SizedBox(height: 6),
-          Text('In dispute: ${item.disputeQty!.toInt()} units',
+          Text(
+              'In dispute: ${agg.disputedQty.toInt()} units'
+              '${agg.lines.length > 1 ? ' (${agg.lines.length} orders)' : ''}',
               style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
                   color: _kAmberText)),
         ],
@@ -515,10 +543,11 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
           }),
         ],
 
-        // Supplier action buttons (item.actions only — admin buttons never shown here)
+        // Supplier action buttons (item.actions only). C362 point-8: a response fans out to
+        // every underlying order-line of this aggregated product.
         if (item.actions.isNotEmpty) ...[
           const SizedBox(height: 12),
-          _buildSupplierButtons(item, isResponding),
+          _buildSupplierButtons(item, isResponding, agg.allActiveDisputeIds),
         ],
       ]),
     );
@@ -584,7 +613,7 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
       const VerticalDivider(width: 1, color: Color(0xFFE5E7EB), thickness: 1);
 
   // Supplier buttons from item.actions
-  Widget _buildSupplierButtons(DisputeItem item, bool isResponding) {
+  Widget _buildSupplierButtons(DisputeItem item, bool isResponding, List<String> groupIds) {
     RenderLog.write('c189_supplier_buttons_rendered',
         'dispute=${item.disputeId};count=${item.actions.length}');
     RenderLog.write('c348_actions', 'n=${item.actions.length}');
@@ -595,7 +624,7 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
       return SizedBox(
         width: double.infinity,
         child: FilledButton(
-          onPressed: isResponding ? null : () => _respondSupplier(item, action),
+          onPressed: isResponding ? null : () => _respondSupplier(item, action, alsoIds: groupIds),
           style: FilledButton.styleFrom(
             backgroundColor: _kGreen,
             disabledBackgroundColor: _kGreen.withValues(alpha: 0.4),
@@ -618,7 +647,7 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
           return Padding(
             padding: const EdgeInsets.only(bottom: 6),
             child: FilledButton(
-              onPressed: isResponding ? null : () => _respondSupplier(item, action),
+              onPressed: isResponding ? null : () => _respondSupplier(item, action, alsoIds: groupIds),
               style: FilledButton.styleFrom(
                 backgroundColor: const Color(0xFFD97706),
                 disabledBackgroundColor: const Color(0xFFFDE68A),
@@ -632,7 +661,7 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
           );
         } else {
           return OutlinedButton(
-            onPressed: isResponding ? null : () => _respondSupplier(item, action),
+            onPressed: isResponding ? null : () => _respondSupplier(item, action, alsoIds: groupIds),
             style: OutlinedButton.styleFrom(
               foregroundColor: _kText,
               side: const BorderSide(color: Color(0xFFE5E7EB)),

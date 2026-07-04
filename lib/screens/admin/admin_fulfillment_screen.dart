@@ -1935,6 +1935,15 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         setState(() { _confirmingAll = false; _whBlockedItems = names; });
         return;
       }
+      // C362 point-3 — BLOCK: a bag is still attached. Backend refuses with 'bag_attached';
+      // surface the hint and keep the R button disabled (also gated in the footer).
+      if (res['error'] == 'bag_attached') {
+        RenderLog.write('c362_bag_gate', 'blocked=true;src=rpc');
+        setState(() => _confirmingAll = false);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text((res['hint'] ?? 'Detach the bag before confirming all received').toString())));
+        return;
+      }
       // Branch 2 — Hard unknown error
       if (res['error'] != null) {
         RenderLog.write('c339_wh_confirm_fail', 'error=${res['error']}');
@@ -1986,6 +1995,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       if (!mounted) return;
       RenderLog.write('c125_undo_hold_fired', 'true');
       RenderLog.write('c337_undo_wh', 'supplier=$supplier');
+      // C362 point-5: undo the response so the raised disputes are cancelled + flags kept,
+      // returning the candidate rows so the admin can EDIT the dispute type, then re-submit R.
+      RenderLog.write('c362_edit_undo', 'tab=warehouse');
       setState(() { _arrivalsLocked = false; _whBlockedItems = []; });
       _loadSuppliers(); // refresh dot
       await _reloadItemsFromDB();
@@ -2493,7 +2505,14 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         _showSnack('Naam suna par quantity nahi — kuch mark nahi kiya');
       }
 
-      if (items.isEmpty) {
+      // C362 PHANTOM-COUNT GUARD: never write a count from silence/noise. Require BOTH a
+      // recognized number (items) AND a non-empty transcript (mirrors the Pack #304 guard).
+      // Om: tap mic, say nothing, stop -> must write NOTHING (was: hallucinated qty slipped
+      // through the items-only guard when the recognizer emitted a number from noise).
+      final bool noRealCount = items.isEmpty || transcript.trim().isEmpty;
+      if (noRealCount) {
+        RenderLog.write('c362_voice_guard',
+            'wrote=false;tab=${widget.arrivals ? 'warehouse' : 'shop'}');
         setState(() {
           _voiceProcessing = false;
           _lastTranscript = transcript;
@@ -2509,6 +2528,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         });
         return;
       }
+      RenderLog.write('c362_voice_guard',
+          'wrote=true;tab=${widget.arrivals ? 'warehouse' : 'shop'}');
       await _commitVoiceItems(items);
       if (mounted) {
         setState(() => _sessionVoiceCount++); // kept for legacy logs; badge now uses _voiceMentions
@@ -3255,6 +3276,50 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   // ── #91: Confirm count lock / unlock ─────────────────────────────────────────
 
+  // C362 point-2: dispute on/off toggle (per SS/WH tab). OFF (default) = tapping an item
+  // does nothing; ON = tapping a candidate opens the classify popup. Replaces #359 auto-open.
+  bool _disputeToggleOn = false;
+
+  // C362 point-2: the "Turn on dispute option" slide switch, shown above the R button on
+  // BOTH Supplier Shop + Warehouse (one widget → both layouts agree, no drift).
+  Widget _buildDisputeToggle() {
+    final tab = widget.arrivals ? 'warehouse' : 'shop';
+    RenderLog.write('c362_toggle', 'tab=$tab,on=$_disputeToggleOn');
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.fromLTRB(12, 2, 6, 2),
+      decoration: BoxDecoration(
+        color: _disputeToggleOn ? const Color(0xFFFFFBEB) : const Color(0xFFF5F6F8),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+            color: _disputeToggleOn ? const Color(0xFFFCD34D) : _kBorder),
+      ),
+      child: Row(children: [
+        Icon(Icons.flag_outlined,
+            size: 16, color: _disputeToggleOn ? const Color(0xFFB45309) : _kSub),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            _disputeToggleOn
+                ? 'Dispute option ON — tap a flagged item to raise'
+                : 'Turn on dispute option',
+            style: TextStyle(
+                fontSize: 12.5,
+                fontWeight: FontWeight.w600,
+                color: _disputeToggleOn ? const Color(0xFF92400E) : _kText)),
+        ),
+        Switch(
+          value: _disputeToggleOn,
+          activeColor: _kGreen,
+          onChanged: (v) {
+            setState(() => _disputeToggleOn = v);
+            RenderLog.write('c362_toggle', 'tab=$tab,on=$v');
+          },
+        ),
+      ]),
+    );
+  }
+
   // #92: isWide=true → right-aligned compact; false → full-width refined mobile strip
   Widget _buildConfirmFooter(bool locked, {bool isWide = false}) {
     final isAdmin = UserState.of(context).isAdmin;
@@ -3299,20 +3364,28 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       // C359: yellow + disabled while any dispute candidate is still un-balanced
       // (ordered != received + disputed). Normal + clickable once all balance.
       final whBlocked = _disputeGate == ResponseButtonState.yellowDisabled;
+      // C362 point-3: a bag must be DETACHED before "Confirm all received" (the backend
+      // also refuses with {error:'bag_attached'}). Detect via the active bag from fw_get_state.
+      final bool bagAttached = _activeBag != null;
+      final bool whDisabled = whBlocked || bagAttached;
+      if (bagAttached) RenderLog.write('c362_bag_gate', 'blocked=true');
       RenderLog.write('c359_btn_state',
           'tab=warehouse,state=${whBlocked ? 'yellow_disabled' : 'normal'}');
       RenderLog.write('c361_gate',
           'tab=warehouse,state=${whBlocked ? 'yellow_disabled' : 'normal'}');
+      RenderLog.write('c362_r_gate',
+          'tab=warehouse,state=${whDisabled ? 'disabled' : 'enabled'}');
       return Column(mainAxisSize: MainAxisSize.min, children: [
+        _buildDisputeToggle(),
         SizedBox(
           height: 44,
           child: FilledButton(
             style: FilledButton.styleFrom(
-              backgroundColor: whBlocked ? _kPendingBg : _kGreen,
-              disabledBackgroundColor: whBlocked ? _kPendingBg : _kGreen.withValues(alpha: 0.5),
+              backgroundColor: whDisabled ? _kPendingBg : _kGreen,
+              disabledBackgroundColor: whDisabled ? _kPendingBg : _kGreen.withValues(alpha: 0.5),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
             ),
-            onPressed: (whBlocked || _confirmingAll) ? null : _fw_confirmAllReceived,
+            onPressed: (whDisabled || _confirmingAll) ? null : _fw_confirmAllReceived,
             child: _confirmingAll
                 ? const SizedBox(
                     width: 18,
@@ -3321,19 +3394,21 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                         color: Colors.white, strokeWidth: 2))
                 : Row(mainAxisSize: MainAxisSize.min, children: [
                     Icon(
-                        whBlocked
+                        whDisabled
                             ? Icons.error_outline_rounded
                             : Icons.check_circle_outline_rounded,
-                        size: 15, color: whBlocked ? _kPendingFg : Colors.white),
+                        size: 15, color: whDisabled ? _kPendingFg : Colors.white),
                     const SizedBox(width: 4),
                     Text(
-                        whBlocked
-                            ? 'Resolve flagged items to confirm'
-                            : 'Confirm all items received',
+                        bagAttached
+                            ? 'Detach the bag to confirm all'
+                            : whBlocked
+                                ? 'Resolve flagged items to confirm'
+                                : 'Confirm all items received',
                         style: TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.w700,
-                            color: whBlocked ? _kPendingFg : Colors.white)),
+                            color: whDisabled ? _kPendingFg : Colors.white)),
                   ]),
           ),
         ),
@@ -3468,6 +3543,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                 'tab=shop,state=${shopBlocked ? 'yellow_disabled' : 'normal'}');
             RenderLog.write('c361_gate',
                 'tab=shop,state=${shopBlocked ? 'yellow_disabled' : 'normal'}');
+            RenderLog.write('c362_r_gate',
+                'tab=shop,state=${shopBlocked ? 'disabled' : 'enabled'}');
             return Column(mainAxisSize: MainAxisSize.min, children: [
               SizedBox(
                 height: _kFooterH,
@@ -3557,6 +3634,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       ),
     ]);
     return Column(mainAxisSize: MainAxisSize.min, children: [
+      _buildDisputeToggle(), // C362 point-2: dispute on/off toggle above the R button
       if (sc171 > 0 || _wrongFlaggedCount > 0) ...[
         _buildShortReminderBtn(),
         const SizedBox(height: 8),
@@ -3607,6 +3685,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       if (!mounted) return;
       RenderLog.write('c125_undo_hold_fired', 'true');
       RenderLog.write('c337_undo_shop', 'supplier=$supplier');
+      // C362 point-5: undo the response (full reset + cancels fresh disputes) so the admin
+      // can re-count / re-classify, then re-submit "Confirm counting".
+      RenderLog.write('c362_edit_undo', 'tab=shop');
       setState(() { _supplierMode = null; });
       _loadCollectModes(); // refresh badge map → P
       _loadSuppliers();
@@ -5207,11 +5288,16 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     }
 
     return GestureDetector(
-      // C359: tap disabled unless this is a candidate (counting is voice-only). A
-      // candidate opens the classify popup regardless of active bag (no counting there).
+      // C359: tap disabled unless this is a candidate (counting is voice-only).
+      // C362 point-2: a candidate opens the classify popup ONLY when the dispute toggle
+      // is ON (replaces auto-open). Non-candidate / locked rows stay inert (#361).
       onTap: (!isCandidate || (widget.arrivals && _arrivalsLocked))
           ? null
-          : () => _showProductSheet(merged),
+          : () {
+              RenderLog.write('c362_tap_gated',
+                  'tab=${widget.arrivals ? 'warehouse' : 'shop'},opened=$_disputeToggleOn');
+              if (_disputeToggleOn) _showProductSheet(merged);
+            },
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
@@ -6093,12 +6179,16 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                         'tab=${widget.arrivals ? 'warehouse' : 'shop'},counted=$counted');
                   }
                   return InkWell(
-                    // C359: candidate opens the classify popup regardless of active bag.
-                    // C361: mirror the mobile gate — a locked warehouse tab makes candidates
-                    // inert (no hover/dead-click on an already-locked row; sheet early-returns).
+                    // C359/C361: locked warehouse tab makes candidates inert (sheet early-returns).
+                    // C362 point-2: a candidate opens the classify popup ONLY when the dispute
+                    // toggle is ON (replaces auto-open).
                     onTap: (!isCandidate || (widget.arrivals && _arrivalsLocked))
                         ? null
-                        : () => _showProductSheet(mp),
+                        : () {
+                            RenderLog.write('c362_tap_gated',
+                                'tab=${widget.arrivals ? 'warehouse' : 'shop'},opened=$_disputeToggleOn');
+                            if (_disputeToggleOn) _showProductSheet(mp);
+                          },
                     hoverColor: _kGreen.withValues(alpha: 0.04),
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -15103,7 +15193,8 @@ class _DisputesScreenState extends State<_DisputesScreen> {
   }
 
   // #188: RPC-only resolve — dialog handled by _DisputeActionSheet
-  Future<void> _resolveDispute(DisputeItem item, DisputeAction action, {String? note}) async {
+  Future<void> _resolveDispute(DisputeItem item, DisputeAction action,
+      {String? note, List<String> alsoIds = const []}) async {
     if (_resolving.contains(item.disputeId)) return;
     RenderLog.write('c188_resolve_called', 'outcome=${action.code};dispute=${item.disputeId}');
     setState(() => _resolving.add(item.disputeId));
@@ -15126,7 +15217,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
           required: true,
         );
         if (retryNote == null || !mounted) return;
-        await _resolveDispute(item, action, note: retryNote);
+        await _resolveDispute(item, action, note: retryNote, alsoIds: alsoIds);
         return;
       }
       if (err != null) {
@@ -15134,6 +15225,20 @@ class _DisputesScreenState extends State<_DisputesScreen> {
       } else {
         RenderLog.write('c349_resolved', 'code=${action.code}');
         RenderLog.write('c352_resolved', 'code=${action.code}');
+        // C362 point-7: fan the SAME outcome to the OTHER lines of this aggregated product.
+        final others = alsoIds.where((id) => id != item.disputeId).toList();
+        for (final id in others) {
+          try {
+            await Supabase.instance.client.rpc('fw_resolve_dispute', params: {
+              'p_dispute_id': id,
+              'p_outcome': action.code,
+              'p_note': (note != null && note.isEmpty) ? null : note,
+            });
+          } catch (_) {}
+        }
+        if (others.isNotEmpty) {
+          RenderLog.write('c362_disp_group', 'fanout_resolved=${others.length}');
+        }
         final newStatus = res['new_status']?.toString() ?? action.label;
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Updated: $newStatus')));
         Future.delayed(const Duration(seconds: 1), () {
@@ -15361,6 +15466,13 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     final activeDisputes = _disputes.where((d) => d.isActive).toList();
     final closedDisputes = _disputes.where((d) => !d.isActive).toList();
     final activeGroups = _groupBySupplier(activeDisputes);
+    // C362 point-7: ITEM-WISE, no Active/Closed sections — aggregate ALL disputes by product,
+    // grouped by supplier (one row per product; disputed qty summed; Active/Inactive badge).
+    final supplierGroups =
+        groupAggregatedBySupplier(aggregateDisputesByProduct(_disputes));
+    RenderLog.write('c362_disp_group',
+        'items=${supplierGroups.values.fold<int>(0, (s, l) => s + l.length)};'
+        'suppliers=${supplierGroups.length};no_ac_sections=y');
 
     // ── Render-log sentinels ────────────────────────────────────────────────
     RenderLog.write('c349_ready', 'a3=v2');
@@ -15396,47 +15508,12 @@ class _DisputesScreenState extends State<_DisputesScreen> {
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
               children: [
                 if (_unfillable.isNotEmpty) _buildUnfillableBanner(),
-                // ── Active section header ──────────────────────────────────
-                Builder(builder: (_) {
-                  RenderLog.write('c188_admin_active_rendered', 'count=${activeDisputes.length}');
-                  return Padding(
-                    padding: const EdgeInsets.only(bottom: 8),
-                    child: Text('Active (${activeDisputes.length})',
-                        style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: _kText)),
-                  );
-                }),
-                if (activeDisputes.isEmpty)
-                  const Padding(
-                    padding: EdgeInsets.only(bottom: 16),
-                    child: Text('No active disputes.', style: TextStyle(fontSize: 14, color: _kSub)),
-                  ),
-                for (final g in activeGroups) ...[
-                  _buildDisputeSupplierCard(g.key, g.value),
+                // C362 point-7: NO Active/Closed sections — one card per supplier (name
+                // header + dispute link), item-wise rows underneath (each row an
+                // Active=red / Inactive=green badge). Active + inactive rows live together.
+                for (final entry in supplierGroups.entries) ...[
+                  _buildDisputeSupplierCard(entry.key, entry.value),
                 ],
-                const SizedBox(height: 8),
-                // ── Closed section header (collapsible) ───────────────────
-                InkWell(
-                  onTap: () => setState(() => _closedExpanded = !_closedExpanded),
-                  borderRadius: BorderRadius.circular(8),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 6),
-                    child: Row(children: [
-                      Text('Closed (${closedDisputes.length})',
-                          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: _kText)),
-                      const SizedBox(width: 6),
-                      AnimatedRotation(
-                        turns: _closedExpanded ? 0.5 : 0.0,
-                        duration: const Duration(milliseconds: 220),
-                        child: const Icon(Icons.keyboard_arrow_down_rounded, size: 18, color: _kSub),
-                      ),
-                    ]),
-                  ),
-                ),
-                if (_closedExpanded)
-                  for (final item in closedDisputes) ...[
-                    const SizedBox(height: 8),
-                    _buildDisputeItemCard(item),
-                  ],
                 const SizedBox(height: 8),
               ],
             ),
@@ -15532,8 +15609,11 @@ class _DisputesScreenState extends State<_DisputesScreen> {
   }
 
   // ── #188: Unified supplier card — header always visible, body via _smoothReveal ─
-  Widget _buildDisputeSupplierCard(String supplier, List<DisputeItem> items) {
+  Widget _buildDisputeSupplierCard(String supplier, List<AggregatedDispute> agg) {
     final isOpen = _openSupplierKey == supplier;
+    // C362 point-7: rows are item-wise (aggregated by product); flat lines drive the
+    // dispute link / header / nudge / reminder (per-line payload fields).
+    final items = agg.expand((a) => a.lines).toList();
     final canonicalLink = _supplierLinkFromItems(items);
     final sendKey = _sendLinkKeys.putIfAbsent(supplier, () => GlobalKey());
 
@@ -15625,9 +15705,9 @@ class _DisputesScreenState extends State<_DisputesScreen> {
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
                 child: Column(children: [
-                  for (int i = 0; i < items.length; i++) ...[
-                    _buildDisputeItemCard(items[i]),
-                    if (i < items.length - 1) const SizedBox(height: 8),
+                  for (int i = 0; i < agg.length; i++) ...[
+                    _buildDisputeItemCard(agg[i]),
+                    if (i < agg.length - 1) const SizedBox(height: 8),
                   ],
                 ]),
               ),
@@ -15639,9 +15719,12 @@ class _DisputesScreenState extends State<_DisputesScreen> {
   }
 
   // ── #192: Compact dispute card — thumbnail + info, NO inline buttons; tap → sheet ──
-  Widget _buildDisputeItemCard(DisputeItem item) {
+  Widget _buildDisputeItemCard(AggregatedDispute agg) {
+    // C362 point-7: item-wise row — the representative drives labels/actions; qty is summed
+    // and the row is Active if ANY underlying line is active.
+    final item = agg.representative;
     final isWrong  = item.kind == 'wrong_item';
-    final isActive = item.isActive;
+    final isActive = agg.active;
     final statusBgColor  = isActive ? const Color(0xFFFEF3C7) : const Color(0xFFD1FAE5);
     final statusTxtColor = isActive ? const Color(0xFF92400E) : const Color(0xFF065F46);
 
@@ -15664,7 +15747,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     RenderLog.write('c352_row', 'kind=${item.kind}');
 
     return InkWell(
-      onTap: () => _openDisputeActionSheet(item),
+      onTap: () => _openDisputeActionSheet(item, groupIds: agg.allActiveDisputeIds),
       borderRadius: BorderRadius.circular(10),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -15731,14 +15814,34 @@ class _DisputesScreenState extends State<_DisputesScreen> {
               // (d) Quantities
               const SizedBox(height: 2),
               Text(
-                'Ord ${item.ordered.toInt()} · Rec ${item.received.toInt()} · Short ${item.short.toInt()}'
-                '${item.disputeQty != null && item.disputeQty! > 0 ? ' · Dispute ${item.disputeQty!.toInt()}' : ''}',
+                'Ord ${agg.orderedQty.toInt()} · Rec ${agg.receivedQty.toInt()} · '
+                'Disputed ${agg.disputedQty.toInt()}'
+                '${agg.lines.length > 1 ? ' · ${agg.lines.length} orders' : ''}',
                 style: const TextStyle(fontSize: 11, color: _kSub),
               ),
 
               // (e+f) Status chips
               const SizedBox(height: 4),
               Wrap(spacing: 4, runSpacing: 4, children: [
+                // C362 point-7: Active = RED, Inactive = GREEN badge per item.
+                Builder(builder: (_) {
+                  RenderLog.write('c362_badge', 'where=disp_tab,active=$isActive');
+                  return Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                    decoration: BoxDecoration(
+                        color: isActive
+                            ? const Color(0xFFFEE2E2)
+                            : const Color(0xFFD1FAE5),
+                        borderRadius: BorderRadius.circular(20)),
+                    child: Text(isActive ? 'Active' : 'Inactive',
+                        style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
+                            color: isActive
+                                ? const Color(0xFF991B1B)
+                                : const Color(0xFF065F46))),
+                  );
+                }),
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                   decoration: BoxDecoration(
@@ -15825,7 +15928,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
   }
 
   // ── #192: Dispute action bottom sheet — buttons live here, not on the card ──
-  void _openDisputeActionSheet(DisputeItem item) {
+  void _openDisputeActionSheet(DisputeItem item, {List<String> groupIds = const []}) {
     RenderLog.write('c192_dispute_sheet_opened',
         'dispute=${item.disputeId};actions=${item.actions.length}');
     showModalBottomSheet<void>(
@@ -15836,7 +15939,9 @@ class _DisputesScreenState extends State<_DisputesScreen> {
         item: item,
         onResolve: (action, {String? note}) async {
           Navigator.of(sheetCtx).pop();
-          await _resolveDispute(item, action, note: note);
+          // C362 point-7: an action on an item-wise (aggregated) row fans out to EVERY
+          // underlying order-line's dispute so the whole product resolves together.
+          await _resolveDispute(item, action, note: note, alsoIds: groupIds);
         },
       ),
     );

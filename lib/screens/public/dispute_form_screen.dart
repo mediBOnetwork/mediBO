@@ -70,7 +70,8 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
     }
   }
 
-  Future<void> _submitAction(DisputeItem item, DisputeAction action) async {
+  Future<void> _submitAction(DisputeItem item, DisputeAction action,
+      {List<String> alsoIds = const []}) async {
     if (_submitting[item.disputeId] == true) return;
 
     final confirmed = await showDialog<bool>(
@@ -105,6 +106,13 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
         disputeId: item.disputeId,
         response: action.code,
       );
+      // C362 point-8: fan the SAME response to the OTHER lines of this aggregated product.
+      for (final id in alsoIds.where((x) => x != item.disputeId)) {
+        try {
+          await submitDisputeResponse(
+              token: widget.token, disputeId: id, response: action.code);
+        } catch (_) {}
+      }
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Thanks — response recorded.')));
@@ -206,8 +214,11 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
   }
 
   Widget _buildPage() {
-    final activeItems = _items.where((d) => d.isActive).toList();
-    final closedItems = _items.where((d) => !d.isActive).toList();
+    // C362 point-8: ITEM-WISE — aggregate by product (summed disputed qty; Active if any).
+    final aggregated = aggregateDisputesByProduct(_items);
+    final activeItems = aggregated.where((a) => a.active).toList();
+    final closedItems = aggregated.where((a) => !a.active).toList();
+    RenderLog.write('c362_disp_group', 'where=token;items=${aggregated.length}');
 
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(16, 20, 16, 48),
@@ -300,16 +311,15 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
     ]);
   }
 
-  Widget _buildItemCard(DisputeItem item) {
-    final isActive   = item.isActive;
+  Widget _buildItemCard(AggregatedDispute agg) {
+    // C362 point-8: item-wise — representative drives labels/actions; qty summed; the row
+    // is Active if ANY underlying line is active.
+    final item = agg.representative;
+    final isActive   = agg.active;
     final isWrong    = item.kind == 'wrong_item';
     final hasFewWrong = item.kind == 'few_wrong';
     final hasImage   = (item.imageUrl ?? '').isNotEmpty;
     final isSubmitting = _submitting[item.disputeId] == true;
-
-    // active = amber; closed = grey/green
-    final statusBgColor  = isActive ? _kAmberBg : const Color(0xFFD1FAE5);
-    final statusTxtColor = isActive ? _kAmberText : const Color(0xFF065F46);
 
     return Container(
       decoration: BoxDecoration(
@@ -354,17 +364,27 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
                   ]),
                 ),
                 const SizedBox(width: 6),
-                // Status pill = item_status_label verbatim; amber=active, grey/green=closed
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: statusBgColor,
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Text(item.itemStatusLabel,
-                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
-                          color: statusTxtColor)),
-                ),
+                // C362 point-8: Active = RED / Inactive = GREEN badge — replaces the verbose
+                // "Awaiting supplier response" item_status_label pill.
+                Builder(builder: (_) {
+                  RenderLog.write('c362_badge', 'where=supplier,active=$isActive');
+                  return Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: isActive
+                          ? const Color(0xFFFEE2E2)
+                          : const Color(0xFFD1FAE5),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(isActive ? 'Active' : 'Inactive',
+                        style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            color: isActive
+                                ? const Color(0xFF991B1B)
+                                : const Color(0xFF065F46))),
+                  );
+                }),
               ]),
               // (b) meta
               if ((item.disputeCode ?? '').isNotEmpty) ...[
@@ -397,10 +417,12 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
 
         // (c) Quantities table
         const SizedBox(height: 12),
-        _buildQtyTable(item.ordered, item.received, item.short, item.packType),
-        if (item.disputeQty != null && item.disputeQty! > 0) ...[
+        _buildQtyTable(agg.orderedQty, agg.receivedQty, agg.disputedQty, item.packType),
+        if (agg.disputedQty > 0) ...[
           const SizedBox(height: 6),
-          Text('In dispute: ${item.disputeQty!.toInt()} units',
+          Text(
+              'In dispute: ${agg.disputedQty.toInt()} units'
+              '${agg.lines.length > 1 ? ' (${agg.lines.length} orders)' : ''}',
               style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
                   color: _kAmberText)),
         ],
@@ -454,7 +476,7 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
         // (f) Action buttons — dynamic from item.actions; only shown when array non-empty
         if (item.actions.isNotEmpty) ...[
           const SizedBox(height: 12),
-          _buildActionButtons(item, isSubmitting),
+          _buildActionButtons(item, isSubmitting, agg.allActiveDisputeIds),
         ],
       ]),
     );
@@ -519,7 +541,7 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
   Widget _vertDivider() => VerticalDivider(width: 1, color: _kBorder, thickness: 1);
 
   // Dynamic buttons from item.actions — no hardcoded codes or labels
-  Widget _buildActionButtons(DisputeItem item, bool isSubmitting) {
+  Widget _buildActionButtons(DisputeItem item, bool isSubmitting, List<String> groupIds) {
     RenderLog.write('c190_link_buttons_rendered',
         'dispute=${item.disputeId};count=${item.actions.length}');
     const spinner = SizedBox(width: 14, height: 14,
@@ -530,7 +552,7 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
       return SizedBox(
         width: double.infinity,
         child: FilledButton(
-          onPressed: isSubmitting ? null : () => _submitAction(item, action),
+          onPressed: isSubmitting ? null : () => _submitAction(item, action, alsoIds: groupIds),
           style: FilledButton.styleFrom(
             backgroundColor: const Color(0xFFD97706),
             disabledBackgroundColor: const Color(0xFFFDE68A),
@@ -554,7 +576,7 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
           return Padding(
             padding: const EdgeInsets.only(bottom: 6),
             child: FilledButton(
-              onPressed: isSubmitting ? null : () => _submitAction(item, action),
+              onPressed: isSubmitting ? null : () => _submitAction(item, action, alsoIds: groupIds),
               style: FilledButton.styleFrom(
                 backgroundColor: const Color(0xFFD97706),
                 disabledBackgroundColor: const Color(0xFFFDE68A),
@@ -568,7 +590,7 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
           );
         }
         return OutlinedButton(
-          onPressed: isSubmitting ? null : () => _submitAction(item, action),
+          onPressed: isSubmitting ? null : () => _submitAction(item, action, alsoIds: groupIds),
           style: OutlinedButton.styleFrom(
             foregroundColor: _kTextPrimary,
             side: const BorderSide(color: _kBorder),

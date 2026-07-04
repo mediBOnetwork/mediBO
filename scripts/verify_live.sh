@@ -32,9 +32,11 @@ BASE_URL="https://medibo.in"
 echo "=== verify_live.sh: target commit=${COMMIT} ==="
 echo ""
 
-# ── Step 1: main.dart.js must be 200 + full size (>1 MB) ────────────────────
-echo "→ [1/3] checking main.dart.js..."
-RESULT=$(curl -s -o /dev/null -w "%{http_code} %{size_download}" "${BASE_URL}/main.dart.js?v=${COMMIT}" || echo "000 0")
+# ── Step 1: fingerprinted bundle must be 200 + full size (>1 MB) ────────────
+# C353 fix: bundles are fingerprinted (main.<commit>.dart.js); the legacy
+# /main.dart.js path now returns the SPA shell and always failed this check.
+echo "→ [1/3] checking main.${COMMIT}.dart.js..."
+RESULT=$(curl -s -o /dev/null -w "%{http_code} %{size_download}" "${BASE_URL}/main.${COMMIT}.dart.js" || echo "000 0")
 HTTP_CODE=$(echo "$RESULT" | cut -d' ' -f1)
 SIZE=$(echo "$RESULT" | cut -d' ' -f2)
 if [ "$HTTP_CODE" != "200" ] || [ "${SIZE:-0}" -lt 1000000 ]; then

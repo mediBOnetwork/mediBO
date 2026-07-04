@@ -73,6 +73,8 @@ class DisputeItem {
   final String? returnNoteStatus; // 'open'|'collected'|null
   final bool nudgePending;
   final String? lastReminderAt;
+  // C354: monetary adjustment applied by the resolution (credit/debit), payload-driven.
+  final num? adjAmount;
 
   const DisputeItem({
     required this.disputeId,
@@ -110,6 +112,7 @@ class DisputeItem {
     this.returnNoteStatus,
     this.nudgePending = false,
     this.lastReminderAt,
+    this.adjAmount,
   });
 
   factory DisputeItem.fromJson(Map<String, dynamic> j) {
@@ -160,6 +163,7 @@ class DisputeItem {
       returnNoteStatus: j['return_note_status']?.toString(),
       nudgePending: j['nudge_pending'] == true,
       lastReminderAt: j['last_reminder_at']?.toString(),
+      adjAmount: j['adj_amount'] != null ? _n(j['adj_amount']) : null,
     );
   }
 

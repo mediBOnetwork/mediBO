@@ -1275,6 +1275,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c170_bugs_done', 'dispute_form_flat_list+3arg_submit+supplier_grouped_admin');
     RenderLog.write('c171_popup_per_item_send_removed', 'true');
     RenderLog.write('c331_caps', 'wired=y'); // #331: static presence marker for VoiceCaps helper
+    RenderLog.write('c354_ready', 'tab=${widget.arrivals ? 'warehouse' : 'shop'}');
   }
 
   @override
@@ -5310,6 +5311,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       imageUrl: merged.imageUrl,
       orderedTotal: merged.orderedTotal,
       receivedTotal: merged.receivedTotal,
+      shopQtyTotal: merged.shopQtyTotal,
       combinedState: merged.combinedState,
       existingDispute: existingDispute,
       arrivals: widget.arrivals,
@@ -5394,6 +5396,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   Future<void> _refetchAfterAction() async {
     if (!mounted) return;
     RenderLog.write('c353_refetch', 'src=action,tab=${widget.arrivals ? 'arrivals' : 'collect'}');
+    RenderLog.write('c354_live', 'tab=${widget.arrivals ? 'warehouse' : 'shop'},src=action');
     await _loadDisputes();
     await _reloadItemsFromDB();
     if (widget.arrivals) {
@@ -5409,6 +5412,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   Future<void> _refetchFromRealtime() async {
     if (!mounted) return;
     RenderLog.write('c353_refetch', 'src=rt,tab=${widget.arrivals ? 'arrivals' : 'collect'}');
+    RenderLog.write('c354_live', 'tab=${widget.arrivals ? 'warehouse' : 'shop'},src=rt');
     await _loadSuppliers();
     if (!widget.arrivals) {
       await _loadCollectModes();
@@ -9311,6 +9315,9 @@ class _ProductReceiveSheet extends StatefulWidget {
   final String? imageUrl;
   final int orderedTotal;
   final int receivedTotal;
+  // C354: shop-stage counted total (sum shop_qty); null if any line uncounted. Used so the
+  // Report-issue gating sees the SHOP count at shop stage, not the warehouse received_qty.
+  final int? shopQtyTotal;
   final String combinedState;
   final DisputeItem? existingDispute;
   // #258 BUG4: arrivals mode — "Got all" calls bag_count_set instead of fw_product_action.
@@ -9333,6 +9340,7 @@ class _ProductReceiveSheet extends StatefulWidget {
     this.imageUrl,
     required this.orderedTotal,
     required this.receivedTotal,
+    this.shopQtyTotal,
     required this.combinedState,
     this.existingDispute,
     this.arrivals = false,
@@ -10288,9 +10296,15 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
         // C351: unified 5-option report-issue section
         if (widget.itemData != null) ...[
           ReportIssueSection(
+            // C354: at SHOP stage the counted total lives in shop_qty, not received_qty
+            // (a warehouse field that is 0 until arrivals). Feeding received_qty here made
+            // the gate always see recv==0 → always 'full' options. Use the stage's own count.
+            tab: widget.arrivals ? 'warehouse' : 'shop',
             orderItemId: widget.itemData!['order_item_id']?.toString() ?? '',
             orderedQty: widget.orderedTotal,
-            receivedQty: widget.receivedTotal,
+            receivedQty: widget.arrivals
+                ? widget.receivedTotal
+                : (widget.shopQtyTotal ?? 0),
             isLocked: widget.itemData!['received_locked'] == true ||
                 widget.itemData!['collect_locked'] == true,
             existingIssue: widget.itemData!['count_issue']?.toString(),
@@ -10468,8 +10482,18 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
     FulfillRealtime.instance.addListener(_onRealtimeChange);
   }
 
+  void _refreshPack() {
+    _packTabKey.currentState?.refreshDisputeIndex();
+  }
+
   void _onRealtimeChange(Set<String> changedTables) {
     if (!mounted) return;
+    // C354: a dispute change alters recounts/splits/chips on EVERY tab, not just the
+    // visible one. Refresh the Pack dispute index regardless of which tab is showing so
+    // its read-only chips are correct the instant the packer switches to it.
+    if (changedTables.contains('supplier_disputes') && _tab != 3) {
+      _packTabKey.currentState?.refreshDisputeIndex();
+    }
     switch (_tab) {
       case 0: // Supplier Shop
         _collectKey.currentState?._refetchFromRealtime();
@@ -10652,7 +10676,8 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
               _BagTab(key: _bagTabKey),
               _PackTab(key: _packTabKey),
               _DisputesScreen(key: _disputesKey, onCountChanged: _setDisputeCount,
-                  onRefreshCollect: _refreshCollect, onRefreshArrivals: _refreshArrivals),
+                  onRefreshCollect: _refreshCollect, onRefreshArrivals: _refreshArrivals,
+                  onRefreshPack: _refreshPack),
             ],
           );
         }),
@@ -11530,6 +11555,9 @@ class _PackTabState extends State<_PackTab>
   final Map<String, Map<String, dynamic>> _packQueueData = {};
   // packed/total cache for packing button label
   final Map<String, Map<String, int>?> _packStatus = {};
+  // C354: dispute index keyed by order_item_id — ONE fw_get_disputes fetch, matched per row.
+  // Drives the read-only "In dispute" chip so packers never chase a phantom line.
+  Map<String, DisputeItem> _packDisputeIdx = {};
 
   // #299→C353: per-order channels replaced by the single FulfillRealtime channel
 
@@ -11569,7 +11597,29 @@ class _PackTabState extends State<_PackTab>
       duration: const Duration(milliseconds: 5000),
     );
     RenderLog.write('c278_pack_tab_mounted', 1);
+    RenderLog.write('c354_ready', 'tab=pack');
     _load();
+    _loadDisputeIndex();
+  }
+
+  // C354: single fw_get_disputes fetch → index by order_item_id (no per-row RPC).
+  Future<void> _loadDisputeIndex() async {
+    try {
+      final idx = await fetchAdminDisputeIndexByOrderItem();
+      if (!mounted) return;
+      setState(() => _packDisputeIdx = idx);
+      RenderLog.write('c354_live', 'tab=pack,src=disputes');
+    } catch (_) {/* chip is best-effort; queue still renders */}
+  }
+
+  // C354: called by the parent when a supplier_disputes change fires (any tab / on resolve),
+  // so the Pack chips reflect resolutions even when Pack was not the visible tab.
+  void refreshDisputeIndex() {
+    if (!mounted) return;
+    RenderLog.write('c354_resolve_sync', 'tab=pack');
+    _loadDisputeIndex();
+    final oid = _expandedOrderId;
+    if (oid != null) _loadFromPackQueue(oid);
   }
 
   @override
@@ -11679,6 +11729,9 @@ class _PackTabState extends State<_PackTab>
         _packStatus[orderId] = {'packed': packed, 'total': total};
         _loadingItems[orderId] = false;
       });
+      RenderLog.write('c354_live', 'tab=pack,src=queue');
+      // C354: refresh the dispute index alongside the queue so chips stay in sync.
+      _loadDisputeIndex();
       if (_expandedOrderId == orderId) _refreshPackMentions(orderId);
     } catch (e) {
       if (!mounted) return;
@@ -12612,6 +12665,48 @@ class _PackTabState extends State<_PackTab>
     );
   }
 
+  // C354: read-only chip for lines that must not be packed as-is. Derives from the
+  // pack_get_queue fulfillment_state plus the single fw_get_disputes index (matched by
+  // order_item_id). Returns an empty box for normal rows.
+  Widget _buildPackDisputeChip(Map<String, dynamic> item) {
+    final fs   = item['fulfillment_state']?.toString();
+    final oiid = item['order_item_id']?.toString();
+    final disp = (oiid != null && oiid.isNotEmpty) ? _packDisputeIdx[oiid] : null;
+
+    String? label;
+    Color bg = const Color(0xFFF3F4F6);
+    Color fg = _kSub;
+    if (fs == 'not_coming') {
+      label = 'Not coming';
+      bg = const Color(0xFFEFEEE9); fg = const Color(0xFF5A5A57);
+    } else if (fs == 'wrong') {
+      label = 'Wrong — re-sourcing';
+      bg = const Color(0xFFFEE2E2); fg = const Color(0xFFB42318);
+    } else if (disp != null && disp.isActive) {
+      label = 'In dispute';
+      bg = const Color(0xFFEDE9FE); fg = const Color(0xFF6D28D9);
+    }
+    if (label == null) return const SizedBox.shrink();
+
+    RenderLog.write('c354_pack_chip', 'state=${fs == 'not_coming' ? 'not_coming' : fs == 'wrong' ? 'wrong' : 'in_dispute'}');
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+          decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(20)),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(Icons.info_outline_rounded, size: 12, color: fg),
+            const SizedBox(width: 4),
+            Text(label,
+                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: fg)),
+          ]),
+        ),
+      ),
+    );
+  }
+
   // #347: item card — stacked multi-bag tags; mismatch chip removed; Counted colour vs received
   Widget _buildPackItemTile(Map<String, dynamic> item) {
     final name       = item['product_name']?.toString() ?? '—';
@@ -12693,6 +12788,10 @@ class _PackTabState extends State<_PackTab>
                     ),
                   ],
                 ]),
+                // C354: read-only dispute/not_coming/wrong chip — flags phantom lines
+                // so the packer never chases them. Backend already excludes these from
+                // dispatch-ready, so the chip is informational and blocks nothing.
+                _buildPackDisputeChip(item),
                 const SizedBox(height: 5),
                 // Received
                 _packChip('Received • $received/$ordered$pt', received, ordered),
@@ -14855,11 +14954,14 @@ class _DisputesScreen extends StatefulWidget {
   final void Function(int) onCountChanged;
   final VoidCallback onRefreshCollect;
   final VoidCallback onRefreshArrivals;
+  // C354: resolving a dispute changes pack recounts/splits — refresh the Pack tab too.
+  final VoidCallback onRefreshPack;
   const _DisputesScreen({
     super.key,
     required this.onCountChanged,
     required this.onRefreshCollect,
     required this.onRefreshArrivals,
+    required this.onRefreshPack,
   });
 
   @override
@@ -14882,6 +14984,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
   void initState() {
     super.initState();
     RenderLog.write('c188_realtime_subscribed', 'disputes_tab_init');
+    RenderLog.write('c354_ready', 'tab=disputes');
     _load();
   }
 
@@ -14899,6 +15002,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
       final res = await Supabase.instance.client.rpc('fw_get_disputes') as Map;
       if (!mounted) return;
       final items = DisputeItem.listFromResponse(res);
+      RenderLog.write('c354_live', 'tab=disputes,src=load');
       // c188: first parse = models_loaded
       if (items.isNotEmpty) {
         RenderLog.write('c188_models_loaded', 'count=${items.length}');
@@ -15033,8 +15137,10 @@ class _DisputesScreenState extends State<_DisputesScreen> {
       if (mounted) {
         setState(() => _resolving.remove(item.disputeId));
         RenderLog.write('c337_dispute_sync', 'both_stages_reloaded=y;outcome=${action.code}');
+        RenderLog.write('c354_resolve_sync', 'tab=disputes');
         widget.onRefreshCollect();
         widget.onRefreshArrivals();
+        widget.onRefreshPack();
       }
     }
   }
@@ -15664,6 +15770,23 @@ class _DisputesScreenState extends State<_DisputesScreen> {
                     child: const Text('Nudge due',
                         style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700,
                             color: Color(0xFFB8860B))),
+                  );
+                }),
+                // C354: adjustment chip — payload-driven (adj_amount)
+                if (item.adjAmount != null && item.adjAmount! != 0) Builder(builder: (_) {
+                  RenderLog.write('c354_adj', 'amt=${item.adjAmount}');
+                  final amt = item.adjAmount!;
+                  final label = amt > 0
+                      ? 'Adj +₹${amt.toStringAsFixed(2)}'
+                      : 'Adj −₹${amt.abs().toStringAsFixed(2)}';
+                  return Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                        color: const Color(0xFFEFF6FF),
+                        borderRadius: BorderRadius.circular(20)),
+                    child: Text(label,
+                        style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700,
+                            color: Color(0xFF1E40AF))),
                   );
                 }),
                 // Return-note chip

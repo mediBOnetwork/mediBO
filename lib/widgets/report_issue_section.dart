@@ -24,9 +24,12 @@ class ReportIssueSection extends StatefulWidget {
   final String? existingWrongName;
   final String? existingProofUrl;
   final VoidCallback onSaved;
+  // C354: tab label ('shop'|'warehouse') for render-log gate proof; cosmetic only.
+  final String? tab;
 
   const ReportIssueSection({
     super.key,
+    this.tab,
     required this.orderItemId,
     required this.orderedQty,
     required this.receivedQty,
@@ -319,6 +322,7 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
       final opts = _gatedOptions;
       RenderLog.write('c351_section', 'n=${opts.length}');
       RenderLog.write('c353_gate', 'mode=$_gateMode');
+      RenderLog.write('c354_gate', 'tab=${widget.tab ?? "?"},mode=$_gateMode');
       final hasExisting = _cleanIssue(widget.existingIssue) != null;
       final title = _gateMode == 'excess' ? 'Report excess' : 'Report issue';
       return Container(

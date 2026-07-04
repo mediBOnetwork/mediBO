@@ -18,12 +18,14 @@ class FulfillRealtime {
   FulfillRealtime._();
   static final FulfillRealtime instance = FulfillRealtime._();
 
-  // C355: ONLY tables that are actually in the `supabase_realtime` publication
+  // C356: ONLY tables that are actually in the `supabase_realtime` publication
   // (verified via pg_publication_tables). Subscribing to an UNPUBLISHED table
-  // (the old list had `supplier_count_mode`, which is NOT published) risks a
-  // server-side binding rejection that can error the WHOLE channel — after which
-  // no table delivers events and a second device never updates until reload.
-  // `orders` IS published and is added so order-level status changes also sync.
+  // risks a server-side binding rejection that can error the WHOLE channel — after
+  // which no table delivers events and a second device never updates until reload.
+  // #355 had dropped supplier_count_mode because it was NOT published; the backend
+  // has since published it, so it is restored here — this makes Confirm-counting
+  // stage flips (shop↔warehouse) and arrivals_confirmed changes sync cross-device.
+  // All six are published; `orders` carries order-level status changes.
   static const tables = [
     'order_items',
     'supplier_disputes',
@@ -32,6 +34,8 @@ class FulfillRealtime {
     // appear on the Collect list without a manual refresh.
     'supplier_orders',
     'orders',
+    // C356: re-added now that it is in the supabase_realtime publication.
+    'supplier_count_mode',
   ];
 
   final Set<void Function(Set<String> changedTables)> _listeners = {};

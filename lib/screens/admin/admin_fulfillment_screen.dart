@@ -5858,6 +5858,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // ── B3: Wide item table ───────────────────────────────────────────────────────
   Widget _buildWideItemTable() {
     RenderLog.write('change_86_wide_table_present', '1');
+    RenderLog.write('c357_cols_ready', 'tab=${widget.arrivals ? 'warehouse' : 'shop'}');
     final locked = _boxLocked;
     if (locked) RenderLog.write('change_91_locked', '1');
     else RenderLog.write('change_91_confirm_present', '1');
@@ -5877,13 +5878,19 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             ),
           ),
           child: Row(children: [
-            Expanded(flex: 6, child: Text('Product',
+            // C357: two new columns — Dispute Type + Item Status — between Received
+            // and Status. Web/desktop only (table renders >=900px; mobile = cards).
+            Expanded(flex: 5, child: Text('Product',
                 style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _kSub))),
             Expanded(flex: 2, child: Text('Pack',
                 style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _kSub))),
             Expanded(flex: 2, child: Text('Received',
                 style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _kSub),
                 textAlign: TextAlign.right)),
+            Expanded(flex: 3, child: Text('Dispute Type',
+                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _kSub))),
+            Expanded(flex: 3, child: Text('Item Status',
+                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _kSub))),
             Expanded(flex: 2, child: Text('Status',
                 style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _kSub),
                 textAlign: TextAlign.right)),
@@ -5921,10 +5928,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                     RenderLog.write('c177_shop_states', 'state=$state;idx=$i');
                   }
                   DisputeItem? deskDisputeItem;
-                  Map<String, dynamic>? deskDispute;
                   for (final oiid in mp.orderItemIds) {
                     deskDisputeItem ??= _disputeItemMap[oiid];
-                    deskDispute ??= _disputeMap[oiid];
                   }
                   // C355: qty label + pill from the SHARED helper — the web row
                   // now honours expected-at-warehouse and terminal states exactly
@@ -5948,8 +5953,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                         ),
                       ),
                       child: Row(children: [
-                        // col1: thumbnail + name + dispute badge
-                        Expanded(flex: 6, child: Row(children: [
+                        // col1: thumbnail + name (C357: dispute/kind chips moved to
+                        // the new Dispute Type / Item Status columns)
+                        Expanded(flex: 5, child: Row(children: [
                           _FulfilImageTile(mp.imageUrl, size: 36),
                           const SizedBox(width: 10),
                           Expanded(
@@ -5980,22 +5986,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                                     );
                                   }),
                                 ],
-                                // C355: strip only when the dispute is ACTIVE (shared
-                                // rule — web used to show it for resolved ones too).
-                                if (disputeStripVisible(deskDisputeItem)) ...[
-                                  const SizedBox(height: 2),
-                                  _DisputeStrip(item: deskDisputeItem!, surface: widget.arrivals ? 'arrivals' : 'collect'),
-                                ] else if (deskDispute != null) ...[
-                                  const SizedBox(height: 2),
-                                  DisputeBadge(status: deskDispute['status']?.toString() ?? ''),
-                                ],
-                                // C355: count_issue amber chip — SHARED label + widget
-                                Builder(builder: (_) {
-                                  final lbl = issueChipLabel(mp.firstLineData?['count_issue']?.toString());
-                                  if (lbl == null) return const SizedBox.shrink();
-                                  RenderLog.write('c351_chip', 'kind=${mp.firstLineData?['count_issue']}');
-                                  return _issueChip(lbl);
-                                }),
+                                // C357: under-name _DisputeStrip / DisputeBadge / count_issue
+                                // amber chip REMOVED on web — the Dispute Type + Item Status
+                                // columns carry that info now. (Mobile card layout keeps chips.)
                                 // #203: proof thumbnail in desktop tile
                                 if (deskDisputeItem != null && (deskDisputeItem.proofUrl ?? '').isNotEmpty) ...[
                                   const SizedBox(height: 4),
@@ -6057,6 +6050,52 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                           style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
                           textAlign: TextAlign.right,
                         )),
+                        // C357 col: Dispute Type — SHARED kind label for the matched
+                        // dispute, else the flagged count_issue kind, else "—".
+                        Expanded(flex: 3, child: Builder(builder: (_) {
+                          final tab = widget.arrivals ? 'warehouse' : 'shop';
+                          final kindLabel = deskDisputeItem != null
+                              ? disputeKindLabel(deskDisputeItem.kind)
+                              : issueChipLabel(mp.firstLineData?['count_issue']?.toString());
+                          if (kindLabel == null) {
+                            return const Text('—', style: TextStyle(fontSize: 12, color: _kSub));
+                          }
+                          RenderLog.write('c357_disp_cell',
+                              'tab=$tab,kind=${deskDisputeItem?.kind ?? mp.firstLineData?['count_issue']}');
+                          return Row(mainAxisSize: MainAxisSize.min, children: [
+                            Container(width: 7, height: 7,
+                                decoration: const BoxDecoration(
+                                    color: Color(0xFFB45309), shape: BoxShape.circle)),
+                            const SizedBox(width: 6),
+                            Flexible(child: Text(kindLabel,
+                                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText),
+                                maxLines: 1, overflow: TextOverflow.ellipsis)),
+                          ]);
+                        })),
+                        // C357 col: Item Status — backend item_status_label for the
+                        // dispute, else the plain line status ("—" when just pending).
+                        Expanded(flex: 3, child: Builder(builder: (_) {
+                          final tab = widget.arrivals ? 'warehouse' : 'shop';
+                          String statusText;
+                          if (deskDisputeItem != null && deskDisputeItem.itemStatusLabel.isNotEmpty) {
+                            statusText = deskDisputeItem.itemStatusLabel;
+                          } else {
+                            final ps = rv.pillState;
+                            statusText = ps == 'pending'
+                                ? '—'
+                                : (ps[0].toUpperCase() + ps.substring(1)).replaceAll('_', ' ');
+                          }
+                          if (statusText == '—') {
+                            return const Text('—', style: TextStyle(fontSize: 12, color: _kSub));
+                          }
+                          RenderLog.write('c357_status_cell', 'tab=$tab');
+                          return Tooltip(
+                            message: statusText,
+                            child: Text(statusText,
+                                style: const TextStyle(fontSize: 12, color: _kText),
+                                maxLines: 1, overflow: TextOverflow.ellipsis),
+                          );
+                        })),
                         // col4: status chip (SHARED helper pill state)
                         Expanded(flex: 2, child: Align(
                           alignment: Alignment.centerRight,

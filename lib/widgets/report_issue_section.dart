@@ -18,6 +18,12 @@ class ReportIssueSection extends StatefulWidget {
   final String orderItemId;
   final int orderedQty;
   final int receivedQty;
+  // C360: stage REFERENCE qty for gating + qty math (short/excess boundary, stepper
+  // caps). SHOP = ordered; WAREHOUSE = expected (forwarded shop_qty), matching the
+  // backend's dispute reference. Defaults to orderedQty when unset. `orderedQty`
+  // stays display-only ("Ordered: N"). Without this, an over-forward warehouse line
+  // (expected < received <= ordered) could not pick 'excess' -> confirm deadlock.
+  final int? refQty;
   final bool isLocked;
   final String? existingIssue;
   final int? existingIssueQty;
@@ -40,6 +46,7 @@ class ReportIssueSection extends StatefulWidget {
     required this.orderItemId,
     required this.orderedQty,
     required this.receivedQty,
+    this.refQty,
     required this.isLocked,
     this.existingIssue,
     this.existingIssueQty,
@@ -104,9 +111,12 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
     return raw;
   }
 
+  // C360: stage reference for gating + qty math (falls back to ordered when unset).
+  int get _ref => widget.refQty ?? widget.orderedQty;
+
   int get _maxQty {
-    final uncounted = widget.orderedQty - widget.receivedQty;
-    return uncounted > 0 ? uncounted : (widget.orderedQty > 0 ? widget.orderedQty : 1);
+    final uncounted = _ref - widget.receivedQty;
+    return uncounted > 0 ? uncounted : (_ref > 0 ? _ref : 1);
   }
 
   bool get _saveEnabled {
@@ -343,10 +353,11 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
     ('not_coming', Icons.block_outlined,             'Not coming',        'Item will leave the counting list'),
   ];
 
-  // C359: the short option is only offered when the parent wired the report-missing
-  // callback AND the line can actually be short (received < ordered).
+  // C359/C360: the short option is only offered when the parent wired the
+  // report-missing callback AND the line can actually be short (received < the
+  // stage reference — expected at warehouse, ordered at shop).
   bool get _shortOffered =>
-      widget.onReportMissing != null && widget.receivedQty < widget.orderedQty;
+      widget.onReportMissing != null && widget.receivedQty < _ref;
 
   // C353 B2: probable-dispute gating — only offer issues that are actually
   // possible for the line's current ordered/received state. An existing flag
@@ -354,7 +365,9 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
   String get _gateMode {
     if (_cleanIssue(widget.existingIssue) != null) return 'flagged';
     if (widget.isShort && widget.onReportMissing != null) return 'flagged';
-    if (widget.receivedQty >= widget.orderedQty && widget.orderedQty > 0) return 'excess';
+    // C360: excess boundary is the stage REFERENCE (expected at warehouse), not raw
+    // ordered — so an over-forward warehouse line can pick 'excess' and balance.
+    if (widget.receivedQty >= _ref && _ref > 0) return 'excess';
     if (widget.receivedQty > 0) return 'partial';
     return 'full';
   }
@@ -465,8 +478,14 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
       onTap: () => setState(() {
         if (_selected == value) return;
         _selected = value;
-        // C359: short defaults its qty to the units already counted as received.
-        _qty = value == 'short' ? widget.receivedQty.clamp(0, widget.orderedQty) : 1;
+        // C359/C361: pre-fill the qty stepper to the actual discrepancy so a save without
+        // stepping matches the per-line balance point — short = units counted; excess = the
+        // amount over the stage reference (else 'excess' silently defaulted to 1).
+        _qty = value == 'short'
+            ? widget.receivedQty.clamp(0, _ref)
+            : value == 'excess'
+                ? (widget.receivedQty - _ref).clamp(1, 9999)
+                : 1;
       }),
       child: Container(
         margin: const EdgeInsets.only(bottom: 4),
@@ -503,17 +522,19 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
     // C359: short — enter how many actually arrived; the rest is the missing gap
     // that the confirm RPC raises as a short dispute. No name / no photo needed.
     if (issue == 'short') {
-      final missing = (widget.orderedQty - _qty).clamp(0, widget.orderedQty);
+      // C360: reconcile against the stage reference (expected at warehouse, ordered
+      // at shop) so "missing" == the short qty the backend raises (ref - received).
+      final missing = (_ref - _qty).clamp(0, _ref);
       return Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min,
           children: [
-        Text('Units received (of ${widget.orderedQty})',
+        Text('Units received (of $_ref)',
             style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText)),
         const SizedBox(height: 6),
         Row(children: [
           _RisStepper(
             value: _qty,
             min: 0,
-            max: widget.orderedQty,
+            max: _ref,
             onChanged: (v) => setState(() => _qty = v),
           ),
           const SizedBox(width: 10),

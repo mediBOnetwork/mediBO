@@ -202,10 +202,7 @@ class _StatePill extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(20)),
       child: Text(
-        const <String, String>{
-          'wrong': 'Wrong item',
-          'not_coming': 'Not coming',
-        }[state] ?? state.replaceAll('_', ' '),
+        statusPillLabel(state), // C361: shared canonical label (see fulfill_view_logic)
         style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: fg),
       ),
     );
@@ -255,6 +252,10 @@ class _MergedProduct {
   final bool hasArrived; // true if any underlying Arrivals line has received_locked=true
   final List<Map>? bagBreakdown; // #254: per-bag breakdown for Arrivals
   final Map<String, dynamic>? firstLineData; // raw first-line payload for issue section
+  // C361: first non-null count_issue across ALL underlying lines. A merged product can
+  // span several order_items; the issue chip / Dispute Type column must not read only
+  // firstLineData (which can be a clean line while a sibling carries the flag).
+  final String? mergedCountIssue;
 
   const _MergedProduct({
     required this.productId,
@@ -270,6 +271,7 @@ class _MergedProduct {
     this.hasArrived = false,
     this.bagBreakdown,
     this.firstLineData,
+    this.mergedCountIssue,
   });
 }
 
@@ -1112,6 +1114,13 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       final shopQtyTotal = anyUncounted ? null : shopSum;
       // #333: expected per product — sum of backend 'expected' field (forwarded qty at warehouse)
       final expectedTotal = lines.fold(0, (s, r) => s + ((r['expected'] as num?)?.toInt() ?? ordQtyOf(r)));
+      // C361: first flagged count_issue across ALL underlying lines (chip/Dispute Type
+      // must reflect a flagged sibling line, not only lines.first).
+      String? mergedCountIssue;
+      for (final r in lines) {
+        final ci = r['count_issue']?.toString();
+        if (ci != null && ci.isNotEmpty && ci != 'null') { mergedCountIssue = ci; break; }
+      }
       final oiids = lines
           .map((r) => r['order_item_id']?.toString() ?? '')
           .where((s) => s.isNotEmpty)
@@ -1147,6 +1156,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         hasArrived: hasArrived,
         bagBreakdown: bagBreakdown,
         firstLineData: Map<String, dynamic>.from(first),
+        mergedCountIssue: mergedCountIssue,
       ));
     }
     // CHANGE #269 — strict A-Z, no status grouping
@@ -1192,11 +1202,14 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // Response/confirm button gate over the whole tab: yellow+disabled while ANY
   // candidate LINE is still un-balanced; normal+clickable otherwise.
   ResponseButtonState get _disputeGate {
+    final tab = widget.arrivals ? 'warehouse' : 'shop';
     int cands = 0, unbalanced = 0;
     for (final l in _items) {
       if (!_lineIsCandidate(l)) continue;
       cands++;
-      if (!_lineIsBalanced(l)) unbalanced++;
+      final bal = _lineIsBalanced(l);
+      RenderLog.write('c361_balance', 'tab=$tab,balanced=$bal'); // C361: per-candidate balance vs backend contract
+      if (!bal) unbalanced++;
     }
     return responseButtonState(
         candidateCount: cands, unbalancedCandidateCount: unbalanced);
@@ -1944,6 +1957,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       RenderLog.write('c125_confirm_refresh', 'true');
       RenderLog.write('c335_confirm', 'wh_confirm_ok=y');
       RenderLog.write('c359_confirm_raise', 'tab=warehouse,raised=$disputesRaised'); // C359: disputes raised at confirm
+      RenderLog.write('c361_confirm', 'tab=warehouse,raised=$disputesRaised'); // C360
       RenderLog.write('c339_wh_confirmed', 'locked_items=$lockedItems;disputes=$disputesRaised');
       // #125 R6: refresh Collect so re-sourced shortfall lines appear
       context.findAncestorStateOfType<_AdminFulfillmentScreenState>()?._refreshCollect();
@@ -3244,6 +3258,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // #92: isWide=true → right-aligned compact; false → full-width refined mobile strip
   Widget _buildConfirmFooter(bool locked, {bool isWide = false}) {
     final isAdmin = UserState.of(context).isAdmin;
+    // C360: the Fulfill counting tab rendered its footer — counting is voice-only
+    // (no manual count buttons in the popup) and the gate below reads the shared logic.
+    RenderLog.write('c361_voice_only', widget.arrivals ? 'warehouse' : 'shop');
 
     // #156/#157: Arrivals-specific footer — "Confirm all items received" / locked+undo
     if (widget.arrivals) {
@@ -3283,6 +3300,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       // (ordered != received + disputed). Normal + clickable once all balance.
       final whBlocked = _disputeGate == ResponseButtonState.yellowDisabled;
       RenderLog.write('c359_btn_state',
+          'tab=warehouse,state=${whBlocked ? 'yellow_disabled' : 'normal'}');
+      RenderLog.write('c361_gate',
           'tab=warehouse,state=${whBlocked ? 'yellow_disabled' : 'normal'}');
       return Column(mainAxisSize: MainAxisSize.min, children: [
         SizedBox(
@@ -3446,6 +3465,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             // candidate is still un-balanced (ordered != counted + disputed).
             final shopBlocked = _disputeGate == ResponseButtonState.yellowDisabled;
             RenderLog.write('c359_btn_state',
+                'tab=shop,state=${shopBlocked ? 'yellow_disabled' : 'normal'}');
+            RenderLog.write('c361_gate',
                 'tab=shop,state=${shopBlocked ? 'yellow_disabled' : 'normal'}');
             return Column(mainAxisSize: MainAxisSize.min, children: [
               SizedBox(
@@ -3658,6 +3679,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       RenderLog.write('c125_submit_refresh', 'true');
       RenderLog.write('c331_confirm_gate', 'success;shorts=$shortsDisputed');
       RenderLog.write('c359_confirm_raise', 'tab=shop,raised=$shortsDisputed'); // C359: disputes raised at confirm
+      RenderLog.write('c361_confirm', 'tab=shop,raised=$shortsDisputed'); // C360
       RenderLog.write('c335_confirm', 'shop_confirm_ok=y;shorts=$shortsDisputed');
       RenderLog.write('c337_shop_confirmed', 'supplier=$supplier;shorts=$shortsDisputed');
       RenderLog.write('c353_refetch', 'src=action,tab=collect'); // C353: confirm refetch
@@ -5170,7 +5192,13 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
     RenderLog.write('c196_collect_card_layout_v2', 'surface=$surface');
     RenderLog.write('c198_card_layout_v3', 'surface=$surface');
-    if (isCandidate) RenderLog.write('c359_candidate', widget.arrivals ? 'warehouse' : 'shop');
+    if (isCandidate) {
+      RenderLog.write('c359_candidate', widget.arrivals ? 'warehouse' : 'shop');
+      // C360: carry the counted basis used (shop_qty on Shop, received on Warehouse).
+      final counted = widget.arrivals ? merged.receivedTotal : (merged.shopQtyTotal ?? 0);
+      RenderLog.write('c361_candidate',
+          'tab=${widget.arrivals ? 'warehouse' : 'shop'},counted=$counted');
+    }
     if (widget.arrivals) RenderLog.write('c265_warehouse_no_arrival', 'prod=${merged.productId}');
     if (widget.arrivals) {
       final bool itemBagPresent = _activeBag != null;
@@ -5324,9 +5352,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
               // the mobile merged layout silently dropped issue flags the single
               // tile and web row showed. Now shared with both.
               Builder(builder: (_) {
-                final lbl = issueChipLabel(merged.firstLineData?['count_issue']?.toString());
+                final lbl = issueChipLabel(merged.mergedCountIssue); // C361: any flagged line
                 if (lbl == null) return const SizedBox.shrink();
-                RenderLog.write('c351_chip', 'kind=${merged.firstLineData?['count_issue']}');
+                RenderLog.write('c351_chip', 'kind=${merged.mergedCountIssue}');
                 return _issueChip(lbl);
               }),
               // #265: arrival status line removed — "Arrival pending"/"Arrived" not shown on Warehouse rows
@@ -5376,6 +5404,14 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       final d = _disputeItemMap[oiid];
       if (d != null) { existingDispute = d; break; }
     }
+    // C361: a merged product can span several order-lines; line-level flags
+    // (fw_set_line_issue) must target the actual CANDIDATE line, not lines.first —
+    // else the flag + its qty land on the wrong line and the per-line gate false-greens.
+    final oiids = merged.orderItemIds.toSet();
+    final Map<String, dynamic> classifyLine = _items.firstWhere(
+      (l) => oiids.contains(l['order_item_id']?.toString()) && _lineIsCandidate(l),
+      orElse: () => merged.firstLineData ?? const <String, dynamic>{},
+    );
     final isWide = MediaQuery.of(context).size.width >= 900;
     final sheet = _ProductReceiveSheet(
       supplierName: supplier,
@@ -5386,6 +5422,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       orderedTotal: merged.orderedTotal,
       receivedTotal: merged.receivedTotal,
       shopQtyTotal: merged.shopQtyTotal,
+      expectedTotal: merged.expectedTotal,
       combinedState: merged.combinedState,
       existingDispute: existingDispute,
       arrivals: widget.arrivals,
@@ -5428,7 +5465,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         _reloadItemsFromDB();
       } : null,
       onReload: _refetchAfterAction, // C353: full refetch (items + chips + disputes)
-      itemData: merged.firstLineData,
+      // C361: classify the actual candidate line (falls back to first line defensively).
+      itemData: classifyLine.isNotEmpty ? classifyLine : merged.firstLineData,
+      multiLine: merged.orderItemIds.length > 1,
     );
     if (isWide) {
       await showDialog<void>(
@@ -5956,6 +5995,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c357_cols_ready', 'tab=${widget.arrivals ? 'warehouse' : 'shop'}');
     // C358 B2: Received / Dispute Type / Item Status / Status are separate, spaced columns.
     RenderLog.write('c358_cols3', 'tab=${widget.arrivals ? 'warehouse' : 'shop'}');
+    // C361: web Dispute Type + Item Status render as SEPARATE payload-driven columns.
+    RenderLog.write('c361_disp_cols', 'tab=${widget.arrivals ? 'warehouse' : 'shop'}');
     final locked = _boxLocked;
     if (locked) RenderLog.write('change_91_locked', '1');
     else RenderLog.write('change_91_confirm_present', '1');
@@ -6047,10 +6088,17 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                   final isCandidate = _mIsCandidate(mp);
                   if (isCandidate) {
                     RenderLog.write('c359_candidate', widget.arrivals ? 'warehouse' : 'shop');
+                    final counted = widget.arrivals ? mp.receivedTotal : (mp.shopQtyTotal ?? 0);
+                    RenderLog.write('c361_candidate',
+                        'tab=${widget.arrivals ? 'warehouse' : 'shop'},counted=$counted');
                   }
                   return InkWell(
                     // C359: candidate opens the classify popup regardless of active bag.
-                    onTap: !isCandidate ? null : () => _showProductSheet(mp),
+                    // C361: mirror the mobile gate — a locked warehouse tab makes candidates
+                    // inert (no hover/dead-click on an already-locked row; sheet early-returns).
+                    onTap: (!isCandidate || (widget.arrivals && _arrivalsLocked))
+                        ? null
+                        : () => _showProductSheet(mp),
                     hoverColor: _kGreen.withValues(alpha: 0.04),
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -6166,12 +6214,12 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                           final tab = widget.arrivals ? 'warehouse' : 'shop';
                           final kindLabel = deskDisputeItem != null
                               ? disputeKindLabel(deskDisputeItem.kind)
-                              : issueChipLabel(mp.firstLineData?['count_issue']?.toString());
+                              : issueChipLabel(mp.mergedCountIssue); // C361: any flagged line
                           if (kindLabel == null) {
                             return const Text('—', style: TextStyle(fontSize: 12, color: _kSub));
                           }
                           RenderLog.write('c357_disp_cell',
-                              'tab=$tab,kind=${deskDisputeItem?.kind ?? mp.firstLineData?['count_issue']}');
+                              'tab=$tab,kind=${deskDisputeItem?.kind ?? mp.mergedCountIssue}');
                           return Row(mainAxisSize: MainAxisSize.min, children: [
                             Container(width: 7, height: 7,
                                 decoration: const BoxDecoration(
@@ -6192,9 +6240,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                             statusText = deskDisputeItem.itemStatusLabel;
                           } else {
                             final ps = rv.pillState;
-                            statusText = ps == 'pending'
-                                ? '—'
-                                : (ps[0].toUpperCase() + ps.substring(1)).replaceAll('_', ' ');
+                            // C361: same shared label as this row's _StatePill — no casing drift.
+                            statusText = ps == 'pending' ? '—' : statusPillLabel(ps);
                           }
                           if (statusText == '—') {
                             return const Text('—', style: TextStyle(fontSize: 12, color: _kSub));
@@ -9453,6 +9500,9 @@ class _ProductReceiveSheet extends StatefulWidget {
   // C354: shop-stage counted total (sum shop_qty); null if any line uncounted. Used so the
   // Report-issue gating sees the SHOP count at shop stage, not the warehouse received_qty.
   final int? shopQtyTotal;
+  // C360: warehouse expected total (sum forwarded shop_qty). The Report-issue gating +
+  // balance reference at warehouse is `expected`, not raw ordered.
+  final int? expectedTotal;
   final String combinedState;
   final DisputeItem? existingDispute;
   // #258 BUG4: arrivals mode — "Got all" calls bag_count_set instead of fw_product_action.
@@ -9465,7 +9515,12 @@ class _ProductReceiveSheet extends StatefulWidget {
   final Future<void> Function(int productId)? bagCountClearFn;
   final VoidCallback? onReload;
   // C351: raw first-line payload for issue section (order_item_id, count_issue, etc.)
+  // C361: this is now the CANDIDATE line (first _lineIsCandidate), not lines.first, so
+  // line-level flags (fw_set_line_issue) target the line the admin is classifying.
   final Map<String, dynamic>? itemData;
+  // C361: true when the product spans >1 order-line. The short/report-missing flow is
+  // product-level (fw_product_action distributes), so it is only offered single-line.
+  final bool multiLine;
 
   const _ProductReceiveSheet({
     required this.supplierName,
@@ -9476,6 +9531,7 @@ class _ProductReceiveSheet extends StatefulWidget {
     required this.orderedTotal,
     required this.receivedTotal,
     this.shopQtyTotal,
+    this.expectedTotal,
     required this.combinedState,
     this.existingDispute,
     this.arrivals = false,
@@ -9485,6 +9541,7 @@ class _ProductReceiveSheet extends StatefulWidget {
     this.bagCountClearFn,
     this.onReload,
     this.itemData,
+    this.multiLine = false,
   });
 
   @override
@@ -10205,10 +10262,21 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
             // the gate always see recv==0 → always 'full' options. Use the stage's own count.
             tab: widget.arrivals ? 'warehouse' : 'shop',
             orderItemId: widget.itemData!['order_item_id']?.toString() ?? '',
-            orderedQty: widget.orderedTotal,
+            // C361: qtys are the CANDIDATE LINE's own (itemData IS that line), NOT the
+            // merged product totals — a line-level flag must balance the specific line.
+            orderedQty: (widget.itemData!['ordered'] as num?)?.toInt() ?? widget.orderedTotal,
             receivedQty: widget.arrivals
-                ? widget.receivedTotal
-                : (widget.shopQtyTotal ?? 0),
+                ? ((widget.itemData!['received_qty'] as num?)?.toInt() ?? 0)
+                : ((widget.itemData!['shop_qty'] as num?)?.toInt() ?? 0),
+            // C360/C361: gating/qty reference — WAREHOUSE = the line's expected (forwarded
+            // shop_qty), SHOP = the line's ordered. Matches the backend dispute reference so
+            // 'excess' shows + 'short' balances for over/under-forward warehouse lines.
+            refQty: widget.arrivals
+                ? ((widget.itemData!['expected'] as num?)?.toInt()
+                    ?? (widget.itemData!['shop_qty'] as num?)?.toInt()
+                    ?? (widget.itemData!['ordered'] as num?)?.toInt()
+                    ?? widget.orderedTotal)
+                : ((widget.itemData!['ordered'] as num?)?.toInt() ?? widget.orderedTotal),
             isLocked: widget.itemData!['received_locked'] == true ||
                 widget.itemData!['collect_locked'] == true,
             existingIssue: widget.itemData!['count_issue']?.toString(),
@@ -10216,8 +10284,10 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
             existingWrongName: widget.itemData!['wrong_received_note']?.toString(),
             existingProofUrl: widget.itemData!['wrong_proof_url']?.toString(),
             // C359: short/missing reuses the existing report-missing flow (fw_product_action).
+            // C361: report_missing is PRODUCT-level (distributes across all lines), so only
+            // offer it single-line — multi-line voice-count shorts already auto-balance.
             isShort: isShortLine,
-            onReportMissing: _reportMissing,
+            onReportMissing: widget.multiLine ? null : _reportMissing,
             onSaved: () {
               widget.onReload?.call();
               if (mounted) Navigator.of(context).pop();
@@ -10405,6 +10475,11 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
     // the #357 Dispute Type / Item Status columns) so resolutions reflect back here.
     if (changedTables.contains('supplier_disputes') && (_tab == 0 || _tab == 1)) {
       RenderLog.write('c358_line_synced', 'tab=${_tab == 0 ? 'shop' : 'warehouse'}');
+    }
+    // C360: a realtime change (e.g. a dispute raised at confirm) silently re-renders
+    // the visible counting tab — no manual refresh, no polling.
+    if (_tab == 0 || _tab == 1) {
+      RenderLog.write('c361_synced', 'tab=${_tab == 0 ? 'shop' : 'warehouse'},src=rt');
     }
     // C354: a dispute change alters recounts/splits/chips on EVERY tab, not just the
     // visible one. Refresh the Pack dispute index regardless of which tab is showing so

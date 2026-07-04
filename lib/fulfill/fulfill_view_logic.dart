@@ -101,6 +101,19 @@ String? issueChipLabel(String? countIssue) {
   };
 }
 
+/// Canonical status-pill label. C361: the web "Item Status" column re-derived this
+/// inline (capitalised) with a different casing than the _StatePill chip in the SAME
+/// row ("Received" vs "received"). One definition so a pill and any text column that
+/// shows the same state can never disagree.
+String statusPillLabel(String state) {
+  RenderLog.write('c355_shared', 'fn=statusLabel');
+  return switch (state) {
+    'wrong' => 'Wrong item',
+    'not_coming' => 'Not coming',
+    _ => state.replaceAll('_', ' '),
+  };
+}
+
 /// Dispute-kind tag label (Disputes tab card + action sheet). One definition so
 /// the card and the sheet header can never disagree.
 String disputeKindLabel(String kind) {
@@ -163,22 +176,22 @@ bool _isCounted359({
   return shopQty != null || actedOn;
 }
 
-/// Short threshold: counted below this is short. SHOP = ordered; WAREHOUSE =
-/// expected (the forwarded shop_qty). A warehouse line that receives MORE than
-/// the shop forwarded (expected < received <= ordered) is NOT short — the shop
-/// shortfall was already disputed at shop confirm — so it must not be flagged.
-int _shortRefFor({required bool arrivals, required int ordered, int? expected}) =>
+/// C360: the SINGLE stage reference for candidacy AND balance, matching the LIVE
+/// backend (_fw_raise_dispute_for_line, verified via MCP):
+///   SHOP      -> ordered (v_expected = quantity)
+///   WAREHOUSE -> expected = forwarded shop_qty (v_expected = coalesce(shop_qty, quantity))
+/// The backend raises short when counted < ref AND excess when counted > ref, for
+/// BOTH stages against this same ref. (#359 wrongly used ordered as the warehouse
+/// EXCESS threshold; the backend uses expected, so a warehouse line received above
+/// the forwarded qty would false-green the confirm button. Unifying to one ref
+/// fixes that and keeps candidacy == the backend's own raise condition.)
+int stageRefFor({required bool arrivals, required int ordered, int? expected}) =>
     arrivals ? (expected ?? ordered) : ordered;
 
-/// Excess threshold: counted above ORDERED is excess (both stages). Counting caps
-/// received at ordered, so excess normally only exists as an explicit flag.
-int _excessRefFor({required int ordered}) => ordered;
-
 /// STEP B — a line is a DISPUTE CANDIDATE when, after voice counting, it is not
-/// fully/correctly satisfied: counted below the short threshold (short), above
-/// ordered (excess), OR it carries a count_issue flag, OR it is short/wrong/
-/// not_coming. Un-counted lines are not candidates yet. This mirrors exactly the
-/// lines the confirm RPC raises disputes for.
+/// fully/correctly satisfied: counted != the stage reference (short OR excess), OR
+/// it carries a count_issue flag, OR it is wrong/not_coming. Un-counted lines are
+/// not candidates yet. Mirrors exactly the lines the confirm RPC raises disputes for.
 bool isDisputeCandidate({
   required bool arrivals,
   required int ordered,
@@ -199,13 +212,13 @@ bool isDisputeCandidate({
     return false;
   }
   final counted = countedQtyFor(arrivals: arrivals, shopQty: shopQty, received: received);
-  final shortRef = _shortRefFor(arrivals: arrivals, ordered: ordered, expected: expected);
-  final excessRef = _excessRefFor(ordered: ordered);
+  final ref = stageRefFor(arrivals: arrivals, ordered: ordered, expected: expected);
   final ci = _cleanIssue359(countIssue);
-  final candidate = counted < shortRef ||
-      counted > excessRef ||
+  // `counted != ref` captures BOTH short (counted<ref) and excess (counted>ref);
+  // state=='short' is NOT an independent trigger (a short is defined by counted<ref,
+  // so an already-reconciled line at counted==ref never re-flags).
+  final candidate = counted != ref ||
       ci != null ||
-      state == 'short' ||
       state == 'wrong' ||
       state == 'not_coming';
   if (candidate) RenderLog.write('c355_shared', 'fn=candidate');
@@ -228,19 +241,21 @@ bool isTappableLine({
       arrivals: arrivals, ordered: ordered, shopQty: shopQty, received: received,
       expected: expected, countIssue: countIssue, state: state);
 
-/// STEP C — is a candidate's discrepancy fully accounted for by its chosen
-/// dispute type + qty? (Om's per-kind rules.) Designed so every balance point is
-/// REACHABLE via the popup stepper (max = ordered - received), i.e. no deadlock.
-///   plain short (counted < shortRef, no flag) : accounted for — the confirm RPC
-///                            auto-raises the short (short_qty = ordered - received).
-///                            Matches `ordered == counted + disputed`.
-///   few_wrong / damaged    : issue_qty == ordered - counted (the wrong/damaged units
-///                            ARE the shortfall); if counted >= ordered, any qty >= 1.
-///   excess                 : issue_qty == counted - ordered when over-ordered; else
-///                            any qty >= 1 (admin-observed extra units).
+/// STEP C — is a candidate's discrepancy fully accounted for by its chosen dispute
+/// type + qty? All measured against the SAME stage reference as candidacy (ordered
+/// at shop, expected/forwarded shop_qty at warehouse), so the gate matches what the
+/// backend actually disputes. Every balance point is REACHABLE via the popup stepper
+/// (max = ref - received), i.e. no deadlock.
+///   plain short (counted < ref, no flag) : accounted for — the confirm RPC auto-raises
+///                            the short (short_qty = ref - counted). Matches
+///                            `ref == counted + disputed`.
+///   few_wrong / damaged    : issue_qty == ref - counted (the wrong/damaged units ARE
+///                            the shortfall); if counted >= ref, any qty >= 1.
+///   excess                 : issue_qty == counted - ref when over-ref; else any qty>=1.
 ///   not_coming             : whole remaining gap claimed  -> balanced once selected
 ///   wrong item (whole line): balanced once the type is selected
-///   over-ordered with no excess flag : NOT balanced (admin must flag excess)
+///   over-ref with no excess flag : NOT balanced (admin must flag excess — backend WILL
+///                            raise it: received > expected at warehouse / shop_qty > ordered)
 /// A non-candidate line is trivially balanced (nothing to reconcile).
 bool lineBalanced({
   required bool arrivals,
@@ -258,22 +273,21 @@ bool lineBalanced({
     return true;
   }
   final counted = countedQtyFor(arrivals: arrivals, shopQty: shopQty, received: received);
-  final shortRef = _shortRefFor(arrivals: arrivals, ordered: ordered, expected: expected);
-  final excessRef = _excessRefFor(ordered: ordered);
+  final ref = stageRefFor(arrivals: arrivals, ordered: ordered, expected: expected);
   final ci = _cleanIssue359(countIssue);
   final iq = issueQty ?? 0;
   if (ci == 'wrong' || state == 'wrong') return true;           // whole line disputed
   if (state == 'not_coming') return true;                       // whole remaining gap
   if (ci == 'few_wrong' || ci == 'damaged') {
-    final gap = ordered - counted;                             // == popup stepper max
+    final gap = ref - counted;                                 // == popup stepper max
     return gap > 0 ? iq == gap : iq >= 1;
   }
   if (ci == 'excess') {                                         // extra units = issue_qty
-    final over = counted - excessRef;
+    final over = counted - ref;
     return over > 0 ? iq == over : iq >= 1;
   }
-  if (counted < shortRef) return true;                          // plain short — RPC auto-raises
-  return false;                                                 // over-ordered, unflagged → must flag excess
+  if (counted < ref) return true;                              // plain short — RPC auto-raises
+  return false;                                                 // over-ref, unflagged → must flag excess
 }
 
 /// Response/confirm button visual state for a tab.

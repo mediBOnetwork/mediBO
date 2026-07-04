@@ -17,6 +17,7 @@ import 'dart:convert';
 import '../../utils/render_log.dart';
 import '../../widgets/dispute_state.dart';
 import 'dispute/dispute_models.dart';
+import '../../fulfill/fulfill_view_logic.dart'; // C355: shared logic for both layouts
 // dispute_card.dart removed in #170 — Disputes tab rebuilt with accordion layout
 import '../../utils/responsive.dart';
 import '../../utils/tts.dart';
@@ -4905,6 +4906,24 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     );
   }
 
+  // C355: single amber count_issue chip widget — ONE styling used by both the
+  // mobile tiles and the web table row (label text comes from issueChipLabel()).
+  Widget _issueChip(String lbl) => Padding(
+        padding: const EdgeInsets.only(top: 3),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFEF3C7),
+            border: Border.all(color: const Color(0xFFFCD34D), width: 1),
+            borderRadius: BorderRadius.circular(4),
+          ),
+          child: Text(lbl,
+              style: const TextStyle(
+                  fontSize: 10, fontWeight: FontWeight.w700, color: Color(0xFFB45309)),
+              maxLines: 1, overflow: TextOverflow.ellipsis),
+        ),
+      );
+
   // #113: extracted so PinnedFooterList can pass items as List<Widget>
   // #331: shop tab shows shop_qty/ordQty; warehouse shows recQty/expected (mode-aware)
   Widget _buildItemTile(Map<String, dynamic> item) {
@@ -4964,43 +4983,35 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 120),
             child: Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
-              // #331: shop tab → shop_qty/ordered; warehouse → received/expected
-              if (!widget.arrivals) ...[
-                // Supplier Shop stage: show shop count progress
-                Builder(builder: (_) {
-                  RenderLog.write('c334_zero_counter', 'shop_qty=${shopQty ?? '0'};ord=$ordQty');
-                  RenderLog.write('c335_shop_row', 'shop=${shopQty ?? 0};ord=$ordQty');
-                  final label = '${shopQty ?? 0}/$ordQty';
-                  return Row(mainAxisSize: MainAxisSize.min, children: [
-                    Text(label,
-                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText)),
-                    const SizedBox(width: 6),
-                    // #335 BUG-3: derive pill ONLY from shop_qty vs ordered — never fulfillment_state at shop stage
-                    _StatePill(shopQty == null ? 'pending' : (shopQty >= ordQty ? 'received' : 'short')),
-                  ]);
-                }),
-              ] else if (whExpected == 0) ...[
-                // Warehouse: fully-short disputed line — muted row
-                const Text('in dispute · awaiting resolution',
-                    style: TextStyle(fontSize: 10, color: _kSub)),
-              ] else ...[
-                // Warehouse stage: show received/expected
-                Builder(builder: (_) {
-                  RenderLog.write('c331_wh_rows', 'rec=$recQty;expected=$whExpected;mode=${_supplierMode ?? ''}');
-                  RenderLog.write('c335_wh_row', 'rec=$recQty;exp=$whExpected');
-                  final isRowLocked = lockedOf(item);
-                  return Row(mainAxisSize: MainAxisSize.min, children: [
-                    if (isRowLocked) ...[
-                      const Icon(Icons.lock_rounded, size: 12, color: _kReceivedFg),
-                      const SizedBox(width: 3),
-                    ],
-                    Text('$recQty/$whExpected',
-                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText)),
-                    const SizedBox(width: 6),
-                    _StatePill(recQty >= whExpected ? 'received' : state),
-                  ]);
-                }),
-              ],
+              // C355: qty label + pill state from the SHARED helper (same rule as
+              // the merged tile and the web row — no per-layout drift).
+              Builder(builder: (_) {
+                final rv = fulfillRowView(
+                  arrivals: widget.arrivals,
+                  ordered: ordQty,
+                  shopQty: shopQty,
+                  received: recQty,
+                  expected: (item['expected'] as num?)?.toInt(),
+                  combinedState: state,
+                );
+                if (rv.awaitingResolution) {
+                  return const Text('in dispute · awaiting resolution',
+                      style: TextStyle(fontSize: 10, color: _kSub));
+                }
+                RenderLog.write(widget.arrivals ? 'c335_wh_row' : 'c335_shop_row',
+                    widget.arrivals ? 'rec=$recQty;exp=$whExpected' : 'shop=${shopQty ?? 0};ord=$ordQty');
+                final isRowLocked = widget.arrivals && lockedOf(item);
+                return Row(mainAxisSize: MainAxisSize.min, children: [
+                  if (isRowLocked) ...[
+                    const Icon(Icons.lock_rounded, size: 12, color: _kReceivedFg),
+                    const SizedBox(width: 3),
+                  ],
+                  Text(rv.qtyLabel,
+                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText)),
+                  const SizedBox(width: 6),
+                  _StatePill(rv.pillState),
+                ]);
+              }),
               // #338: voice-vs-actual mismatch chip (audit fetched on expand)
               Builder(builder: (_) {
                 final chip = _mismatchChip((item['product_id'] as num?)?.toInt());
@@ -5031,34 +5042,12 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                   ),
                 ),
               ],
-              // C351: count_issue amber chip from payload
+              // C355: count_issue amber chip — label from the SHARED helper
               Builder(builder: (_) {
-                final ci = item['count_issue']?.toString();
-                if (ci == null || ci.isEmpty || ci == 'null') return const SizedBox.shrink();
-                final lbl = switch (ci) {
-                  'wrong'      => 'Wrong',
-                  'few_wrong'  => 'Few wrong',
-                  'damaged'    => 'Damaged',
-                  'excess'     => 'Excess',
-                  'not_coming' => 'Not coming',
-                  _            => ci,
-                };
-                RenderLog.write('c351_chip', 'kind=$ci');
-                return Padding(
-                  padding: const EdgeInsets.only(top: 3),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFFEF3C7),
-                      border: Border.all(color: const Color(0xFFFCD34D), width: 1),
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    child: Text(lbl,
-                        style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700,
-                            color: Color(0xFFB45309)),
-                        maxLines: 1, overflow: TextOverflow.ellipsis),
-                  ),
-                );
+                final lbl = issueChipLabel(item['count_issue']?.toString());
+                if (lbl == null) return const SizedBox.shrink();
+                RenderLog.write('c351_chip', 'kind=${item['count_issue']}');
+                return _issueChip(lbl);
               }),
               // #333: count_mismatch is a dead field — removed
             ]),
@@ -5071,10 +5060,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // ── #197: Merged product card ─────────────────────────────────────────────
   Widget _buildMergedItemTile(_MergedProduct merged) {
     final state = merged.combinedState;
-    // #333: use backend 'expected' field sum for warehouse rows; ordered for collect rows
-    final int whExpected = widget.arrivals
-        ? (merged.expectedTotal ?? merged.orderedTotal)
-        : merged.orderedTotal;
+    // C355: qty/pill/expected logic moved into fulfillRowView() (shared helper).
     // Dispute: first match across all underlying lines
     DisputeItem? disputeItem;
     Map<String, dynamic>? openDispute;
@@ -5210,49 +5196,42 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 120),
             child: Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
-              // #331: shop tab → shop_qty/ordered; warehouse → received/expected
-              if (!widget.arrivals) ...[
-                Builder(builder: (_) {
-                  RenderLog.write('c334_zero_counter', 'shop=${merged.shopQtyTotal ?? '0'};ord=${merged.orderedTotal}');
-                  // C353 B1: "Got all"/"Not coming"/"Wrong" write fulfillment_state but
-                  // NOT shop_qty, so a shop_qty-only pill stays "0/2 short" forever after
-                  // Got all. Terminal fulfillment states win; otherwise keep the #335
-                  // shop_qty-derived pill for counting-in-progress lines.
-                  final cs = merged.combinedState;
-                  final terminal = cs == 'received' || cs == 'wrong' || cs == 'not_coming';
-                  final label = (terminal && merged.shopQtyTotal == null)
-                      ? '${merged.receivedTotal}/${merged.orderedTotal}'
-                      : '${merged.shopQtyTotal ?? 0}/${merged.orderedTotal}';
-                  final pillState = terminal
-                      ? cs
-                      : merged.shopQtyTotal == null
-                          ? 'pending'
-                          : (merged.shopQtyTotal! >= merged.orderedTotal ? 'received' : 'short');
-                  return Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
-                    Text(label, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText)),
-                    const SizedBox(height: 3),
-                    _StatePill(pillState),
-                  ]);
-                }),
-              ] else if (whExpected == 0) ...[
-                const Text('in dispute · awaiting resolution',
-                    style: TextStyle(fontSize: 10, color: _kSub, height: 1.3)),
-              ] else ...[
-                Builder(builder: (_) {
-                  RenderLog.write('c331_wh_rows', 'rec=${merged.receivedTotal};exp=$whExpected;mode=${_supplierMode ?? ''}');
-                  return Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
-                    Text('${merged.receivedTotal}/$whExpected',
-                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText)),
-                    const SizedBox(height: 3),
-                    _StatePill(merged.receivedTotal >= whExpected ? 'received' : state),
-                  ]);
-                }),
-              ],
+              // C355: qty label + pill state from the SHARED helper (identical rule
+              // to the single tile and the web row).
+              Builder(builder: (_) {
+                final rv = fulfillRowView(
+                  arrivals: widget.arrivals,
+                  ordered: merged.orderedTotal,
+                  shopQty: merged.shopQtyTotal,
+                  received: merged.receivedTotal,
+                  expected: widget.arrivals ? merged.expectedTotal : null,
+                  combinedState: merged.combinedState,
+                );
+                if (rv.awaitingResolution) {
+                  return const Text('in dispute · awaiting resolution',
+                      style: TextStyle(fontSize: 10, color: _kSub, height: 1.3));
+                }
+                return Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
+                  Text(rv.qtyLabel,
+                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText)),
+                  const SizedBox(height: 3),
+                  _StatePill(rv.pillState),
+                ]);
+              }),
               // #338: voice-vs-actual mismatch chip (audit fetched on expand)
               Builder(builder: (_) {
                 final chip = _mismatchChip(merged.productId);
                 if (chip == null) return const SizedBox.shrink();
                 return Padding(padding: const EdgeInsets.only(top: 3), child: chip);
+              }),
+              // C355: count_issue amber chip — was MISSING on the merged tile, so
+              // the mobile merged layout silently dropped issue flags the single
+              // tile and web row showed. Now shared with both.
+              Builder(builder: (_) {
+                final lbl = issueChipLabel(merged.firstLineData?['count_issue']?.toString());
+                if (lbl == null) return const SizedBox.shrink();
+                RenderLog.write('c351_chip', 'kind=${merged.firstLineData?['count_issue']}');
+                return _issueChip(lbl);
               }),
               // #265: arrival status line removed — "Arrival pending"/"Arrived" not shown on Warehouse rows
               // line 4: awaiting dispute badge — ACTIVE disputes only (#199)
@@ -5947,6 +5926,17 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                     deskDisputeItem ??= _disputeItemMap[oiid];
                     deskDispute ??= _disputeMap[oiid];
                   }
+                  // C355: qty label + pill from the SHARED helper — the web row
+                  // now honours expected-at-warehouse and terminal states exactly
+                  // like the mobile tiles (it used to ignore both).
+                  final rv = fulfillRowView(
+                    arrivals: widget.arrivals,
+                    ordered: mp.orderedTotal,
+                    shopQty: mp.shopQtyTotal,
+                    received: mp.receivedTotal,
+                    expected: widget.arrivals ? mp.expectedTotal : null,
+                    combinedState: mp.combinedState,
+                  );
                   return InkWell(
                     onTap: (widget.arrivals && _activeBag == null) ? null : () => _showProductSheet(mp),
                     hoverColor: _kGreen.withValues(alpha: 0.04),
@@ -5990,41 +5980,21 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                                     );
                                   }),
                                 ],
-                                if (deskDisputeItem != null) ...[
+                                // C355: strip only when the dispute is ACTIVE (shared
+                                // rule — web used to show it for resolved ones too).
+                                if (disputeStripVisible(deskDisputeItem)) ...[
                                   const SizedBox(height: 2),
-                                  _DisputeStrip(item: deskDisputeItem, surface: widget.arrivals ? 'arrivals' : 'collect'),
+                                  _DisputeStrip(item: deskDisputeItem!, surface: widget.arrivals ? 'arrivals' : 'collect'),
                                 ] else if (deskDispute != null) ...[
                                   const SizedBox(height: 2),
                                   DisputeBadge(status: deskDispute['status']?.toString() ?? ''),
                                 ],
-                                // C351: count_issue amber chip (desktop row)
+                                // C355: count_issue amber chip — SHARED label + widget
                                 Builder(builder: (_) {
-                                  final ci = mp.firstLineData?['count_issue']?.toString();
-                                  if (ci == null || ci.isEmpty || ci == 'null') return const SizedBox.shrink();
-                                  final lbl = switch (ci) {
-                                    'wrong'      => 'Wrong',
-                                    'few_wrong'  => 'Few wrong',
-                                    'damaged'    => 'Damaged',
-                                    'excess'     => 'Excess',
-                                    'not_coming' => 'Not coming',
-                                    _            => ci,
-                                  };
-                                  RenderLog.write('c351_chip', 'kind=$ci');
-                                  return Padding(
-                                    padding: const EdgeInsets.only(top: 2),
-                                    child: Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                                      decoration: BoxDecoration(
-                                        color: const Color(0xFFFEF3C7),
-                                        border: Border.all(color: const Color(0xFFFCD34D), width: 1),
-                                        borderRadius: BorderRadius.circular(4),
-                                      ),
-                                      child: Text(lbl,
-                                          style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700,
-                                              color: Color(0xFFB45309)),
-                                          maxLines: 1, overflow: TextOverflow.ellipsis),
-                                    ),
-                                  );
+                                  final lbl = issueChipLabel(mp.firstLineData?['count_issue']?.toString());
+                                  if (lbl == null) return const SizedBox.shrink();
+                                  RenderLog.write('c351_chip', 'kind=${mp.firstLineData?['count_issue']}');
+                                  return _issueChip(lbl);
                                 }),
                                 // #203: proof thumbnail in desktop tile
                                 if (deskDisputeItem != null && (deskDisputeItem.proofUrl ?? '').isNotEmpty) ...[
@@ -6081,16 +6051,18 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                           mp.packType.isEmpty ? '—' : mp.packType,
                           style: const TextStyle(fontSize: 12, color: _kSub),
                         )),
-                        // col3: received / ordered (merged totals)
+                        // col3: qty progress (SHARED helper — awaiting shows a dash)
                         Expanded(flex: 2, child: Text(
-                          '${mp.receivedTotal} / ${mp.orderedTotal}',
+                          rv.awaitingResolution ? '—' : rv.qtyLabel,
                           style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
                           textAlign: TextAlign.right,
                         )),
-                        // col4: status chip
+                        // col4: status chip (SHARED helper pill state)
                         Expanded(flex: 2, child: Align(
                           alignment: Alignment.centerRight,
-                          child: _StatePill(state),
+                          child: rv.awaitingResolution
+                              ? const Text('awaiting', style: TextStyle(fontSize: 10, color: _kSub))
+                              : _StatePill(rv.pillState),
                         )),
                       ]),
                     ),
@@ -10488,6 +10460,9 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
 
   void _onRealtimeChange(Set<String> changedTables) {
     if (!mounted) return;
+    // C355: an event reached THIS device (local or from another device) and is now
+    // driving a visible-tab refetch — same code path for both. This is the unify point.
+    RenderLog.write('c355_rt_refetch', 'tab=$_tab');
     // C354: a dispute change alters recounts/splits/chips on EVERY tab, not just the
     // visible one. Refresh the Pack dispute index regardless of which tab is showing so
     // its read-only chips are correct the instant the packer switches to it.
@@ -10560,6 +10535,10 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed && mounted) {
+      // C355: a phone wake / network flip can leave a zombie WebSocket that never
+      // fires 'closed', so future remote events never arrive until reload. Force a
+      // fresh re-subscribe + full refetch on resume to recover it.
+      FulfillRealtime.instance.forceReconnect();
       _scheduleCollectReload();
       _scheduleDisputeReload();
       _arrivalsKey.currentState?.refresh();
@@ -15638,14 +15617,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     final metaLine = metaParts.join(' · ');
 
     // Kind tag text for all 6 kinds
-    final kindTagText = switch (item.kind) {
-      'wrong_item'  => 'Wrong item',
-      'few_wrong'   => 'Few wrong',
-      'damaged'     => 'Damaged',
-      'excess'      => 'Excess',
-      'not_coming'  => 'Not coming',
-      _             => 'Short',
-    };
+    final kindTagText = disputeKindLabel(item.kind); // C355: shared kind label
     final kindTagBg = isWrong ? const Color(0xFFEEF2FF) : const Color(0xFFF1F5F9);
     final kindTagFg = isWrong ? const Color(0xFF4338CA) : const Color(0xFF475569);
 
@@ -15973,14 +15945,7 @@ class _DisputeActionSheetState extends State<_DisputeActionSheet> {
                 ),
                 const SizedBox(width: 8),
                 Builder(builder: (_) {
-                  final kindTag = switch (item.kind) {
-                    'wrong_item'  => 'Wrong item',
-                    'few_wrong'   => 'Few wrong',
-                    'damaged'     => 'Damaged',
-                    'excess'      => 'Excess',
-                    'not_coming'  => 'Not coming',
-                    _             => 'Short',
-                  };
+                  final kindTag = disputeKindLabel(item.kind); // C355: shared kind label
                   return Container(
                     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
                     decoration: BoxDecoration(

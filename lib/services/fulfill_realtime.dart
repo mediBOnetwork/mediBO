@@ -18,14 +18,20 @@ class FulfillRealtime {
   FulfillRealtime._();
   static final FulfillRealtime instance = FulfillRealtime._();
 
+  // C355: ONLY tables that are actually in the `supabase_realtime` publication
+  // (verified via pg_publication_tables). Subscribing to an UNPUBLISHED table
+  // (the old list had `supplier_count_mode`, which is NOT published) risks a
+  // server-side binding rejection that can error the WHOLE channel — after which
+  // no table delivers events and a second device never updates until reload.
+  // `orders` IS published and is added so order-level status changes also sync.
   static const tables = [
     'order_items',
     'supplier_disputes',
     'bag_item_counts',
-    'supplier_count_mode',
     // Kept from #187's fulfill_suppord channel: new supplier orders must still
     // appear on the Collect list without a manual refresh.
     'supplier_orders',
+    'orders',
   ];
 
   final Set<void Function(Set<String> changedTables)> _listeners = {};
@@ -38,8 +44,49 @@ class FulfillRealtime {
   bool _up = false;
   bool _hadFirstUp = false;
   bool _readyLogged = false;
+  // C355: app-level session flag — once an authed admin session is active the
+  // channel stays subscribed across tab switches and even when no Fulfill tab is
+  // mounted, so a change on ANY device is received the moment a tab needs it.
+  bool _sessionActive = false;
+  int _reconnects = 0;
 
   bool get isUp => _up;
+
+  /// C355: called from the auth hub (user_state) on sign-in / token-refresh /
+  /// session-restore. Applies the admin JWT to the realtime socket (belt-and-
+  /// suspenders on top of the SDK's own propagation, and re-applies on refresh)
+  /// and brings up the app-level channel so RLS lets change events through.
+  void onAuthActive(String? token) {
+    _sessionActive = true;
+    _applyAuth(token);
+    if (_channel == null) _subscribe();
+  }
+
+  /// C355: called on sign-out — drop the socket and stop keeping it warm.
+  void onAuthInactive() {
+    _sessionActive = false;
+    _teardown();
+  }
+
+  void _applyAuth(String? token) {
+    try {
+      Supabase.instance.client.realtime.setAuth(token);
+      RenderLog.write('c355_rt_auth',
+          'jwt=${token != null && token.isNotEmpty ? 'set' : 'null'}');
+    } catch (_) {}
+  }
+
+  /// C355: force a fresh re-subscribe (drop any zombie socket left by a phone
+  /// sleep / network flip) and do a FULL refetch of the visible tab.
+  void forceReconnect() {
+    if (!_sessionActive && _listeners.isEmpty) return;
+    _reconnects++;
+    RenderLog.write('c355_reconnect', 'n=$_reconnects');
+    _removeChannel();
+    _up = false;
+    _subscribe();
+    _notify({...tables});
+  }
 
   /// Created when a Fulfill tab mounts…
   void addListener(void Function(Set<String>) l) {
@@ -47,14 +94,14 @@ class FulfillRealtime {
     if (_channel == null) _subscribe();
   }
 
-  /// …torn down when none is mounted.
+  /// …torn down when none is mounted AND no app-level session is keeping it warm.
   void removeListener(void Function(Set<String>) l) {
     _listeners.remove(l);
-    if (_listeners.isEmpty) _teardown();
+    if (_listeners.isEmpty && !_sessionActive) _teardown();
   }
 
   void _subscribe() {
-    if (_listeners.isEmpty) return;
+    if (_listeners.isEmpty && !_sessionActive) return;
     try {
       var ch = Supabase.instance.client.channel('fulfill_rt_c353');
       for (final t in tables) {
@@ -75,6 +122,7 @@ class FulfillRealtime {
             RenderLog.write('c353_ready', 'rt=v1');
           }
           RenderLog.write('c353_rt_state', 's=up');
+          RenderLog.write('c355_rt_sub', 'tables=${tables.length}');
           if (reconnect) {
             // One full refetch after re-subscribe — events may have been missed.
             _notify({...tables});
@@ -95,6 +143,10 @@ class FulfillRealtime {
   }
 
   void _onEvent(String table) {
+    // C355: a change event ARRIVED (local OR from another device). This firing on
+    // device B is the proof that cross-device delivery works — it is the exact key
+    // to grep after the manual two-device test.
+    RenderLog.write('c355_rt_remote', 'tbl=$table');
     _pending.add(table);
     _debounce?.cancel();
     _debounce = Timer(const Duration(milliseconds: 400), () {
@@ -113,13 +165,13 @@ class FulfillRealtime {
   }
 
   void _scheduleRetry() {
-    if (_listeners.isEmpty) return;
+    if (_listeners.isEmpty && !_sessionActive) return;
     _retry?.cancel();
     final secs = _backoffSecs[
         _backoffIdx < _backoffSecs.length ? _backoffIdx : _backoffSecs.length - 1];
     _backoffIdx++;
     _retry = Timer(Duration(seconds: secs), () {
-      if (_listeners.isEmpty) return;
+      if (_listeners.isEmpty && !_sessionActive) return;
       _removeChannel();
       _subscribe();
     });

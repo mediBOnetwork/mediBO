@@ -5,6 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'models/user_profile.dart';
 import 'services/gis_auth.dart';
+import 'services/fulfill_realtime.dart'; // C355: app-level realtime auth + subscription
 import 'utils/render_log.dart';
 
 class AuthNotifier extends ChangeNotifier {
@@ -250,6 +251,7 @@ class AuthNotifier extends ChangeNotifier {
         _supplierStatus = null;
         _profileChannel?.unsubscribe();
         _profileChannel = null;
+        FulfillRealtime.instance.onAuthInactive(); // C355: drop the app-level socket
         RenderLog.write('auth_email', 'signed_out');
         RenderLog.write('auth_role', 'none');
         notifyListeners();
@@ -285,6 +287,7 @@ class AuthNotifier extends ChangeNotifier {
       _supplierStatus = null;
       _profileChannel?.unsubscribe();
       _profileChannel = null;
+      FulfillRealtime.instance.onAuthInactive(); // C355: drop the app-level socket
       RenderLog.write('auth_email', 'signed_out');
       RenderLog.write('auth_role', 'none');
       notifyListeners();
@@ -370,6 +373,19 @@ class AuthNotifier extends ChangeNotifier {
   // DB-authoritative role resolution via get_my_role() RPC.
   // Precedence: super_admin > admin > supplier > customer > none.
   // No hardcoded email constants — the DB is the single source of truth.
+  // C355: bring up the app-level Fulfill realtime channel with the current JWT.
+  // Admin-only (the Fulfill area is admin-only); re-applying the token on every
+  // signedIn/tokenRefreshed keeps the realtime socket authed so RLS lets change
+  // events through on every device.
+  void _maybeActivateFulfillRealtime() {
+    if (!(_isAdmin || _isSuperAdmin)) return;
+    final token = Supabase.instance.client.auth.currentSession?.accessToken;
+    if (token == null || token.isEmpty) return;
+    try {
+      FulfillRealtime.instance.onAuthActive(token);
+    } catch (_) {}
+  }
+
   Future<void> _resolveRole(String email) async {
     if (email.isEmpty) {
       _isAdmin = false;
@@ -401,6 +417,9 @@ class AuthNotifier extends ChangeNotifier {
       final routed = _isAdmin ? 'admin' : (_isSupplier ? 'supplier' : 'customer');
       RenderLog.write('c308_routed_to', routed);
       RenderLog.write('c310_routed', routed); // CHANGE #310
+      // C355: admins keep an app-level, JWT-authed Fulfill realtime channel alive
+      // for the whole session so cross-device changes arrive without a reload.
+      _maybeActivateFulfillRealtime();
     } catch (_) {
       _isAdmin = false;
       _isSuperAdmin = false;

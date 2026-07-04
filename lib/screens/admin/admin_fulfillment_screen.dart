@@ -9116,10 +9116,6 @@ class _DisputeStrip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isActive = item.isActive;
-    final bgColor  = isActive ? const Color(0xFFFEF3C7) : const Color(0xFFD1FAE5);
-    final fgColor  = isActive ? const Color(0xFF92400E) : const Color(0xFF065F46);
-
     if (surface == 'collect') {
       RenderLog.write('c189_collect_badge_rendered',
           'dispute=${item.disputeId};status=${item.disputeStatus}');
@@ -9127,13 +9123,22 @@ class _DisputeStrip extends StatelessWidget {
       RenderLog.write('c189_arrivals_badge_rendered',
           'dispute=${item.disputeId};status=${item.disputeStatus}');
     }
+    RenderLog.write('c349_item_chip', 'tab=$surface');
+
+    // B2 (#349): red-outline chip "In dispute — <item_status_label>" (24-char truncated)
+    const kRed = Color(0xFFDC2626);
+    final rawLabel = item.itemStatusLabel;
+    final label = rawLabel.length > 24 ? '${rawLabel.substring(0, 24)}…' : rawLabel;
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-      decoration: BoxDecoration(color: bgColor, borderRadius: BorderRadius.circular(4)),
+      decoration: BoxDecoration(
+        border: Border.all(color: kRed, width: 1),
+        borderRadius: BorderRadius.circular(4),
+      ),
       child: Text(
-        item.itemStatusLabel,
-        style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: fgColor),
+        'In dispute — $label',
+        style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: kRed),
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
       ),
@@ -14972,57 +14977,84 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     }
   }
 
-  // #188: confirm+note dialog for any action button
-  Future<void> _resolveDispute(DisputeItem item, DisputeAction action) async {
-    if (_resolving.contains(item.disputeId)) return;
+  // #349: note dialog helper — returns note string or null if cancelled
+  Future<String?> _showNoteDialog(String title, String body, {bool required = false}) {
     final noteCtrl = TextEditingController();
-    RenderLog.write('c188_resolve_called', 'outcome=${action.code};dispute=${item.disputeId}');
-    final confirmed = await showDialog<bool>(
+    return showDialog<String?>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(action.label),
-        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('${item.productName} — supplier ${item.supplier}.\nConfirm: ${action.label}?',
-              style: const TextStyle(fontSize: 14)),
-          const SizedBox(height: 16),
-          TextField(
-            controller: noteCtrl,
-            maxLines: 3,
-            decoration: const InputDecoration(
-              labelText: 'Note (optional)',
-              border: OutlineInputBorder(),
-              isDense: true,
+      barrierDismissible: false,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, set) => AlertDialog(
+          title: Text(title),
+          content: Column(mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(body, style: const TextStyle(fontSize: 14)),
+            const SizedBox(height: 16),
+            TextField(
+              controller: noteCtrl,
+              maxLines: 3,
+              autofocus: required,
+              decoration: InputDecoration(
+                labelText: required ? 'Note (required)' : 'Note (optional)',
+                border: const OutlineInputBorder(),
+                isDense: true,
+              ),
+              onChanged: (_) => set(() {}),
             ),
-          ),
-        ]),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: _kGreen),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Confirm'),
-          ),
-        ],
+          ]),
+          actions: [
+            TextButton(
+                onPressed: () { noteCtrl.dispose(); Navigator.pop(ctx); },
+                child: const Text('Cancel')),
+            FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: _kGreen),
+              onPressed: required && noteCtrl.text.trim().isEmpty
+                  ? null
+                  : () {
+                      final note = noteCtrl.text.trim();
+                      noteCtrl.dispose();
+                      Navigator.pop(ctx, note.isEmpty ? '' : note);
+                    },
+              child: const Text('Confirm'),
+            ),
+          ],
+        ),
       ),
     );
-    noteCtrl.dispose();
-    if (confirmed != true || !mounted) return;
+  }
+
+  // #188: RPC-only resolve — dialog handled by _DisputeActionSheet
+  Future<void> _resolveDispute(DisputeItem item, DisputeAction action, {String? note}) async {
+    if (_resolving.contains(item.disputeId)) return;
+    RenderLog.write('c188_resolve_called', 'outcome=${action.code};dispute=${item.disputeId}');
     setState(() => _resolving.add(item.disputeId));
     try {
-      final note = noteCtrl.text.trim().isEmpty ? null : noteCtrl.text.trim();
       final res = await Supabase.instance.client.rpc('fw_resolve_dispute', params: {
         'p_dispute_id': item.disputeId,
         'p_outcome': action.code,
-        'p_note': note,
+        'p_note': (note != null && note.isEmpty) ? null : note,
       }) as Map;
       if (!mounted) return;
       final err = res['error']?.toString();
+      if (err == 'note_required') {
+        // Retry with note dialog
+        setState(() => _resolving.remove(item.disputeId));
+        RenderLog.write('c349_note_gate', 'forced=n');
+        final retryNote = await _showNoteDialog(
+          action.label,
+          '${item.productName} — ${item.supplier}.\nA note is required for this action.',
+          required: true,
+        );
+        if (retryNote == null || !mounted) return;
+        await _resolveDispute(item, action, note: retryNote);
+        return;
+      }
       if (err != null) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $err')));
       } else {
+        RenderLog.write('c349_resolved', 'code=${action.code}');
         final newStatus = res['new_status']?.toString() ?? action.label;
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Updated: $newStatus')));
-        // Realtime will refresh; fallback manual reload after 1s
         Future.delayed(const Duration(seconds: 1), () {
           if (mounted) _load();
         });
@@ -15248,6 +15280,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     final activeGroups = _groupBySupplier(activeDisputes);
 
     // ── Render-log sentinels ────────────────────────────────────────────────
+    RenderLog.write('c349_ready', 'a3=v2');
     RenderLog.write('c188_disputes_tab_built', 'active=${activeDisputes.length};closed=${closedDisputes.length}');
     RenderLog.write('c170_disputes_built', 'true');
     RenderLog.write('c170_supplier_card_count', '${activeGroups.length}');
@@ -15399,6 +15432,19 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     );
   }
 
+  // #349: relative time helper
+  String _relTime(String? isoStr) {
+    if (isoStr == null || isoStr.isEmpty) return '';
+    final dt = DateTime.tryParse(isoStr)?.toLocal();
+    if (dt == null) return '';
+    final now = DateTime.now();
+    final diff = now.difference(dt);
+    if (diff.inMinutes < 1) return 'just now';
+    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+    if (diff.inHours < 24) return '${diff.inHours}h ago';
+    return '${diff.inDays}d ago';
+  }
+
   // ── #188: Unified supplier card — header always visible, body via _smoothReveal ─
   Widget _buildDisputeSupplierCard(String supplier, List<DisputeItem> items) {
     final isOpen = _openSupplierKey == supplier;
@@ -15434,30 +15480,59 @@ class _DisputesScreenState extends State<_DisputesScreen> {
             Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
               const Divider(height: 1, color: _kBorder),
 
-              // Send link button row
-              if (canonicalLink.isNotEmpty)
-                Padding(
+              // Send link button row + nudge badge + last_reminder_at
+              Builder(builder: (_) {
+                final hasNudge = items.any((d) => d.nudgePending);
+                final reminderAt = items.map((d) => d.lastReminderAt).where((s) => s != null).firstOrNull;
+                final relTime = _relTime(reminderAt);
+                return Padding(
                   padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-                  child: Row(children: [
-                    OutlinedButton.icon(
-                      key: sendKey,
-                      onPressed: () {
-                        RenderLog.write('c180_sendlink_open', supplier);
-                        _showDisputeSendLink(context, sendKey, supplier, canonicalLink);
-                      },
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: _kGreen,
-                        side: const BorderSide(color: Color(0xFFBBDDC8)),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      ),
-                      icon: const Icon(Icons.send_rounded, size: 14),
-                      label: const Text('Send link',
-                          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-                    ),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Row(children: [
+                      if (canonicalLink.isNotEmpty) ...[
+                        OutlinedButton.icon(
+                          key: sendKey,
+                          onPressed: () {
+                            RenderLog.write('c180_sendlink_open', supplier);
+                            _showDisputeSendLink(context, sendKey, supplier, canonicalLink);
+                          },
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: _kGreen,
+                            side: const BorderSide(color: Color(0xFFBBDDC8)),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                          icon: const Icon(Icons.send_rounded, size: 14),
+                          label: Text(hasNudge ? 'Nudge again' : 'Send link',
+                              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                        ),
+                        if (hasNudge) ...[
+                          const SizedBox(width: 8),
+                          Builder(builder: (_) {
+                            RenderLog.write('c349_nudge', 'pending=y');
+                            return Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFFFF8E1),
+                                borderRadius: BorderRadius.circular(20),
+                              ),
+                              child: const Text('Nudge due',
+                                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
+                                      color: Color(0xFFB8860B))),
+                            );
+                          }),
+                        ],
+                      ],
+                    ]),
+                    if (relTime.isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Text('reminded $relTime',
+                          style: const TextStyle(fontSize: 11, color: _kSub)),
+                    ],
                   ]),
-                ),
+                );
+              }),
 
               // Item list (all active items for this supplier)
               Padding(
@@ -15491,8 +15566,21 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     ];
     final metaLine = metaParts.join(' · ');
 
+    // Kind tag text for all 6 kinds
+    final kindTagText = switch (item.kind) {
+      'wrong_item'  => 'Wrong item',
+      'few_wrong'   => 'Few wrong',
+      'damaged'     => 'Damaged',
+      'excess'      => 'Excess',
+      'not_coming'  => 'Not coming',
+      _             => 'Short',
+    };
+    final kindTagBg = isWrong ? const Color(0xFFEEF2FF) : const Color(0xFFF1F5F9);
+    final kindTagFg = isWrong ? const Color(0xFF4338CA) : const Color(0xFF475569);
+
     RenderLog.write('c192_dispute_card_rendered',
         'dispute=${item.disputeId};status=${item.statusCode}');
+    RenderLog.write('c349_row', 'kind=${item.kind}');
 
     return InkWell(
       onTap: () => _openDisputeActionSheet(item),
@@ -15530,9 +15618,9 @@ class _DisputesScreenState extends State<_DisputesScreen> {
                             maxLines: 1, overflow: TextOverflow.ellipsis);
                       }),
                     ],
-                    if (isWrong && (item.wrongProductName ?? '').isNotEmpty) ...[
+                    if ((isWrong || item.kind == 'few_wrong') && (item.wrongProductName ?? '').isNotEmpty) ...[
                       const SizedBox(height: 1),
-                      Text('Received: ${item.wrongProductName}',
+                      Text('They sent: ${item.wrongProductName}',
                           style: const TextStyle(fontSize: 11, color: Color(0xFFDC2626)),
                           maxLines: 1, overflow: TextOverflow.ellipsis),
                     ],
@@ -15542,12 +15630,12 @@ class _DisputesScreenState extends State<_DisputesScreen> {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
                   decoration: BoxDecoration(
-                    color: isWrong ? const Color(0xFFEEF2FF) : const Color(0xFFF1F5F9),
+                    color: kindTagBg,
                     borderRadius: BorderRadius.circular(5),
                   ),
-                  child: Text(isWrong ? 'Wrong' : 'Short',
+                  child: Text(kindTagText,
                       style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700,
-                          color: isWrong ? const Color(0xFF4338CA) : const Color(0xFF475569))),
+                          color: kindTagFg)),
                 ),
               ]),
 
@@ -15562,7 +15650,8 @@ class _DisputesScreenState extends State<_DisputesScreen> {
               // (d) Quantities
               const SizedBox(height: 2),
               Text(
-                'Ord ${item.ordered.toInt()} · Rec ${item.received.toInt()} · Short ${item.short.toInt()}',
+                'Ord ${item.ordered.toInt()} · Rec ${item.received.toInt()} · Short ${item.short.toInt()}'
+                '${item.disputeQty != null && item.disputeQty! > 0 ? ' · Dispute ${item.disputeQty!.toInt()}' : ''}',
                 style: const TextStyle(fontSize: 11, color: _kSub),
               ),
 
@@ -15597,6 +15686,33 @@ class _DisputesScreenState extends State<_DisputesScreen> {
                         style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700,
                             color: Color(0xFF991B1B))),
                   ),
+                // Nudge badge
+                if (item.nudgePending) Builder(builder: (_) {
+                  RenderLog.write('c349_nudge', 'pending=y');
+                  return Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                        color: const Color(0xFFFFF8E1),
+                        borderRadius: BorderRadius.circular(20)),
+                    child: const Text('Nudge due',
+                        style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700,
+                            color: Color(0xFFB8860B))),
+                  );
+                }),
+                // Return-note chip
+                if ((item.returnNoteStatus ?? '').isNotEmpty) Builder(builder: (_) {
+                  RenderLog.write('c349_return_chip', 'state=${item.returnNoteStatus}');
+                  final isOpen = item.returnNoteStatus == 'open';
+                  return Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                        color: isOpen ? const Color(0xFFFFF8E1) : const Color(0xFFF3F4F6),
+                        borderRadius: BorderRadius.circular(20)),
+                    child: Text(isOpen ? 'Stock to return' : 'Return collected ✓',
+                        style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700,
+                            color: isOpen ? const Color(0xFFB8860B) : _kSub)),
+                  );
+                }),
               ]),
             ]),
           ),
@@ -15619,19 +15735,37 @@ class _DisputesScreenState extends State<_DisputesScreen> {
       backgroundColor: Colors.transparent,
       builder: (sheetCtx) => _DisputeActionSheet(
         item: item,
-        onResolve: (action) async {
+        onResolve: (action, {String? note}) async {
           Navigator.of(sheetCtx).pop();
-          await _resolveDispute(item, action);
+          await _resolveDispute(item, action, note: note);
         },
       ),
     );
+  }
+
+  Future<void> _closeReturnNote(DisputeItem item) async {
+    try {
+      await closeReturnNoteRpc(disputeId: item.disputeId);
+      if (!mounted) return;
+      RenderLog.write('c349_return_close', 'ok=y');
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Return note closed ✓')));
+      _load();
+    } on DisputeException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(e.toString().substring(0, e.toString().length.clamp(0, 80)))));
+    }
   }
 }
 
 // ── #192: Dispute action bottom sheet — shown when admin taps a dispute card ────
 class _DisputeActionSheet extends StatefulWidget {
   final DisputeItem item;
-  final Future<void> Function(DisputeAction action) onResolve;
+  final Future<void> Function(DisputeAction action, {String? note}) onResolve;
 
   const _DisputeActionSheet({required this.item, required this.onResolve});
 
@@ -15644,45 +15778,60 @@ class _DisputeActionSheetState extends State<_DisputeActionSheet> {
 
   Future<void> _tap(DisputeAction action) async {
     if (_resolving) return;
-    final noteCtrl = TextEditingController();
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(action.label),
-        content: Column(mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('${widget.item.productName} — ${widget.item.supplier}.\nConfirm: ${action.label}?',
-              style: const TextStyle(fontSize: 14)),
-          const SizedBox(height: 16),
-          TextField(
-            controller: noteCtrl,
-            maxLines: 3,
-            decoration: const InputDecoration(
-              labelText: 'Note (optional)',
-              border: OutlineInputBorder(),
-              isDense: true,
-            ),
+
+    // note_required gate: collect note first; save disabled while empty
+    String? note;
+    if (action.noteRequired) {
+      RenderLog.write('c349_note_gate', 'forced=y');
+      final noteCtrl = TextEditingController();
+      final confirmed = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => StatefulBuilder(
+          builder: (ctx, set) => AlertDialog(
+            title: Text(action.label),
+            content: Column(mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('${widget.item.productName} — ${widget.item.supplier}.\n${action.label}',
+                  style: const TextStyle(fontSize: 14)),
+              const SizedBox(height: 16),
+              TextField(
+                controller: noteCtrl,
+                maxLines: 3,
+                autofocus: true,
+                decoration: const InputDecoration(
+                  labelText: 'Note (required)',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                ),
+                onChanged: (_) => set(() {}),
+              ),
+            ]),
+            actions: [
+              TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: const Text('Cancel')),
+              FilledButton(
+                style: FilledButton.styleFrom(backgroundColor: _kGreen),
+                onPressed: noteCtrl.text.trim().isEmpty
+                    ? null
+                    : () => Navigator.pop(ctx, true),
+                child: const Text('Confirm'),
+              ),
+            ],
           ),
-        ]),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: _kGreen),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Confirm'),
-          ),
-        ],
-      ),
-    );
-    noteCtrl.dispose();
-    if (confirmed != true || !mounted) return;
+        ),
+      );
+      note = noteCtrl.text.trim();
+      noteCtrl.dispose();
+      if (confirmed != true || !mounted) return;
+    }
+
     setState(() => _resolving = true);
     RenderLog.write('c192_resolve_called',
         'dispute=${widget.item.disputeId};outcome=${action.code}');
     try {
-      await widget.onResolve(action);
+      await widget.onResolve(action, note: note);
     } finally {
       if (mounted) setState(() => _resolving = false);
     }
@@ -15731,20 +15880,30 @@ class _DisputeActionSheetState extends State<_DisputeActionSheet> {
                       maxLines: 2, overflow: TextOverflow.ellipsis),
                 ),
                 const SizedBox(width: 8),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: isWrong ? const Color(0xFFEEF2FF) : const Color(0xFFF1F5F9),
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: Text(isWrong ? 'Wrong item' : 'Short',
-                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700,
-                          color: isWrong ? const Color(0xFF4338CA) : const Color(0xFF475569))),
-                ),
+                Builder(builder: (_) {
+                  final kindTag = switch (item.kind) {
+                    'wrong_item'  => 'Wrong item',
+                    'few_wrong'   => 'Few wrong',
+                    'damaged'     => 'Damaged',
+                    'excess'      => 'Excess',
+                    'not_coming'  => 'Not coming',
+                    _             => 'Short',
+                  };
+                  return Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: isWrong ? const Color(0xFFEEF2FF) : const Color(0xFFF1F5F9),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(kindTag,
+                        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700,
+                            color: isWrong ? const Color(0xFF4338CA) : const Color(0xFF475569))),
+                  );
+                }),
               ]),
-              if (isWrong && (item.wrongProductName ?? '').isNotEmpty) ...[
+              if ((isWrong || item.kind == 'few_wrong') && (item.wrongProductName ?? '').isNotEmpty) ...[
                 const SizedBox(height: 2),
-                Text('Received: ${item.wrongProductName}',
+                Text('They sent: ${item.wrongProductName}',
                     style: const TextStyle(fontSize: 12, color: Color(0xFFDC2626)),
                     maxLines: 1, overflow: TextOverflow.ellipsis),
               ],
@@ -15792,6 +15951,46 @@ class _DisputeActionSheetState extends State<_DisputeActionSheet> {
           ]),
         ],
 
+        // Return-note chip + admin close button
+        if ((item.returnNoteStatus ?? '').isNotEmpty) ...[
+          const SizedBox(height: 12),
+          Builder(builder: (bCtx) {
+            final isOpen = item.returnNoteStatus == 'open';
+            return Row(children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: isOpen ? const Color(0xFFFFF8E1) : const Color(0xFFF3F4F6),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  isOpen ? 'Stock to return — supplier will pick up' : 'Return collected ✓',
+                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
+                      color: isOpen ? const Color(0xFFB8860B) : _kSub),
+                ),
+              ),
+              if (isOpen) ...[
+                const SizedBox(width: 8),
+                TextButton(
+                  onPressed: () {
+                    Navigator.of(bCtx).pop();
+                    final parentState = bCtx.findAncestorStateOfType<_DisputesScreenState>();
+                    parentState?._closeReturnNote(item);
+                  },
+                  style: TextButton.styleFrom(
+                    foregroundColor: _kGreen,
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  child: const Text('Return collected ✓',
+                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
+                ),
+              ],
+            ]);
+          }),
+        ],
+
         const SizedBox(height: 20),
         const Divider(height: 1, color: Color(0xFFE5E7EB)),
         const SizedBox(height: 16),
@@ -15817,6 +16016,7 @@ class _DisputeActionSheetState extends State<_DisputeActionSheet> {
           Builder(builder: (_) {
             RenderLog.write('c192_dispute_sheet_buttons',
                 'dispute=${item.disputeId};count=${item.actions.length}');
+            RenderLog.write('c349_actions', 'n=${item.actions.length}');
             return Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: item.actions.asMap().entries.map((e) {

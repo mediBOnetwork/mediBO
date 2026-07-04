@@ -177,6 +177,15 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
   String? _wrongUploadError;
   final TextEditingController _wrongNameCtrl = TextEditingController();
 
+  // C347: unified report-issue section
+  String? _selectedIssue;   // 'wrong'|'few_wrong'|'damaged'|'excess'|'not_coming'
+  int _issueQty = 1;
+  bool _issueSaving = false;
+  String? _issueProofUrl;
+  bool _issueProofUploading = false;
+  bool _initiallyLocked = false;
+  final TextEditingController _issueNameCtrl = TextEditingController();
+
   @override
   void initState() {
     super.initState();
@@ -205,6 +214,19 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
     _missingDraft = _localRecQty.clamp(0, safeOrd);
     _fewWrongCountedDraft = (ordQty > 1 ? ordQty - 1 : 0).clamp(0, safeOrd - 1 < 0 ? 0 : safeOrd - 1);
 
+    // C347: preselect existing issue
+    _initiallyLocked = widget.item['collect_locked'] == true || widget.item['received_locked'] == true;
+    final existingIssue = widget.item['count_issue']?.toString();
+    if (existingIssue != null && existingIssue.isNotEmpty && existingIssue != 'null') {
+      _selectedIssue = existingIssue;
+      _issueQty = (widget.item['issue_qty'] as num?)?.toInt() ?? 1;
+      final savedName = widget.item['wrong_received_note']?.toString() ?? '';
+      if (savedName.isNotEmpty) _issueNameCtrl.text = savedName;
+      _issueProofUrl = widget.item['wrong_proof_url']?.toString();
+    } else if (_localFsState == 'not_coming') {
+      _selectedIssue = 'not_coming';
+    }
+
     _dispute = widget.existingDispute;
     _logOpen();
   }
@@ -215,6 +237,7 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
     _fewWrongCountedCtrl.dispose();
     _fewWrongNameCtrl.dispose();
     _wrongNameCtrl.dispose();
+    _issueNameCtrl.dispose();
     super.dispose();
   }
 
@@ -410,6 +433,93 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
       RenderLog.write('c173_wrong_flag_error', 'order_item_id=$id;exception=$msg');
       RenderLog.write('c177_action',
           'action=wrong_item;rpc=fw_flag_wrong_item;ok=false');
+    }
+  }
+
+  // ── C347: Unified set-line-issue ──────────────────────────────────────────
+
+  Future<void> _doSetLineIssue({bool clear = false}) async {
+    final id = _itemId;
+    if (id == null || id.isEmpty) return;
+    if (_issueSaving) return;
+    setState(() => _issueSaving = true);
+    try {
+      if (clear) {
+        final res = await Supabase.instance.client.rpc('fw_set_line_issue', params: {
+          'p_order_item_id': id,
+          'p_issue': 'clear',
+        }) as Map;
+        if (!mounted) return;
+        final err = res['error']?.toString();
+        if (err != null) {
+          setState(() => _issueSaving = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Error: $err'), backgroundColor: const Color(0xFFDC2626)));
+          return;
+        }
+        RenderLog.write('c347_flag_cleared', 'ok=y');
+        if (mounted) Navigator.of(context).pop();
+        return;
+      }
+      final issue = _selectedIssue;
+      if (issue == null) return;
+      final qty = _issueQty;
+      final name = _issueNameCtrl.text.trim();
+      final proofUrl = _issueProofUrl;
+
+      if (_initiallyLocked) {
+        // B7: line is locked — raise typed dispute directly
+        final kind = issue == 'wrong' ? 'wrong_item' : issue;
+        final res = await Supabase.instance.client.rpc('fw_raise_typed_dispute', params: {
+          'p_order_item_id': id,
+          'p_kind': kind,
+          if (qty > 0 && issue != 'wrong' && issue != 'not_coming') 'p_qty': qty,
+          if (name.isNotEmpty) 'p_wrong_name': name,
+          if (proofUrl != null) 'p_proof_url': proofUrl,
+        }) as Map;
+        if (!mounted) return;
+        final err = res['error']?.toString();
+        if (err != null) {
+          setState(() => _issueSaving = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Error: $err'), backgroundColor: const Color(0xFFDC2626)));
+          return;
+        }
+        RenderLog.write('c347_typed_raise', 'kind=$kind');
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Dispute raised')));
+        if (mounted) Navigator.of(context).pop();
+        return;
+      }
+
+      final params = <String, dynamic>{
+        'p_order_item_id': id,
+        'p_issue': issue,
+      };
+      if ((issue == 'few_wrong' || issue == 'damaged' || issue == 'excess') && qty > 0) {
+        params['p_qty'] = qty;
+      }
+      if (name.isNotEmpty && (issue == 'wrong' || issue == 'few_wrong')) {
+        params['p_wrong_name'] = name;
+      }
+      if (proofUrl != null) params['p_proof_url'] = proofUrl;
+
+      final res = await Supabase.instance.client.rpc('fw_set_line_issue', params: params) as Map;
+      if (!mounted) return;
+      final err = res['error']?.toString();
+      if (err != null) {
+        setState(() => _issueSaving = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $err'), backgroundColor: const Color(0xFFDC2626)));
+        return;
+      }
+      RenderLog.write('c347_flag_saved', 'issue=$issue,qty=$qty');
+      if (mounted) Navigator.of(context).pop();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _issueSaving = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: $e'), backgroundColor: const Color(0xFFDC2626)));
     }
   }
 

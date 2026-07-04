@@ -17,11 +17,13 @@ class DisputeException implements Exception {
 class DisputeAction {
   final String code;
   final String label;
-  const DisputeAction({required this.code, required this.label});
+  final bool noteRequired;
+  const DisputeAction({required this.code, required this.label, this.noteRequired = false});
 
   factory DisputeAction.fromJson(Map<String, dynamic> j) => DisputeAction(
         code: (j['code'] ?? '').toString(),
         label: (j['label'] ?? '').toString(),
+        noteRequired: j['note_required'] == true,
       );
 
   static List<DisputeAction> listFrom(dynamic v) {
@@ -66,6 +68,11 @@ class DisputeItem {
   final String? resolvedAt;
   final String? proofUrl;
   final String? disputeCode;
+  // v1 new fields (#347–349)
+  final num? disputeQty;
+  final String? returnNoteStatus; // 'open'|'collected'|null
+  final bool nudgePending;
+  final String? lastReminderAt;
 
   const DisputeItem({
     required this.disputeId,
@@ -99,6 +106,10 @@ class DisputeItem {
     this.resolvedAt,
     this.proofUrl,
     this.disputeCode,
+    this.disputeQty,
+    this.returnNoteStatus,
+    this.nudgePending = false,
+    this.lastReminderAt,
   });
 
   factory DisputeItem.fromJson(Map<String, dynamic> j) {
@@ -145,6 +156,10 @@ class DisputeItem {
       resolvedAt: j['resolved_at']?.toString(),
       proofUrl: j['proof_url']?.toString(),
       disputeCode: j['dispute_code']?.toString(),
+      disputeQty: j['dispute_qty'] != null ? _n(j['dispute_qty']) : null,
+      returnNoteStatus: j['return_note_status']?.toString(),
+      nudgePending: j['nudge_pending'] == true,
+      lastReminderAt: j['last_reminder_at']?.toString(),
     );
   }
 
@@ -295,6 +310,19 @@ Future<Map<String, dynamic>> resolveAdminDisputeRpc({
       'p_outcome': outcome,
       'p_note': note,
     },
+  ) as Map;
+  final err = res['error']?.toString();
+  if (err != null) throw DisputeException(err);
+  return Map<String, dynamic>.from(res);
+}
+
+/// Admin close a return note (fw_close_return_note).
+Future<Map<String, dynamic>> closeReturnNoteRpc({
+  required String disputeId,
+}) async {
+  final res = await Supabase.instance.client.rpc(
+    'fw_close_return_note',
+    params: {'p_dispute_id': disputeId},
   ) as Map;
   final err = res['error']?.toString();
   if (err != null) throw DisputeException(err);

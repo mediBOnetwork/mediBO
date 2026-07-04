@@ -41,6 +41,7 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
   @override
   void initState() {
     super.initState();
+    RenderLog.write('c348_token_ready', 'token_page=v2');
     _load();
   }
 
@@ -302,12 +303,13 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
   Widget _buildItemCard(DisputeItem item) {
     final isActive   = item.isActive;
     final isWrong    = item.kind == 'wrong_item';
+    final hasFewWrong = item.kind == 'few_wrong';
     final hasImage   = (item.imageUrl ?? '').isNotEmpty;
     final isSubmitting = _submitting[item.disputeId] == true;
 
-    // active/closed colours derived from dispute_status
-    final statusBgColor  = isActive ? const Color(0xFFFEF3C7) : const Color(0xFFD1FAE5);
-    final statusTxtColor = isActive ? const Color(0xFF92400E) : const Color(0xFF065F46);
+    // active = amber; closed = grey/green
+    final statusBgColor  = isActive ? _kAmberBg : const Color(0xFFD1FAE5);
+    final statusTxtColor = isActive ? _kAmberText : const Color(0xFF065F46);
 
     return Container(
       decoration: BoxDecoration(
@@ -343,25 +345,25 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
                             color: isActive ? _kTextPrimary : _kTextMuted, height: 1.3),
                         maxLines: 2, overflow: TextOverflow.ellipsis),
                     // (a) wrong product name
-                    if (isWrong && (item.wrongProductName ?? '').isNotEmpty) ...[
+                    if ((isWrong || hasFewWrong) && (item.wrongProductName ?? '').isNotEmpty) ...[
                       const SizedBox(height: 3),
-                      Text('Received: ${item.wrongProductName}',
+                      Text('They say we sent: ${item.wrongProductName}',
                           style: const TextStyle(fontSize: 12, color: _kRed),
-                          maxLines: 1, overflow: TextOverflow.ellipsis),
+                          maxLines: 2, overflow: TextOverflow.ellipsis),
                     ],
                   ]),
                 ),
                 const SizedBox(width: 6),
-                // (e) dispute_status chip — VERBATIM from backend
+                // Status pill = item_status_label verbatim; amber=active, grey/green=closed
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
                   decoration: BoxDecoration(
-                    color: isActive ? _kGreenChipBg : _kNeutralChip,
+                    color: statusBgColor,
                     borderRadius: BorderRadius.circular(20),
                   ),
-                  child: Text(item.disputeStatus,
+                  child: Text(item.itemStatusLabel,
                       style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
-                          color: isActive ? _kGreen : _kTextMuted)),
+                          color: statusTxtColor)),
                 ),
               ]),
               // (b) meta
@@ -396,26 +398,42 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
         // (c) Quantities table
         const SizedBox(height: 12),
         _buildQtyTable(item.ordered, item.received, item.short, item.packType),
+        if (item.disputeQty != null && item.disputeQty! > 0) ...[
+          const SizedBox(height: 6),
+          Text('In dispute: ${item.disputeQty!.toInt()} units',
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
+                  color: _kAmberText)),
+        ],
 
-        // (d) item_status_label badge — hidden while awaiting (meaningless to the supplier)
-        if (!item.isAwaitingSupplier) ...[
-          const SizedBox(height: 10),
+        // (d) item_status_label — pill already in header; log only
+        Builder(builder: (_) {
+          final hidden = item.isAwaitingSupplier;
+          RenderLog.write('c191_link_awaiting_hidden', '${hidden ? 'true' : 'false'};dispute=${item.disputeId};status=${item.statusCode}');
+          return const SizedBox.shrink();
+        }),
+
+        // Return-note chip
+        if ((item.returnNoteStatus ?? '').isNotEmpty) ...[
+          const SizedBox(height: 8),
           Builder(builder: (_) {
-            RenderLog.write('c191_link_awaiting_hidden', 'false;dispute=${item.disputeId};status=${item.statusCode}');
+            final isOpen = item.returnNoteStatus == 'open';
             return Align(
               alignment: Alignment.centerLeft,
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(color: statusBgColor, borderRadius: BorderRadius.circular(20)),
-                child: Text(item.itemStatusLabel,
-                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: statusTxtColor)),
+                decoration: BoxDecoration(
+                  color: isOpen ? _kAmberBg : _kNeutralChip,
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  isOpen
+                      ? 'Stock with buyer — pick up on next delivery'
+                      : 'Return collected ✓',
+                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
+                      color: isOpen ? _kAmberText : _kTextMuted),
+                ),
               ),
             );
-          }),
-        ] else ...[
-          Builder(builder: (_) {
-            RenderLog.write('c191_link_awaiting_hidden', 'true;dispute=${item.disputeId};status=${item.statusCode}');
-            return const SizedBox.shrink();
           }),
         ],
 

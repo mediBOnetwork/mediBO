@@ -88,6 +88,13 @@ class _SupPayPanelState extends State<SupPayPanel> {
           .map((e) => Map<String, dynamic>.from(e as Map))
           .toList();
 
+  List<Map<String, dynamic>> get _adjustments =>
+      (_d['adjustments'] as List<dynamic>? ?? [])
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+
+  double get _adjustmentsTotal => safeParseDouble(_d['adjustments_total']);
+
   String _r(double v) => v == v.truncateToDouble()
       ? '₹${v.toInt()}'
       : '₹${v.toStringAsFixed(2)}';
@@ -323,6 +330,48 @@ class _SupPayPanelState extends State<SupPayPanel> {
             style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)))
       else
         ..._payments.map(_buildCompactRow),
+      // Adjustments block (c349 — excess-kept and other adjustments from backend)
+      if (_adjustments.isNotEmpty) ...[
+        const SizedBox(height: 12),
+        Builder(builder: (_) {
+          RenderLog.write('c349_bill_adj', 'n=${_adjustments.length}');
+          return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('Adjustments',
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
+                    color: Color(0xFF6B7280))),
+            const SizedBox(height: 6),
+            ..._adjustments.map((adj) {
+              final label  = (adj['label']  as String? ?? '').trim();
+              final amount = safeParseDouble(adj['amount']);
+              final amtStr = amount == amount.truncateToDouble()
+                  ? '+₹${amount.toInt()}'
+                  : '+₹${amount.toStringAsFixed(2)}';
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Row(children: [
+                  Expanded(child: Text(label.isNotEmpty ? label : 'Adjustment',
+                      style: const TextStyle(fontSize: 13, color: Color(0xFF111827)))),
+                  Text(amtStr, style: const TextStyle(fontSize: 13,
+                      fontWeight: FontWeight.w600, color: Color(0xFF065F46))),
+                ]),
+              );
+            }),
+            const Divider(height: 16, color: Color(0xFFE5E7EB)),
+            Row(children: [
+              const Expanded(child: Text('Adjustments total',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
+                      color: Color(0xFF111827)))),
+              Text(
+                _adjustmentsTotal == _adjustmentsTotal.truncateToDouble()
+                    ? '+₹${_adjustmentsTotal.toInt()}'
+                    : '+₹${_adjustmentsTotal.toStringAsFixed(2)}',
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
+                    color: Color(0xFF065F46)),
+              ),
+            ]),
+          ]);
+        }),
+      ],
     ]);
   }
 

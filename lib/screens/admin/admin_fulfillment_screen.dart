@@ -61,6 +61,11 @@ const _kShippedBg    = Color(0xFFE6F1FB);
 const _kShippedFg    = Color(0xFF0C447C);
 const _kPendingBg    = Color(0xFFFEF3C7);
 const _kPendingFg    = Color(0xFF92400E);
+// C359: light-yellow tint for a dispute-candidate row (short/excess/flagged after
+// voice counting). Lighter than _kPendingBg so text stays readable; the stronger
+// 0xFFFEF3C7 yellow is reserved for the disabled Confirm button gate.
+const _kCandidateBg     = Color(0xFFFEFCE8);
+const _kCandidateBorder = Color(0xFFF59E0B);
 
 const _stateBgMap = <String, Color>{
   'received': _kReceivedBg, 'short':     _kShortBg,
@@ -1150,6 +1155,53 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     return merged;
   }
 
+  // ── C359: dispute-candidate / balance / response-gate (shared logic) ─────────
+  // Computed PER order-line — the backend raises disputes per line and the
+  // few_wrong/damaged/excess flags are written per order_item_id, so a merged
+  // product that spans several lines must be judged line-by-line (comparing one
+  // line's issue_qty against the merged-sum gap would false-block or false-pass).
+  bool _lineIsCandidate(Map<String, dynamic> line) => isDisputeCandidate(
+        arrivals: widget.arrivals,
+        ordered: ordQtyOf(line),
+        shopQty: (line['shop_qty'] as num?)?.toInt(),
+        received: recQtyOf(line),
+        expected: (line['expected'] as num?)?.toInt(),
+        countIssue: line['count_issue']?.toString(),
+        state: stateOf(line),
+      );
+
+  bool _lineIsBalanced(Map<String, dynamic> line) => lineBalanced(
+        arrivals: widget.arrivals,
+        ordered: ordQtyOf(line),
+        shopQty: (line['shop_qty'] as num?)?.toInt(),
+        received: recQtyOf(line),
+        expected: (line['expected'] as num?)?.toInt(),
+        countIssue: line['count_issue']?.toString(),
+        issueQty: (line['issue_qty'] as num?)?.toInt(),
+        state: stateOf(line),
+      );
+
+  // A merged product row is a candidate (tint yellow + tappable) if ANY of its
+  // underlying lines is a candidate.
+  bool _mIsCandidate(_MergedProduct m) {
+    final ids = m.orderItemIds.toSet();
+    return _items.any((l) =>
+        ids.contains(l['order_item_id']?.toString()) && _lineIsCandidate(l));
+  }
+
+  // Response/confirm button gate over the whole tab: yellow+disabled while ANY
+  // candidate LINE is still un-balanced; normal+clickable otherwise.
+  ResponseButtonState get _disputeGate {
+    int cands = 0, unbalanced = 0;
+    for (final l in _items) {
+      if (!_lineIsCandidate(l)) continue;
+      cands++;
+      if (!_lineIsBalanced(l)) unbalanced++;
+    }
+    return responseButtonState(
+        candidateCount: cands, unbalancedCandidateCount: unbalanced);
+  }
+
   // ── C167/C168 shared helpers — shape-tolerant for BOTH RPCs ─────────────────
   // Collect: ordered_qty(numeric), fulfillment_state(text), collect_locked(bool)
   // Arrivals: ordered(=quantity), no fulfillment_state, received_locked(bool)
@@ -1891,6 +1943,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           'ok_locks=y;undo=fw_unconfirm_all_received');
       RenderLog.write('c125_confirm_refresh', 'true');
       RenderLog.write('c335_confirm', 'wh_confirm_ok=y');
+      RenderLog.write('c359_confirm_raise', 'tab=warehouse,raised=$disputesRaised'); // C359: disputes raised at confirm
       RenderLog.write('c339_wh_confirmed', 'locked_items=$lockedItems;disputes=$disputesRaised');
       // #125 R6: refresh Collect so re-sourced shortfall lines appear
       context.findAncestorStateOfType<_AdminFulfillmentScreenState>()?._refreshCollect();
@@ -3226,30 +3279,42 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       final bool hasBag284 = _activeBag != null;
       RenderLog.write('c284_confirm_always_clickable',
           'bag=$hasBag284;enabled=${!_confirmingAll}');
+      // C359: yellow + disabled while any dispute candidate is still un-balanced
+      // (ordered != received + disputed). Normal + clickable once all balance.
+      final whBlocked = _disputeGate == ResponseButtonState.yellowDisabled;
+      RenderLog.write('c359_btn_state',
+          'tab=warehouse,state=${whBlocked ? 'yellow_disabled' : 'normal'}');
       return Column(mainAxisSize: MainAxisSize.min, children: [
         SizedBox(
           height: 44,
           child: FilledButton(
             style: FilledButton.styleFrom(
-              backgroundColor: _kGreen,
+              backgroundColor: whBlocked ? _kPendingBg : _kGreen,
+              disabledBackgroundColor: whBlocked ? _kPendingBg : _kGreen.withValues(alpha: 0.5),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
             ),
-            onPressed: _confirmingAll ? null : _fw_confirmAllReceived,
+            onPressed: (whBlocked || _confirmingAll) ? null : _fw_confirmAllReceived,
             child: _confirmingAll
                 ? const SizedBox(
                     width: 18,
                     height: 18,
                     child: CircularProgressIndicator(
                         color: Colors.white, strokeWidth: 2))
-                : const Row(mainAxisSize: MainAxisSize.min, children: [
-                    Icon(Icons.check_circle_outline_rounded,
-                        size: 15, color: Colors.white),
-                    SizedBox(width: 4),
-                    Text('Confirm all items received',
+                : Row(mainAxisSize: MainAxisSize.min, children: [
+                    Icon(
+                        whBlocked
+                            ? Icons.error_outline_rounded
+                            : Icons.check_circle_outline_rounded,
+                        size: 15, color: whBlocked ? _kPendingFg : Colors.white),
+                    const SizedBox(width: 4),
+                    Text(
+                        whBlocked
+                            ? 'Resolve flagged items to confirm'
+                            : 'Confirm all items received',
                         style: TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.w700,
-                            color: Colors.white)),
+                            color: whBlocked ? _kPendingFg : Colors.white)),
                   ]),
           ),
         ),
@@ -3377,11 +3442,35 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           child: Builder(builder: (_) {
             final uncounted = _shopUncountedCount;
             final notReady = uncounted > 0;
+            // C359: dispute gate takes precedence — yellow + disabled while any
+            // candidate is still un-balanced (ordered != counted + disputed).
+            final shopBlocked = _disputeGate == ResponseButtonState.yellowDisabled;
+            RenderLog.write('c359_btn_state',
+                'tab=shop,state=${shopBlocked ? 'yellow_disabled' : 'normal'}');
             return Column(mainAxisSize: MainAxisSize.min, children: [
               SizedBox(
                 height: _kFooterH,
                 width: double.infinity,
-                child: notReady
+                child: shopBlocked
+                    ? FilledButton(
+                        style: FilledButton.styleFrom(
+                          backgroundColor: _kPendingBg,
+                          disabledBackgroundColor: _kPendingBg,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          padding: const EdgeInsets.symmetric(horizontal: 6),
+                        ),
+                        onPressed: null,
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Row(mainAxisSize: MainAxisSize.min, children: const [
+                            Icon(Icons.error_outline_rounded, size: 15, color: _kPendingFg),
+                            SizedBox(width: 4),
+                            Text('Resolve flagged items to confirm',
+                                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _kPendingFg)),
+                          ]),
+                        ),
+                      )
+                    : notReady
                     ? OutlinedButton(
                         style: OutlinedButton.styleFrom(
                           foregroundColor: _kSub,
@@ -3568,6 +3657,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       RenderLog.write('c117_collect_confirm_text_mode', 'warehouse');
       RenderLog.write('c125_submit_refresh', 'true');
       RenderLog.write('c331_confirm_gate', 'success;shorts=$shortsDisputed');
+      RenderLog.write('c359_confirm_raise', 'tab=shop,raised=$shortsDisputed'); // C359: disputes raised at confirm
       RenderLog.write('c335_confirm', 'shop_confirm_ok=y;shorts=$shortsDisputed');
       RenderLog.write('c337_shop_confirmed', 'supplier=$supplier;shorts=$shortsDisputed');
       RenderLog.write('c353_refetch', 'src=action,tab=collect'); // C353: confirm refetch
@@ -5074,9 +5164,13 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     // #265: arrival sub-line removed from Warehouse rows — "Arrival pending"/"Arrived"
     // is misleading for items already being counted. Disputes tab uses its own renderer.
     final surface = widget.arrivals ? 'arrivals' : 'collect';
+    // C359: only a dispute candidate (short/excess/flagged after voice counting) is
+    // tappable and tinted light-yellow. Correct / un-counted lines are inert.
+    final isCandidate = _mIsCandidate(merged);
 
     RenderLog.write('c196_collect_card_layout_v2', 'surface=$surface');
     RenderLog.write('c198_card_layout_v3', 'surface=$surface');
+    if (isCandidate) RenderLog.write('c359_candidate', widget.arrivals ? 'warehouse' : 'shop');
     if (widget.arrivals) RenderLog.write('c265_warehouse_no_arrival', 'prod=${merged.productId}');
     if (widget.arrivals) {
       final bool itemBagPresent = _activeBag != null;
@@ -5085,21 +5179,20 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     }
 
     return GestureDetector(
-      onTap: (widget.arrivals && _arrivalsLocked) ? null : () {
-        // CHANGE #277: silent noop when no bag in Warehouse
-        if (widget.arrivals && _activeBag == null) {
-          RenderLog.write('c277_item_gate_no_bag', 'merged;product=${merged.productId}');
-          return;
-        }
-        _showProductSheet(merged);
-      },
+      // C359: tap disabled unless this is a candidate (counting is voice-only). A
+      // candidate opens the classify popup regardless of active bag (no counting there).
+      onTap: (!isCandidate || (widget.arrivals && _arrivalsLocked))
+          ? null
+          : () => _showProductSheet(merged),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
-          color: _kCard,
+          color: isCandidate ? _kCandidateBg : _kCard,
           borderRadius: BorderRadius.circular(10),
           border: Border.all(
-            color: state == 'pending' ? _kBorder : (_stateBgMap[state] ?? _kBorder),
+            color: isCandidate
+                ? _kCandidateBorder
+                : (state == 'pending' ? _kBorder : (_stateBgMap[state] ?? _kBorder)),
           ),
         ),
         // #198: crossAxisAlignment.start so both columns align at their first line
@@ -5270,11 +5363,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // #197: open per-product receiving sheet
   Future<void> _showProductSheet(_MergedProduct merged) async {
     if (widget.arrivals ? _arrivalsLocked : _boxLocked) return;
-    // CHANGE #277: silent gate (rows already block; this is a safety fallback)
-    if (widget.arrivals && _activeBag == null) {
-      RenderLog.write('c277_item_gate_no_bag', 'productSheet_fallback=${merged.productId}');
-      return;
-    }
+    // C359: the popup no longer counts (voice-only) — it only classifies a dispute
+    // candidate, which is order-item-scoped, not bag-scoped. So it must open even
+    // when no bag is active, else an unbalanced warehouse candidate would be
+    // un-resolvable AND keep the confirm button disabled (dead end).
     final supplier = _selectedSupplier ?? '';
     RenderLog.write('c197_product_sheet_opened',
         'surface=${widget.arrivals ? 'arrivals' : 'collect'};product_id=${merged.productId};ordered=${merged.orderedTotal}');
@@ -5951,14 +6043,22 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                     expected: widget.arrivals ? mp.expectedTotal : null,
                     combinedState: mp.combinedState,
                   );
+                  // C359: only a dispute candidate is tappable + tinted light-yellow.
+                  final isCandidate = _mIsCandidate(mp);
+                  if (isCandidate) {
+                    RenderLog.write('c359_candidate', widget.arrivals ? 'warehouse' : 'shop');
+                  }
                   return InkWell(
-                    onTap: (widget.arrivals && _activeBag == null) ? null : () => _showProductSheet(mp),
+                    // C359: candidate opens the classify popup regardless of active bag.
+                    onTap: !isCandidate ? null : () => _showProductSheet(mp),
                     hoverColor: _kGreen.withValues(alpha: 0.04),
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                       decoration: BoxDecoration(
-                        border: isLast ? null : const Border(
-                          bottom: BorderSide(color: _kBorder, width: 0.8),
+                        color: isCandidate ? _kCandidateBg : null,
+                        border: isLast ? null : Border(
+                          bottom: BorderSide(
+                              color: isCandidate ? _kCandidateBorder : _kBorder, width: 0.8),
                         ),
                       ),
                       child: Row(children: [
@@ -9395,11 +9495,7 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
   late String _localState;
   late int _localReceived;
 
-  // Report missing inline two-half
-  bool _showMissingInline = false;
-  late int _missingDraft;
-  bool _confirmingMissing = false;
-  final _missingCtrl = TextEditingController();
+  // C359: "Report missing" moved into the Report-issue popup — inline stepper removed.
 
   // Few wrong inline panel
   bool _showFewWrongInline = false;
@@ -9425,10 +9521,7 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
     super.initState();
     _localState = widget.combinedState;
     _localReceived = widget.receivedTotal;
-    final safeOrd = widget.orderedTotal > 0 ? widget.orderedTotal : 1;
-    _missingDraft = _localReceived.clamp(0, safeOrd);
     _wrongDraft = 1;
-    _missingCtrl.text = '$_missingDraft';
     _fewWrongCtrl.text = '1';
     RenderLog.write('c197_product_sheet_opened',
         'product_id=${widget.productId};ordered=${widget.orderedTotal}');
@@ -9436,7 +9529,6 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
 
   @override
   void dispose() {
-    _missingCtrl.dispose();
     _fewWrongCtrl.dispose();
     _fewWrongNameCtrl.dispose();
     _wrongItemNameCtrl.dispose();
@@ -9532,80 +9624,21 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
     }
   }
 
-  Future<void> _doGotAll() async {
-    if (_confirmingSimple) return;
-    setState(() => _confirmingSimple = true);
-    try {
-      if (widget.arrivals && widget.bagCountFn != null) {
-        // #258 BUG4: Arrivals "Got all" → bag_count_set (not fw_product_action which bypasses bag).
-        final err = await widget.bagCountFn!(widget.productId, _orderedTotal.toDouble());
-        if (!mounted) return;
-        if (err != null) {
-          setState(() => _confirmingSimple = false);
-          ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text(err), backgroundColor: const Color(0xFFDC2626)));
-          return;
-        }
-        RenderLog.write('c258_bag_count', 'got_all;product=${widget.productId};qty=$_orderedTotal');
-        setState(() { _localState = 'received'; _localReceived = _orderedTotal; _confirmingSimple = false; });
-        // CHANGE #274 — removed "Got all N — marked received" snackbar; per-item undo is in the card
-        final pid = widget.productId;
-        RenderLog.write('c274_no_snackbar', 'got_all_bag;product=$pid');
-        widget.onReload?.call();
-        if (mounted) Navigator.of(context).pop();
-        return;
-      }
-      await _callProductAction('got_all');
-      if (!mounted) return;
-      setState(() { _localState = 'received'; _localReceived = _orderedTotal; _confirmingSimple = false; });
-      // CHANGE #274 — removed "Got all N — marked received" snackbar; per-item undo is in the card
-      final pid = widget.productId;
-      RenderLog.write('c274_no_snackbar', 'got_all_nonfn;product=$pid');
-      Navigator.of(context).pop();
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _confirmingSimple = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error: $e'), backgroundColor: const Color(0xFFDC2626)));
+  // C359: "Report missing / Short" reuses the existing report-missing flow, now
+  // invoked from inside the Report-issue popup. receivedQty = units actually
+  // received (the rest becomes short); null = clear/undo the short. Throws on
+  // error so ReportIssueSection surfaces it. The confirm RPC raises the dispute.
+  Future<void> _reportMissing(int? receivedQty) async {
+    if (receivedQty == null) {
+      final res = await Supabase.instance.client.rpc('fw_product_undo', params: {
+        'p_supplier_name': widget.supplierName,
+        'p_product_id': widget.productId,
+      }) as Map;
+      final err = res['error']?.toString();
+      if (err != null && err != 'nothing_to_undo') throw err;
+      return;
     }
-  }
-
-  Future<void> _doConfirmMissing() async {
-    if (_confirmingMissing) return;
-    setState(() => _confirmingMissing = true);
-    try {
-      await _callProductAction('report_missing', qty: _missingDraft);
-      if (!mounted) return;
-      final missing = _orderedTotal - _missingDraft;
-      setState(() {
-        _localState = _missingDraft >= _orderedTotal ? 'received' : 'short';
-        _localReceived = _missingDraft;
-        _confirmingMissing = false;
-        _showMissingInline = false;
-      });
-      final sup = widget.supplierName;
-      final pid = widget.productId;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Saved · $missing$_unitLabel short'),
-        action: SnackBarAction(label: 'UNDO', onPressed: () async {
-          final res = await Supabase.instance.client.rpc('fw_product_undo',
-              params: {'p_supplier_name': sup, 'p_product_id': pid}) as Map;
-          RenderLog.write('c199_undo_called', 'product_id=$pid;supplier=$sup;from=snackbar');
-          widget.onReload?.call(); // C353: refetch after undo — no manual refresh
-          final e = res['error']?.toString();
-          if (e == 'nothing_to_undo') {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Nothing to undo (already confirmed or re-sourced)')));
-          }
-        }),
-      ));
-      Navigator.of(context).pop();
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _confirmingMissing = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error: $e'), backgroundColor: const Color(0xFFDC2626)));
-    }
+    await _callProductAction('report_missing', qty: receivedQty);
   }
 
   Future<void> _doConfirmFewWrong() async {
@@ -9719,100 +9752,6 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
     }
   }
 
-  Widget _buildMissingInlineRow() {
-    final missing = (_orderedTotal - _missingDraft).clamp(0, _orderedTotal);
-    final confirmLabel = 'Confirm missing · $missing$_unitLabel';
-    const borderColor = _kShortFg;
-    return SizedBox(
-      height: 52,
-      child: Row(children: [
-        Expanded(
-          child: Container(
-            decoration: BoxDecoration(
-              color: _kShortFg.withValues(alpha: 0.06),
-              borderRadius: const BorderRadius.only(
-                topLeft: Radius.circular(11), bottomLeft: Radius.circular(11)),
-              border: Border(
-                top: BorderSide(color: _kShortFg.withValues(alpha: 0.4)),
-                bottom: BorderSide(color: _kShortFg.withValues(alpha: 0.4)),
-                left: BorderSide(color: _kShortFg.withValues(alpha: 0.4)),
-              ),
-            ),
-            child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-              _ProdStepBtn(
-                icon: Icons.remove,
-                enabled: !_confirmingMissing && _missingDraft > 0,
-                color: borderColor,
-                onTap: () => setState(() {
-                  _missingDraft = (_missingDraft - 1).clamp(0, _orderedTotal);
-                  _missingCtrl.text = '$_missingDraft';
-                }),
-              ),
-              SizedBox(
-                width: 48,
-                child: TextField(
-                  controller: _missingCtrl,
-                  enabled: !_confirmingMissing,
-                  keyboardType: TextInputType.number,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
-                  decoration: const InputDecoration.collapsed(hintText: '0'),
-                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                  onChanged: (v) {
-                    final n = int.tryParse(v) ?? 0;
-                    final clamped = n.clamp(0, _orderedTotal);
-                    setState(() => _missingDraft = clamped);
-                    if (v.isNotEmpty && v != '$clamped') {
-                      _missingCtrl.value = _missingCtrl.value.copyWith(
-                        text: '$clamped',
-                        selection: TextSelection.collapsed(offset: '$clamped'.length),
-                      );
-                    }
-                  },
-                ),
-              ),
-              if (_unit.isNotEmpty)
-                Text(' $_unit', style: const TextStyle(fontSize: 10, color: _kSub)),
-              _ProdStepBtn(
-                icon: Icons.add,
-                enabled: !_confirmingMissing && _missingDraft < _orderedTotal,
-                color: borderColor,
-                onTap: () => setState(() {
-                  _missingDraft = (_missingDraft + 1).clamp(0, _orderedTotal);
-                  _missingCtrl.text = '$_missingDraft';
-                }),
-              ),
-            ]),
-          ),
-        ),
-        Expanded(
-          child: GestureDetector(
-            onTap: _confirmingMissing ? null : _doConfirmMissing,
-            child: Container(
-              alignment: Alignment.center,
-              padding: const EdgeInsets.symmetric(horizontal: 6),
-              decoration: BoxDecoration(
-                color: _confirmingMissing ? _kShortFg.withValues(alpha: 0.45) : _kShortFg,
-                borderRadius: const BorderRadius.only(
-                  topRight: Radius.circular(11), bottomRight: Radius.circular(11)),
-                border: Border(
-                  top: BorderSide(color: _kShortFg.withValues(alpha: 0.4)),
-                  bottom: BorderSide(color: _kShortFg.withValues(alpha: 0.4)),
-                  right: BorderSide(color: _kShortFg.withValues(alpha: 0.4)),
-                ),
-              ),
-              child: _confirmingMissing
-                  ? const SizedBox(width: 16, height: 16,
-                      child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                  : Text(confirmLabel,
-                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.white),
-                      textAlign: TextAlign.center, maxLines: 2, overflow: TextOverflow.ellipsis),
-            ),
-          ),
-        ),
-      ]),
-    );
-  }
 
   // #203: Banner showing the uploaded proof image + wrong-name for an existing dispute
   Widget _buildExistingProofBanner(DisputeItem dispute) {
@@ -10178,25 +10117,19 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
   Widget build(BuildContext context) {
     final ord = _orderedTotal;
     final state = _localState;
-    final isBusy = _confirmingSimple || _confirmingMissing || _confirmingFewWrong ||
-        _confirmingWrongAll || _wrongItemUploading || _fewWrongUploading || _undoing;
+    // C359: counting is VOICE-ONLY — the manual Got-all / Report-missing buttons
+    // were removed from this popup. The only remaining in-flight guard is Undo.
+    final isBusy = _undoing;
     final bg = _stateBgMap[state] ?? _kPendingBg;
     final fg = _stateFgMap[state] ?? _kPendingFg;
     final isActioned = state != 'pending';
-    final anyPanelOpen = _showMissingInline || _showFewWrongInline || _showWrongItemInline;
 
-    // #200: dynamic visibility predicates
-    final fullyReceived = state == 'received' && _localReceived >= ord;
-    final showGotAll    = !fullyReceived;
-    final showMissing   = ord > 1;
-    final showFewWrong  = ord > 1;
-    final showNotComing = !fullyReceived;
-
-    RenderLog.write('c200_actions_dynamic',
-        'ord=$ord;state=$state;rec=$_localReceived;fullyReceived=$fullyReceived');
-    if (ord == 1) RenderLog.write('c200_qty1_compact', 'ord=1;hiding_report_missing_and_few_wrong=true');
-    if (fullyReceived) RenderLog.write('c200_received_hides_gotall',
-        'state=$state;rec=$_localReceived;ord=$ord;hiding_gotall_and_notcoming=true');
+    // C359: this popup only opens for a dispute candidate. "Report missing / Short"
+    // now lives INSIDE the Report-issue list; detect an already-marked short so it
+    // pre-selects, and pass the stage-appropriate counted qty as its default.
+    final isShortLine = _localState == 'short' ||
+        widget.itemData?['fulfillment_state']?.toString() == 'short';
+    RenderLog.write('c359_voice_only', widget.arrivals ? 'warehouse' : 'shop');
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 20, 16, 32),
@@ -10260,75 +10193,11 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
           const SizedBox(height: 12),
         ],
 
-        // Action: Got all — CHANGE #277: dynamic in Warehouse (show when bag+uncounted)
-        if (showGotAll && !anyPanelOpen && !widget.arrivals) ...[
-          SizedBox(
-            width: double.infinity,
-            child: _buildActionBtn(
-              label: 'Got all ($ord)',
-              onTap: isBusy ? null : _doGotAll,
-              loading: _confirmingSimple,
-              bg: _kGreen,
-            ),
-          ),
-          const SizedBox(height: 8),
-        ] else if (showGotAll && !anyPanelOpen && widget.arrivals && widget.activeBagNo != null) ...[
-          // Warehouse + active bag: show Got all only if item not yet counted into this bag
-          Builder(builder: (_) {
-            final bagNo = widget.activeBagNo!;
-            final bd = widget.bagBreakdown;
-            final itemCounted = bd != null && bd.any((b) =>
-              (b['bag_no'] as num?)?.toInt() == bagNo &&
-              ((b['qty'] as num?)?.toDouble() ?? 0.0) > 0);
-            if (itemCounted) {
-              RenderLog.write('c277_got_all_hidden', 'bag=$bagNo;product=${widget.productId}');
-              return const SizedBox.shrink();
-            }
-            RenderLog.write('c277_got_all_shown', 'bag=$bagNo;product=${widget.productId}');
-            return Column(children: [
-              SizedBox(
-                width: double.infinity,
-                child: _buildActionBtn(
-                  label: 'Got all ($ord)',
-                  onTap: isBusy ? null : () {
-                    RenderLog.write('c277_got_all_action', 'bag=$bagNo;qty=$ord;product=${widget.productId}');
-                    _doGotAll();
-                  },
-                  loading: _confirmingSimple,
-                  bg: _kGreen,
-                ),
-              ),
-              const SizedBox(height: 8),
-            ]);
-          }),
-        ] else if (widget.arrivals && !anyPanelOpen && widget.activeBagNo == null) ...[
-          Builder(builder: (_) {
-            RenderLog.write('c276_no_getall_warehouse', 'product_sheet_no_bag;product=${widget.productId}');
-            return const SizedBox.shrink();
-          }),
-        ],
+        // C359: Got all + the standalone Report-missing button were REMOVED here —
+        // counting is voice-only and "Report missing / Short" is now a dispute type
+        // inside the Report-issue list below.
 
-        // Action: Report missing (#200: hidden when T == 1)
-        if (showMissing && !_showFewWrongInline && !_showWrongItemInline) ...[
-          if (!_showMissingInline)
-            SizedBox(
-              width: double.infinity,
-              child: _buildActionBtn(
-                label: 'Report missing',
-                onTap: isBusy ? null : () => setState(() {
-                  _showMissingInline = true;
-                  _missingDraft = _localReceived.clamp(0, ord > 0 ? ord : 1);
-                  _missingCtrl.text = '$_missingDraft';
-                }),
-                bg: _kShortFg,
-              ),
-            )
-          else
-            _buildMissingInlineRow(),
-          const SizedBox(height: 8),
-        ],
-
-        // C351: unified 5-option report-issue section
+        // C351/C359: unified report-issue section — now includes "Report missing / Short".
         if (widget.itemData != null) ...[
           ReportIssueSection(
             // C354: at SHOP stage the counted total lives in shop_qty, not received_qty
@@ -10346,6 +10215,9 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
             existingIssueQty: (widget.itemData!['issue_qty'] as num?)?.toInt(),
             existingWrongName: widget.itemData!['wrong_received_note']?.toString(),
             existingProofUrl: widget.itemData!['wrong_proof_url']?.toString(),
+            // C359: short/missing reuses the existing report-missing flow (fw_product_action).
+            isShort: isShortLine,
+            onReportMissing: _reportMissing,
             onSaved: () {
               widget.onReload?.call();
               if (mounted) Navigator.of(context).pop();
@@ -15422,6 +15294,8 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     RenderLog.write('c170_disputes_built', 'true');
     RenderLog.write('c170_supplier_card_count', '${activeGroups.length}');
     RenderLog.write('c191_admin_disputes_redesigned', 'active=${activeDisputes.length};closed=${closedDisputes.length};groups=${activeGroups.length}');
+    // C359: disputes raised at confirm land here (Disputes tab) after the realtime refresh.
+    if (_disputes.isNotEmpty) RenderLog.write('c359_moved_disp', '${_disputes.length}');
 
     if (_disputes.isEmpty) {
       return const Center(

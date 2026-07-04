@@ -122,3 +122,172 @@ bool disputeStripVisible(DisputeItem? item) {
   if (visible) RenderLog.write('c355_shared', 'fn=stripVisible');
   return visible;
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// CHANGE #359 — 2-STEP DISPUTE FLOW: shared candidate / balance / gate logic.
+//
+// SINGLE SOURCE OF TRUTH for both layouts (mobile card + web table) AND the
+// response button, so a "yellow candidate row" and a "yellow disabled button"
+// can never disagree. All pure — compute from the line/merged fields only, never
+// from ephemeral UI state (Om's rule: "put it in the shared helper so mobile and
+// web agree"). Counting is stage-dependent: SHOP counts shop_qty vs ordered,
+// WAREHOUSE counts received_qty vs expected.
+// ════════════════════════════════════════════════════════════════════════════
+
+String? _cleanIssue359(String? raw) {
+  if (raw == null || raw.isEmpty || raw == 'null') return null;
+  return raw;
+}
+
+/// Stage-appropriate counted quantity for a fulfill line/merged product.
+int countedQtyFor({required bool arrivals, int? shopQty, required int received}) =>
+    arrivals ? received : (shopQty ?? 0);
+
+/// Has this line been counted at all? An un-counted line (shop_qty null at shop,
+/// nothing received/flagged at warehouse) is NOT a candidate — counting is still
+/// pending for it (the confirm RPC's own uncounted gate forces it to be counted).
+bool _isCounted359({
+  required bool arrivals,
+  int? shopQty,
+  required int received,
+  String? countIssue,
+  required String state,
+}) {
+  // A flag or terminal state also proves the line was acted on (covers a merged
+  // product whose shop_qty total is null because a sibling line is uncounted).
+  final actedOn = _cleanIssue359(countIssue) != null ||
+      state == 'short' ||
+      state == 'wrong' ||
+      state == 'not_coming';
+  if (arrivals) return received > 0 || actedOn;
+  return shopQty != null || actedOn;
+}
+
+/// Short threshold: counted below this is short. SHOP = ordered; WAREHOUSE =
+/// expected (the forwarded shop_qty). A warehouse line that receives MORE than
+/// the shop forwarded (expected < received <= ordered) is NOT short — the shop
+/// shortfall was already disputed at shop confirm — so it must not be flagged.
+int _shortRefFor({required bool arrivals, required int ordered, int? expected}) =>
+    arrivals ? (expected ?? ordered) : ordered;
+
+/// Excess threshold: counted above ORDERED is excess (both stages). Counting caps
+/// received at ordered, so excess normally only exists as an explicit flag.
+int _excessRefFor({required int ordered}) => ordered;
+
+/// STEP B — a line is a DISPUTE CANDIDATE when, after voice counting, it is not
+/// fully/correctly satisfied: counted below the short threshold (short), above
+/// ordered (excess), OR it carries a count_issue flag, OR it is short/wrong/
+/// not_coming. Un-counted lines are not candidates yet. This mirrors exactly the
+/// lines the confirm RPC raises disputes for.
+bool isDisputeCandidate({
+  required bool arrivals,
+  required int ordered,
+  int? shopQty,
+  required int received,
+  int? expected,
+  String? countIssue,
+  required String state,
+}) {
+  // Warehouse "awaiting resolution" rows (fully-short lines forwarded from shop,
+  // expected==0) are ALREADY disputed and not admin-actionable — fulfillRowView
+  // renders them muted. Exclude them so they don't tint, aren't tappable, and
+  // never block the confirm gate. (Same guard as fulfillRowView.)
+  if (arrivals && (expected ?? ordered) == 0) return false;
+  if (!_isCounted359(
+      arrivals: arrivals, shopQty: shopQty, received: received,
+      countIssue: countIssue, state: state)) {
+    return false;
+  }
+  final counted = countedQtyFor(arrivals: arrivals, shopQty: shopQty, received: received);
+  final shortRef = _shortRefFor(arrivals: arrivals, ordered: ordered, expected: expected);
+  final excessRef = _excessRefFor(ordered: ordered);
+  final ci = _cleanIssue359(countIssue);
+  final candidate = counted < shortRef ||
+      counted > excessRef ||
+      ci != null ||
+      state == 'short' ||
+      state == 'wrong' ||
+      state == 'not_coming';
+  if (candidate) RenderLog.write('c355_shared', 'fn=candidate');
+  return candidate;
+}
+
+/// STEP B — a candidate is TAPPABLE (opens the Report-issue popup); a fully
+/// correct / un-counted line is not. Alias of [isDisputeCandidate] so the rule
+/// lives in one place and stage nuances can grow here later.
+bool isTappableLine({
+  required bool arrivals,
+  required int ordered,
+  int? shopQty,
+  required int received,
+  int? expected,
+  String? countIssue,
+  required String state,
+}) =>
+    isDisputeCandidate(
+      arrivals: arrivals, ordered: ordered, shopQty: shopQty, received: received,
+      expected: expected, countIssue: countIssue, state: state);
+
+/// STEP C — is a candidate's discrepancy fully accounted for by its chosen
+/// dispute type + qty? (Om's per-kind rules.) Designed so every balance point is
+/// REACHABLE via the popup stepper (max = ordered - received), i.e. no deadlock.
+///   plain short (counted < shortRef, no flag) : accounted for — the confirm RPC
+///                            auto-raises the short (short_qty = ordered - received).
+///                            Matches `ordered == counted + disputed`.
+///   few_wrong / damaged    : issue_qty == ordered - counted (the wrong/damaged units
+///                            ARE the shortfall); if counted >= ordered, any qty >= 1.
+///   excess                 : issue_qty == counted - ordered when over-ordered; else
+///                            any qty >= 1 (admin-observed extra units).
+///   not_coming             : whole remaining gap claimed  -> balanced once selected
+///   wrong item (whole line): balanced once the type is selected
+///   over-ordered with no excess flag : NOT balanced (admin must flag excess)
+/// A non-candidate line is trivially balanced (nothing to reconcile).
+bool lineBalanced({
+  required bool arrivals,
+  required int ordered,
+  int? shopQty,
+  required int received,
+  int? expected,
+  String? countIssue,
+  int? issueQty,
+  required String state,
+}) {
+  if (!isDisputeCandidate(
+      arrivals: arrivals, ordered: ordered, shopQty: shopQty, received: received,
+      expected: expected, countIssue: countIssue, state: state)) {
+    return true;
+  }
+  final counted = countedQtyFor(arrivals: arrivals, shopQty: shopQty, received: received);
+  final shortRef = _shortRefFor(arrivals: arrivals, ordered: ordered, expected: expected);
+  final excessRef = _excessRefFor(ordered: ordered);
+  final ci = _cleanIssue359(countIssue);
+  final iq = issueQty ?? 0;
+  if (ci == 'wrong' || state == 'wrong') return true;           // whole line disputed
+  if (state == 'not_coming') return true;                       // whole remaining gap
+  if (ci == 'few_wrong' || ci == 'damaged') {
+    final gap = ordered - counted;                             // == popup stepper max
+    return gap > 0 ? iq == gap : iq >= 1;
+  }
+  if (ci == 'excess') {                                         // extra units = issue_qty
+    final over = counted - excessRef;
+    return over > 0 ? iq == over : iq >= 1;
+  }
+  if (counted < shortRef) return true;                          // plain short — RPC auto-raises
+  return false;                                                 // over-ordered, unflagged → must flag excess
+}
+
+/// Response/confirm button visual state for a tab.
+enum ResponseButtonState { normal, yellowDisabled }
+
+/// STEP C — the response button is YELLOW + DISABLED while any candidate is still
+/// un-balanced; NORMAL + clickable when there are no candidates OR every candidate
+/// balances (ordered == counted + disputed for all lines).
+ResponseButtonState responseButtonState({
+  required int candidateCount,
+  required int unbalancedCandidateCount,
+}) {
+  if (candidateCount == 0) return ResponseButtonState.normal;
+  return unbalancedCandidateCount == 0
+      ? ResponseButtonState.normal
+      : ResponseButtonState.yellowDisabled;
+}

@@ -26,6 +26,13 @@ class ReportIssueSection extends StatefulWidget {
   final VoidCallback onSaved;
   // C354: tab label ('shop'|'warehouse') for render-log gate proof; cosmetic only.
   final String? tab;
+  // C359: "Report missing / Short" moved INTO this popup as a dispute type. Since
+  // this widget has no supplier/product context, the parent wires the existing
+  // report-missing flow here. Called with the received qty to flag short, or null
+  // to clear/undo the short. Absent (null) => the short option is not offered.
+  final Future<void> Function(int? receivedQty)? onReportMissing;
+  // C359: line is already marked short (report_missing) — pre-select 'short'.
+  final bool isShort;
 
   const ReportIssueSection({
     super.key,
@@ -39,6 +46,8 @@ class ReportIssueSection extends StatefulWidget {
     this.existingWrongName,
     this.existingProofUrl,
     required this.onSaved,
+    this.onReportMissing,
+    this.isShort = false,
   });
 
   @override
@@ -65,6 +74,11 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
         _nameCtrl.text = widget.existingWrongName!;
       }
       _proofUrl = widget.existingProofUrl;
+      _expanded = true;
+    } else if (widget.isShort && widget.onReportMissing != null) {
+      // C359: line already marked short — pre-select the short option (qty = received).
+      _selected = 'short';
+      _qty = widget.receivedQty;
       _expanded = true;
     }
   }
@@ -100,6 +114,8 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
     if (_selected == 'few_wrong') {
       return _qty >= 1 && _nameCtrl.text.trim().isNotEmpty;
     }
+    // C359: short — received qty may be 0..ordered (0 = fully missing); always valid.
+    if (_selected == 'short') return true;
     return true;
   }
 
@@ -131,6 +147,22 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
   Future<void> _clear() async {
     if (_saving) return;
     setState(() => _saving = true);
+    // C359: clearing a short un-does the report-missing (fw_product_undo) via the parent.
+    if ((_selected == 'short' || (widget.isShort && _cleanIssue(widget.existingIssue) == null)) &&
+        widget.onReportMissing != null) {
+      try {
+        await widget.onReportMissing!(null); // null = clear/undo the short
+        if (!mounted) return;
+        RenderLog.write('c359_flag_marked', 'issue=short_cleared');
+        widget.onSaved();
+      } catch (e) {
+        if (!mounted) return;
+        setState(() => _saving = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e'), backgroundColor: const Color(0xFFDC2626)));
+      }
+      return;
+    }
     try {
       final res = await Supabase.instance.client.rpc('fw_set_line_issue', params: {
         'p_order_item_id': widget.orderItemId,
@@ -161,6 +193,22 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
     final qty = _qty;
     final name = _nameCtrl.text.trim();
     final proofUrl = _proofUrl;
+    // C359: "Report missing / Short" — reuse the parent's existing report-missing
+    // flow (fw_product_action). Flag only; the confirm RPC raises the dispute later.
+    if (issue == 'short') {
+      try {
+        await widget.onReportMissing!(qty); // qty = units received
+        if (!mounted) return;
+        RenderLog.write('c359_flag_marked', 'issue=short');
+        widget.onSaved();
+      } catch (e) {
+        if (!mounted) return;
+        setState(() => _saving = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e'), backgroundColor: const Color(0xFFDC2626)));
+      }
+      return;
+    }
     try {
       if (widget.isLocked) {
         final kind = issue == 'wrong' ? 'wrong_item' : issue;
@@ -208,6 +256,7 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
         return;
       }
       RenderLog.write('c351_flag_saved', 'issue=$issue,qty=$qty');
+      RenderLog.write('c359_flag_marked', 'issue=$issue'); // C359: flagged, not yet disputed
       widget.onSaved();
     } catch (e) {
       if (!mounted) return;
@@ -285,6 +334,8 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
   }
 
   static const _options = [
+    // C359: "Report missing / Short" — moved in from the old standalone button.
+    ('short',      Icons.content_cut_rounded,        'Report missing / Short', 'Fewer units arrived than ordered'),
     ('wrong',      Icons.swap_horiz_rounded,         'Wrong item',        'Whole line is wrong'),
     ('few_wrong',  Icons.remove_circle_outline,      'Few units wrong',   'Some units are wrong'),
     ('damaged',    Icons.broken_image_outlined,      'Damaged / expired', 'Units are damaged or expired'),
@@ -292,29 +343,41 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
     ('not_coming', Icons.block_outlined,             'Not coming',        'Item will leave the counting list'),
   ];
 
+  // C359: the short option is only offered when the parent wired the report-missing
+  // callback AND the line can actually be short (received < ordered).
+  bool get _shortOffered =>
+      widget.onReportMissing != null && widget.receivedQty < widget.orderedQty;
+
   // C353 B2: probable-dispute gating — only offer issues that are actually
   // possible for the line's current ordered/received state. An existing flag
   // keeps the full list so it can be changed or cleared.
   String get _gateMode {
     if (_cleanIssue(widget.existingIssue) != null) return 'flagged';
+    if (widget.isShort && widget.onReportMissing != null) return 'flagged';
     if (widget.receivedQty >= widget.orderedQty && widget.orderedQty > 0) return 'excess';
     if (widget.receivedQty > 0) return 'partial';
     return 'full';
   }
 
   List<(String, IconData, String, String)> get _gatedOptions {
+    Iterable<(String, IconData, String, String)> opts;
     switch (_gateMode) {
       case 'excess':
-        return _options.where((o) => o.$1 == 'excess').toList();
+        opts = _options.where((o) => o.$1 == 'excess');
+        break;
       case 'partial':
-        return _options
-            .where((o) => o.$1 == 'wrong' || o.$1 == 'few_wrong' || o.$1 == 'damaged')
-            .toList();
+        opts = _options.where((o) =>
+            o.$1 == 'short' || o.$1 == 'wrong' || o.$1 == 'few_wrong' || o.$1 == 'damaged');
+        break;
       case 'full':
-        return _options.where((o) => o.$1 != 'excess').toList();
+        opts = _options.where((o) => o.$1 != 'excess');
+        break;
       default: // flagged
-        return _options;
+        opts = _options;
     }
+    // C359: only offer the short option when the parent wired the report-missing flow.
+    if (!_shortOffered) opts = opts.where((o) => o.$1 != 'short');
+    return opts.toList();
   }
 
   Widget _buildExpandedSection() {
@@ -323,7 +386,8 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
       RenderLog.write('c351_section', 'n=${opts.length}');
       RenderLog.write('c353_gate', 'mode=$_gateMode');
       RenderLog.write('c354_gate', 'tab=${widget.tab ?? "?"},mode=$_gateMode');
-      final hasExisting = _cleanIssue(widget.existingIssue) != null;
+      final hasExisting = _cleanIssue(widget.existingIssue) != null ||
+          (widget.isShort && widget.onReportMissing != null);
       final title = _gateMode == 'excess' ? 'Report excess' : 'Report issue';
       return Container(
         padding: const EdgeInsets.all(12),
@@ -401,7 +465,8 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
       onTap: () => setState(() {
         if (_selected == value) return;
         _selected = value;
-        _qty = 1;
+        // C359: short defaults its qty to the units already counted as received.
+        _qty = value == 'short' ? widget.receivedQty.clamp(0, widget.orderedQty) : 1;
       }),
       child: Container(
         margin: const EdgeInsets.only(bottom: 4),
@@ -435,6 +500,31 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
 
   Widget _buildInputs() {
     final issue = _selected!;
+    // C359: short — enter how many actually arrived; the rest is the missing gap
+    // that the confirm RPC raises as a short dispute. No name / no photo needed.
+    if (issue == 'short') {
+      final missing = (widget.orderedQty - _qty).clamp(0, widget.orderedQty);
+      return Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min,
+          children: [
+        Text('Units received (of ${widget.orderedQty})',
+            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText)),
+        const SizedBox(height: 6),
+        Row(children: [
+          _RisStepper(
+            value: _qty,
+            min: 0,
+            max: widget.orderedQty,
+            onChanged: (v) => setState(() => _qty = v),
+          ),
+          const SizedBox(width: 10),
+          Text('$missing missing',
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _kAmber)),
+        ]),
+        const SizedBox(height: 6),
+        const Text('The missing units are raised as a short dispute when you confirm.',
+            style: TextStyle(fontSize: 11, color: _kSub)),
+      ]);
+    }
     final needsQty = issue == 'few_wrong' || issue == 'damaged' || issue == 'excess';
     final needsName = issue == 'few_wrong' || issue == 'wrong';
     final nameRequired = issue == 'few_wrong';
@@ -545,6 +635,7 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
   }
 
   String _issueLabel(String issue) => switch (issue) {
+    'short'      => 'Report missing',
     'wrong'      => 'Wrong item',
     'few_wrong'  => 'Few wrong',
     'damaged'    => 'Damaged',

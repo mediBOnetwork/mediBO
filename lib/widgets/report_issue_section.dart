@@ -67,6 +67,16 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
   }
 
   @override
+  void didUpdateWidget(ReportIssueSection old) {
+    super.didUpdateWidget(old);
+    // C353: item values may refresh in place while the sheet stays open —
+    // drop a selection that is no longer offered by the gated option list.
+    if (_selected != null && !_gatedOptions.any((o) => o.$1 == _selected)) {
+      _selected = null;
+    }
+  }
+
+  @override
   void dispose() {
     _nameCtrl.dispose();
     super.dispose();
@@ -258,7 +268,8 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
       child: OutlinedButton.icon(
         onPressed: () => setState(() => _expanded = true),
         icon: const Icon(Icons.flag_outlined, size: 16),
-        label: Text(isEdit ? 'Change issue' : 'Report issue',
+        label: Text(
+            isEdit ? 'Change issue' : (_gateMode == 'excess' ? 'Report excess' : 'Report issue'),
             style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
         style: OutlinedButton.styleFrom(
           foregroundColor: _kAmber,
@@ -278,10 +289,38 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
     ('not_coming', Icons.block_outlined,             'Not coming',        'Item will leave the counting list'),
   ];
 
+  // C353 B2: probable-dispute gating — only offer issues that are actually
+  // possible for the line's current ordered/received state. An existing flag
+  // keeps the full list so it can be changed or cleared.
+  String get _gateMode {
+    if (_cleanIssue(widget.existingIssue) != null) return 'flagged';
+    if (widget.receivedQty >= widget.orderedQty && widget.orderedQty > 0) return 'excess';
+    if (widget.receivedQty > 0) return 'partial';
+    return 'full';
+  }
+
+  List<(String, IconData, String, String)> get _gatedOptions {
+    switch (_gateMode) {
+      case 'excess':
+        return _options.where((o) => o.$1 == 'excess').toList();
+      case 'partial':
+        return _options
+            .where((o) => o.$1 == 'wrong' || o.$1 == 'few_wrong' || o.$1 == 'damaged')
+            .toList();
+      case 'full':
+        return _options.where((o) => o.$1 != 'excess').toList();
+      default: // flagged
+        return _options;
+    }
+  }
+
   Widget _buildExpandedSection() {
     return Builder(builder: (_) {
-      RenderLog.write('c351_section', 'n=5');
+      final opts = _gatedOptions;
+      RenderLog.write('c351_section', 'n=${opts.length}');
+      RenderLog.write('c353_gate', 'mode=$_gateMode');
       final hasExisting = _cleanIssue(widget.existingIssue) != null;
+      final title = _gateMode == 'excess' ? 'Report excess' : 'Report issue';
       return Container(
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
@@ -294,8 +333,8 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
           Row(children: [
             const Icon(Icons.flag_outlined, size: 14, color: _kAmber),
             const SizedBox(width: 6),
-            const Text('Report issue',
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kAmber)),
+            Text(title,
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kAmber)),
             const Spacer(),
             if (hasExisting)
               TextButton(
@@ -319,8 +358,8 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
           ]),
           const SizedBox(height: 10),
 
-          // 5 options
-          for (final opt in _options)
+          // C353 B2: gated options — only probable-dispute issues for this line
+          for (final opt in opts)
             _buildOption(opt.$1, opt.$2, opt.$3, opt.$4),
 
           // Conditional inputs + save

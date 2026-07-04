@@ -22,6 +22,7 @@ import '../../utils/responsive.dart';
 import '../../utils/tts.dart';
 import '../../user_state.dart';
 import '../../services/voice_receive_service.dart';
+import '../../services/fulfill_realtime.dart'; // C353: single realtime channel
 import '../../supabase_config.dart' show SupabaseConfig;
 import 'voice_receive.dart';
 import '../../widgets/pinned_footer_list.dart';
@@ -3564,6 +3565,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       RenderLog.write('c331_confirm_gate', 'success;shorts=$shortsDisputed');
       RenderLog.write('c335_confirm', 'shop_confirm_ok=y;shorts=$shortsDisputed');
       RenderLog.write('c337_shop_confirmed', 'supplier=$supplier;shorts=$shortsDisputed');
+      RenderLog.write('c353_refetch', 'src=action,tab=collect'); // C353: confirm refetch
       _loadSupplierDots();
       _loadCollectModes(); // R2: badge P→C immediately
       _loadDisputes(); // #332 D1: refresh Disputes tab so new short-item disputes appear immediately
@@ -5211,11 +5213,20 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
               if (!widget.arrivals) ...[
                 Builder(builder: (_) {
                   RenderLog.write('c334_zero_counter', 'shop=${merged.shopQtyTotal ?? '0'};ord=${merged.orderedTotal}');
-                  final label = '${merged.shopQtyTotal ?? 0}/${merged.orderedTotal}';
-                  // #335 BUG-3: shop stage pill derived from shop_qty only — never fulfillment_state
-                  final pillState = merged.shopQtyTotal == null
-                      ? 'pending'
-                      : (merged.shopQtyTotal! >= merged.orderedTotal ? 'received' : 'short');
+                  // C353 B1: "Got all"/"Not coming"/"Wrong" write fulfillment_state but
+                  // NOT shop_qty, so a shop_qty-only pill stays "0/2 short" forever after
+                  // Got all. Terminal fulfillment states win; otherwise keep the #335
+                  // shop_qty-derived pill for counting-in-progress lines.
+                  final cs = merged.combinedState;
+                  final terminal = cs == 'received' || cs == 'wrong' || cs == 'not_coming';
+                  final label = (terminal && merged.shopQtyTotal == null)
+                      ? '${merged.receivedTotal}/${merged.orderedTotal}'
+                      : '${merged.shopQtyTotal ?? 0}/${merged.orderedTotal}';
+                  final pillState = terminal
+                      ? cs
+                      : merged.shopQtyTotal == null
+                          ? 'pending'
+                          : (merged.shopQtyTotal! >= merged.orderedTotal ? 'received' : 'short');
                   return Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
                     Text(label, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText)),
                     const SizedBox(height: 3),
@@ -5340,7 +5351,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         } catch (_) {}
         _reloadItemsFromDB();
       } : null,
-      onReload: _reloadItemsFromDB,
+      onReload: _refetchAfterAction, // C353: full refetch (items + chips + disputes)
       itemData: merged.firstLineData,
     );
     if (isWide) {
@@ -5373,9 +5384,38 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       );
     }
     if (mounted) {
-      await _loadDisputes();
-      await _reloadItemsFromDB();
+      await _refetchAfterAction();
     }
+  }
+
+  // C353: action-triggered refetch — item state + list-row chips/dots + dispute
+  // chips for THIS tab, immediately after any mutating action (works even with
+  // realtime down).
+  Future<void> _refetchAfterAction() async {
+    if (!mounted) return;
+    RenderLog.write('c353_refetch', 'src=action,tab=${widget.arrivals ? 'arrivals' : 'collect'}');
+    await _loadDisputes();
+    await _reloadItemsFromDB();
+    if (widget.arrivals) {
+      await _loadSuppliers();
+    } else {
+      await _loadCollectModes();
+      await _loadSupplierDots();
+    }
+  }
+
+  // C353: realtime-triggered refetch of this tab's visible data (called by the
+  // parent screen's FulfillRealtime listener; debounce lives in the service).
+  Future<void> _refetchFromRealtime() async {
+    if (!mounted) return;
+    RenderLog.write('c353_refetch', 'src=rt,tab=${widget.arrivals ? 'arrivals' : 'collect'}');
+    await _loadSuppliers();
+    if (!widget.arrivals) {
+      await _loadCollectModes();
+      await _loadSupplierDots();
+    }
+    await _loadDisputes();
+    await _reloadItemsFromDB();
   }
 
   // ── #88: agent popup bubble management ──────────────────────────────────────
@@ -9508,6 +9548,7 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
           final res = await Supabase.instance.client.rpc('fw_product_undo',
               params: {'p_supplier_name': sup, 'p_product_id': pid}) as Map;
           RenderLog.write('c199_undo_called', 'product_id=$pid;supplier=$sup;from=snackbar');
+          widget.onReload?.call(); // C353: refetch after undo — no manual refresh
           final e = res['error']?.toString();
           if (e == 'nothing_to_undo') {
             ScaffoldMessenger.of(context).showSnackBar(
@@ -9547,6 +9588,7 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
           final res = await Supabase.instance.client.rpc('fw_product_undo',
               params: {'p_supplier_name': sup, 'p_product_id': pid}) as Map;
           RenderLog.write('c199_undo_called', 'product_id=$pid;supplier=$sup;from=snackbar');
+          widget.onReload?.call(); // C353: refetch after undo — no manual refresh
           final e = res['error']?.toString();
           if (e == 'nothing_to_undo') {
             ScaffoldMessenger.of(context).showSnackBar(
@@ -9585,6 +9627,7 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
           final res = await Supabase.instance.client.rpc('fw_product_undo',
               params: {'p_supplier_name': sup, 'p_product_id': pid}) as Map;
           RenderLog.write('c199_undo_called', 'product_id=$pid;supplier=$sup;from=snackbar');
+          widget.onReload?.call(); // C353: refetch after undo — no manual refresh
           final e = res['error']?.toString();
           if (e == 'nothing_to_undo') {
             ScaffoldMessenger.of(context).showSnackBar(
@@ -9616,6 +9659,7 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
           final res = await Supabase.instance.client.rpc('fw_product_undo',
               params: {'p_supplier_name': sup, 'p_product_id': pid}) as Map;
           RenderLog.write('c199_undo_called', 'product_id=$pid;supplier=$sup;from=snackbar');
+          widget.onReload?.call(); // C353: refetch after undo — no manual refresh
           final e = res['error']?.toString();
           if (e == 'nothing_to_undo') {
             ScaffoldMessenger.of(context).showSnackBar(
@@ -10333,15 +10377,12 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen>
   // Key gives the parent a handle to trigger supplier-list refresh.
   final _ptlKey = GlobalKey<_PickToLightScreenState>();
 
-  RealtimeChannel? _channel;
-  Timer? _debounce;
-  Timer? _pollTimer;
-
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _subscribeRealtime();
+    // C353: the arrivals_c140 channel + 15s poll are replaced by the single
+    // FulfillRealtime channel; the parent routes events here via refreshAll().
   }
 
   @override
@@ -10359,60 +10400,16 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen>
     _ptlKey.currentState?._loadSuppliers();
   }
 
+  // C353: full realtime-triggered refetch — supplier list + expanded card items.
+  void refreshAll() {
+    if (!mounted) return;
+    _ptlKey.currentState?._refetchFromRealtime();
+  }
+
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _debounce?.cancel();
-    _pollTimer?.cancel();
-    _channel?.unsubscribe();
-    _channel = null;
     super.dispose();
-  }
-
-  void _subscribeRealtime() {
-    void onDbChange(_) {
-      _debounce?.cancel();
-      _debounce = Timer(const Duration(milliseconds: 500), () {
-        if (mounted) {
-          RenderLog.write('c140_autorefresh', 'trigger=realtime');
-          _ptlKey.currentState?._loadSuppliers();
-        }
-      });
-    }
-    try {
-      final ch = Supabase.instance.client
-          .channel('arrivals_c140')
-          .onPostgresChanges(
-            event: PostgresChangeEvent.all,
-            schema: 'public',
-            table: 'order_items',
-            callback: onDbChange,
-          )
-          .onPostgresChanges(
-            event: PostgresChangeEvent.all,
-            schema: 'public',
-            table: 'supplier_count_mode',
-            callback: onDbChange,
-          )
-          .subscribe((status, [error]) {
-            if (!mounted) return;
-            final live = status == RealtimeSubscribeStatus.subscribed;
-            if (live) {
-              RenderLog.write('c140_autorefresh', 'realtime=subscribed');
-              _pollTimer?.cancel();
-            } else {
-              _pollTimer?.cancel();
-              _pollTimer = Timer.periodic(const Duration(seconds: 15), (_) {
-                if (mounted) _ptlKey.currentState?._loadSuppliers();
-              });
-            }
-          });
-      _channel = ch;
-    } catch (_) {
-      _pollTimer = Timer.periodic(const Duration(seconds: 15), (_) {
-        if (mounted) _ptlKey.currentState?._loadSuppliers();
-      });
-    }
   }
 
   @override
@@ -10442,8 +10439,7 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
   final _packTabKey   = GlobalKey<_PackTabState>();
   final _bagTabKey    = GlobalKey<_BagTabState>();
 
-  // ── #187: Realtime channels ───────────────────────────────────────────────
-  final List<RealtimeChannel> _rtChannels = [];
+  // ── #187→C353: realtime now via the single FulfillRealtime channel ────────
   Timer? _collectDebounce;
   Timer? _disputeDebounce;
 
@@ -10465,44 +10461,36 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
     });
   }
 
+  // C353: the three #187 channels are replaced by ONE app-wide channel
+  // (lib/services/fulfill_realtime.dart). Events arrive already debounced
+  // (400ms); refetch targets ONLY the visible tab's data.
   void _subscribeRealtime() {
-    final supabase = Supabase.instance.client;
-    int subscribed = 0;
+    FulfillRealtime.instance.addListener(_onRealtimeChange);
+  }
 
-    void addChannel(String name, List<String> tables, void Function() onEvent) {
-      try {
-        var ch = supabase.channel(name);
-        for (final t in tables) {
-          ch = ch.onPostgresChanges(
-            event: PostgresChangeEvent.all,
-            schema: 'public',
-            table: t,
-            callback: (_) => onEvent(),
-          );
-        }
-        ch.subscribe((status, [_]) {
-          if (status == RealtimeSubscribeStatus.subscribed) subscribed++;
-        });
-        _rtChannels.add(ch);
-      } catch (_) {}
+  void _onRealtimeChange(Set<String> changedTables) {
+    if (!mounted) return;
+    switch (_tab) {
+      case 0: // Supplier Shop
+        _collectKey.currentState?._refetchFromRealtime();
+        break;
+      case 1: // Warehouse / Arrivals (logs c353_refetch inside)
+        _arrivalsKey.currentState?.refreshAll();
+        break;
+      case 2: // Bag
+        RenderLog.write('c353_refetch', 'src=rt,tab=bag');
+        _bagTabKey.currentState?.refreshFromRealtime();
+        break;
+      case 3: // Pack
+        RenderLog.write('c353_refetch', 'src=rt,tab=pack');
+        _packTabKey.currentState?.refreshFromRealtime();
+        break;
+      case 4: // Disputes (chips data on Collect invalidated too)
+        RenderLog.write('c353_refetch', 'src=rt,tab=disputes');
+        _disputesKey.currentState?._load();
+        _collectKey.currentState?._loadDisputes();
+        break;
     }
-
-    addChannel('fulfill_collect_187',   ['order_items'],                               _scheduleCollectReload);
-    addChannel('fulfill_disputes_188',  ['supplier_disputes', 'order_items'],          () {
-      RenderLog.write('c188_realtime_subscribed', 'supplier_disputes+order_items');
-      _scheduleDisputeReload();
-    });
-    addChannel('fulfill_suppord_187',   ['supplier_orders'],                           _scheduleCollectReload);
-
-    Future.delayed(const Duration(seconds: 3), () {
-      if (!mounted) return;
-      RenderLog.write('c187_realtime',
-        'change:187,removed_refresh_buttons:true,'
-        'channels:[order_items,orders,supplier_orders,supplier_disputes],'
-        'channels_subscribed:$subscribed,'
-        'debounce_ms:400,'
-        'reload_on_focus:true');
-    });
   }
 
   // #125 R6: called by Arrivals after confirm to refresh Collect badge/list.
@@ -10559,10 +10547,7 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
     WidgetsBinding.instance.removeObserver(this);
     _collectDebounce?.cancel();
     _disputeDebounce?.cancel();
-    for (final ch in _rtChannels) {
-      try { Supabase.instance.client.removeChannel(ch); } catch (_) {}
-    }
-    _rtChannels.clear();
+    FulfillRealtime.instance.removeListener(_onRealtimeChange);
     super.dispose();
   }
 
@@ -10702,8 +10687,7 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
   bool _searching = false;
   bool _searchLoading = false;
 
-  // Realtime
-  RealtimeChannel? _channel;
+  // C353: realtime via the single FulfillRealtime channel (parent routes here)
   bool _allStatesLogged = false;
 
   @override
@@ -10717,7 +10701,6 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
     RenderLog.write('c286_no_inner_strip', 'strip=removed');
     RenderLog.write('c286_no_received_footer', 'footer=removed');
     _load();
-    _subscribeRealtime();
   }
 
   @override
@@ -10725,12 +10708,6 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
     _scroll.dispose();
     _searchCtrl.dispose();
     _searchDebounce?.cancel();
-    final ch = _channel;
-    _channel = null;
-    if (ch != null) {
-      ch.unsubscribe();
-      Supabase.instance.client.removeChannel(ch);
-    }
     super.dispose();
   }
 
@@ -10809,28 +10786,10 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
     }
   }
 
-  void _subscribeRealtime() {
-    try {
-      _channel = Supabase.instance.client
-          .channel('bag_tab_order_items_v2')
-          .onPostgresChanges(
-            event: PostgresChangeEvent.all,
-            schema: 'public',
-            table: 'order_items',
-            callback: _onOrderItemChanged,
-          )
-          .subscribe((status, [_]) {
-            if (status == RealtimeSubscribeStatus.subscribed && mounted) {
-              RenderLog.write('c280_realtime_subscribed', 'bag_tab=order_items');
-              RenderLog.write('c281_realtime_subscribed', 'channel=bag_tab_order_items_v2');
-            }
-          });
-    } catch (_) {}
-  }
-
-  void _onOrderItemChanged(PostgresChangePayload payload) {
+  // C353: called by the shared FulfillRealtime service when the Bag tab is
+  // visible (replaces the bag_tab_order_items_v2 channel).
+  void refreshFromRealtime() {
     if (!mounted) return;
-    RenderLog.write('c281_realtime_event_received', payload.eventType.toString());
     _load(silent: true);
     if (_expandedBagNo != null) {
       _loadItems(_expandedBagNo!);
@@ -11572,9 +11531,7 @@ class _PackTabState extends State<_PackTab>
   // packed/total cache for packing button label
   final Map<String, Map<String, int>?> _packStatus = {};
 
-  // CHANGE #299: realtime subscription per expanded order
-  final Map<String, RealtimeChannel> _rtChannels = {};
-  Timer? _rtDebounce;
+  // #299→C353: per-order channels replaced by the single FulfillRealtime channel
 
   // CHANGE #299: voice counting
   final VoiceReceiveService _voiceService = VoiceReceiveService();
@@ -11618,14 +11575,18 @@ class _PackTabState extends State<_PackTab>
   @override
   void dispose() {
     _scroll.dispose();
-    _rtDebounce?.cancel();
     _dispatchHoldTimer?.cancel();
     _dispatchHoldCtrl.dispose();
-    for (final ch in _rtChannels.values) {
-      Supabase.instance.client.removeChannel(ch);
-    }
-    _rtChannels.clear();
     super.dispose();
+  }
+
+  // C353: called by the shared FulfillRealtime service when the Pack tab is
+  // visible (replaces the per-order pack_rt_* channels; debounce in service).
+  void refreshFromRealtime() {
+    final oid = _expandedOrderId;
+    if (!mounted || oid == null) return;
+    try { RenderLog.write('c299_rt', 'order=${oid.substring(0, 8)};event=rt'); } catch (_) {}
+    _loadFromPackQueue(oid);
   }
 
   Future<void> _load() async {
@@ -11778,36 +11739,6 @@ class _PackTabState extends State<_PackTab>
   }
 
   // CHANGE #299: realtime — subscribe to order_items UPDATEs for this order
-  void _subscribeOrderRt(String orderId) {
-    if (_rtChannels.containsKey(orderId)) return;
-    final ch = Supabase.instance.client
-        .channel('pack_rt_$orderId')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.update,
-          schema: 'public',
-          table: 'order_items',
-          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'order_id', value: orderId),
-          callback: (_) {
-            _rtDebounce?.cancel();
-            _rtDebounce = Timer(const Duration(milliseconds: 300), () {
-              if (mounted && _expandedOrderId == orderId) {
-                try { RenderLog.write('c299_rt', 'order=${orderId.substring(0, 8)};event=update'); } catch (_) {}
-                _loadFromPackQueue(orderId);
-              }
-            });
-          },
-        )
-        .subscribe();
-    _rtChannels[orderId] = ch;
-    try { RenderLog.write('c299_rt', 'order=${orderId.substring(0, 8)};subscribed=true'); } catch (_) {}
-  }
-
-  void _teardownOrderRt(String orderId) {
-    _rtDebounce?.cancel();
-    final ch = _rtChannels.remove(orderId);
-    if (ch != null) Supabase.instance.client.removeChannel(ch);
-  }
-
   // CHANGE #299: voice counting — toggle record/stop
   Future<void> _toggleCountVoice(String orderId) async {
     // CHANGE #301: block if processing is already in flight
@@ -12360,7 +12291,6 @@ class _PackTabState extends State<_PackTab>
       rowKey: rowKey,
       onTap: () {
         if (isExpanded) {
-          _teardownOrderRt(orderId);
           _packCounting = false;
           setState(() {
             _expandedOrderId = null;
@@ -12387,7 +12317,6 @@ class _PackTabState extends State<_PackTab>
           });
           _loadFromPackQueue(orderId);
           _fetchPackAudit(orderId); // #338: mismatch chips (expand only)
-          _subscribeOrderRt(orderId);
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (!mounted || !_scroll.hasClients) return;
             _scroll.animateTo(0.0,

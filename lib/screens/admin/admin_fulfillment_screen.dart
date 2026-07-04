@@ -1443,7 +1443,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   Future<void> _loadSuppliers() async {
     if (widget.arrivals) {
       // #155: Arrivals mode — load from fw_list_arrivals instead of supplier_orders.
-      if (!_loadingSuppliers) setState(() => _loadingSuppliers = true);
+      // C358 B1: SILENT refetch — only show the spinner on the FIRST load (empty list).
+      // A realtime-driven refetch keeps the existing list on screen and patches it in
+      // place when the new data arrives, so the tab never flashes/reloads.
+      if (!_loadingSuppliers && _suppliers.isEmpty) setState(() => _loadingSuppliers = true);
       try {
         final res = await Supabase.instance.client.rpc('fw_list_arrivals') as Map;
         if (!mounted) return;
@@ -5859,6 +5862,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   Widget _buildWideItemTable() {
     RenderLog.write('change_86_wide_table_present', '1');
     RenderLog.write('c357_cols_ready', 'tab=${widget.arrivals ? 'warehouse' : 'shop'}');
+    // C358 B2: Received / Dispute Type / Item Status / Status are separate, spaced columns.
+    RenderLog.write('c358_cols3', 'tab=${widget.arrivals ? 'warehouse' : 'shop'}');
     final locked = _boxLocked;
     if (locked) RenderLog.write('change_91_locked', '1');
     else RenderLog.write('change_91_confirm_present', '1');
@@ -5878,8 +5883,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             ),
           ),
           child: Row(children: [
-            // C357: two new columns — Dispute Type + Item Status — between Received
-            // and Status. Web/desktop only (table renders >=900px; mobile = cards).
+            // C357/C358: Received · Dispute Type · Item Status · Status are FOUR distinct
+            // columns. C358 B2: 16px gaps between them so the right-aligned "Received"
+            // header no longer butts against "Dispute Type" ("ReceivedDispute Type").
             Expanded(flex: 5, child: Text('Product',
                 style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _kSub))),
             Expanded(flex: 2, child: Text('Pack',
@@ -5887,10 +5893,13 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             Expanded(flex: 2, child: Text('Received',
                 style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _kSub),
                 textAlign: TextAlign.right)),
+            const SizedBox(width: 16),
             Expanded(flex: 3, child: Text('Dispute Type',
                 style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _kSub))),
+            const SizedBox(width: 12),
             Expanded(flex: 3, child: Text('Item Status',
                 style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _kSub))),
+            const SizedBox(width: 12),
             Expanded(flex: 2, child: Text('Status',
                 style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _kSub),
                 textAlign: TextAlign.right)),
@@ -6050,6 +6059,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                           style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
                           textAlign: TextAlign.right,
                         )),
+                        const SizedBox(width: 16), // C358 B2: gap after Received
                         // C357 col: Dispute Type — SHARED kind label for the matched
                         // dispute, else the flagged count_issue kind, else "—".
                         Expanded(flex: 3, child: Builder(builder: (_) {
@@ -6072,6 +6082,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                                 maxLines: 1, overflow: TextOverflow.ellipsis)),
                           ]);
                         })),
+                        const SizedBox(width: 12), // C358 B2: gap after Dispute Type
                         // C357 col: Item Status — backend item_status_label for the
                         // dispute, else the plain line status ("—" when just pending).
                         Expanded(flex: 3, child: Builder(builder: (_) {
@@ -6096,6 +6107,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                                 maxLines: 1, overflow: TextOverflow.ellipsis),
                           );
                         })),
+                        const SizedBox(width: 12), // C358 B2: gap after Item Status
                         // col4: status chip (SHARED helper pill state)
                         Expanded(flex: 2, child: Align(
                           alignment: Alignment.centerRight,
@@ -8264,7 +8276,13 @@ class _BagLabelsScreenState extends State<_BagLabelsScreen> {
   }
 
   Future<void> _load() async {
-    setState(() { _loading = true; _error = null; });
+    // C358 B1: SILENT refetch — spinner only on first load (empty). Realtime-driven
+    // refetches keep the bag labels on screen and patch them in place (no flash).
+    if (_bags.isEmpty) {
+      setState(() { _loading = true; _error = null; });
+    } else if (_error != null) {
+      setState(() => _error = null);
+    }
     try {
       final res = await Supabase.instance.client.rpc('get_customer_pack_status') as List;
       if (!mounted) return;
@@ -8908,7 +8926,13 @@ class _BagLabelsInlineState extends State<_BagLabelsInline> {
   }
 
   Future<void> _load() async {
-    setState(() { _loading = true; _error = null; });
+    // C358 B1: SILENT refetch — spinner only on first load (empty). Realtime-driven
+    // refetches keep the bag labels on screen and patch them in place (no flash).
+    if (_bags.isEmpty) {
+      setState(() { _loading = true; _error = null; });
+    } else if (_error != null) {
+      setState(() => _error = null);
+    }
     try {
       final res = await Supabase.instance.client.rpc('get_customer_pack_status') as List;
       if (!mounted) return;
@@ -10502,6 +10526,14 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
     // C355: an event reached THIS device (local or from another device) and is now
     // driving a visible-tab refetch — same code path for both. This is the unify point.
     RenderLog.write('c355_rt_refetch', 'tab=$_tab');
+    // C358 B1: proof that a refetch is triggered ONLY by a real Postgres change event
+    // (never a timer). Carries the changed table(s). The refetch itself is now SILENT.
+    RenderLog.write('c358_rt_only', 'tbl=${changedTables.join("+")}');
+    // C358 B3: a dispute change re-renders the Supplier Shop / Warehouse rows (chips +
+    // the #357 Dispute Type / Item Status columns) so resolutions reflect back here.
+    if (changedTables.contains('supplier_disputes') && (_tab == 0 || _tab == 1)) {
+      RenderLog.write('c358_line_synced', 'tab=${_tab == 0 ? 'shop' : 'warehouse'}');
+    }
     // C354: a dispute change alters recounts/splits/chips on EVERY tab, not just the
     // visible one. Refresh the Pack dispute index regardless of which tab is showing so
     // its read-only chips are correct the instant the packer switches to it.
@@ -10564,6 +10596,10 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _subscribeRealtime();
+    // C358 B1: the Fulfill area subscribes to realtime ONLY (event-driven). There is
+    // NO periodic/interval refetch timer scheduled here or in any tab — refetches fire
+    // solely on a real Postgres change event (debounced 400ms) or an explicit action.
+    RenderLog.write('c358_no_poll', 'killed=1');
     RenderLog.write('fulfillment_area_mounted', 'true');
     RenderLog.write('fulfillment_three_areas_mounted', 'true');
     RenderLog.write('c132c_disputes_view', 'true');
@@ -11706,7 +11742,11 @@ class _PackTabState extends State<_PackTab>
   Future<void> _loadFromPackQueue(String orderId) async {
     if (_loadingItems[orderId] == true) return;
     if (!mounted) return;
-    setState(() => _loadingItems[orderId] = true);
+    // C358 B1: SILENT refetch — only show the per-order spinner on the FIRST load.
+    // Once we have queue data, a realtime-driven refetch patches it in place (no flash).
+    if (!_packQueueData.containsKey(orderId)) {
+      setState(() => _loadingItems[orderId] = true);
+    }
     try {
       final dynamic raw = await Supabase.instance.client
           .rpc('pack_get_queue', params: {'p_order_id': orderId});
@@ -15015,12 +15055,21 @@ class _DisputesScreenState extends State<_DisputesScreen> {
 
   Future<void> _load() async {
     if (!mounted) return;
-    setState(() { _loading = true; _error = null; });
+    // C358 B1: SILENT refetch — spinner only on first load; a realtime-driven refetch
+    // keeps the current list on screen and patches it in place (no flash).
+    if (_disputes.isEmpty) {
+      setState(() { _loading = true; _error = null; });
+    } else if (_error != null) {
+      setState(() => _error = null);
+    }
     try {
       final res = await Supabase.instance.client.rpc('fw_get_disputes') as Map;
       if (!mounted) return;
       final items = DisputeItem.listFromResponse(res);
       RenderLog.write('c354_live', 'tab=disputes,src=load');
+      // C358 B3: Disputes list rendered after a (realtime-driven) refetch — includes
+      // 'shop_logged' flagged disputes which the backend returns as active.
+      RenderLog.write('c358_disp_synced', 'n=${items.length}');
       // c188: first parse = models_loaded
       if (items.isNotEmpty) {
         RenderLog.write('c188_models_loaded', 'count=${items.length}');

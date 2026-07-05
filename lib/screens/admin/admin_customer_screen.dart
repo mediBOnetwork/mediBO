@@ -2117,6 +2117,58 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     );
   }
 
+  // CHANGE #382 — Customer Orders item-row thumbnail. Same
+  // Image.network+errorBuilder pattern as widgets/order_item_card.dart
+  // (_buildImageTile): null/empty url renders the placeholder directly;
+  // a broken image URL falls back to the same placeholder via errorBuilder.
+  // Never shows a broken-image glyph.
+  Widget _custOrderItemThumb(String? imageUrl) {
+    const size = 76.0;
+    if (imageUrl != null && imageUrl.isNotEmpty) {
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(13),
+        child: Image.network(
+          imageUrl,
+          width: size,
+          height: size,
+          fit: BoxFit.cover,
+          errorBuilder: (_, __, ___) => _custOrderItemThumbPlaceholder(size),
+        ),
+      );
+    }
+    return _custOrderItemThumbPlaceholder(size);
+  }
+
+  Widget _custOrderItemThumbPlaceholder(double size) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        color: const Color(0xFFF5F6F8),
+        borderRadius: BorderRadius.circular(13),
+      ),
+      child: const Icon(Icons.medication_outlined, size: 28, color: Color(0xFFD1D5DB)),
+    );
+  }
+
+  // CHANGE #382 — qty pill for the Customer Orders item row. quantity is
+  // always present on _ItemLine (non-nullable), so this never guards null;
+  // no pack/unit field is available on _ItemLine for real orders today, so
+  // it renders the plain number (ticket 2e's documented fallback).
+  Widget _custOrderItemQtyPill(int qty) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: const Color(0xFFEFF6FF),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: const Color(0xFFBFDBFE)),
+      ),
+      child: Text('$qty',
+          style: const TextStyle(
+              fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF1E40AF))),
+    );
+  }
+
   Widget _buildExpandedItems(_CustRow row, {required bool isDesktop}) {
     final lpad = isDesktop ? 28.0 : 16.0;
     final rpad = isDesktop ? 28.0 : 16.0;
@@ -2197,62 +2249,89 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                 fontWeight: FontWeight.w700,
                 color: Color(0xFF374151))),
         const SizedBox(height: 8),
-        // Header row — columns must match data row widths exactly
-        Row(children: const [
-          Expanded(
-              flex: 5,
-              child: Text('Product',
-                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF9CA3AF)))),
-          SizedBox(width: 8),
-          SizedBox(
-              width: 48,
-              child: Text('Qty',
-                  textAlign: TextAlign.right,
-                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF9CA3AF)))),
-          SizedBox(width: 8),
-          SizedBox(
-              width: 80,
-              child: Text('Price',
-                  textAlign: TextAlign.right,
-                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF9CA3AF)))),
-          SizedBox(width: 12),
-          SizedBox(
-              width: 200,
-              child: Text('Status',
-                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF9CA3AF)))),
-        ]),
-        const SizedBox(height: 4),
+        // CHANGE #382 — replaced the fixed 4-column Product/Qty/Price/Status
+        // table (its fixed-width header cells wrapped "Product" to vertical
+        // letters on narrow admin viewports) with a responsive per-item row:
+        // thumbnail + name/pack/company/qty+price+status. Status pill logic
+        // (_itemInquiryBadge above, untouched) and every other field on this
+        // card — total, "Order Items (N)" count, Accept/Reject, View
+        // Payment, delete — are unchanged; only this item-row layout changed.
         ...row.items.map((item) {
           final s = statusByName[_norm(item.name)];
           final currentStatus   = s?['current_status'] as String?;
           final currentSupplier = s?['current_supplier'] as String?;
-          return Padding(
-            padding: const EdgeInsets.only(top: 6),
-            child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-              Expanded(
-                  flex: 5,
-                  child: Text(item.name,
-                      maxLines: 1,
-                      softWrap: false,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 12, color: Color(0xFF374151)))),
-              const SizedBox(width: 8),
-              SizedBox(
-                  width: 48,
-                  child: Text('×${item.qty}',
-                      textAlign: TextAlign.right,
-                      style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)))),
-              const SizedBox(width: 8),
-              SizedBox(
-                  width: 80,
-                  child: Text(
-                      item.price != null ? '₹${item.price!.toStringAsFixed(2)}' : '—',
-                      textAlign: TextAlign.right,
-                      style: const TextStyle(fontSize: 12, color: Color(0xFF374151)))),
+          try {
+            RenderLog.write('cust_order_items_redesign_382',
+                'orderId:${row.orderId ?? "?"}:item:${item.name}');
+          } catch (_) {}
+
+          // Null-guarded derived text — a missing value hides its line/token,
+          // never renders "null"/"undefined"/"NaN"/"₹null".
+          final packLine = (item.packSize ?? '').trim();
+          final priceVal = (item.price != null && item.price! > 0)
+              ? item.price
+              : ((item.mrp != null && item.mrp! > 0) ? item.mrp : null);
+          final priceText =
+              priceVal != null ? '₹${priceVal.toStringAsFixed(2)}' : null;
+
+          return Container(
+            margin: const EdgeInsets.only(top: 10),
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: const Color(0xFFE5E7EB), width: 0.5),
+            ),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              // CHANGE #382 — _ItemLine (parsed from orders.items JSONB, see
+              // _parseItems) carries no image_url field today — the JSONB
+              // itself is only ever written with product_name/quantity/
+              // price/mrp/gst_percent/line_total (cart_screen.dart order
+              // insert). Per ticket scope (no new query/RPC for this),
+              // imageUrl is always null here — the tile still uses the same
+              // Image.network+errorBuilder pattern as
+              // widgets/order_item_card.dart so it's ready to light up the
+              // moment an image field is ever added, but today it always
+              // shows the placeholder, never a broken-image glyph.
+              _custOrderItemThumb(null),
               const SizedBox(width: 12),
-              SizedBox(
-                width: 200,
-                child: _itemInquiryBadge(currentStatus, currentSupplier),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(item.name,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF111827))),
+                    if (packLine.isNotEmpty) ...[
+                      const SizedBox(height: 2),
+                      Text(packLine,
+                          style: const TextStyle(
+                              fontSize: 12.5, color: Color(0xFF6B7280))),
+                    ],
+                    // No company/marketer field exists on _ItemLine for real
+                    // orders today — line omitted entirely (not fabricated).
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 12,
+                      runSpacing: 8,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        _custOrderItemQtyPill(item.qty),
+                        if (priceText != null)
+                          Text(priceText,
+                              style: const TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w700,
+                                  color: Color(0xFF111827))),
+                        _itemInquiryBadge(currentStatus, currentSupplier),
+                      ],
+                    ),
+                  ],
+                ),
               ),
             ]),
           );

@@ -125,34 +125,64 @@ class _CustRow {
   bool get isCartOnly => source == 'cart_only';
 }
 
-// ── CHANGE #367 — WhatsApp lead row model (pending_orders, not yet converted) ──
-// A "lead" is one pending_orders row (one WhatsApp order-photo) that hasn't been
-// turned into a real order yet (status != 'done'). One row per lead_code, unlike
-// the older per-USER _WaOrderPanel grouping.
-class _WaLeadRow {
-  final String id;             // pending_orders.id — also the wa_convert_start image id
-  final String? userId;        // nullable: null until the sender is resolved to a user
-  final String leadCode;       // e.g. CPO050726PAL124L1
-  final String customerName;
-  final String pharmacy;
-  final String phone;
+// ── CHANGE #369 — grouped WhatsApp lead models (one card per customer) ───────
+// Fed exclusively by get_leads_grouped_today(); replaces the old one-row-per-
+// image _WaLeadRow (was #367). A Lead groups all of a sender's not-yet-
+// converted order-list photos received today; each is a LeadImage ("Order N").
+class LeadImage {
+  final String id;               // pending_orders.id (uuid) — used for delete_lead_image + convert
+  final String? leadCode;
+  final int orderSeq;            // 1,2,3 -> "Order 1", "Order 2"...
   final String filePath;
-  final String status;         // 'pending' here (leads are always status != 'done')
-  final bool isApproved;
+  final String? fileName;
+  final String? caption;
   final DateTime? receivedAt;
-
-  const _WaLeadRow({
-    required this.id,
-    this.userId,
-    required this.leadCode,
-    required this.customerName,
-    required this.pharmacy,
-    required this.phone,
-    required this.filePath,
-    required this.status,
-    required this.isApproved,
-    this.receivedAt,
+  final String? status;
+  final DateTime? convertClickedAt;
+  final String? convertedOrderCode;
+  LeadImage({
+    required this.id, this.leadCode, required this.orderSeq, required this.filePath,
+    this.fileName, this.caption, this.receivedAt, this.status, this.convertClickedAt,
+    this.convertedOrderCode,
   });
+  factory LeadImage.fromJson(Map<String, dynamic> j) => LeadImage(
+    id: j['id'] as String,
+    leadCode: j['lead_code'] as String?,
+    orderSeq: (j['order_seq'] as num?)?.toInt() ?? 1,
+    filePath: j['file_path'] as String? ?? '',
+    fileName: j['file_name'] as String?,
+    caption: j['caption'] as String?,
+    receivedAt: j['received_at'] != null ? DateTime.tryParse(j['received_at'] as String) : null,
+    status: j['status'] as String?,
+    convertClickedAt: j['convert_clicked_at'] != null
+        ? DateTime.tryParse(j['convert_clicked_at'] as String) : null,
+    convertedOrderCode: j['converted_order_code'] as String?,
+  );
+}
+
+class Lead {
+  final String senderPhone;
+  final String? customerName;   // may be null — resolved via phone lookup in _load()
+  final String pharmacy;        // resolved same way as _pharmacy() elsewhere in this file
+  final int leadCount;
+  final List<LeadImage> images;
+  final bool isApproved;         // resolved pharmacy_profiles.approved for the ViewAs handoff
+  Lead({
+    required this.senderPhone, this.customerName, this.pharmacy = '',
+    required this.leadCount, required this.images, this.isApproved = false,
+  });
+  factory Lead.fromRow(Map<String, dynamic> r,
+          {String? resolvedName, String resolvedPharmacy = '', bool resolvedIsApproved = false}) =>
+      Lead(
+        senderPhone: r['sender_phone'] as String? ?? '',
+        customerName: resolvedName ?? (r['customer_name'] as String?),
+        pharmacy: resolvedPharmacy,
+        leadCount: (r['lead_count'] as num?)?.toInt() ?? 0,
+        isApproved: resolvedIsApproved,
+        images: ((r['images'] as List?) ?? const [])
+            .map((e) => LeadImage.fromJson(Map<String, dynamic>.from(e as Map)))
+            .toList(),
+      );
 }
 
 // ── Registration-row model ────────────────────────────────────────────────────
@@ -346,12 +376,10 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   final Map<String, bool> _payOpen = {};
   // CHANGE #322 — per-customer WA order panel open state (keyed by userId)
   final Map<String, bool> _waOpen = {};
-  // CHANGE #367 — WhatsApp leads (unconverted pending_orders), shown above orders
-  // in the Customer Orders tab. _leadWaOpen is keyed by lead id (pending_orders.id),
-  // deliberately separate from _waOpen (keyed by userId) so a lead's dropdown and
-  // its customer's order-row WA dropdown never collide.
-  List<_WaLeadRow> _waLeadRows = [];
-  final Map<String, bool> _leadWaOpen = {};
+  // CHANGE #369 — grouped WhatsApp leads (unconverted pending_orders), shown
+  // above orders in the Customer Orders tab. Sourced solely from
+  // get_leads_grouped_today(), one Lead per sender phone with N LeadImages.
+  List<Lead> _leads = [];
   // orderId → per-product inquiry status from get_order_item_inquiry_status
   final Map<String, List<Map<String, dynamic>>> _orderItemStatuses = {};
   final ScrollController _scrollCtrl = ScrollController();
@@ -414,7 +442,11 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     final ts = DateTime.now().millisecondsSinceEpoch;
     // CHANGE #367 — 'pending_orders' added so a lead auto-disappears from the
     // Leads section (and its order appears below) the moment it's converted.
-    for (final table in ['cart_items', 'orders', 'pharmacy_profiles', 'payment_claims', 'pending_orders']) {
+    // CHANGE #369 — 'order_items' added; realtime init confirmed here (no
+    // periodic/2s poll timer anywhere in this file — debounced-load only).
+    const tables = ['cart_items', 'orders', 'order_items', 'pharmacy_profiles', 'payment_claims', 'pending_orders'];
+    RenderLog.write('co_realtime_369', 'tables:${tables.join(",")}');
+    for (final table in tables) {
       final ch = client
           .channel('admin_${table}_$ts')
           .onPostgresChanges(
@@ -452,9 +484,11 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         // Fetch deleted profiles for "Recently Deleted" section
         client.from('pharmacy_profiles').select().eq('is_deleted', true)
             .order('deleted_at', ascending: false).catchError((_) => <dynamic>[]),
-        // CHANGE #367 — unconverted WhatsApp leads for the Customer Orders tab
-        client.from('pending_orders').select().neq('status', 'done')
-            .order('received_at', ascending: false).catchError((_) => <dynamic>[]),
+        // CHANGE #369 — grouped WhatsApp leads for the Customer Orders tab.
+        // MUST come solely from get_leads_grouped_today() — never a raw
+        // pending_orders/whatsapp_messages read (backend already scopes to
+        // today + order-list images only).
+        client.rpc('get_leads_grouped_today').catchError((_) => <dynamic>[]),
       ]);
 
       final upRows       = results[0] as List;
@@ -514,35 +548,29 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         ));
       }
 
-      // CHANGE #367 — WhatsApp leads (unconverted pending_orders rows).
-      // Resolve name/pharmacy/phone via the same up/pp maps as orders when the
-      // sender has already been linked to a user_id; otherwise fall back to the
-      // raw customer_name/sender_phone captured on arrival by the WhatsApp bot.
-      final leads = <_WaLeadRow>[];
-      for (final l in leadRowsRaw) {
-        final ml  = Map<String, dynamic>.from(l as Map);
-        final uid = ml['user_id'] as String?;
-        final up  = uid != null ? upMap[uid] : null;
-        final pp  = uid != null ? ppMap[uid] : null;
-        final rawName  = (ml['customer_name'] as String?)?.trim() ?? '';
-        final rawPhone = (ml['sender_phone'] as String?)?.trim() ?? '';
-        leads.add(_WaLeadRow(
-          id:          ml['id'] as String,
-          userId:      uid,
-          leadCode:    ml['lead_code'] as String? ?? '',
-          customerName: (up != null || pp != null)
-              ? _name(up, pp, null)
-              : (rawName.isNotEmpty ? rawName : (rawPhone.isNotEmpty ? rawPhone : 'Unknown')),
-          pharmacy:    (up != null || pp != null) ? _pharmacy(up, pp, null) : '',
-          phone:       (up != null || pp != null) ? _phone(up, pp, null) : rawPhone,
-          filePath:    ml['file_path'] as String? ?? '',
-          status:      ml['status'] as String? ?? 'pending',
-          isApproved:  pp?['approved'] == true,
-          receivedAt:  ml['received_at'] != null
-              ? DateTime.tryParse(ml['received_at'] as String)
-              : null,
-        ));
+      // CHANGE #369 — grouped WhatsApp leads, one Lead per sender phone.
+      // The RPC returns sender_phone (not user_id), so resolve customer
+      // name/pharmacy/approval via a phone-keyed lookup into pharmacy_profiles
+      // (the uid-keyed upMap/ppMap above don't directly apply here).
+      String digitsOnly(String s) => s.replaceAll(RegExp(r'[^0-9]'), '');
+      final ppByPhone = <String, Map<String, dynamic>>{};
+      for (final p in ppRows) {
+        final m = Map<String, dynamic>.from(p as Map);
+        final ph = digitsOnly((m['whatsapp_no'] as String?) ?? (m['phone'] as String?) ?? '');
+        if (ph.isNotEmpty) ppByPhone[ph] = m;
       }
+      final leads = leadRowsRaw.map((r) {
+        final m = Map<String, dynamic>.from(r as Map);
+        final phoneDigits = digitsOnly((m['sender_phone'] as String?) ?? '');
+        final pp = ppByPhone[phoneDigits];
+        final resolvedName = pp != null ? _name(null, pp, null) : null;
+        final resolvedPharmacy = pp != null ? _pharmacy(null, pp, null) : '';
+        final resolvedIsApproved = pp?['approved'] == true;
+        return Lead.fromRow(m,
+            resolvedName: resolvedName,
+            resolvedPharmacy: resolvedPharmacy,
+            resolvedIsApproved: resolvedIsApproved);
+      }).toList();
 
       // Cart-only rows — any user with active cart items, regardless of order history.
       // Previously excluded users in orderedUids, which silently dropped authenticated
@@ -632,11 +660,14 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
           _regRows      = regs;
           _approvedRows = approved;
           _deletedRows  = deleted;
-          _waLeadRows   = leads;
+          _leads        = leads;
           _loading      = false;
         });
+        // CHANGE #369 — "Delete order" button removed from real orders (they're
+        // permanent); this key now records that removal instead of the old
+        // button-present claim.
         RenderLog.write('c186_delete_order',
-            'change:186,button_present:true,uses_rpc:delete_order,confirm_dialog:true');
+            'change:369,button_present:false,reason:real_orders_are_permanent');
       }
     } catch (e) {
       if (mounted) {
@@ -1143,16 +1174,6 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     });
   }
 
-  void _toggleWaOpen(String userId) {
-    setState(() {
-      final wasOpen = _waOpen[userId] == true;
-      _expanded.clear();
-      _payOpen.clear();
-      _waOpen.clear();
-      if (!wasOpen) _waOpen[userId] = true;
-    });
-  }
-
   Future<void> _fetchOrderItemStatus(String orderId) async {
     try {
       final rows = await Supabase.instance.client.rpc(
@@ -1176,66 +1197,12 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     }
   }
 
-  // ── Delete order ──────────────────────────────────────────────────────────
-  final Set<String> _deletingOrders = {};
-
-  Future<void> _deleteOrder(BuildContext ctx, String orderId) async {
-    final confirmed = await showDialog<bool>(
-      context: ctx,
-      builder: (dCtx) => AlertDialog(
-        title: const Text('Delete this order?'),
-        content: const Text(
-            'This permanently deletes the order and all related items, disputes, '
-            'and receiving history. This cannot be undone.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dCtx, false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(dCtx, true),
-            style: TextButton.styleFrom(foregroundColor: const Color(0xFFDC2626)),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true) return;
-    if (!mounted) return;
-    setState(() => _deletingOrders.add(orderId));
-    try {
-      final res = await Supabase.instance.client
-          .rpc('delete_order', params: {'p_order_id': orderId});
-      if (!mounted) return;
-      final data = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
-      final err = data['error']?.toString();
-      if (err == 'not_authorized') {
-        ScaffoldMessenger.of(ctx).showSnackBar(
-            const SnackBar(content: Text('Not allowed')));
-      } else if (err == 'order_not_found') {
-        ScaffoldMessenger.of(ctx).showSnackBar(
-            const SnackBar(content: Text('Order already removed')));
-        await _load(showSpinner: false);
-      } else if (err != null) {
-        ScaffoldMessenger.of(ctx).showSnackBar(
-            SnackBar(content: Text('Delete failed: $err')));
-      } else {
-        final deleted = data['deleted'] as Map? ?? {};
-        final itemCount = deleted['order_items'];
-        final msg = itemCount != null
-            ? 'Order deleted ($itemCount items removed)'
-            : 'Order deleted';
-        ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text(msg)));
-        await _load(showSpinner: false);
-      }
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(ctx).showSnackBar(
-          const SnackBar(content: Text('Delete failed — try again')));
-    } finally {
-      if (mounted) setState(() => _deletingOrders.remove(orderId));
-    }
-  }
+  // CHANGE #369 — the "Delete order" flow (was CHANGE #186) was removed along
+  // with its button in _buildExpandedItems: real orders are permanent, so
+  // _deleteOrder/_deletingOrders (and the delete_order RPC call) no longer
+  // have a caller and were deleted here rather than left dead, since an
+  // unreferenced private method would otherwise show up as a new
+  // `unused_element` flutter analyze warning.
 
   // ── Build ──────────────────────────────────────────────────────────────────
 
@@ -1309,11 +1276,12 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
 
     // Customer orders / cart
     final rows = _activeCust;
-    // CHANGE #367 — Leads (unconverted WhatsApp order-photos) show ABOVE orders,
-    // only on the Customer Orders tab (not Cart).
-    final showLeads = _filter == _CustFilter.customerOrders && _waLeadRows.isNotEmpty;
+    // CHANGE #369 — Leads (grouped WhatsApp order-photo customers) show ABOVE
+    // orders, only on the Customer Orders tab (not Cart). If there are none,
+    // nothing is rendered for the leads section at all.
+    final showLeads = _filter == _CustFilter.customerOrders && _leads.isNotEmpty;
     if (showLeads) {
-      RenderLog.write('c367_lead_above', 'leads:${_waLeadRows.length},orders:${rows.length}');
+      RenderLog.write('c367_lead_above', 'leads:${_leads.length},orders:${rows.length}');
     }
     if (rows.isEmpty && !showLeads) {
       return _ssvEmptyState(
@@ -1407,13 +1375,6 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
               ]),
             ),
           ),
-          IconButton(
-            onPressed: _load,
-            icon: const Icon(Icons.refresh_outlined,
-                color: Color(0xFF6B7280), size: 20),
-            tooltip: 'Refresh',
-            visualDensity: VisualDensity.compact,
-          ),
         ]);
       }),
     );
@@ -1459,27 +1420,27 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // CHANGE #367 — WHATSAPP LEADS section (shown ABOVE Orders, Customer Orders tab)
+  // CHANGE #369 — WHATSAPP LEADS section (shown ABOVE Orders, Customer Orders tab)
+  // One card per customer (grouped by sender phone), each listing its order-list
+  // photos as "Order N" tiles with inline Delete/Convert actions. Fed solely by
+  // get_leads_grouped_today() — see _load().
   // ═══════════════════════════════════════════════════════════════════════════
 
   List<Widget> _buildLeadsSection(bool isDesktop) {
     final pad = isDesktop ? 28.0 : 16.0;
+    RenderLog.write('co_leads_grouped_369', 'leads:${_leads.length}');
     return [
       Padding(
         padding: EdgeInsets.fromLTRB(pad, 20, pad, 8),
         child: Row(children: [
           const Icon(Icons.chat_outlined, size: 15, color: Color(0xFF4338CA)),
           const SizedBox(width: 6),
-          Text('Leads (${_waLeadRows.length})',
+          Text('Leads (${_leads.length})',
               style: const TextStyle(
                   fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF4338CA))),
         ]),
       ),
-      if (isDesktop) _buildLeadTableHeader(),
-      ..._waLeadRows.map((l) {
-        RenderLog.write('c367_lead_row', l.leadCode);
-        return isDesktop ? _buildDesktopLeadRow(l) : _buildMobileLeadCard(l);
-      }),
+      ..._leads.map((l) => _buildLeadCard(l, pad: pad)),
       SizedBox(height: isDesktop ? 20 : 16),
       Padding(
         padding: EdgeInsets.fromLTRB(pad, 0, pad, 8),
@@ -1490,128 +1451,201 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     ];
   }
 
-  Widget _buildLeadTableHeader() {
+  Widget _buildLeadCard(Lead lead, {required double pad}) {
+    final displayName =
+        (lead.customerName != null && lead.customerName!.trim().isNotEmpty)
+            ? lead.customerName!.trim()
+            : (lead.senderPhone.isNotEmpty ? lead.senderPhone : 'Unknown');
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 10),
-      decoration: const BoxDecoration(
-        color: Color(0xFFF9FAFB),
-        border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
-      ),
-      child: Row(children: [
-        _th('CUSTOMER', flex: 4),
-        _th('PHARMACY', flex: 3),
-        _th('PHONE', flex: 2),
-        _th('LEAD', flex: 2),
-        _th('WHATSAPP', flex: 2),
-      ]),
-    );
-  }
-
-  Widget _buildDesktopLeadRow(_WaLeadRow lead) {
-    final isOpen = _leadWaOpen[lead.id] == true;
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Container(
-        padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 13),
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
-        ),
-        child: Row(children: [
-          Expanded(
-            flex: 4,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(lead.customerName,
-                    style: const TextStyle(
-                        fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
-                    overflow: TextOverflow.ellipsis),
-                const SizedBox(height: 2),
-                Text(lead.leadCode,
-                    style: const TextStyle(
-                        fontSize: 11, color: Color(0xFF6B7280), fontFamily: 'monospace')),
-              ],
-            ),
-          ),
-          Expanded(
-              flex: 3,
-              child: Text(lead.pharmacy.isNotEmpty ? lead.pharmacy : '—',
-                  style: const TextStyle(fontSize: 13, color: Color(0xFF374151)),
-                  overflow: TextOverflow.ellipsis)),
-          Expanded(
-              flex: 2,
-              child: Text(lead.phone.isNotEmpty ? lead.phone : '—',
-                  style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)))),
-          const Expanded(flex: 2, child: _LeadBadge()),
-          Expanded(
-            flex: 2,
-            child: GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: () {},
-              child: _WaBtn(
-                isOpen: isOpen,
-                onTap: () => setState(() => _leadWaOpen[lead.id] = !isOpen),
-              ),
-            ),
-          ),
-        ]),
-      ),
-      if (isOpen)
-        _LeadConvertPanel(lead: lead, onRefresh: () => setState(() {})),
-    ]);
-  }
-
-  Widget _buildMobileLeadCard(_WaLeadRow lead) {
-    final isOpen = _leadWaOpen[lead.id] == true;
-    return Container(
-      margin: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+      margin: EdgeInsets.fromLTRB(pad, 0, pad, 12),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: const Color(0xFFE5E7EB)),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Padding(
-          padding: const EdgeInsets.all(14),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Row(children: [
-              Expanded(
-                  child: Text(lead.customerName,
-                      style: const TextStyle(
-                          fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF111827)),
-                      overflow: TextOverflow.ellipsis)),
-              const SizedBox(width: 6),
-              const _LeadBadge(),
-            ]),
-            const SizedBox(height: 3),
-            Text(lead.leadCode,
+        Row(children: [
+          IconButton(
+            onPressed: () => _deleteLeadGroup(lead),
+            icon: const Icon(Icons.delete_outline, size: 18, color: Color(0xFFDC2626)),
+            tooltip: 'Delete all order lists from today',
+            visualDensity: VisualDensity.compact,
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+          ),
+          const SizedBox(width: 4),
+          Expanded(
+            child: Text(displayName,
                 style: const TextStyle(
-                    fontSize: 11, color: Color(0xFF6B7280), fontFamily: 'monospace')),
-            if (lead.pharmacy.isNotEmpty) ...[
-              const SizedBox(height: 3),
-              Text(lead.pharmacy,
-                  style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
-                  overflow: TextOverflow.ellipsis),
-            ],
-            if (lead.phone.isNotEmpty) ...[
-              const SizedBox(height: 2),
-              Text(lead.phone, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
-            ],
-            const SizedBox(height: 10),
-            SizedBox(
-              width: double.infinity,
-              child: _WaBtn(
-                isOpen: isOpen,
-                onTap: () => setState(() => _leadWaOpen[lead.id] = !isOpen),
-              ),
-            ),
-          ]),
-        ),
-        if (isOpen)
-          _LeadConvertPanel(lead: lead, onRefresh: () => setState(() {})),
+                    fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF111827)),
+                overflow: TextOverflow.ellipsis),
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: BoxDecoration(
+                color: const Color(0xFFEEF2FF), borderRadius: BorderRadius.circular(20)),
+            child: Text('${lead.leadCount}',
+                style: const TextStyle(
+                    fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFF4338CA))),
+          ),
+        ]),
+        if (lead.pharmacy.isNotEmpty) ...[
+          const SizedBox(height: 2),
+          Padding(
+            padding: const EdgeInsets.only(left: 36),
+            child: Text(lead.pharmacy,
+                style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+                overflow: TextOverflow.ellipsis),
+          ),
+        ],
+        ...lead.images.map((img) => _LeadImageTile(
+              lead: lead,
+              image: img,
+              onDelete: _deleteLeadImage,
+              onConvert: _convertLeadImage,
+            )),
       ]),
     );
+  }
+
+  // ── CHANGE #369 — lead group / image delete + convert handlers ───────────────
+
+  Future<void> _deleteLeadGroup(Lead lead) async {
+    final displayName =
+        (lead.customerName != null && lead.customerName!.trim().isNotEmpty)
+            ? lead.customerName!.trim()
+            : lead.senderPhone;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dCtx) => AlertDialog(
+        title: Text('Delete all order lists from $displayName today?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dCtx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dCtx, true),
+            style: TextButton.styleFrom(foregroundColor: const Color(0xFFDC2626)),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    RenderLog.write('co_lead_delete_369', 'group:${lead.senderPhone}');
+    try {
+      await Supabase.instance.client
+          .rpc('delete_lead_group', params: {'p_sender_phone': lead.senderPhone});
+      if (mounted) {
+        setState(() {
+          _leads = _leads.where((l) => l.senderPhone != lead.senderPhone).toList();
+        });
+      }
+    } catch (e) {
+      if (mounted) showToast(context, 'Delete failed: $e', isError: true);
+    }
+  }
+
+  Future<void> _deleteLeadImage(LeadImage img) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dCtx) => AlertDialog(
+        title: const Text('Delete this order list?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dCtx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dCtx, true),
+            style: TextButton.styleFrom(foregroundColor: const Color(0xFFDC2626)),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    RenderLog.write('co_lead_delete_369', 'image:${img.id}');
+    try {
+      await Supabase.instance.client.rpc('delete_lead_image', params: {'p_id': img.id});
+      if (mounted) {
+        setState(() {
+          _leads = _leads
+              .map((l) {
+                if (!l.images.any((i) => i.id == img.id)) return l;
+                final remaining = l.images.where((i) => i.id != img.id).toList();
+                return Lead(
+                  senderPhone: l.senderPhone,
+                  customerName: l.customerName,
+                  pharmacy: l.pharmacy,
+                  leadCount: remaining.length,
+                  images: remaining,
+                  isApproved: l.isApproved,
+                );
+              })
+              .where((l) => l.images.isNotEmpty)
+              .toList();
+        });
+      }
+    } catch (e) {
+      if (mounted) showToast(context, 'Delete failed: $e', isError: true);
+    }
+  }
+
+  Future<void> _convertLeadImage(Lead lead, LeadImage image) async {
+    final viewAs = ViewAsState.of(context);
+    final scaffoldCtx = context;
+    final res = await Supabase.instance.client
+        .rpc('wa_convert_start', params: {'p_image_id': image.id});
+    final data = Map<String, dynamic>.from(res as Map);
+    if (data['ok'] != true) {
+      if (mounted) showToast(scaffoldCtx, 'Convert start failed', isError: true);
+      return;
+    }
+    final filePath = data['file_path'] as String;
+    final userId = data['user_id'] as String;
+
+    final bytes = await Supabase.instance.client.storage
+        .from('whatsapp-media')
+        .download(filePath);
+
+    if (!mounted) return;
+
+    final displayName =
+        (lead.customerName != null && lead.customerName!.trim().isNotEmpty)
+            ? lead.customerName!.trim()
+            : lead.senderPhone;
+    final pharmacyName = lead.pharmacy.isNotEmpty ? lead.pharmacy : displayName;
+    viewAs.activate(
+      ViewAsRole.customer,
+      ViewAsIdentity(
+        id: userId,
+        name: pharmacyName,
+        email: '',
+        userId: userId,
+        isApproved: lead.isApproved,
+      ),
+    );
+
+    RenderLog.write('c367_convert', 'image:${image.id},phone:${lead.senderPhone}');
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      BulkUploadScreen.startWaConvert(
+        imageBytes: bytes,
+        mimeType: 'image/jpeg',
+        imageName: 'wa_order_${image.id.substring(0, 8)}.jpg',
+        imageId: image.id,
+        userId: userId,
+        customerName: displayName,
+        pharmacy: lead.pharmacy,
+        phone: lead.senderPhone,
+        address: '',
+        isApproved: lead.isApproved,
+      );
+      BulkUploadScreen.navToBulkUpload?.call();
+    });
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -1650,6 +1684,12 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     final key        = row.orderId ?? row.userId;
     final isExpanded = _expanded.contains(key);
     final isCart     = _filter == _CustFilter.cartNotOrdered;
+    // CHANGE #369 — the per-order WhatsApp button (CHANGE #322) that used to
+    // render here (and its "Received/Processed/Left" chip row, only reachable
+    // through that button's _WaOrderPanel) has been removed; see GAP 7/5a.
+    RenderLog.write('cust_wa_btn_removed_369', 'row:${row.orderId ?? row.userId}');
+    RenderLog.write('co_order_chips_removed_369',
+        'received_processed_left_chips_lived_in_removed_WaOrderPanel_only');
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       InkWell(
@@ -1763,18 +1803,6 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                           ),
                         )
                       : const SizedBox()),
-              // CHANGE #322 — WhatsApp order panel button
-              Expanded(
-                flex: 2,
-                child: GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: () {},
-                  child: _WaBtn(
-                    isOpen: _waOpen[row.userId] == true,
-                    onTap: () => _toggleWaOpen(row.userId),
-                  ),
-                ),
-              ),
             ],
             SizedBox(
               width: 32,
@@ -1795,16 +1823,9 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
           orderNumber: row.orderNumber,
           onStatusChanged: () => _load(showSpinner: false),
         ),
-      // CHANGE #322 — WA order panel
-      if (_waOpen[row.userId] == true)
-        _WaOrderPanel(
-          userId: row.userId,
-          customerName: row.name,
-          pharmacy: row.pharmacy,
-          phone: row.phone,
-          isApproved: row.isOrder,
-          onRefresh: () => setState(() {}),
-        ),
+      // CHANGE #369 — the per-order WhatsApp button/panel (CHANGE #322) was
+      // removed here: it exposed every WhatsApp photo for this customer, which
+      // is now redundant with (and a bypass of) the scoped Leads section above.
       if (isExpanded) _buildExpandedItems(row, isDesktop: true),
     ]);
   }
@@ -1900,36 +1921,29 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                   onTap: () {},
                   child: _ConfirmActions(row: row, onUpdate: _updateStatus),
                 ),
-                // CHANGE #327 — View Payment (left) + WhatsApp (right) side-by-side
-                const SizedBox(height: 6),
-                GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: () {},
-                  child: Row(children: [
-                    if (row.orderId != null) ...[
-                      Expanded(child: _ViewPayBtn(
-                        isOpen: _payOpen[row.orderId] == true,
-                        onTap: () => setState(() =>
-                            _payOpen[row.orderId!] =
-                                !(_payOpen[row.orderId!] ?? false)),
-                        onLongPress: () => showModalBottomSheet(
-                          context: context,
-                          isScrollControlled: true,
-                          backgroundColor: Colors.transparent,
-                          builder: (_) => CashPaymentSheet(
-                            orderId: row.orderId!,
-                            onSuccess: () => setState(() {}),
-                          ),
+                // CHANGE #213 — View Payment (mobile)
+                if (row.orderId != null) ...[
+                  const SizedBox(height: 6),
+                  GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () {},
+                    child: _ViewPayBtn(
+                      isOpen: _payOpen[row.orderId] == true,
+                      onTap: () => setState(() =>
+                          _payOpen[row.orderId!] =
+                              !(_payOpen[row.orderId!] ?? false)),
+                      onLongPress: () => showModalBottomSheet(
+                        context: context,
+                        isScrollControlled: true,
+                        backgroundColor: Colors.transparent,
+                        builder: (_) => CashPaymentSheet(
+                          orderId: row.orderId!,
+                          onSuccess: () => setState(() {}),
                         ),
-                      )),
-                      const SizedBox(width: 8),
-                    ],
-                    Expanded(child: _WaBtn(
-                      isOpen: _waOpen[row.userId] == true,
-                      onTap: () => _toggleWaOpen(row.userId),
-                    )),
-                  ]),
-                ),
+                      ),
+                    ),
+                  ),
+                ],
               ],
             ]),
           ),
@@ -1944,20 +1958,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                 onStatusChanged: () => _load(showSpinner: false),
               ),
             ),
-          // CHANGE #322 — WA order panel (mobile)
-          if (_waOpen[row.userId] == true)
-            GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: () {},
-              child: _WaOrderPanel(
-                userId: row.userId,
-                customerName: row.name,
-                pharmacy: row.pharmacy,
-                phone: row.phone,
-                isApproved: row.isOrder,
-                onRefresh: () => setState(() {}),
-              ),
-            ),
+          // CHANGE #369 — the per-order WhatsApp button/panel (CHANGE #322) was
+          // removed here (mobile); see the desktop row for the rationale.
           if (isExpanded) ...[
             const Divider(height: 1, color: Color(0xFFE5E7EB)),
             _buildExpandedItems(row, isDesktop: false),
@@ -2138,34 +2140,10 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
             ]),
           );
         }),
-        // CHANGE #213 — OrderPaymentSection removed; payment now in View Payment dropdown above
-        if (row.orderId != null) ...[
-          const SizedBox(height: 14),
-          const Divider(height: 1, color: Color(0xFFE5E7EB)),
-          const SizedBox(height: 10),
-          SizedBox(
-            width: double.infinity,
-            child: Builder(builder: (btnCtx) {
-              final isDeleting = _deletingOrders.contains(row.orderId);
-              return OutlinedButton.icon(
-                onPressed: isDeleting ? null : () => _deleteOrder(btnCtx, row.orderId!),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: const Color(0xFFDC2626),
-                  side: const BorderSide(color: Color(0xFFDC2626)),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                  padding: const EdgeInsets.symmetric(vertical: 10),
-                ),
-                icon: isDeleting
-                    ? const SizedBox(width: 14, height: 14,
-                        child: CircularProgressIndicator(
-                            color: Color(0xFFDC2626), strokeWidth: 2))
-                    : const Icon(Icons.delete_outline_rounded, size: 16),
-                label: Text(isDeleting ? 'Deleting…' : 'Delete order',
-                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-              );
-            }),
-          ),
-        ],
+        // CHANGE #369 — the "Delete order" button was removed here: real orders
+        // are permanent once placed and admins get no delete option for them.
+        // (Leads still have their own delete via delete_lead_image/
+        // delete_lead_group in the grouped Leads section above.)
       ]),
     );
   }
@@ -6452,52 +6430,10 @@ class _PayChip extends StatelessWidget {
   }
 }
 
-// ── CHANGE #322 — WhatsApp button (mirrors _ViewPayBtn with green WA theme) ──
-
-class _WaBtn extends StatelessWidget {
-  final bool isOpen;
-  final VoidCallback onTap;
-  const _WaBtn({required this.isOpen, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        decoration: BoxDecoration(
-          color: isOpen ? const Color(0xFFDCFCE7) : const Color(0xFFF5F6F8),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(
-            color: isOpen
-                ? const Color(0xFF1B7A43).withValues(alpha: 0.5)
-                : const Color(0xFFE5E7EB),
-          ),
-        ),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          Icon(Icons.chat_outlined, size: 13,
-              color: isOpen ? const Color(0xFF1B7A43) : const Color(0xFF6B7280)),
-          const SizedBox(width: 4),
-          Text(
-            'WhatsApp',
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              color: isOpen ? const Color(0xFF1B7A43) : const Color(0xFF374151),
-            ),
-          ),
-          const SizedBox(width: 4),
-          AnimatedRotation(
-            turns: isOpen ? 0.5 : 0.0,
-            duration: const Duration(milliseconds: 150),
-            child: Icon(Icons.expand_more, size: 14,
-                color: isOpen ? const Color(0xFF1B7A43) : const Color(0xFF6B7280)),
-          ),
-        ]),
-      ),
-    );
-  }
-}
+// CHANGE #369 — _WaBtn (CHANGE #322's WhatsApp toggle button) was deleted here:
+// GAP 7 removed its last two call sites (desktop + mobile cust rows), and as a
+// StatelessWidget with no State<T> self-reference it would otherwise trip a
+// new `unused_element` flutter analyze warning if left in place unreferenced.
 
 // ── CHANGE #322 — WhatsApp order panel ───────────────────────────────────────
 
@@ -6998,61 +6934,53 @@ class _WaTabChip extends StatelessWidget {
 }
 
 
-// ── CHANGE #367 — "Lead" badge (pending_orders row not yet converted) ───────
+// CHANGE #369 — _LeadBadge (CHANGE #367's static "Lead" pill) was deleted
+// here: the old per-image lead rows that used it were replaced by the
+// grouped Lead cards (GAP 4), which show a lead-count badge inline in
+// _buildLeadCard() instead. Left unreferenced it would trip a new
+// `unused_element` flutter analyze warning.
 
-class _LeadBadge extends StatelessWidget {
-  const _LeadBadge();
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(
-        color: const Color(0xFFEEF2FF),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: const Color(0xFF4F46E5).withValues(alpha: 0.35)),
-      ),
-      child: const Text('Lead',
-          style: TextStyle(
-              fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF4338CA))),
-    );
-  }
-}
-
-// ── CHANGE #367 — single-lead WhatsApp photo + Convert-to-Order panel ───────
-// Unlike _WaOrderPanel (groups ALL of a user's WA images by day, keyed by
-// userId — needed when userId is already known and there may be several),
-// a lead row already IS one specific pending_orders row, so this panel shows
-// just that one photo. It reuses wa_convert_start() and the exact same
-// BulkUploadScreen.startWaConvert() hand-off as the existing flow, unchanged.
-class _LeadConvertPanel extends StatefulWidget {
-  final _WaLeadRow lead;
-  final VoidCallback onRefresh;
-  const _LeadConvertPanel({required this.lead, required this.onRefresh});
+// ── CHANGE #369 — single order-list photo tile (one per LeadImage) ─────────
+// Renders one "Order N" image full-width with inline Delete/Convert buttons,
+// used inside each grouped Lead card built by _buildLeadCard(). Reuses
+// wa_convert_start() and the exact same BulkUploadScreen.startWaConvert()
+// hand-off as the pre-existing convert flow, unchanged — only the data
+// source (Lead/LeadImage instead of the old per-image _WaLeadRow) differs.
+class _LeadImageTile extends StatefulWidget {
+  final Lead lead;
+  final LeadImage image;
+  final Future<void> Function(LeadImage image) onDelete;
+  final Future<void> Function(Lead lead, LeadImage image) onConvert;
+  const _LeadImageTile({
+    required this.lead,
+    required this.image,
+    required this.onDelete,
+    required this.onConvert,
+  });
 
   @override
-  State<_LeadConvertPanel> createState() => _LeadConvertPanelState();
+  State<_LeadImageTile> createState() => _LeadImageTileState();
 }
 
-class _LeadConvertPanelState extends State<_LeadConvertPanel> {
+class _LeadImageTileState extends State<_LeadImageTile> {
   String? _viewType;
-  bool _converting = false;
   String? _error;
+  bool _converting = false;
+  bool _deleting = false;
 
   @override
   void initState() {
     super.initState();
     _loadImage();
-    RenderLog.write('c367_lead_panel', widget.lead.leadCode);
   }
 
   Future<void> _loadImage() async {
     try {
       final url = await Supabase.instance.client.storage
           .from('whatsapp-media')
-          .createSignedUrl(widget.lead.filePath, 3600);
+          .createSignedUrl(widget.image.filePath, 3600);
       if (!mounted) return;
-      final vt = 'wa-lead-img-${widget.lead.id}';
+      final vt = 'lead-img-${widget.image.id}';
       final capturedCtx = context;
       ui_web.platformViewRegistry.registerViewFactory(vt, (int viewId) {
         final img = html.ImageElement()
@@ -7062,7 +6990,10 @@ class _LeadConvertPanelState extends State<_LeadConvertPanel> {
           ..style.objectFit = 'contain'
           ..style.background = '#F3F4F6'
           ..style.cursor = 'pointer';
-        img.onClick.listen((_) => openFullscreenImage(capturedCtx, url));
+        img.onClick.listen((_) {
+          RenderLog.write('co_img_zoom_369', 'lead_image:${widget.image.id}');
+          openFullscreenImage(capturedCtx, url);
+        });
         return img;
       });
       if (mounted) setState(() => _viewType = vt);
@@ -7071,97 +7002,44 @@ class _LeadConvertPanelState extends State<_LeadConvertPanel> {
     }
   }
 
-  Future<void> _convert() async {
-    if (_converting) return;
+  Future<void> _handleConvert() async {
+    if (_converting || _deleting) return;
     setState(() => _converting = true);
-    final viewAs = ViewAsState.of(context);
-    final scaffoldCtx = context;
     try {
-      final res = await Supabase.instance.client
-          .rpc('wa_convert_start', params: {'p_image_id': widget.lead.id});
-      final data = Map<String, dynamic>.from(res as Map);
-      if (data['ok'] != true) {
-        if (mounted) {
-          showToast(scaffoldCtx, 'Convert start failed', isError: true);
-          setState(() => _converting = false);
-        }
-        return;
-      }
-      final filePath = data['file_path'] as String;
-      final userId = data['user_id'] as String;
+      await widget.onConvert(widget.lead, widget.image);
+    } catch (_) {
+      // onConvert already surfaces its own toast on failure.
+    } finally {
+      if (mounted) setState(() => _converting = false);
+    }
+  }
 
-      final bytes = await Supabase.instance.client.storage
-          .from('whatsapp-media')
-          .download(filePath);
-
-      if (!mounted) return;
-
-      final pharmacyName = widget.lead.pharmacy.isNotEmpty
-          ? widget.lead.pharmacy
-          : widget.lead.customerName;
-      viewAs.activate(
-        ViewAsRole.customer,
-        ViewAsIdentity(
-          id: userId,
-          name: pharmacyName,
-          email: '',
-          userId: userId,
-          isApproved: widget.lead.isApproved,
-        ),
-      );
-
-      RenderLog.write('c367_convert', widget.lead.leadCode);
-
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        BulkUploadScreen.startWaConvert(
-          imageBytes: bytes,
-          mimeType: 'image/jpeg',
-          imageName: 'wa_order_${widget.lead.id.substring(0, 8)}.jpg',
-          imageId: widget.lead.id,
-          userId: userId,
-          customerName: widget.lead.customerName,
-          pharmacy: widget.lead.pharmacy,
-          phone: widget.lead.phone,
-          address: '',
-          isApproved: widget.lead.isApproved,
-        );
-        BulkUploadScreen.navToBulkUpload?.call();
-      });
-      widget.onRefresh();
-    } catch (e) {
-      if (mounted) {
-        showToast(scaffoldCtx, 'Convert failed: $e', isError: true);
-        setState(() => _converting = false);
-      }
+  Future<void> _handleDelete() async {
+    if (_deleting || _converting) return;
+    setState(() => _deleting = true);
+    try {
+      await widget.onDelete(widget.image);
+    } finally {
+      if (mounted) setState(() => _deleting = false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF0FDF4),
-        border: Border(
-          top: BorderSide(color: const Color(0xFF1B7A43).withValues(alpha: 0.2)),
-          bottom: BorderSide(color: const Color(0xFF1B7A43).withValues(alpha: 0.2)),
-        ),
-      ),
+    final img = widget.image;
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          const Icon(Icons.chat_outlined, size: 16, color: Color(0xFF1B7A43)),
-          const SizedBox(width: 8),
-          Text('Lead ${widget.lead.leadCode}',
-              style: const TextStyle(
-                  fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF1B7A43))),
-        ]),
-        const SizedBox(height: 12),
+        Text('Order ${img.orderSeq}',
+            style: const TextStyle(
+                fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFF374151))),
+        const SizedBox(height: 6),
         Container(
-          height: 240,
           width: double.infinity,
+          height: 220,
           decoration: BoxDecoration(
             color: const Color(0xFFE5E7EB),
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: BorderRadius.circular(10),
           ),
           clipBehavior: Clip.hardEdge,
           child: _error != null
@@ -7176,46 +7054,55 @@ class _LeadConvertPanelState extends State<_LeadConvertPanel> {
                           height: 24,
                           child: CircularProgressIndicator(strokeWidth: 2)))),
         ),
-        const SizedBox(height: 12),
-        // Convert button — same amber pending style as the order-row WA panel
-        SizedBox(
-          width: double.infinity,
-          child: GestureDetector(
-            onTap: _converting ? null : _convert,
-            child: Container(
-              padding: const EdgeInsets.symmetric(vertical: 12),
-              decoration: BoxDecoration(
-                color: const Color(0xFFFEF3C7),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: const Color(0xFFD97706).withValues(alpha: 0.5)),
+        if ((img.caption ?? '').trim().isNotEmpty) ...[
+          const SizedBox(height: 6),
+          Text(img.caption!.trim(),
+              style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+        ],
+        const SizedBox(height: 8),
+        Row(children: [
+          if (img.convertedOrderCode == null) ...[
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: (_deleting || _converting) ? null : _handleDelete,
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFFDC2626),
+                  side: const BorderSide(color: Color(0xFFDC2626)),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                ),
+                icon: _deleting
+                    ? const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: Color(0xFFDC2626)))
+                    : const Icon(Icons.delete_outline, size: 16),
+                label: const Text('Delete', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
               ),
-              alignment: Alignment.center,
-              child: _converting
-                  ? const Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        SizedBox(
-                          width: 14,
-                          height: 14,
-                          child: CircularProgressIndicator(
-                              strokeWidth: 2, color: Color(0xFF92400E)),
-                        ),
-                        SizedBox(width: 8),
-                        Text('Opening…',
-                            style: TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w700,
-                                color: Color(0xFF92400E))),
-                      ],
-                    )
-                  : const Text('Convert to Order',
-                      style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w700,
-                          color: Color(0xFF92400E))),
+            ),
+            const SizedBox(width: 8),
+          ],
+          Expanded(
+            child: ElevatedButton.icon(
+              onPressed: (_converting || _deleting) ? null : _handleConvert,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF1B7A43),
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                padding: const EdgeInsets.symmetric(vertical: 10),
+              ),
+              icon: _converting
+                  ? const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                  : const Icon(Icons.shopping_cart_checkout, size: 16),
+              label: Text(_converting ? 'Opening…' : 'Convert',
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
             ),
           ),
-        ),
+        ]),
       ]),
     );
   }

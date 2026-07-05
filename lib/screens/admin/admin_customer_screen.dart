@@ -125,6 +125,36 @@ class _CustRow {
   bool get isCartOnly => source == 'cart_only';
 }
 
+// ── CHANGE #367 — WhatsApp lead row model (pending_orders, not yet converted) ──
+// A "lead" is one pending_orders row (one WhatsApp order-photo) that hasn't been
+// turned into a real order yet (status != 'done'). One row per lead_code, unlike
+// the older per-USER _WaOrderPanel grouping.
+class _WaLeadRow {
+  final String id;             // pending_orders.id — also the wa_convert_start image id
+  final String? userId;        // nullable: null until the sender is resolved to a user
+  final String leadCode;       // e.g. CPO050726PAL124L1
+  final String customerName;
+  final String pharmacy;
+  final String phone;
+  final String filePath;
+  final String status;         // 'pending' here (leads are always status != 'done')
+  final bool isApproved;
+  final DateTime? receivedAt;
+
+  const _WaLeadRow({
+    required this.id,
+    this.userId,
+    required this.leadCode,
+    required this.customerName,
+    required this.pharmacy,
+    required this.phone,
+    required this.filePath,
+    required this.status,
+    required this.isApproved,
+    this.receivedAt,
+  });
+}
+
 // ── Registration-row model ────────────────────────────────────────────────────
 
 class _RegRow {
@@ -316,6 +346,12 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   final Map<String, bool> _payOpen = {};
   // CHANGE #322 — per-customer WA order panel open state (keyed by userId)
   final Map<String, bool> _waOpen = {};
+  // CHANGE #367 — WhatsApp leads (unconverted pending_orders), shown above orders
+  // in the Customer Orders tab. _leadWaOpen is keyed by lead id (pending_orders.id),
+  // deliberately separate from _waOpen (keyed by userId) so a lead's dropdown and
+  // its customer's order-row WA dropdown never collide.
+  List<_WaLeadRow> _waLeadRows = [];
+  final Map<String, bool> _leadWaOpen = {};
   // orderId → per-product inquiry status from get_order_item_inquiry_status
   final Map<String, List<Map<String, dynamic>>> _orderItemStatuses = {};
   final ScrollController _scrollCtrl = ScrollController();
@@ -376,7 +412,9 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   void _subscribeRealtime() {
     final client = Supabase.instance.client;
     final ts = DateTime.now().millisecondsSinceEpoch;
-    for (final table in ['cart_items', 'orders', 'pharmacy_profiles', 'payment_claims']) {
+    // CHANGE #367 — 'pending_orders' added so a lead auto-disappears from the
+    // Leads section (and its order appears below) the moment it's converted.
+    for (final table in ['cart_items', 'orders', 'pharmacy_profiles', 'payment_claims', 'pending_orders']) {
       final ch = client
           .channel('admin_${table}_$ts')
           .onPostgresChanges(
@@ -414,14 +452,18 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         // Fetch deleted profiles for "Recently Deleted" section
         client.from('pharmacy_profiles').select().eq('is_deleted', true)
             .order('deleted_at', ascending: false).catchError((_) => <dynamic>[]),
+        // CHANGE #367 — unconverted WhatsApp leads for the Customer Orders tab
+        client.from('pending_orders').select().neq('status', 'done')
+            .order('received_at', ascending: false).catchError((_) => <dynamic>[]),
       ]);
 
-      final upRows      = results[0] as List;
-      final ppRows      = results[1] as List;
-      final orderRows   = results[2] as List;
-      final cartRows    = results[3] as List;
-      final authRows    = results[4] as List;
-      final deletedList = results[5] as List;
+      final upRows       = results[0] as List;
+      final ppRows       = results[1] as List;
+      final orderRows    = results[2] as List;
+      final cartRows     = results[3] as List;
+      final authRows     = results[4] as List;
+      final deletedList  = results[5] as List;
+      final leadRowsRaw  = results[6] as List;
 
       // Auth users with no pharmacy_profile (logged-in but unregistered)
       final authMap = <String, Map<String, dynamic>>{};
@@ -469,6 +511,36 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
           items:         _parseItems(mo['items']),
           total:         (mo['total_amount'] as num?)?.toDouble(),
           placedByAdmin: (mo['placed_by_admin'] as bool?) ?? false,
+        ));
+      }
+
+      // CHANGE #367 — WhatsApp leads (unconverted pending_orders rows).
+      // Resolve name/pharmacy/phone via the same up/pp maps as orders when the
+      // sender has already been linked to a user_id; otherwise fall back to the
+      // raw customer_name/sender_phone captured on arrival by the WhatsApp bot.
+      final leads = <_WaLeadRow>[];
+      for (final l in leadRowsRaw) {
+        final ml  = Map<String, dynamic>.from(l as Map);
+        final uid = ml['user_id'] as String?;
+        final up  = uid != null ? upMap[uid] : null;
+        final pp  = uid != null ? ppMap[uid] : null;
+        final rawName  = (ml['customer_name'] as String?)?.trim() ?? '';
+        final rawPhone = (ml['sender_phone'] as String?)?.trim() ?? '';
+        leads.add(_WaLeadRow(
+          id:          ml['id'] as String,
+          userId:      uid,
+          leadCode:    ml['lead_code'] as String? ?? '',
+          customerName: (up != null || pp != null)
+              ? _name(up, pp, null)
+              : (rawName.isNotEmpty ? rawName : (rawPhone.isNotEmpty ? rawPhone : 'Unknown')),
+          pharmacy:    (up != null || pp != null) ? _pharmacy(up, pp, null) : '',
+          phone:       (up != null || pp != null) ? _phone(up, pp, null) : rawPhone,
+          filePath:    ml['file_path'] as String? ?? '',
+          status:      ml['status'] as String? ?? 'pending',
+          isApproved:  pp?['approved'] == true,
+          receivedAt:  ml['received_at'] != null
+              ? DateTime.tryParse(ml['received_at'] as String)
+              : null,
         ));
       }
 
@@ -560,6 +632,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
           _regRows      = regs;
           _approvedRows = approved;
           _deletedRows  = deleted;
+          _waLeadRows   = leads;
           _loading      = false;
         });
         RenderLog.write('c186_delete_order',
@@ -1199,6 +1272,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     if (_isLeadsView) return _buildLeadsContent(isDesktop);
     // Approved customers view
     if (_isApprovedView) {
+      RenderLog.write('c367_wa_removed', 'tab:customers');
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1235,7 +1309,13 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
 
     // Customer orders / cart
     final rows = _activeCust;
-    if (rows.isEmpty) {
+    // CHANGE #367 — Leads (unconverted WhatsApp order-photos) show ABOVE orders,
+    // only on the Customer Orders tab (not Cart).
+    final showLeads = _filter == _CustFilter.customerOrders && _waLeadRows.isNotEmpty;
+    if (showLeads) {
+      RenderLog.write('c367_lead_above', 'leads:${_waLeadRows.length},orders:${rows.length}');
+    }
+    if (rows.isEmpty && !showLeads) {
       return _ssvEmptyState(
         _filter == _CustFilter.customerOrders
             ? '0 orders'
@@ -1245,9 +1325,13 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (isDesktop) _buildCustTableHeader(),
-        ...rows.map(
-          (r) => isDesktop ? _buildDesktopCustRow(r) : _buildMobileCustCard(r)),
+        if (showLeads) ..._buildLeadsSection(isDesktop),
+        if (rows.isNotEmpty) ...[
+          if (isDesktop) _buildCustTableHeader(),
+          ...rows.map(
+            (r) => isDesktop ? _buildDesktopCustRow(r) : _buildMobileCustCard(r)),
+        ] else if (showLeads)
+          _ssvEmptyState('0 orders'),
         if (_filter == _CustFilter.cartNotOrdered)
           _buildCartTotalsFooter(isDesktop),
         const SizedBox(height: 32),
@@ -1371,6 +1455,162 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
           ),
         ),
       ),
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // CHANGE #367 — WHATSAPP LEADS section (shown ABOVE Orders, Customer Orders tab)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  List<Widget> _buildLeadsSection(bool isDesktop) {
+    final pad = isDesktop ? 28.0 : 16.0;
+    return [
+      Padding(
+        padding: EdgeInsets.fromLTRB(pad, 20, pad, 8),
+        child: Row(children: [
+          const Icon(Icons.chat_outlined, size: 15, color: Color(0xFF4338CA)),
+          const SizedBox(width: 6),
+          Text('Leads (${_waLeadRows.length})',
+              style: const TextStyle(
+                  fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF4338CA))),
+        ]),
+      ),
+      if (isDesktop) _buildLeadTableHeader(),
+      ..._waLeadRows.map((l) {
+        RenderLog.write('c367_lead_row', l.leadCode);
+        return isDesktop ? _buildDesktopLeadRow(l) : _buildMobileLeadCard(l);
+      }),
+      SizedBox(height: isDesktop ? 20 : 16),
+      Padding(
+        padding: EdgeInsets.fromLTRB(pad, 0, pad, 8),
+        child: const Text('Orders',
+            style: TextStyle(
+                fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+      ),
+    ];
+  }
+
+  Widget _buildLeadTableHeader() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 10),
+      decoration: const BoxDecoration(
+        color: Color(0xFFF9FAFB),
+        border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
+      ),
+      child: Row(children: [
+        _th('CUSTOMER', flex: 4),
+        _th('PHARMACY', flex: 3),
+        _th('PHONE', flex: 2),
+        _th('LEAD', flex: 2),
+        _th('WHATSAPP', flex: 2),
+      ]),
+    );
+  }
+
+  Widget _buildDesktopLeadRow(_WaLeadRow lead) {
+    final isOpen = _leadWaOpen[lead.id] == true;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 13),
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
+        ),
+        child: Row(children: [
+          Expanded(
+            flex: 4,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(lead.customerName,
+                    style: const TextStyle(
+                        fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
+                    overflow: TextOverflow.ellipsis),
+                const SizedBox(height: 2),
+                Text(lead.leadCode,
+                    style: const TextStyle(
+                        fontSize: 11, color: Color(0xFF6B7280), fontFamily: 'monospace')),
+              ],
+            ),
+          ),
+          Expanded(
+              flex: 3,
+              child: Text(lead.pharmacy.isNotEmpty ? lead.pharmacy : '—',
+                  style: const TextStyle(fontSize: 13, color: Color(0xFF374151)),
+                  overflow: TextOverflow.ellipsis)),
+          Expanded(
+              flex: 2,
+              child: Text(lead.phone.isNotEmpty ? lead.phone : '—',
+                  style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)))),
+          const Expanded(flex: 2, child: _LeadBadge()),
+          Expanded(
+            flex: 2,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () {},
+              child: _WaBtn(
+                isOpen: isOpen,
+                onTap: () => setState(() => _leadWaOpen[lead.id] = !isOpen),
+              ),
+            ),
+          ),
+        ]),
+      ),
+      if (isOpen)
+        _LeadConvertPanel(lead: lead, onRefresh: () => setState(() {})),
+    ]);
+  }
+
+  Widget _buildMobileLeadCard(_WaLeadRow lead) {
+    final isOpen = _leadWaOpen[lead.id] == true;
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              Expanded(
+                  child: Text(lead.customerName,
+                      style: const TextStyle(
+                          fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF111827)),
+                      overflow: TextOverflow.ellipsis)),
+              const SizedBox(width: 6),
+              const _LeadBadge(),
+            ]),
+            const SizedBox(height: 3),
+            Text(lead.leadCode,
+                style: const TextStyle(
+                    fontSize: 11, color: Color(0xFF6B7280), fontFamily: 'monospace')),
+            if (lead.pharmacy.isNotEmpty) ...[
+              const SizedBox(height: 3),
+              Text(lead.pharmacy,
+                  style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+                  overflow: TextOverflow.ellipsis),
+            ],
+            if (lead.phone.isNotEmpty) ...[
+              const SizedBox(height: 2),
+              Text(lead.phone, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+            ],
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              child: _WaBtn(
+                isOpen: isOpen,
+                onTap: () => setState(() => _leadWaOpen[lead.id] = !isOpen),
+              ),
+            ),
+          ]),
+        ),
+        if (isOpen)
+          _LeadConvertPanel(lead: lead, onRefresh: () => setState(() {})),
+      ]),
     );
   }
 
@@ -2648,19 +2888,6 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                     () => _deleteCustomer(row)),
               ]),
             ),
-            // CHANGE #322 — WhatsApp button on Customers tab
-            () {
-              final uid = row.rawData['user_id'] as String?;
-              if (uid == null) return const SizedBox(width: 8);
-              return GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: () {},
-                child: _WaBtn(
-                  isOpen: _waOpen[uid] == true,
-                  onTap: () => _toggleWaOpen(uid),
-                ),
-              );
-            }(),
             // Rotating chevron
             SizedBox(
               width: 32,
@@ -2675,19 +2902,6 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         ),
       ),
       if (isExpanded) _buildDynamicDetails(row.rawData, lpad: 44, rpad: 28),
-      // CHANGE #322 — WA panel on Customers tab
-      () {
-        final uid = row.rawData['user_id'] as String?;
-        if (uid == null || _waOpen[uid] != true) return const SizedBox.shrink();
-        return _WaOrderPanel(
-          userId: uid,
-          customerName: row.customerName,
-          pharmacy: row.pharmacyName,
-          phone: row.phone,
-          isApproved: !row.isSuspended,
-          onRefresh: () => setState(() {}),
-        );
-      }(),
     ]);
   }
 
@@ -2779,45 +2993,12 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                   _actionBtn('Delete', const Color(0xFFDC2626),
                       () => _deleteCustomer(row)),
                 ]),
-                // CHANGE #322 — WhatsApp button on mobile Customers tab
-                () {
-                  final uid = row.rawData['user_id'] as String?;
-                  if (uid == null) return const SizedBox.shrink();
-                  return Padding(
-                    padding: const EdgeInsets.only(top: 8),
-                    child: GestureDetector(
-                      behavior: HitTestBehavior.opaque,
-                      onTap: () {},
-                      child: _WaBtn(
-                        isOpen: _waOpen[uid] == true,
-                        onTap: () => _toggleWaOpen(uid),
-                      ),
-                    ),
-                  );
-                }(),
               ]),
             ),
             if (isExpanded) ...[
               const Divider(height: 1, color: Color(0xFFE5E7EB)),
               _buildDynamicDetails(row.rawData, lpad: 16, rpad: 16),
             ],
-            // CHANGE #322 — WA panel on mobile Customers tab
-            () {
-              final uid = row.rawData['user_id'] as String?;
-              if (uid == null || _waOpen[uid] != true) return const SizedBox.shrink();
-              return GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: () {},
-                child: _WaOrderPanel(
-                  userId: uid,
-                  customerName: row.customerName,
-                  pharmacy: row.pharmacyName,
-                  phone: row.phone,
-                  isApproved: !row.isSuspended,
-                  onRefresh: () => setState(() {}),
-                ),
-              );
-            }(),
           ]),
         ),
       ),
@@ -6353,6 +6534,10 @@ class _WaOrderPanelState extends State<_WaOrderPanel> {
   final Map<String, String> _signedUrls = {};
   // imageId → HtmlElementView viewType
   final Map<String, String> _imgViewTypes = {};
+  // CHANGE #367 — imageId → lead_code, merged in from pending_orders since
+  // wa_admin_order_groups doesn't return it, so the traceability view can show
+  // the full photo -> lead -> order -> success chain.
+  Map<String, String?> _leadCodes = {};
 
   @override
   void initState() {
@@ -6382,9 +6567,23 @@ class _WaOrderPanelState extends State<_WaOrderPanel> {
         'wa_admin_order_groups',
         params: {'p_user_id': widget.userId},
       );
+      // CHANGE #367 — fetch lead_code straight off pending_orders for this user
+      // (the RPC payload doesn't include it) to complete the traceability chain.
+      var leadCodes = <String, String?>{};
+      try {
+        final rows = await Supabase.instance.client
+            .from('pending_orders')
+            .select('id, lead_code')
+            .eq('user_id', widget.userId);
+        for (final r in rows as List) {
+          final m = Map<String, dynamic>.from(r as Map);
+          leadCodes[m['id'] as String] = m['lead_code'] as String?;
+        }
+      } catch (_) {}
       if (mounted) {
         setState(() {
           _data = Map<String, dynamic>.from(res as Map);
+          _leadCodes = leadCodes;
           _loading = false;
         });
         _loadTodaySignedUrls();
@@ -6615,6 +6814,11 @@ class _WaOrderPanelState extends State<_WaOrderPanel> {
     final convertedCode = image['converted_order_code'] as String?;
     final isConverting = _converting.contains(imageId);
     final vt = _imgViewTypes[imageId];
+    // CHANGE #367 — traceability: photo -> lead -> order -> success.
+    final leadCode = _leadCodes[imageId];
+    if (leadCode != null) {
+      RenderLog.write('c367_trace', 'lead_code:$leadCode,order:${convertedCode ?? ''}');
+    }
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
@@ -6634,6 +6838,28 @@ class _WaOrderPanelState extends State<_WaOrderPanel> {
                   width: 24, height: 24,
                   child: CircularProgressIndicator(strokeWidth: 2))),
         ),
+        if (leadCode != null) ...[
+          const SizedBox(height: 8),
+          Row(children: [
+            Text('Lead $leadCode',
+                style: const TextStyle(
+                    fontSize: 11, color: Color(0xFF4338CA), fontFamily: 'monospace')),
+            if (isDone && convertedCode != null) ...[
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 4),
+                child: Icon(Icons.arrow_forward, size: 11, color: Color(0xFF9CA3AF)),
+              ),
+              Text('Order $convertedCode',
+                  style: const TextStyle(
+                      fontSize: 11, color: Color(0xFF065F46), fontFamily: 'monospace')),
+            ] else
+              const Padding(
+                padding: EdgeInsets.only(left: 6),
+                child: Text('(not yet converted)',
+                    style: TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
+              ),
+          ]),
+        ],
         if (caption.isNotEmpty) ...[
           const SizedBox(height: 8),
           Text(caption, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
@@ -6771,3 +6997,226 @@ class _WaTabChip extends StatelessWidget {
   }
 }
 
+
+// ── CHANGE #367 — "Lead" badge (pending_orders row not yet converted) ───────
+
+class _LeadBadge extends StatelessWidget {
+  const _LeadBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: const Color(0xFFEEF2FF),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: const Color(0xFF4F46E5).withValues(alpha: 0.35)),
+      ),
+      child: const Text('Lead',
+          style: TextStyle(
+              fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF4338CA))),
+    );
+  }
+}
+
+// ── CHANGE #367 — single-lead WhatsApp photo + Convert-to-Order panel ───────
+// Unlike _WaOrderPanel (groups ALL of a user's WA images by day, keyed by
+// userId — needed when userId is already known and there may be several),
+// a lead row already IS one specific pending_orders row, so this panel shows
+// just that one photo. It reuses wa_convert_start() and the exact same
+// BulkUploadScreen.startWaConvert() hand-off as the existing flow, unchanged.
+class _LeadConvertPanel extends StatefulWidget {
+  final _WaLeadRow lead;
+  final VoidCallback onRefresh;
+  const _LeadConvertPanel({required this.lead, required this.onRefresh});
+
+  @override
+  State<_LeadConvertPanel> createState() => _LeadConvertPanelState();
+}
+
+class _LeadConvertPanelState extends State<_LeadConvertPanel> {
+  String? _viewType;
+  bool _converting = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadImage();
+    RenderLog.write('c367_lead_panel', widget.lead.leadCode);
+  }
+
+  Future<void> _loadImage() async {
+    try {
+      final url = await Supabase.instance.client.storage
+          .from('whatsapp-media')
+          .createSignedUrl(widget.lead.filePath, 3600);
+      if (!mounted) return;
+      final vt = 'wa-lead-img-${widget.lead.id}';
+      final capturedCtx = context;
+      ui_web.platformViewRegistry.registerViewFactory(vt, (int viewId) {
+        final img = html.ImageElement()
+          ..src = url
+          ..style.width = '100%'
+          ..style.height = '100%'
+          ..style.objectFit = 'contain'
+          ..style.background = '#F3F4F6'
+          ..style.cursor = 'pointer';
+        img.onClick.listen((_) => openFullscreenImage(capturedCtx, url));
+        return img;
+      });
+      if (mounted) setState(() => _viewType = vt);
+    } catch (e) {
+      if (mounted) setState(() => _error = e.toString());
+    }
+  }
+
+  Future<void> _convert() async {
+    if (_converting) return;
+    setState(() => _converting = true);
+    final viewAs = ViewAsState.of(context);
+    final scaffoldCtx = context;
+    try {
+      final res = await Supabase.instance.client
+          .rpc('wa_convert_start', params: {'p_image_id': widget.lead.id});
+      final data = Map<String, dynamic>.from(res as Map);
+      if (data['ok'] != true) {
+        if (mounted) {
+          showToast(scaffoldCtx, 'Convert start failed', isError: true);
+          setState(() => _converting = false);
+        }
+        return;
+      }
+      final filePath = data['file_path'] as String;
+      final userId = data['user_id'] as String;
+
+      final bytes = await Supabase.instance.client.storage
+          .from('whatsapp-media')
+          .download(filePath);
+
+      if (!mounted) return;
+
+      final pharmacyName = widget.lead.pharmacy.isNotEmpty
+          ? widget.lead.pharmacy
+          : widget.lead.customerName;
+      viewAs.activate(
+        ViewAsRole.customer,
+        ViewAsIdentity(
+          id: userId,
+          name: pharmacyName,
+          email: '',
+          userId: userId,
+          isApproved: widget.lead.isApproved,
+        ),
+      );
+
+      RenderLog.write('c367_convert', widget.lead.leadCode);
+
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        BulkUploadScreen.startWaConvert(
+          imageBytes: bytes,
+          mimeType: 'image/jpeg',
+          imageName: 'wa_order_${widget.lead.id.substring(0, 8)}.jpg',
+          imageId: widget.lead.id,
+          userId: userId,
+          customerName: widget.lead.customerName,
+          pharmacy: widget.lead.pharmacy,
+          phone: widget.lead.phone,
+          address: '',
+          isApproved: widget.lead.isApproved,
+        );
+        BulkUploadScreen.navToBulkUpload?.call();
+      });
+      widget.onRefresh();
+    } catch (e) {
+      if (mounted) {
+        showToast(scaffoldCtx, 'Convert failed: $e', isError: true);
+        setState(() => _converting = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF0FDF4),
+        border: Border(
+          top: BorderSide(color: const Color(0xFF1B7A43).withValues(alpha: 0.2)),
+          bottom: BorderSide(color: const Color(0xFF1B7A43).withValues(alpha: 0.2)),
+        ),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          const Icon(Icons.chat_outlined, size: 16, color: Color(0xFF1B7A43)),
+          const SizedBox(width: 8),
+          Text('Lead ${widget.lead.leadCode}',
+              style: const TextStyle(
+                  fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF1B7A43))),
+        ]),
+        const SizedBox(height: 12),
+        Container(
+          height: 240,
+          width: double.infinity,
+          decoration: BoxDecoration(
+            color: const Color(0xFFE5E7EB),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          clipBehavior: Clip.hardEdge,
+          child: _error != null
+              ? const Center(
+                  child: Text('Couldn’t load photo',
+                      style: TextStyle(fontSize: 12, color: Color(0xFF991B1B))))
+              : (_viewType != null
+                  ? HtmlElementView(viewType: _viewType!)
+                  : const Center(
+                      child: SizedBox(
+                          width: 24,
+                          height: 24,
+                          child: CircularProgressIndicator(strokeWidth: 2)))),
+        ),
+        const SizedBox(height: 12),
+        // Convert button — same amber pending style as the order-row WA panel
+        SizedBox(
+          width: double.infinity,
+          child: GestureDetector(
+            onTap: _converting ? null : _convert,
+            child: Container(
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFEF3C7),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFFD97706).withValues(alpha: 0.5)),
+              ),
+              alignment: Alignment.center,
+              child: _converting
+                  ? const Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: Color(0xFF92400E)),
+                        ),
+                        SizedBox(width: 8),
+                        Text('Opening…',
+                            style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                                color: Color(0xFF92400E))),
+                      ],
+                    )
+                  : const Text('Convert to Order',
+                      style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFF92400E))),
+            ),
+          ),
+        ),
+      ]),
+    );
+  }
+}

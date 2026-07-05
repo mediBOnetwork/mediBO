@@ -7213,10 +7213,11 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
         }
       } catch (_) {}
 
+      // #345: no p_stage — review popup must show clips from ALL stages
+      // (shop + warehouse) for this supplier, not just the tab it was opened from.
       final rows = await Supabase.instance.client
           .rpc('get_voice_clip_mentions', params: {
             'p_supplier_name': widget.supplierName,
-            'p_stage': widget.stage,
           }) as List;
       if (!mounted) return;
       var mentions = rows.map((r) => Map<String, dynamic>.from(r as Map)).toList();

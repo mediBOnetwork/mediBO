@@ -498,72 +498,83 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     String origMimeType,
     String fileName,
   ) async {
-    final bNames = <String>[];
-    final bQtys = <int>[];
-    final bNameBboxes = <Rect?>[];
-    final bLineBboxes = <Rect?>[];
-    for (final item in extracted) {
-      final name = item['name']?.toString().trim() ?? '';
-      final qty = (int.tryParse(item['qty']?.toString() ?? '') ?? 1).clamp(1, 99999);
-      if (name.isNotEmpty) {
-        Rect? lineBbox;
-        Rect? nameBbox;
-        if (origImageSize != null) {
-          Rect? parseBox(dynamic raw) {
-            if (raw is! List || raw.length != 4) return null;
-            final yMin = (raw[0] as num).toDouble() / 1000;
-            final xMin = (raw[1] as num).toDouble() / 1000;
-            final yMax = (raw[2] as num).toDouble() / 1000;
-            final xMax = (raw[3] as num).toDouble() / 1000;
-            final w = (xMax - xMin).clamp(0.0, 1.0);
-            final h = (yMax - yMin).clamp(0.0, 1.0);
-            return (w > 0 && h > 0) ? Rect.fromLTWH(xMin, yMin, w, h) : null;
-          }
-          lineBbox = parseBox(item['box_2d']);
-          nameBbox = parseBox(item['name_box_2d']);
-          if (nameBbox == null ||
-              (lineBbox != null && nameBbox.width < lineBbox.width * 0.15)) {
-            nameBbox = lineBbox;
-          }
-          if (lineBbox == null) {
-            final bm = item['bbox'] as Map<String, dynamic>?;
-            if (bm != null) {
-              final bx = (bm['x'] as num?)?.toDouble() ?? 0;
-              final by = (bm['y'] as num?)?.toDouble() ?? 0;
-              final bw = (bm['w'] as num?)?.toDouble() ?? 0;
-              final bh = (bm['h'] as num?)?.toDouble() ?? 0;
-              if (bw > 0 && bh > 0) {
-                lineBbox = Rect.fromLTWH(bx, by, bw, bh);
-                nameBbox = lineBbox;
+    try {
+      final bNames = <String>[];
+      final bQtys = <int>[];
+      final bNameBboxes = <Rect?>[];
+      final bLineBboxes = <Rect?>[];
+      for (final item in extracted) {
+        final name = item['name']?.toString().trim() ?? '';
+        final qty = (int.tryParse(item['qty']?.toString() ?? '') ?? 1).clamp(1, 99999);
+        if (name.isNotEmpty) {
+          Rect? lineBbox;
+          Rect? nameBbox;
+          if (origImageSize != null) {
+            Rect? parseBox(dynamic raw) {
+              if (raw is! List || raw.length != 4) return null;
+              final yMin = (raw[0] as num).toDouble() / 1000;
+              final xMin = (raw[1] as num).toDouble() / 1000;
+              final yMax = (raw[2] as num).toDouble() / 1000;
+              final xMax = (raw[3] as num).toDouble() / 1000;
+              final w = (xMax - xMin).clamp(0.0, 1.0);
+              final h = (yMax - yMin).clamp(0.0, 1.0);
+              return (w > 0 && h > 0) ? Rect.fromLTWH(xMin, yMin, w, h) : null;
+            }
+            lineBbox = parseBox(item['box_2d']);
+            nameBbox = parseBox(item['name_box_2d']);
+            if (nameBbox == null ||
+                (lineBbox != null && nameBbox.width < lineBbox.width * 0.15)) {
+              nameBbox = lineBbox;
+            }
+            if (lineBbox == null) {
+              final bm = item['bbox'] as Map<String, dynamic>?;
+              if (bm != null) {
+                final bx = (bm['x'] as num?)?.toDouble() ?? 0;
+                final by = (bm['y'] as num?)?.toDouble() ?? 0;
+                final bw = (bm['w'] as num?)?.toDouble() ?? 0;
+                final bh = (bm['h'] as num?)?.toDouble() ?? 0;
+                if (bw > 0 && bh > 0) {
+                  lineBbox = Rect.fromLTWH(bx, by, bw, bh);
+                  nameBbox = lineBbox;
+                }
               }
             }
           }
+          bNames.add(name);
+          bQtys.add(qty);
+          bNameBboxes.add(nameBbox);
+          bLineBboxes.add(lineBbox ?? nameBbox);
         }
-        bNames.add(name);
-        bQtys.add(qty);
-        bNameBboxes.add(nameBbox);
-        bLineBboxes.add(lineBbox ?? nameBbox);
+      }
+      if (!mounted) return;
+
+      final rows = await _bulkMatchRpc(bNames, bQtys, bNameBboxes, bLineBboxes);
+      if (!mounted) return;
+      setState(() => _matchProgress = rows.length);
+
+      // CHANGE #375 — photo-crop generation removed entirely (each row now
+      // shows its name-only text, see _lineItemCrop). origImageBytes/
+      // origImageSize are still accepted here for the blank-line re-OCR retry
+      // path elsewhere, which reads row.bbox directly from the uploaded image.
+      if (!mounted) return;
+      setState(() {
+        _rows = rows;
+        _isFromFile = true;
+        _step = _LoadStep.idle;
+        _bulkLineItemMap = {};
+      });
+      _saveSession();
+      unawaited(_autoRetryUnrecognized());
+    } finally {
+      // CHANGE #379 — guarantee the loading state can never hang: if
+      // anything above throws before reaching the normal completion
+      // setState, force _step back to idle here so the UI is never stuck
+      // showing a loading stage forever. No-op on the normal success path
+      // (already idle by the time this runs).
+      if (mounted && _step != _LoadStep.idle) {
+        setState(() => _step = _LoadStep.idle);
       }
     }
-    if (!mounted) return;
-
-    final rows = await _bulkMatchRpc(bNames, bQtys, bNameBboxes, bLineBboxes);
-    if (!mounted) return;
-    setState(() => _matchProgress = rows.length);
-
-    // CHANGE #375 — photo-crop generation removed entirely (each row now
-    // shows its name-only text, see _lineItemCrop). origImageBytes/
-    // origImageSize are still accepted here for the blank-line re-OCR retry
-    // path elsewhere, which reads row.bbox directly from the uploaded image.
-    if (!mounted) return;
-    setState(() {
-      _rows = rows;
-      _isFromFile = true;
-      _step = _LoadStep.idle;
-      _bulkLineItemMap = {};
-    });
-    _saveSession();
-    unawaited(_autoRetryUnrecognized());
   }
 
   Future<void> _loadSession() async {
@@ -1722,13 +1733,9 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     );
   }
 
-  // CHANGE #376 — chunked so the "Matching medicines…" bar advances in real
-  // steps instead of jumping 0 -> 100 after one giant call. bulk_match_items
-  // already scores a subset identically to the full list (backend fact), so
-  // calling it repeatedly with slices produces IDENTICAL combined results —
-  // only the call batching + progress reporting changed.
-  static const int _kBulkMatchChunkSize = 4;
-
+  // CHANGE #379 — REVERTED #376's chunked-loop + animated bar: it froze Bulk
+  // Upload on "AI is identifying items…" for real order lists. Restored the
+  // single bulk_match_items call that worked before #376.
   Future<List<_MatchRow>> _bulkMatchRpc(
     List<String> names,
     List<int> qtys,
@@ -1736,47 +1743,37 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     List<Rect?> lineBboxes,
   ) async {
     if (names.isEmpty) return [];
-    final total = names.length;
-    final rows = <_MatchRow>[];
     try {
-      for (int start = 0; start < total; start += _kBulkMatchChunkSize) {
-        final end = (start + _kBulkMatchChunkSize).clamp(0, total);
-        final chunkNames = names.sublist(start, end);
-        final chunkQtys = qtys.sublist(start, end);
-        final payload = List.generate(chunkNames.length,
-            (i) => {'name': chunkNames[i], 'qty': chunkQtys[i].toString()});
-        try { RenderLog.write('c320_bulk_uses_rpc', 'count:${chunkNames.length}'); } catch (_) {}
-        try { RenderLog.write('c321_bulk_rpc', 'count:${chunkNames.length}'); } catch (_) {}
-        final resp = await Supabase.instance.client
-            .rpc('bulk_match_items', params: {'p_items': payload});
-        if (resp is Map && resp['status'] == 'ok') {
-          final ri = (resp['items'] as List<dynamic>?) ?? [];
-          for (int i = 0; i < chunkNames.length; i++) {
-            final itemData = i < ri.length
-                ? ri[i] as Map<String, dynamic>
-                : <String, dynamic>{};
-            final globalIdx = start + i;
-            final row = _rowFromBulkResult(
-                chunkNames[i], chunkQtys[i], itemData, nameBboxes[globalIdx]);
-            row.lineBbox = lineBboxes[globalIdx];
-            rows.add(row);
-          }
-        } else {
-          throw Exception('unexpected response shape');
-        }
-        if (!mounted) return rows;
-        try {
-          RenderLog.write('bulk_match_progress_376', 'matched:${rows.length}/$total');
-        } catch (_) {}
-        setState(() => _matchProgress = rows.length);
+      try {
+        RenderLog.write('bulk_match_single_379', 'count:${names.length}');
+      } catch (_) {}
+      final payload = List.generate(
+          names.length, (i) => {'name': names[i], 'qty': qtys[i].toString()});
+      try { RenderLog.write('c320_bulk_uses_rpc', 'count:${names.length}'); } catch (_) {}
+      try { RenderLog.write('c321_bulk_rpc', 'count:${names.length}'); } catch (_) {}
+      final resp = await Supabase.instance.client
+          .rpc('bulk_match_items', params: {'p_items': payload});
+      if (resp is Map && resp['status'] == 'ok') {
+        final ri = (resp['items'] as List<dynamic>?) ?? [];
+        return List.generate(names.length, (i) {
+          final itemData = i < ri.length
+              ? ri[i] as Map<String, dynamic>
+              : <String, dynamic>{};
+          final row = _rowFromBulkResult(names[i], qtys[i], itemData, nameBboxes[i]);
+          row.lineBbox = lineBboxes[i];
+          return row;
+        });
       }
-      return rows;
+      throw Exception('unexpected response shape');
     } catch (e) {
-      // CHANGE #376 — a chunk failed: keep whatever matched so far, stop the
-      // loop (no fallback re-processing, no retries), let the caller display
-      // the partial result exactly as it already does today for any partial
-      // row list.
-      debugPrint('[BulkMatch] Chunked RPC failed after ${rows.length}/$total rows: $e');
+      debugPrint('[BulkMatch] RPC failed: $e — falling back to _matchOne per row');
+      final rows = <_MatchRow>[];
+      for (int i = 0; i < names.length; i++) {
+        if (!mounted) return rows;
+        final row = await _matchOne(names[i], qtys[i], bbox: nameBboxes[i]);
+        row.lineBbox = lineBboxes[i];
+        rows.add(row);
+      }
       return rows;
     }
   }
@@ -3218,16 +3215,15 @@ class _TwoStageProgressBar extends StatefulWidget {
   State<_TwoStageProgressBar> createState() => _TwoStageProgressBarState();
 }
 
+// CHANGE #379 — reverted to the pre-#376 simple/indeterminate bar: the
+// per-chunk eased version (TweenAnimationBuilder) is gone along with the
+// chunked match loop that fed it.
 class _TwoStageProgressBarState extends State<_TwoStageProgressBar>
     with SingleTickerProviderStateMixin {
   late AnimationController _ctrl;
   late Animation<double> _anim;
   bool _stage1Logged = false;
   bool _stage2Logged = false;
-  // CHANGE #376 — last eased value shown for the matching-stage bar, so each
-  // new matchProgress update (one per chunk) eases FROM here rather than
-  // snapping straight to the new ratio.
-  double _lastShownMatch = 0.0;
 
   @override
   void initState() {
@@ -3264,51 +3260,41 @@ class _TwoStageProgressBarState extends State<_TwoStageProgressBar>
     super.dispose();
   }
 
-  Widget _bar(double value) => ClipRRect(
-        borderRadius: BorderRadius.circular(4),
-        child: LinearProgressIndicator(
-          value: value,
-          backgroundColor: const Color(0xFFE5E7EB),
-          valueColor: const AlwaysStoppedAnimation(Color(0xFF16A34A)),
-          minHeight: 6,
-        ),
-      );
-
-  Widget _label() => Text(
-        widget.isOcrStage
-            ? 'AI is identifying items…'
-            : 'Matching medicines with database…',
-        textAlign: TextAlign.center,
-        style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
-      );
-
   @override
   Widget build(BuildContext context) {
-    // CHANGE #376 — matching stage now eases toward each real
-    // matchProgress/matchTotal update (one per chunk) instead of snapping
-    // straight to the raw ratio, so a handful of chunk-sized steps reads as
-    // a smooth, continuous fill rather than a 0 -> 100 jump.
-    if (!widget.isOcrStage && widget.matchTotal > 0) {
-      final target = widget.matchProgress / widget.matchTotal;
-      return TweenAnimationBuilder<double>(
-        tween: Tween<double>(begin: _lastShownMatch, end: target),
-        duration: const Duration(milliseconds: 220),
-        curve: Curves.easeOut,
-        onEnd: () => _lastShownMatch = target,
-        builder: (ctx, v, child) => Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [_bar(v), const SizedBox(height: 10), _label()],
-        ),
-      );
-    }
     return AnimatedBuilder(
       animation: _anim,
-      builder: (ctx, _) => Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [_bar(_anim.value), const SizedBox(height: 10), _label()],
-      ),
+      builder: (ctx, _) {
+        final double barValue;
+        if (!widget.isOcrStage && widget.matchTotal > 0) {
+          barValue = widget.matchProgress / widget.matchTotal;
+        } else {
+          barValue = _anim.value;
+        }
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: LinearProgressIndicator(
+                value: barValue,
+                backgroundColor: const Color(0xFFE5E7EB),
+                valueColor: const AlwaysStoppedAnimation(Color(0xFF16A34A)),
+                minHeight: 6,
+              ),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              widget.isOcrStage
+                  ? 'AI is identifying items…'
+                  : 'Matching medicines with database…',
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+            ),
+          ],
+        );
+      },
     );
   }
 }

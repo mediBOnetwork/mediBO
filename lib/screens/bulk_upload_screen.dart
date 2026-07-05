@@ -3975,6 +3975,9 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
 /// proportional width, smooth black strokes, transparent background, no caption).
 /// Falls back to the digital parsed name only when no crop is available.
 Widget _lineItemCrop(_MatchRow row, Size? imageSize, {TextStyle? fallbackStyle}) {
+  // CHANGE #372 — appearance-only visibility fix for the original scanned
+  // line (this element only). No OCR/matching/quantity/logic touched.
+  try { RenderLog.write('bulk_lineitem_visible_372', row.processedCrop != null ? 'image' : 'text'); } catch (_) {}
   if (row.processedCrop != null) {
     final crop = row.processedCrop!;
     return Tooltip(
@@ -3985,10 +3988,21 @@ Widget _lineItemCrop(_MatchRow row, Size? imageSize, {TextStyle? fallbackStyle})
         return FittedBox(
           fit: BoxFit.scaleDown,
           alignment: Alignment.centerLeft,
-          child: Image.memory(
-            crop,
-            filterQuality: FilterQuality.high,
-            gaplessPlayback: true,
+          // CHANGE #372 — presentation-only contrast boost (darkens ink,
+          // whitens paper) so faint low-light pen photos stay readable.
+          // No pixel data persisted; this is a display-time filter only.
+          child: ColorFiltered(
+            colorFilter: const ColorFilter.matrix(<double>[
+              1.8, 0, 0, 0, -102,
+              0, 1.8, 0, 0, -102,
+              0, 0, 1.8, 0, -102,
+              0, 0, 0, 1, 0,
+            ]),
+            child: Image.memory(
+              crop,
+              filterQuality: FilterQuality.high,
+              gaplessPlayback: true,
+            ),
           ),
         );
       }),
@@ -3998,11 +4012,14 @@ Widget _lineItemCrop(_MatchRow row, Size? imageSize, {TextStyle? fallbackStyle})
   // Fallback: show digital parsed name so no row is ever blank.
   debugPrint('[CropFallback] "${row.lineItem}": no processedCrop '
       '(bbox=${row.bbox != null ? "ok" : "NULL"})');
+  // CHANGE #372 — dark, high-contrast, larger/bolder default fallback style
+  // (was light-grey 0xFF9CA3AF @ 13px); maxLines bumped 1 → 2 so a long
+  // scanned line never clips to nothing.
   return Text(row.lineItem,
-      maxLines: 1,
+      maxLines: 2,
       overflow: TextOverflow.ellipsis,
       style: fallbackStyle ??
-          const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)));
+          const TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: Colors.black87));
 }
 
 const _kTh = TextStyle(
@@ -4631,14 +4648,16 @@ class _MobileExpandableRowState extends State<_MobileExpandableRow>
                             crossAxisAlignment: CrossAxisAlignment.center,
                             children: [
                               // Handwritten-crop image expands to fill all remaining width.
+                              // CHANGE #372 — height bumped 24 → 48px (readable range for
+                              // the scanned-line crop image; text/appearance only).
                               Expanded(
                                 child: SizedBox(
-                                  height: 24,
+                                  height: 48,
                                   child: _lineItemCrop(
                                       row,
                                       widget.uploadedImageSize,
                                       fallbackStyle: const TextStyle(
-                                          fontSize: 13,
+                                          fontSize: 14,
                                           fontWeight: FontWeight.w700,
                                           color: Color(0xFF111827))),
                                 ),

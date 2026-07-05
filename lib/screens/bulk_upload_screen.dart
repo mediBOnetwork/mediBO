@@ -2,7 +2,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:html' as html;
-import 'dart:math' show sqrt;
 import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
@@ -43,11 +42,12 @@ class _MatchRow {
   _MatchStatus? _preHideStatus; // saved on hide, restored on unhide
   final String _displaySku;
   final String _displayPrice;
-  final Rect? bbox;     // name_box_2d — drives the crop thumbnail
+  final Rect? bbox;     // name_box_2d — used by the blank-line re-OCR retry
   Rect? lineBbox;       // whole-line box_2d — used for vertical clamp calculation only
-  // Handwriting crop PNG (grayscale→alpha, black ink, transparent bg).
-  // Set after canvas processing in _pickAndProcess; never serialized.
-  Uint8List? processedCrop;
+  // CHANGE #375 — the medicine-name-only text bulk_match_items already
+  // returns per line (item['input'], fallback item['clean']). Replaces the
+  // photo-crop thumbnail that used to render here (removed entirely).
+  final String? inputName;
 
   // Product chosen via the per-line manual search field (overrides selectedIndex).
   Product? _manualProduct;
@@ -65,6 +65,7 @@ class _MatchRow {
     String displaySku = 'No match found',
     String displayPrice = '-',
     this.bbox,
+    this.inputName,
   })  : _preHideStatus = preHideStatus,
         _displaySku = displaySku,
         _displayPrice = displayPrice;
@@ -109,6 +110,7 @@ class _MatchRow {
         if (_previousLine1 != null) 'previousLine1': _previousLine1!.toJson(),
         if (bbox     != null) 'bbox':     {'x': bbox!.left,     'y': bbox!.top,     'w': bbox!.width,     'h': bbox!.height},
         if (lineBbox != null) 'lineBbox': {'x': lineBbox!.left, 'y': lineBbox!.top, 'w': lineBbox!.width, 'h': lineBbox!.height},
+        if (inputName != null) 'inputName': inputName,
       };
 
   factory _MatchRow.fromJson(Map<String, dynamic> m) {
@@ -143,6 +145,7 @@ class _MatchRow {
               .toList() ??
           [],
       bbox: bbox,
+      inputName: m['inputName'] as String?,
     );
     final mp = m['manualProduct'] as Map<String, dynamic>?;
     if (mp != null) row._manualProduct = Product.fromJson(mp);
@@ -281,9 +284,6 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
   Uint8List? _uploadedImageBytes;
   Size? _uploadedImageSize;
   String? _uploadedMimeType;
-  // Shared crop scale: ONE value for ALL rows so every crop renders at the
-  // same apparent handwriting size. Computed from median line height after OCR.
-  double? _cropGlobalScale;
 
   // Static (session-lifetime) cache of the last uploaded image.
   // Survives State recreation caused by GlobalKey reparenting failures,
@@ -551,35 +551,10 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     if (!mounted) return;
     setState(() => _matchProgress = rows.length);
 
-    if (origImageBytes != null && origImageSize != null) {
-      final imgEl = await _loadImageForProcessing(origImageBytes, origMimeType);
-      if (imgEl != null) {
-        final srcW = imgEl.naturalWidth;
-        final srcH = imgEl.naturalHeight;
-        const targetHeightPx = 46.0;
-        final lineHeights = rows
-            .where((r) => r.lineBbox != null)
-            .map((r) => r.lineBbox!.height * srcH)
-            .toList()..sort();
-        double globalScale = 0.4;
-        if (lineHeights.isNotEmpty) {
-          final median = lineHeights[lineHeights.length ~/ 2];
-          if (median > 0) globalScale = targetHeightPx / median;
-        }
-        _cropGlobalScale = globalScale;
-        for (int ri = 0; ri < rows.length; ri++) {
-          final row = rows[ri];
-          if (row.bbox == null) continue;
-          final lineBbox = row.lineBbox ?? row.bbox!;
-          final prevLineBbox = ri > 0 ? (rows[ri - 1].lineBbox ?? rows[ri - 1].bbox) : null;
-          final nextLineBbox = ri < rows.length - 1 ? (rows[ri + 1].lineBbox ?? rows[ri + 1].bbox) : null;
-          row.processedCrop = _processOneCrop(
-            imgEl, srcW, srcH, row.bbox!, lineBbox, globalScale,
-            prevLineBbox: prevLineBbox, nextLineBbox: nextLineBbox,
-          );
-        }
-      }
-    }
+    // CHANGE #375 — photo-crop generation removed entirely (each row now
+    // shows its name-only text, see _lineItemCrop). origImageBytes/
+    // origImageSize are still accepted here for the blank-line re-OCR retry
+    // path elsewhere, which reads row.bbox directly from the uploaded image.
     if (!mounted) return;
     setState(() {
       _rows = rows;
@@ -604,28 +579,26 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       final lineItemMap = (m['bulkLineItemMap'] as Map<String, dynamic>?)
               ?.map((k, v) => MapEntry(k, v as String)) ??
           {};
-      final savedScale = (m['cropGlobalScale'] as num?)?.toDouble();
       if (rows.isNotEmpty && mounted) {
         setState(() {
           _rows = rows;
           _fileName = fileName;
           _isFromFile = true;
           _bulkLineItemMap = lineItemMap;
-          if (savedScale != null) _cropGlobalScale = savedScale;
         });
         // Rehydrate image bytes: prefer static cache (survives layout reparent);
-        // fall back to SharedPreferences (survives page refresh).
+        // fall back to SharedPreferences (survives page refresh). Still needed
+        // for the blank-line re-OCR retry path, which reads row.bbox against
+        // the uploaded image directly (no crop generation happens here anymore).
         if (_uploadedImageBytes == null && _cachedImageBytes != null) {
           _uploadedImageBytes = _cachedImageBytes;
           _uploadedImageSize = _cachedImageSize;
           _uploadedMimeType = _cachedMimeType ?? 'image/jpeg';
           debugPrint('[BulkUpload] Rehydrated ${_cachedImageBytes!.length} B image from static cache');
-          _reprocessCropsFromCache();
         } else if (_uploadedImageBytes == null) {
           final loaded = await _loadImageFromPrefs();
           if (loaded && mounted) {
             debugPrint('[BulkUpload] Rehydrated ${_uploadedImageBytes!.length} B image from prefs');
-            _reprocessCropsFromCache();
           }
         }
       }
@@ -640,7 +613,6 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         'fileName': _fileName,
         'rows': _rows.map((r) => r.toJson()).toList(),
         'bulkLineItemMap': _bulkLineItemMap,
-        if (_cropGlobalScale != null) 'cropGlobalScale': _cropGlobalScale,
       }),
     );
   }
@@ -652,43 +624,6 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     _cachedImageSize = null;
     _cachedMimeType = null;
     await _clearImageFromPrefs();
-  }
-
-  // Reprocesses crops for rows that have a bbox but no processedCrop yet.
-  // Called after State rehydrates from the static image cache (i.e., after State
-  // was recreated and _loadSession restored rows-with-bboxes but lost processedCrop).
-  Future<void> _reprocessCropsFromCache() async {
-    final bytes = _uploadedImageBytes;
-    final mime = _uploadedMimeType ?? 'image/jpeg';
-    if (bytes == null) return;
-    final imgEl = await _loadImageForProcessing(bytes, mime);
-    if (imgEl == null || !mounted) return;
-    final srcW = imgEl.naturalWidth;
-    final srcH = imgEl.naturalHeight;
-    // Re-derive globalScale from restored rows if not already in state.
-    double? gs = _cropGlobalScale;
-    if (gs == null) {
-      final heights = _rows
-          .where((r) => r.lineBbox != null)
-          .map((r) => r.lineBbox!.height * srcH)
-          .toList()..sort();
-      if (heights.isNotEmpty) {
-        final median = heights[heights.length ~/ 2];
-        if (median > 0) gs = 30.0 / median;
-      }
-    }
-    if (gs == null) return;
-    bool anyUpdated = false;
-    for (int ri = 0; ri < _rows.length; ri++) {
-      final row = _rows[ri];
-      if (row.processedCrop == null && row.bbox != null) {
-        row.processedCrop = _processOneCrop(
-          imgEl, srcW, srcH, row.bbox!, row.lineBbox ?? row.bbox!, gs);
-        debugPrint('[Crop] Reprocessed "${row.lineItem}" → ${row.processedCrop?.length ?? 0} B');
-        anyUpdated = true;
-      }
-    }
-    if (anyUpdated && mounted) setState(() {});
   }
 
   String get _loadingMessage {
@@ -1206,209 +1141,10 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     }
   }
 
-  /// Generates a crop PNG using a SHARED globalScale so every row's handwriting
-  /// renders at the same apparent height.
-  ///
-  /// [nameBbox]  — name_box_2d (0–1): x left-anchor, gives first letter position.
-  /// [lineBbox]    — box_2d (0–1): this line's vertical extent.
-  /// [globalScale] — pixels-per-source-pixel, same value for every row.
-  /// [prevLineBbox]/[nextLineBbox] — adjacent lines for midpoint-clamped erase.
-  ///
-  /// Output: height = round(actualSrcH * globalScale), width = name width at globalScale + margin.
-  Uint8List? _processOneCrop(
-    html.ImageElement img, int srcW, int srcH,
-    Rect nameBbox, Rect lineBbox, double globalScale, {
-    Rect? prevLineBbox,
-    Rect? nextLineBbox,
-  }) {
-    try {
-      const leftPadPx = 3.0;    // output-px gap before first letter
-
-      // ── Vertical region ──────────────────────────────────────────────────────
-      // Use THIS line's own bbox extent + 12% padding each side.
-      // outH varies per row (taller lines get more pixels) but globalScale is
-      // shared, so apparent handwriting size stays constant across all rows.
-      final vPad = lineBbox.height * 0.12;
-      final srcTopRaw  = ((lineBbox.top  - vPad) * srcH).clamp(0.0, srcH.toDouble());
-      final srcBotRaw  = ((lineBbox.bottom + vPad) * srcH).clamp(0.0, srcH.toDouble());
-      final srcTop     = srcTopRaw;
-      final actualSrcH = (srcBotRaw - srcTopRaw).clamp(1.0, srcH - srcTop);
-      if (actualSrcH < 1) return null;
-
-      // ── Horizontal region ────────────────────────────────────────────────────
-      // Draw from name anchor to image right edge so we can pixel-snap the
-      // true ink extent (Gemini xmax is approximate and often too narrow).
-      final srcXStart = (nameBbox.left * srcW - leftPadPx / globalScale)
-          .clamp(0.0, srcW.toDouble());
-      final fullSrcRegionW = (srcW - srcXStart).clamp(1.0, srcW.toDouble());
-
-      final outH = (actualSrcH * globalScale).round().clamp(4, 300);
-
-      // ── Band boundaries (fractional image coords) ─────────────────────────────
-      final lineH = lineBbox.height;
-      final pad12 = lineH * 0.12;
-
-      final double safeTopFrac;
-      if (prevLineBbox != null) {
-        final midAbove = (prevLineBbox.bottom + lineBbox.top) / 2.0;
-        final inner    = lineBbox.top - pad12;
-        safeTopFrac    = inner < midAbove ? midAbove : inner;
-      } else {
-        safeTopFrac = lineBbox.top - pad12;
-      }
-
-      final double safeBotFrac;
-      if (nextLineBbox != null) {
-        final midBelow = (lineBbox.bottom + nextLineBbox.top) / 2.0;
-        final inner    = lineBbox.bottom + pad12;
-        safeBotFrac    = inner > midBelow ? midBelow : inner;
-      } else {
-        safeBotFrac = lineBbox.bottom + pad12;
-      }
-
-      // ── Draw at SOURCE resolution (full right extent) for binarization ──────
-      final srcCanvasW = fullSrcRegionW.round().clamp(1, 9999);
-      final srcCanvasH = actualSrcH.round().clamp(1, 300);
-
-      final srcCanvas = html.CanvasElement(width: srcCanvasW, height: srcCanvasH);
-      final srcCtx = srcCanvas.context2D;
-      srcCtx.fillStyle = '#ffffff';
-      srcCtx.fillRect(0, 0, srcCanvasW.toDouble(), srcCanvasH.toDouble());
-      srcCtx.drawImageScaledFromSource(
-        img,
-        srcXStart, srcTop, fullSrcRegionW, actualSrcH,
-        0, 0, srcCanvasW.toDouble(), srcCanvasH.toDouble(),
-      );
-
-      final srcImgData = srcCtx.getImageData(0, 0, srcCanvasW, srcCanvasH);
-      final data = srcImgData.data;
-
-      // Band + name-left boundaries in source canvas pixels
-      final srcBandTop = ((safeTopFrac * srcH - srcTop) / actualSrcH * srcCanvasH)
-          .clamp(0.0, srcCanvasH.toDouble()).round();
-      final srcBandBot = ((safeBotFrac * srcH - srcTop) / actualSrcH * srcCanvasH)
-          .clamp(0.0, srcCanvasH.toDouble()).round();
-      final srcNameLeft = (nameBbox.left * srcW - srcXStart - leftPadPx / globalScale)
-          .clamp(0.0, srcCanvasW.toDouble()).round();
-
-      // ── CHANGE #373: ink CLASSIFICATION only (Sauvola adaptive) — used
-      // solely to find where the handwritten ink ends, for the right-edge
-      // trim below. The pixel data (`data`) is NEVER overwritten here: a
-      // prior version of this function binarized every pixel (mapping paper
-      // to white / any stroke to black), which turned coloured ink — e.g.
-      // light-blue pen — into black specks. That whole code path is removed
-      // (not hidden behind a flag) so the crop keeps its true photographed
-      // colour; only the ink/not-ink classification is retained internally.
-      final bandH = srcBandBot - srcBandTop;
-      final inkMask = Uint8List(srcCanvasW * srcCanvasH); // 1 = ink, 0 = not
-      if (bandH > 0) {
-        // Window ≈ 1/3 of band height, forced odd, minimum 5
-        int winSize = ((bandH / 3.0).round() | 1);
-        if (winSize < 5) winSize = 5;
-        if (winSize % 2 == 0) winSize++;
-        final hw = winSize >> 1;
-        const double k = 0.2;
-        const double R = 128.0;
-
-        // Grayscale array (full canvas) — classification only, never drawn.
-        final gray = Float64List(srcCanvasW * srcCanvasH);
-        for (int py = 0; py < srcCanvasH; py++) {
-          for (int px = 0; px < srcCanvasW; px++) {
-            final i = (py * srcCanvasW + px) * 4;
-            gray[py * srcCanvasW + px] =
-                0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-          }
-        }
-
-        // Integral images (size (H+1)*(W+1))
-        final W1 = srcCanvasW + 1;
-        final sat  = Float64List(W1 * (srcCanvasH + 1));
-        final sat2 = Float64List(W1 * (srcCanvasH + 1));
-        for (int y = 1; y <= srcCanvasH; y++) {
-          for (int x = 1; x <= srcCanvasW; x++) {
-            final v = gray[(y - 1) * srcCanvasW + (x - 1)];
-            sat [y * W1 + x] = v     + sat [(y-1)*W1+x] + sat [y*W1+(x-1)] - sat [(y-1)*W1+(x-1)];
-            sat2[y * W1 + x] = v * v + sat2[(y-1)*W1+x] + sat2[y*W1+(x-1)] - sat2[(y-1)*W1+(x-1)];
-          }
-        }
-
-        for (int py = srcBandTop; py < srcBandBot; py++) {
-          for (int px = srcNameLeft; px < srcCanvasW; px++) {
-            final x1 = (px - hw).clamp(0, srcCanvasW);
-            final x2 = (px + hw + 1).clamp(0, srcCanvasW);
-            final y1 = (py - hw).clamp(0, srcCanvasH);
-            final y2 = (py + hw + 1).clamp(0, srcCanvasH);
-            final count = (x2 - x1) * (y2 - y1);
-            if (count == 0) continue;
-            final s  = sat [y2*W1+x2] - sat [y1*W1+x2] - sat [y2*W1+x1] + sat [y1*W1+x1];
-            final s2 = sat2[y2*W1+x2] - sat2[y1*W1+x2] - sat2[y2*W1+x1] + sat2[y1*W1+x1];
-            final mean = s / count;
-            final variance = (s2 / count - mean * mean).clamp(0.0, double.infinity);
-            final std = sqrt(variance);
-            final threshold = mean * (1.0 + k * (std / R - 1.0));
-            if (gray[py * srcCanvasW + px] < threshold) {
-              inkMask[py * srcCanvasW + px] = 1;
-            }
-          }
-        }
-      }
-
-      // ── Pixel-snap right edge: extend past Gemini's name xmax to true ink ────
-      // Strategy: scan from nameBbox.right up to lineBbox.right (Gemini's row
-      // boundary, which covers name + qty columns).  Stop early when a continuous
-      // ink-free gap ≥ 4 % of image width is found — that gap is the whitespace
-      // between the medicine name and the quantity column.  Cap at lineBbox.right
-      // so we never pull in content outside the row.
-      final nameXmaxCanvas = (nameBbox.right * srcW - srcXStart)
-          .clamp(0.0, srcCanvasW.toDouble());
-      final lineXmaxCanvas = (lineBbox.right * srcW - srcXStart)
-          .clamp(0.0, srcCanvasW.toDouble());
-      final gapThreshCols = (0.04 * srcW).ceil().clamp(3, srcCanvasW);
-      final rightPadSrcPx = (0.03 * srcW).ceil().clamp(4, srcCanvasW);
-
-      int inkRightCol = nameXmaxCanvas.round().clamp(0, srcCanvasW - 1);
-      int consecutiveGap = 0;
-      final scanLimit = lineXmaxCanvas.round().clamp(inkRightCol, srcCanvasW);
-      for (int px = inkRightCol; px < scanLimit; px++) {
-        // Require ≥2 ink pixels: single-pixel ruled lines are ignored.
-        int inkCount = 0;
-        for (int py = srcBandTop; py < srcBandBot; py++) {
-          if (inkMask[py * srcCanvasW + px] == 1) {
-            inkCount++;
-            if (inkCount >= 2) break;
-          }
-        }
-        if (inkCount >= 2) {
-          inkRightCol = px;
-          consecutiveGap = 0;
-        } else {
-          consecutiveGap++;
-          if (consecutiveGap >= gapThreshCols) break;
-        }
-      }
-      // Crop right = inkRightCol + right pad, bounded by canvas width.
-      final cropSrcW = (inkRightCol + rightPadSrcPx).clamp(1, srcCanvasW);
-      final outW = (cropSrcW * globalScale).round().clamp(10, 9999);
-
-      // ── Downscale ORIGINAL-COLOUR crop to output size (no binarization) ──────
-      final canvas = html.CanvasElement(width: outW, height: outH);
-      final ctx = canvas.context2D;
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, outW.toDouble(), outH.toDouble());
-      ctx.imageSmoothingEnabled = true;
-      ctx.drawImageScaledFromSource(
-        srcCanvas,
-        0, 0, cropSrcW.toDouble(), srcCanvasH.toDouble(),
-        0, 0, outW.toDouble(), outH.toDouble(),
-      );
-
-      final dataUrl = canvas.toDataUrl('image/png');
-      return base64Decode(dataUrl.split(',').last);
-    } catch (e) {
-      debugPrint('[CropProcess] Failed: $e');
-      return null;
-    }
-  }
+  // CHANGE #375 — _processOneCrop (the whole photo-crop generation pipeline:
+  // crop rect math, ink-mask classification, canvas draw/downscale) removed
+  // entirely. Each row now shows its name-only text (see _lineItemCrop)
+  // instead of a photo crop, so there is nothing left to feed.
 
   static bool _isNetworkOrApiError(Object e) {
     final msg = e.toString().toLowerCase();
@@ -1972,12 +1708,17 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     } else {
       matchStatus = _MatchStatus.unrecognized;
     }
+    // CHANGE #375 — name-only text (no qty), already returned by bulk_match_items.
+    final rawInput = (item['input'] as String?)?.trim() ?? '';
+    final rawClean = (item['clean'] as String?)?.trim() ?? '';
+    final inputName = rawInput.isNotEmpty ? rawInput : (rawClean.isNotEmpty ? rawClean : null);
     return _MatchRow(
       lineItem: name,
       qty: qty,
       status: matchStatus,
       candidates: candidates,
       bbox: bbox,
+      inputName: inputName,
     );
   }
 
@@ -2391,8 +2132,8 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
             isHidden: old.isHidden,
             preHideStatus: old._preHideStatus,
             bbox: old.bbox,
+            inputName: fresh.inputName,
           );
-          updated.processedCrop = old.processedCrop;
           if (mounted) setState(() => _rows[i] = updated);
         }
 
@@ -2515,8 +2256,8 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       isHidden: old.isHidden,
       preHideStatus: old._preHideStatus,
       bbox: old.bbox,
+      inputName: fresh.inputName,
     );
-    updated.processedCrop = old.processedCrop;
 
     if (mounted) setState(() => _rows[rowIndex] = updated);
     onProgress(1.0);
@@ -3949,45 +3690,18 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
 }
 
 
-/// Standard LINE ITEM renderer: shows the handwriting crop (constant height,
-/// proportional width, smooth black strokes, transparent background, no caption).
-/// Falls back to the digital parsed name only when no crop is available.
+/// CHANGE #375 — LINE ITEM renderer: plain NAME-ONLY text (item['input'],
+/// fallback item['clean'], fallback row.lineItem). The photo-crop thumbnail
+/// that used to render here (qty + line-above/below bleeding in) is removed
+/// entirely — see _MatchRow.inputName and _rowFromBulkResult. No matching /
+/// qty / availability / cart logic touched; the quantity box and everything
+/// else on the row is unchanged.
 Widget _lineItemCrop(_MatchRow row, Size? imageSize, {TextStyle? fallbackStyle}) {
-  // CHANGE #372 — appearance-only visibility fix for the original scanned
-  // line (this element only). No OCR/matching/quantity/logic touched.
-  try { RenderLog.write('bulk_lineitem_visible_372', row.processedCrop != null ? 'image' : 'text'); } catch (_) {}
-  if (row.processedCrop != null) {
-    final crop = row.processedCrop!;
-    return Tooltip(
-      message: row.lineItem,
-      waitDuration: const Duration(milliseconds: 400),
-      child: Builder(builder: (ctx) {
-        try { RenderLog.write('c316_img_contain', '1'); } catch (_) {}
-        // CHANGE #373 — no colour/threshold filter on the crop: render the
-        // line-region crop in its true photographed colour (a prior change's
-        // ColorFiltered contrast boost, #372, is removed here; the crop itself
-        // is no longer binarized either — see _processOneCrop).
-        try { RenderLog.write('crop_original_color_373', '1'); } catch (_) {}
-        return FittedBox(
-          fit: BoxFit.scaleDown,
-          alignment: Alignment.centerLeft,
-          child: Image.memory(
-            crop,
-            filterQuality: FilterQuality.high,
-            gaplessPlayback: true,
-          ),
-        );
-      }),
-    );
-  }
-
-  // Fallback: show digital parsed name so no row is ever blank.
-  debugPrint('[CropFallback] "${row.lineItem}": no processedCrop '
-      '(bbox=${row.bbox != null ? "ok" : "NULL"})');
-  // CHANGE #372 — dark, high-contrast, larger/bolder default fallback style
-  // (was light-grey 0xFF9CA3AF @ 13px); maxLines bumped 1 → 2 so a long
-  // scanned line never clips to nothing.
-  return Text(row.lineItem,
+  try { RenderLog.write('bulk_name_text_375', '1'); } catch (_) {}
+  final name = (row.inputName != null && row.inputName!.trim().isNotEmpty)
+      ? row.inputName!.trim()
+      : row.lineItem;
+  return Text(name,
       maxLines: 2,
       overflow: TextOverflow.ellipsis,
       style: fallbackStyle ??

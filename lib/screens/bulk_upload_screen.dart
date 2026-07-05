@@ -42,12 +42,12 @@ class _MatchRow {
   _MatchStatus? _preHideStatus; // saved on hide, restored on unhide
   final String _displaySku;
   final String _displayPrice;
-  final Rect? bbox;     // name_box_2d — used by the blank-line re-OCR retry
+  final Rect? bbox;     // name_box_2d — drives the crop thumbnail
   Rect? lineBbox;       // whole-line box_2d — used for vertical clamp calculation only
-  // CHANGE #375 — the medicine-name-only text bulk_match_items already
-  // returns per line (item['input'], fallback item['clean']). Replaces the
-  // photo-crop thumbnail that used to render here (removed entirely).
-  final String? inputName;
+  // CHANGE #380 — restores the pre-#375 handwriting crop (name region only,
+  // tightened — see _processOneCrop). Original colour, no filter, never
+  // serialized (regenerated from bbox/lineBbox after any reload).
+  Uint8List? processedCrop;
 
   // Product chosen via the per-line manual search field (overrides selectedIndex).
   Product? _manualProduct;
@@ -65,7 +65,6 @@ class _MatchRow {
     String displaySku = 'No match found',
     String displayPrice = '-',
     this.bbox,
-    this.inputName,
   })  : _preHideStatus = preHideStatus,
         _displaySku = displaySku,
         _displayPrice = displayPrice;
@@ -110,7 +109,6 @@ class _MatchRow {
         if (_previousLine1 != null) 'previousLine1': _previousLine1!.toJson(),
         if (bbox     != null) 'bbox':     {'x': bbox!.left,     'y': bbox!.top,     'w': bbox!.width,     'h': bbox!.height},
         if (lineBbox != null) 'lineBbox': {'x': lineBbox!.left, 'y': lineBbox!.top, 'w': lineBbox!.width, 'h': lineBbox!.height},
-        if (inputName != null) 'inputName': inputName,
       };
 
   factory _MatchRow.fromJson(Map<String, dynamic> m) {
@@ -145,7 +143,6 @@ class _MatchRow {
               .toList() ??
           [],
       bbox: bbox,
-      inputName: m['inputName'] as String?,
     );
     final mp = m['manualProduct'] as Map<String, dynamic>?;
     if (mp != null) row._manualProduct = Product.fromJson(mp);
@@ -284,6 +281,9 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
   Uint8List? _uploadedImageBytes;
   Size? _uploadedImageSize;
   String? _uploadedMimeType;
+  // Shared crop scale: ONE value for ALL rows so every crop renders at the
+  // same apparent handwriting size. Computed from median line height after OCR.
+  double? _cropGlobalScale;
 
   // Static (session-lifetime) cache of the last uploaded image.
   // Survives State recreation caused by GlobalKey reparenting failures,
@@ -552,10 +552,39 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       if (!mounted) return;
       setState(() => _matchProgress = rows.length);
 
-      // CHANGE #375 — photo-crop generation removed entirely (each row now
-      // shows its name-only text, see _lineItemCrop). origImageBytes/
-      // origImageSize are still accepted here for the blank-line re-OCR retry
-      // path elsewhere, which reads row.bbox directly from the uploaded image.
+      // CHANGE #380 — restores the handwriting-crop generation #375 removed.
+      // One shared globalScale (derived from median line height) so every
+      // row's ink renders at the same apparent size; each row's crop rect is
+      // tightened to the name column only (see _processOneCrop).
+      if (origImageBytes != null && origImageSize != null) {
+        final imgEl = await _loadImageForProcessing(origImageBytes, origMimeType);
+        if (imgEl != null) {
+          final srcW = imgEl.naturalWidth;
+          final srcH = imgEl.naturalHeight;
+          const targetHeightPx = 46.0;
+          final lineHeights = rows
+              .where((r) => r.lineBbox != null)
+              .map((r) => r.lineBbox!.height * srcH)
+              .toList()..sort();
+          double globalScale = 0.4;
+          if (lineHeights.isNotEmpty) {
+            final median = lineHeights[lineHeights.length ~/ 2];
+            if (median > 0) globalScale = targetHeightPx / median;
+          }
+          _cropGlobalScale = globalScale;
+          for (int ri = 0; ri < rows.length; ri++) {
+            final row = rows[ri];
+            if (row.bbox == null) continue;
+            final lineBbox = row.lineBbox ?? row.bbox!;
+            final prevLineBbox = ri > 0 ? (rows[ri - 1].lineBbox ?? rows[ri - 1].bbox) : null;
+            final nextLineBbox = ri < rows.length - 1 ? (rows[ri + 1].lineBbox ?? rows[ri + 1].bbox) : null;
+            row.processedCrop = _processOneCrop(
+              imgEl, srcW, srcH, row.bbox!, lineBbox, globalScale,
+              prevLineBbox: prevLineBbox, nextLineBbox: nextLineBbox,
+            );
+          }
+        }
+      }
       if (!mounted) return;
       setState(() {
         _rows = rows;
@@ -590,26 +619,28 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       final lineItemMap = (m['bulkLineItemMap'] as Map<String, dynamic>?)
               ?.map((k, v) => MapEntry(k, v as String)) ??
           {};
+      final savedScale = (m['cropGlobalScale'] as num?)?.toDouble();
       if (rows.isNotEmpty && mounted) {
         setState(() {
           _rows = rows;
           _fileName = fileName;
           _isFromFile = true;
           _bulkLineItemMap = lineItemMap;
+          if (savedScale != null) _cropGlobalScale = savedScale;
         });
         // Rehydrate image bytes: prefer static cache (survives layout reparent);
-        // fall back to SharedPreferences (survives page refresh). Still needed
-        // for the blank-line re-OCR retry path, which reads row.bbox against
-        // the uploaded image directly (no crop generation happens here anymore).
+        // fall back to SharedPreferences (survives page refresh).
         if (_uploadedImageBytes == null && _cachedImageBytes != null) {
           _uploadedImageBytes = _cachedImageBytes;
           _uploadedImageSize = _cachedImageSize;
           _uploadedMimeType = _cachedMimeType ?? 'image/jpeg';
           debugPrint('[BulkUpload] Rehydrated ${_cachedImageBytes!.length} B image from static cache');
+          _reprocessCropsFromCache();
         } else if (_uploadedImageBytes == null) {
           final loaded = await _loadImageFromPrefs();
           if (loaded && mounted) {
             debugPrint('[BulkUpload] Rehydrated ${_uploadedImageBytes!.length} B image from prefs');
+            _reprocessCropsFromCache();
           }
         }
       }
@@ -624,8 +655,51 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         'fileName': _fileName,
         'rows': _rows.map((r) => r.toJson()).toList(),
         'bulkLineItemMap': _bulkLineItemMap,
+        if (_cropGlobalScale != null) 'cropGlobalScale': _cropGlobalScale,
       }),
     );
+  }
+
+  // Reprocesses crops for rows that have a bbox but no processedCrop yet.
+  // Called after State rehydrates from the static image cache (i.e., after State
+  // was recreated and _loadSession restored rows-with-bboxes but lost processedCrop).
+  Future<void> _reprocessCropsFromCache() async {
+    final bytes = _uploadedImageBytes;
+    final mime = _uploadedMimeType ?? 'image/jpeg';
+    if (bytes == null) return;
+    final imgEl = await _loadImageForProcessing(bytes, mime);
+    if (imgEl == null || !mounted) return;
+    final srcW = imgEl.naturalWidth;
+    final srcH = imgEl.naturalHeight;
+    // Re-derive globalScale from restored rows if not already in state.
+    double? gs = _cropGlobalScale;
+    if (gs == null) {
+      final heights = _rows
+          .where((r) => r.lineBbox != null)
+          .map((r) => r.lineBbox!.height * srcH)
+          .toList()..sort();
+      if (heights.isNotEmpty) {
+        final median = heights[heights.length ~/ 2];
+        if (median > 0) gs = 30.0 / median;
+      }
+    }
+    if (gs == null) return;
+    bool anyUpdated = false;
+    for (int ri = 0; ri < _rows.length; ri++) {
+      final row = _rows[ri];
+      if (row.processedCrop == null && row.bbox != null) {
+        final lineBbox = row.lineBbox ?? row.bbox!;
+        final prevLineBbox = ri > 0 ? (_rows[ri - 1].lineBbox ?? _rows[ri - 1].bbox) : null;
+        final nextLineBbox = ri < _rows.length - 1 ? (_rows[ri + 1].lineBbox ?? _rows[ri + 1].bbox) : null;
+        row.processedCrop = _processOneCrop(
+          imgEl, srcW, srcH, row.bbox!, lineBbox, gs,
+          prevLineBbox: prevLineBbox, nextLineBbox: nextLineBbox,
+        );
+        debugPrint('[Crop] Reprocessed "${row.lineItem}" → ${row.processedCrop?.length ?? 0} B');
+        anyUpdated = true;
+      }
+    }
+    if (anyUpdated && mounted) setState(() {});
   }
 
   Future<void> _clearSession() async {
@@ -1152,10 +1226,98 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     }
   }
 
-  // CHANGE #375 — _processOneCrop (the whole photo-crop generation pipeline:
-  // crop rect math, ink-mask classification, canvas draw/downscale) removed
-  // entirely. Each row now shows its name-only text (see _lineItemCrop)
-  // instead of a photo crop, so there is nothing left to feed.
+  /// Generates a crop PNG using a SHARED globalScale so every row's handwriting
+  /// renders at the same apparent height.
+  ///
+  /// CHANGE #380 — tightened to the medicine-NAME region only:
+  ///   WIDTH:  uses [nameBbox]'s own right edge when Gemini gave a real
+  ///           name-only box (narrower than the full line) — that edge IS the
+  ///           qty-column boundary. Falls back to a fixed 65% of the line
+  ///           width when Gemini collapsed name_box_2d to the full line.
+  ///           This replaces the old ink-mask right-edge scan (#370-#373),
+  ///           which is what let the qty column bleed into the crop.
+  ///   HEIGHT: insets a little INTO this line's own y-range (not the old
+  ///           outward pad) so ascenders/descenders from the line above/below
+  ///           can never bleed in; the prev/next-line midpoint is kept as a
+  ///           hard safety clamp.
+  ///
+  /// [nameBbox]    — name_box_2d (0–1): name text extent, if Gemini gave one.
+  /// [lineBbox]    — box_2d (0–1): this line's full extent (name + qty).
+  /// [globalScale] — pixels-per-source-pixel, same value for every row.
+  /// [prevLineBbox]/[nextLineBbox] — adjacent lines, for the safety clamp.
+  ///
+  /// Output: original-colour PNG, no filter/threshold.
+  Uint8List? _processOneCrop(
+    html.ImageElement img, int srcW, int srcH,
+    Rect nameBbox, Rect lineBbox, double globalScale, {
+    Rect? prevLineBbox,
+    Rect? nextLineBbox,
+  }) {
+    try {
+      const leftPadPx = 3.0;      // output-px gap before first letter
+      const rightPadFrac = 0.02;  // small right-side breathing room (line-width fraction)
+      const insetFrac = 0.06;     // shave this fraction of line height off top/bottom
+
+      // ── Vertical region — THIS line only, inset a little (never padded
+      // outward) so neighbor ascenders/descenders can't bleed in. ───────────
+      final lineH = lineBbox.height;
+      double topFrac = lineBbox.top + lineH * insetFrac;
+      double botFrac = lineBbox.bottom - lineH * insetFrac;
+      if (botFrac <= topFrac) {
+        topFrac = lineBbox.top;
+        botFrac = lineBbox.bottom;
+      }
+      // Hard safety clamp: never cross the midpoint with the adjacent line.
+      if (prevLineBbox != null) {
+        final midAbove = (prevLineBbox.bottom + lineBbox.top) / 2.0;
+        if (topFrac < midAbove) topFrac = midAbove;
+      }
+      if (nextLineBbox != null) {
+        final midBelow = (lineBbox.bottom + nextLineBbox.top) / 2.0;
+        if (botFrac > midBelow) botFrac = midBelow;
+      }
+      final srcTop = (topFrac * srcH).clamp(0.0, srcH.toDouble());
+      final srcBot = (botFrac * srcH).clamp(0.0, srcH.toDouble());
+      final actualSrcH = (srcBot - srcTop).clamp(1.0, srcH - srcTop);
+      if (actualSrcH < 1) return null;
+
+      // ── Horizontal region — name column only, qty column dropped. ────────
+      // A real name_box_2d (meaningfully narrower than the full line) already
+      // IS the name/qty column boundary from Gemini — trust it. Otherwise
+      // (Gemini collapsed name_box_2d to the full line) fall back to a fixed
+      // 65% of line width (ticket's 62–68% range).
+      final hasRealNameBox = nameBbox.width < lineBbox.width * 0.9;
+      final srcXStart = (nameBbox.left * srcW - leftPadPx / globalScale)
+          .clamp(0.0, srcW.toDouble());
+      final double nameRightFrac =
+          hasRealNameBox ? nameBbox.right : lineBbox.left + lineBbox.width * 0.65;
+      final srcXEnd = ((nameRightFrac + lineBbox.width * rightPadFrac) * srcW)
+          .clamp(srcXStart + 1.0, srcW.toDouble());
+      final cropSrcW = (srcXEnd - srcXStart).clamp(1.0, srcW - srcXStart);
+
+      final outH = (actualSrcH * globalScale).round().clamp(4, 300);
+      final outW = (cropSrcW * globalScale).round().clamp(10, 9999);
+
+      // ── Draw ORIGINAL-COLOUR crop directly at output size (no binarization,
+      // no ink-mask classification, no filter). ─────────────────────────────
+      final canvas = html.CanvasElement(width: outW, height: outH);
+      final ctx = canvas.context2D;
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, outW.toDouble(), outH.toDouble());
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImageScaledFromSource(
+        img,
+        srcXStart, srcTop, cropSrcW, actualSrcH,
+        0, 0, outW.toDouble(), outH.toDouble(),
+      );
+
+      final dataUrl = canvas.toDataUrl('image/png');
+      return base64Decode(dataUrl.split(',').last);
+    } catch (e) {
+      debugPrint('[CropProcess] Failed: $e');
+      return null;
+    }
+  }
 
   static bool _isNetworkOrApiError(Object e) {
     final msg = e.toString().toLowerCase();
@@ -1719,23 +1881,30 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     } else {
       matchStatus = _MatchStatus.unrecognized;
     }
-    // CHANGE #375 — name-only text (no qty), already returned by bulk_match_items.
-    final rawInput = (item['input'] as String?)?.trim() ?? '';
-    final rawClean = (item['clean'] as String?)?.trim() ?? '';
-    final inputName = rawInput.isNotEmpty ? rawInput : (rawClean.isNotEmpty ? rawClean : null);
     return _MatchRow(
       lineItem: name,
       qty: qty,
       status: matchStatus,
       candidates: candidates,
       bbox: bbox,
-      inputName: inputName,
     );
   }
 
-  // CHANGE #379 — REVERTED #376's chunked-loop + animated bar: it froze Bulk
-  // Upload on "AI is identifying items…" for real order lists. Restored the
-  // single bulk_match_items call that worked before #376.
+  // CHANGE #380 — chunks bulk_match_items calls (4 at a time) so the
+  // "Matching medicines…" bar advances in real steps instead of jumping
+  // 0 → 100 after one giant call. bulk_match_items already scores a subset
+  // identically to the full list (backend fact) — only call batching +
+  // progress reporting changed, no scoring/threshold/order logic touched.
+  //
+  // MUST-NOT-HANG (root cause of #376's production freeze): every chunk
+  // call is time-bounded, so a hung network call throws instead of hanging
+  // forever. On any chunk failure (bad shape or timeout), stop the loop and
+  // return whatever matched so far — no fallback re-processing, no retries,
+  // no unawaited future. _runMatchPipeline's try/finally (added in #379)
+  // still guarantees _step is cleared no matter what happens here.
+  static const int _kBulkMatchChunkSize = 4;
+  static const Duration _kBulkMatchChunkTimeout = Duration(seconds: 25);
+
   Future<List<_MatchRow>> _bulkMatchRpc(
     List<String> names,
     List<int> qtys,
@@ -1743,37 +1912,44 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     List<Rect?> lineBboxes,
   ) async {
     if (names.isEmpty) return [];
+    final total = names.length;
+    final rows = <_MatchRow>[];
     try {
-      try {
-        RenderLog.write('bulk_match_single_379', 'count:${names.length}');
-      } catch (_) {}
-      final payload = List.generate(
-          names.length, (i) => {'name': names[i], 'qty': qtys[i].toString()});
-      try { RenderLog.write('c320_bulk_uses_rpc', 'count:${names.length}'); } catch (_) {}
-      try { RenderLog.write('c321_bulk_rpc', 'count:${names.length}'); } catch (_) {}
-      final resp = await Supabase.instance.client
-          .rpc('bulk_match_items', params: {'p_items': payload});
-      if (resp is Map && resp['status'] == 'ok') {
-        final ri = (resp['items'] as List<dynamic>?) ?? [];
-        return List.generate(names.length, (i) {
-          final itemData = i < ri.length
-              ? ri[i] as Map<String, dynamic>
-              : <String, dynamic>{};
-          final row = _rowFromBulkResult(names[i], qtys[i], itemData, nameBboxes[i]);
-          row.lineBbox = lineBboxes[i];
-          return row;
-        });
-      }
-      throw Exception('unexpected response shape');
-    } catch (e) {
-      debugPrint('[BulkMatch] RPC failed: $e — falling back to _matchOne per row');
-      final rows = <_MatchRow>[];
-      for (int i = 0; i < names.length; i++) {
+      for (int start = 0; start < total; start += _kBulkMatchChunkSize) {
+        final end = (start + _kBulkMatchChunkSize).clamp(0, total);
+        final chunkNames = names.sublist(start, end);
+        final chunkQtys = qtys.sublist(start, end);
+        final payload = List.generate(chunkNames.length,
+            (i) => {'name': chunkNames[i], 'qty': chunkQtys[i].toString()});
+        try { RenderLog.write('c320_bulk_uses_rpc', 'count:${chunkNames.length}'); } catch (_) {}
+        try { RenderLog.write('c321_bulk_rpc', 'count:${chunkNames.length}'); } catch (_) {}
+        final resp = await Supabase.instance.client
+            .rpc('bulk_match_items', params: {'p_items': payload})
+            .timeout(_kBulkMatchChunkTimeout);
+        if (resp is Map && resp['status'] == 'ok') {
+          final ri = (resp['items'] as List<dynamic>?) ?? [];
+          for (int i = 0; i < chunkNames.length; i++) {
+            final itemData = i < ri.length
+                ? ri[i] as Map<String, dynamic>
+                : <String, dynamic>{};
+            final globalIdx = start + i;
+            final row = _rowFromBulkResult(
+                chunkNames[i], chunkQtys[i], itemData, nameBboxes[globalIdx]);
+            row.lineBbox = lineBboxes[globalIdx];
+            rows.add(row);
+          }
+        } else {
+          throw Exception('unexpected response shape');
+        }
         if (!mounted) return rows;
-        final row = await _matchOne(names[i], qtys[i], bbox: nameBboxes[i]);
-        row.lineBbox = lineBboxes[i];
-        rows.add(row);
+        try {
+          RenderLog.write('bulk_match_smooth_380', 'matched:${rows.length}/$total');
+        } catch (_) {}
+        setState(() => _matchProgress = rows.length);
       }
+      return rows;
+    } catch (e) {
+      debugPrint('[BulkMatch] Chunked RPC failed after ${rows.length}/$total rows: $e');
       return rows;
     }
   }
@@ -2149,8 +2325,8 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
             isHidden: old.isHidden,
             preHideStatus: old._preHideStatus,
             bbox: old.bbox,
-            inputName: fresh.inputName,
           );
+          updated.processedCrop = old.processedCrop;
           if (mounted) setState(() => _rows[i] = updated);
         }
 
@@ -2273,8 +2449,8 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       isHidden: old.isHidden,
       preHideStatus: old._preHideStatus,
       bbox: old.bbox,
-      inputName: fresh.inputName,
     );
+    updated.processedCrop = old.processedCrop;
 
     if (mounted) setState(() => _rows[rowIndex] = updated);
     onProgress(1.0);
@@ -3215,15 +3391,20 @@ class _TwoStageProgressBar extends StatefulWidget {
   State<_TwoStageProgressBar> createState() => _TwoStageProgressBarState();
 }
 
-// CHANGE #379 — reverted to the pre-#376 simple/indeterminate bar: the
-// per-chunk eased version (TweenAnimationBuilder) is gone along with the
-// chunked match loop that fed it.
+// CHANGE #380 — the matching-stage bar now eases toward each real
+// matchProgress/matchTotal update (one per chunk, see _bulkMatchRpc) instead
+// of jumping straight to the raw ratio, so a handful of chunk-sized steps
+// reads as a smooth, continuous fill. The OCR stage keeps its original
+// indeterminate animation (unaffected — matching only).
 class _TwoStageProgressBarState extends State<_TwoStageProgressBar>
     with SingleTickerProviderStateMixin {
   late AnimationController _ctrl;
   late Animation<double> _anim;
   bool _stage1Logged = false;
   bool _stage2Logged = false;
+  // Last eased value shown for the matching-stage bar, so each new
+  // matchProgress update eases FROM here rather than snapping.
+  double _lastShownMatch = 0.0;
 
   @override
   void initState() {
@@ -3250,6 +3431,7 @@ class _TwoStageProgressBarState extends State<_TwoStageProgressBar>
     if (old.isOcrStage && !widget.isOcrStage) {
       _ctrl.value = 0;
       _ctrl.animateTo(0.88);
+      _lastShownMatch = 0.0;
     }
     _logStage();
   }
@@ -3260,41 +3442,49 @@ class _TwoStageProgressBarState extends State<_TwoStageProgressBar>
     super.dispose();
   }
 
+  Widget _bar(double value) => ClipRRect(
+        borderRadius: BorderRadius.circular(4),
+        child: LinearProgressIndicator(
+          value: value,
+          backgroundColor: const Color(0xFFE5E7EB),
+          valueColor: const AlwaysStoppedAnimation(Color(0xFF16A34A)),
+          minHeight: 6,
+        ),
+      );
+
+  Widget _label() => Text(
+        widget.isOcrStage
+            ? 'AI is identifying items…'
+            : 'Matching medicines with database…',
+        textAlign: TextAlign.center,
+        style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+      );
+
   @override
   Widget build(BuildContext context) {
+    if (!widget.isOcrStage && widget.matchTotal > 0) {
+      final target = widget.matchProgress / widget.matchTotal;
+      return TweenAnimationBuilder<double>(
+        tween: Tween<double>(begin: _lastShownMatch, end: target),
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOut,
+        builder: (ctx, v, child) {
+          _lastShownMatch = v;
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [_bar(v), const SizedBox(height: 10), _label()],
+          );
+        },
+      );
+    }
     return AnimatedBuilder(
       animation: _anim,
-      builder: (ctx, _) {
-        final double barValue;
-        if (!widget.isOcrStage && widget.matchTotal > 0) {
-          barValue = widget.matchProgress / widget.matchTotal;
-        } else {
-          barValue = _anim.value;
-        }
-        return Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(4),
-              child: LinearProgressIndicator(
-                value: barValue,
-                backgroundColor: const Color(0xFFE5E7EB),
-                valueColor: const AlwaysStoppedAnimation(Color(0xFF16A34A)),
-                minHeight: 6,
-              ),
-            ),
-            const SizedBox(height: 10),
-            Text(
-              widget.isOcrStage
-                  ? 'AI is identifying items…'
-                  : 'Matching medicines with database…',
-              textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
-            ),
-          ],
-        );
-      },
+      builder: (ctx, _) => Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [_bar(_anim.value), const SizedBox(height: 10), _label()],
+      ),
     );
   }
 }
@@ -3710,18 +3900,35 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
 }
 
 
-/// CHANGE #375 — LINE ITEM renderer: plain NAME-ONLY text (item['input'],
-/// fallback item['clean'], fallback row.lineItem). The photo-crop thumbnail
-/// that used to render here (qty + line-above/below bleeding in) is removed
-/// entirely — see _MatchRow.inputName and _rowFromBulkResult. No matching /
-/// qty / availability / cart logic touched; the quantity box and everything
-/// else on the row is unchanged.
+/// CHANGE #380 — restores the handwriting-crop thumbnail (#375 had replaced
+/// it with plain OCR name text). Shows the actual scanned ink for this line,
+/// tightened to the name region only (see _processOneCrop): qty column
+/// clipped off the right, height clamped to this line so it can't grab the
+/// row above/below. Original colour, no filter. Falls back to the digital
+/// parsed name only when no crop is available (e.g. non-image uploads).
 Widget _lineItemCrop(_MatchRow row, Size? imageSize, {TextStyle? fallbackStyle}) {
-  try { RenderLog.write('bulk_name_text_375', '1'); } catch (_) {}
-  final name = (row.inputName != null && row.inputName!.trim().isNotEmpty)
-      ? row.inputName!.trim()
-      : row.lineItem;
-  return Text(name,
+  if (row.processedCrop != null) {
+    final crop = row.processedCrop!;
+    try { RenderLog.write('bulk_crop_name_only_380', '1'); } catch (_) {}
+    return Tooltip(
+      message: row.lineItem,
+      waitDuration: const Duration(milliseconds: 400),
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        alignment: Alignment.centerLeft,
+        child: Image.memory(
+          crop,
+          filterQuality: FilterQuality.high,
+          gaplessPlayback: true,
+        ),
+      ),
+    );
+  }
+
+  // Fallback: show digital parsed name so no row is ever blank.
+  debugPrint('[CropFallback] "${row.lineItem}": no processedCrop '
+      '(bbox=${row.bbox != null ? "ok" : "NULL"})');
+  return Text(row.lineItem,
       maxLines: 2,
       overflow: TextOverflow.ellipsis,
       style: fallbackStyle ??

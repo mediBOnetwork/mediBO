@@ -307,25 +307,57 @@ ResponseButtonState responseButtonState({
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// CHANGE #363 — CONFIRM-BUTTON GATE + COLOR (spec A). SINGLE SOURCE for BOTH
-// layouts. The confirm button ("Confirm counting" @ shop / "Confirm all received"
-// @ warehouse) is GREEN + clickable ONLY when EVERY line satisfies
-//     ordered_qty <= counted + disputed_qty
-// (equivalently: the line is counted AND its discrepancy is fully reconciled),
-// otherwise RED + disabled. This intentionally SUBSUMES the old two gates:
-//   - un-counted lines (counting still pending) now block (were only backend-gated), AND
-//   - un-balanced dispute candidates block (as in #359-#362).
-// The math reuses the MCP-verified stage reference (ordered @ shop, expected @
-// warehouse) via lineBalanced/_isCounted359 — NOT raw ordered @ warehouse — so the
-// #360 over-forward warehouse fix is preserved.
+// CHANGE #363 (re-issued, narrow) — CONFIRM-BUTTON GATE + COLOR. SINGLE SOURCE for
+// BOTH layouts. The confirm button ("Confirm counting" @ shop / "Confirm all
+// received" @ warehouse) is GREEN + clickable ONLY when EVERY line satisfies
+//     ref <= counted + disputed
+// otherwise RED + disabled. ref = ordered @ shop / expected (forwarded shop_qty) @
+// warehouse (preserves the #360 over-forward fix). counted = shop_qty @ shop /
+// received_qty @ warehouse. disputed = the qty already flagged on the line by kind.
+// A short line with NO dispute flag has disputed=0 → ref<=counted is FALSE → the
+// button STAYS RED until a matching dispute (count_issue) is assigned to that line.
+// A fully-received line (counted>=ref, no flag) and an excess line are trivially
+// balanced and never block.
 // ════════════════════════════════════════════════════════════════════════════
 
-/// #363-A: does ONE line satisfy the confirm gate (ordered <= counted + disputed)?
-///   - Warehouse "awaiting resolution" rows (expected==0, already disputed at shop):
-///     satisfied — not admin-actionable, must never block.
-///   - Un-counted line (counting still pending): NOT satisfied → blocks.
-///   - Counted line: satisfied iff its discrepancy is balanced (lineBalanced).
-/// A fully-received line with no dispute is counted + balanced → satisfied.
+/// #363: qty already disputed on a line, by kind, measured against the stage [ref].
+///   short      (count_issue='short')             -> ref - counted   (the shortfall is disputed)
+///   few_wrong / damaged                          -> issue_qty
+///   excess     (count_issue='excess')            -> counted - ref   (ref<=counted+disputed trivially → never blocks)
+///   wrong      (count_issue='wrong')             -> ref             (whole line disputed)
+///   not_coming (fulfillment_state='not_coming')  -> ref - counted
+///   no flag                                      -> 0               (an unflagged short keeps the button RED)
+int confirmDisputedQty({
+  required int ref,
+  required int counted,
+  String? countIssue,
+  int? issueQty,
+  required String state,
+}) {
+  if (state == 'not_coming') return ref - counted;
+  final ci = (countIssue == null || countIssue.isEmpty || countIssue == 'null')
+      ? null
+      : countIssue;
+  switch (ci) {
+    case 'wrong':
+      return ref;
+    case 'short':
+      return ref - counted;
+    case 'few_wrong':
+    case 'damaged':
+      return issueQty ?? 0;
+    case 'excess':
+      return counted - ref;
+    default:
+      return 0;
+  }
+}
+
+/// #363: does ONE line satisfy the confirm gate — ref <= counted + disputed? ref =
+/// ordered @ shop, expected (forwarded shop_qty) @ warehouse (#360). A short line with
+/// no dispute flag (disputed=0) does NOT satisfy → keeps the button RED. A fully-received
+/// line (counted>=ref) and an excess line satisfy trivially. Warehouse "awaiting
+/// resolution" rows (ref==0, already disputed at shop) never block.
 bool lineSatisfiesConfirmGate({
   required bool arrivals,
   required int ordered,
@@ -336,20 +368,12 @@ bool lineSatisfiesConfirmGate({
   int? issueQty,
   required String state,
 }) {
-  if (arrivals && (expected ?? ordered) == 0) return true; // already disputed
-  // A terminal 'received' line is DONE (Got-all / fully received) even if shop_qty is
-  // null — treat it as counted so it never deadlocks the gate. lineBalanced still
-  // evaluates it (and blocks a genuine unflagged excess, which never has state=='received').
-  final counted = state == 'received' ||
-      _isCounted359(
-          arrivals: arrivals, shopQty: shopQty, received: received,
-          countIssue: countIssue, state: state);
-  if (!counted) {
-    return false; // uncounted → blocks
-  }
-  return lineBalanced(
-      arrivals: arrivals, ordered: ordered, shopQty: shopQty, received: received,
-      expected: expected, countIssue: countIssue, issueQty: issueQty, state: state);
+  final ref = arrivals ? (expected ?? ordered) : ordered;
+  if (ref <= 0) return true; // nothing to reconcile (already-disputed / empty line)
+  final counted = arrivals ? received : (shopQty ?? 0);
+  final disputed = confirmDisputedQty(
+      ref: ref, counted: counted, countIssue: countIssue, issueQty: issueQty, state: state);
+  return ref <= counted + disputed;
 }
 
 /// #363-A: the confirm button's visual — GREEN + enabled when NO line is unsatisfied,

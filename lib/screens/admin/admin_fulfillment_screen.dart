@@ -1173,10 +1173,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         ids.contains(l['order_item_id']?.toString()) && _lineIsCandidate(l));
   }
 
-  // C363-A: confirm-button visual over the whole tab. GREEN + clickable ONLY when
-  // EVERY line satisfies ordered<=counted+disputed (counted AND its discrepancy
-  // reconciled); otherwise RED + disabled. Subsumes the old uncounted + unbalanced
-  // gates into one shared rule so mobile + web agree by construction.
+  // C363: confirm-button visual over the whole tab. GREEN + clickable ONLY when EVERY
+  // line satisfies ref<=counted+disputed (an unflagged short does NOT balance → stays
+  // RED until a dispute is assigned); otherwise RED + disabled. One shared rule so the
+  // mobile card + web table layouts agree by construction.
   ConfirmButtonVisual get _confirmVisual {
     final tab = widget.arrivals ? 'warehouse' : 'shop';
     int unsatisfied = 0;
@@ -1195,7 +1195,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       if (!ok) unsatisfied++;
     }
     final vis = confirmButtonVisual(unsatisfiedLines: unsatisfied);
-    RenderLog.write('c363_btn_gate', 'tab=$tab,enabled=${vis.enabled}');
+    RenderLog.write('c363_gate', 'tab=$tab,balanced=${vis.enabled}');
     return vis;
   }
 
@@ -3285,7 +3285,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       final bool bagAttached = _activeBag != null;
       final bool whRed = whVis.red || bagAttached; // RED+disabled if unbalanced OR bag attached
       if (bagAttached) RenderLog.write('c362_bag_gate', 'blocked=true');
-      RenderLog.write('c363_btn_color', 'tab=warehouse,color=${whRed ? 'red' : 'green'}');
+      RenderLog.write('c363_color', 'tab=warehouse,color=${whRed ? 'red' : 'green'}');
       return Column(mainAxisSize: MainAxisSize.min, children: [
         _buildDisputeToggle(),
         SizedBox(
@@ -3399,7 +3399,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     // until EVERY line satisfies ordered<=counted+disputed (counted AND reconciled), then
     // GREEN + clickable. One shared gate → NO separate "yellow items" list below the button.
     final ConfirmButtonVisual shopVis = _confirmVisual;
-    RenderLog.write('c363_btn_color', 'tab=shop,color=${shopVis.red ? 'red' : 'green'}');
+    RenderLog.write('c363_color', 'tab=shop,color=${shopVis.red ? 'red' : 'green'}');
+    // C363-A: "Count in warehouse" is GREEN + always enabled (never gated).
+    RenderLog.write('c363_cw_green', 'tab=shop');
     final collectRow = Row(children: [
       Expanded(
         child: SizedBox(

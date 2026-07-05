@@ -1722,6 +1722,13 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     );
   }
 
+  // CHANGE #376 — chunked so the "Matching medicines…" bar advances in real
+  // steps instead of jumping 0 -> 100 after one giant call. bulk_match_items
+  // already scores a subset identically to the full list (backend fact), so
+  // calling it repeatedly with slices produces IDENTICAL combined results —
+  // only the call batching + progress reporting changed.
+  static const int _kBulkMatchChunkSize = 4;
+
   Future<List<_MatchRow>> _bulkMatchRpc(
     List<String> names,
     List<int> qtys,
@@ -1729,34 +1736,47 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     List<Rect?> lineBboxes,
   ) async {
     if (names.isEmpty) return [];
+    final total = names.length;
+    final rows = <_MatchRow>[];
     try {
-      final payload = List.generate(
-          names.length, (i) => {'name': names[i], 'qty': qtys[i].toString()});
-      try { RenderLog.write('c320_bulk_uses_rpc', 'count:${names.length}'); } catch (_) {}
-      try { RenderLog.write('c321_bulk_rpc', 'count:${names.length}'); } catch (_) {}
-      final resp = await Supabase.instance.client
-          .rpc('bulk_match_items', params: {'p_items': payload});
-      if (resp is Map && resp['status'] == 'ok') {
-        final ri = (resp['items'] as List<dynamic>?) ?? [];
-        return List.generate(names.length, (i) {
-          final itemData = i < ri.length
-              ? ri[i] as Map<String, dynamic>
-              : <String, dynamic>{};
-          final row = _rowFromBulkResult(names[i], qtys[i], itemData, nameBboxes[i]);
-          row.lineBbox = lineBboxes[i];
-          return row;
-        });
-      }
-      throw Exception('unexpected response shape');
-    } catch (e) {
-      debugPrint('[BulkMatch] RPC failed: $e — falling back to _matchOne per row');
-      final rows = <_MatchRow>[];
-      for (int i = 0; i < names.length; i++) {
+      for (int start = 0; start < total; start += _kBulkMatchChunkSize) {
+        final end = (start + _kBulkMatchChunkSize).clamp(0, total);
+        final chunkNames = names.sublist(start, end);
+        final chunkQtys = qtys.sublist(start, end);
+        final payload = List.generate(chunkNames.length,
+            (i) => {'name': chunkNames[i], 'qty': chunkQtys[i].toString()});
+        try { RenderLog.write('c320_bulk_uses_rpc', 'count:${chunkNames.length}'); } catch (_) {}
+        try { RenderLog.write('c321_bulk_rpc', 'count:${chunkNames.length}'); } catch (_) {}
+        final resp = await Supabase.instance.client
+            .rpc('bulk_match_items', params: {'p_items': payload});
+        if (resp is Map && resp['status'] == 'ok') {
+          final ri = (resp['items'] as List<dynamic>?) ?? [];
+          for (int i = 0; i < chunkNames.length; i++) {
+            final itemData = i < ri.length
+                ? ri[i] as Map<String, dynamic>
+                : <String, dynamic>{};
+            final globalIdx = start + i;
+            final row = _rowFromBulkResult(
+                chunkNames[i], chunkQtys[i], itemData, nameBboxes[globalIdx]);
+            row.lineBbox = lineBboxes[globalIdx];
+            rows.add(row);
+          }
+        } else {
+          throw Exception('unexpected response shape');
+        }
         if (!mounted) return rows;
-        final row = await _matchOne(names[i], qtys[i], bbox: nameBboxes[i]);
-        row.lineBbox = lineBboxes[i];
-        rows.add(row);
+        try {
+          RenderLog.write('bulk_match_progress_376', 'matched:${rows.length}/$total');
+        } catch (_) {}
+        setState(() => _matchProgress = rows.length);
       }
+      return rows;
+    } catch (e) {
+      // CHANGE #376 — a chunk failed: keep whatever matched so far, stop the
+      // loop (no fallback re-processing, no retries), let the caller display
+      // the partial result exactly as it already does today for any partial
+      // row list.
+      debugPrint('[BulkMatch] Chunked RPC failed after ${rows.length}/$total rows: $e');
       return rows;
     }
   }
@@ -3204,6 +3224,10 @@ class _TwoStageProgressBarState extends State<_TwoStageProgressBar>
   late Animation<double> _anim;
   bool _stage1Logged = false;
   bool _stage2Logged = false;
+  // CHANGE #376 — last eased value shown for the matching-stage bar, so each
+  // new matchProgress update (one per chunk) eases FROM here rather than
+  // snapping straight to the new ratio.
+  double _lastShownMatch = 0.0;
 
   @override
   void initState() {
@@ -3240,41 +3264,51 @@ class _TwoStageProgressBarState extends State<_TwoStageProgressBar>
     super.dispose();
   }
 
+  Widget _bar(double value) => ClipRRect(
+        borderRadius: BorderRadius.circular(4),
+        child: LinearProgressIndicator(
+          value: value,
+          backgroundColor: const Color(0xFFE5E7EB),
+          valueColor: const AlwaysStoppedAnimation(Color(0xFF16A34A)),
+          minHeight: 6,
+        ),
+      );
+
+  Widget _label() => Text(
+        widget.isOcrStage
+            ? 'AI is identifying items…'
+            : 'Matching medicines with database…',
+        textAlign: TextAlign.center,
+        style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+      );
+
   @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _anim,
-      builder: (ctx, _) {
-        final double barValue;
-        if (!widget.isOcrStage && widget.matchTotal > 0) {
-          barValue = widget.matchProgress / widget.matchTotal;
-        } else {
-          barValue = _anim.value;
-        }
-        return Column(
+    // CHANGE #376 — matching stage now eases toward each real
+    // matchProgress/matchTotal update (one per chunk) instead of snapping
+    // straight to the raw ratio, so a handful of chunk-sized steps reads as
+    // a smooth, continuous fill rather than a 0 -> 100 jump.
+    if (!widget.isOcrStage && widget.matchTotal > 0) {
+      final target = widget.matchProgress / widget.matchTotal;
+      return TweenAnimationBuilder<double>(
+        tween: Tween<double>(begin: _lastShownMatch, end: target),
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOut,
+        onEnd: () => _lastShownMatch = target,
+        builder: (ctx, v, child) => Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(4),
-              child: LinearProgressIndicator(
-                value: barValue,
-                backgroundColor: const Color(0xFFE5E7EB),
-                valueColor: const AlwaysStoppedAnimation(Color(0xFF16A34A)),
-                minHeight: 6,
-              ),
-            ),
-            const SizedBox(height: 10),
-            Text(
-              widget.isOcrStage
-                  ? 'AI is identifying items…'
-                  : 'Matching medicines with database…',
-              textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
-            ),
-          ],
-        );
-      },
+          children: [_bar(v), const SizedBox(height: 10), _label()],
+        ),
+      );
+    }
+    return AnimatedBuilder(
+      animation: _anim,
+      builder: (ctx, _) => Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [_bar(_anim.value), const SizedBox(height: 10), _label()],
+      ),
     );
   }
 }

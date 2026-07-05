@@ -43,3 +43,6 @@ app.*.map.json
 /android/app/release
 .env
 scripts/*.json
+
+# Claude Code worktrees (per-change isolated checkouts) — never track these
+.claude/worktrees/

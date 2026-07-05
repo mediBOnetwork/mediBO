@@ -1197,12 +1197,58 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     }
   }
 
-  // CHANGE #369 — the "Delete order" flow (was CHANGE #186) was removed along
-  // with its button in _buildExpandedItems: real orders are permanent, so
-  // _deleteOrder/_deletingOrders (and the delete_order RPC call) no longer
-  // have a caller and were deleted here rather than left dead, since an
-  // unreferenced private method would otherwise show up as a new
-  // `unused_element` flutter analyze warning.
+  // ── CHANGE #370 — Delete order (re-added; #369 removed it on purpose for
+  // the build/test loop, #370 brings it back). Deletes the order's whole
+  // graph server-side and resets the source WhatsApp lead back to 'pending'
+  // so it reappears in Leads for re-conversion. No manual list mutation here:
+  // orders/order_items/pending_orders are all in the #369 realtime
+  // subscription, so the order disappears and the lead reappears on their own.
+  final Set<String> _deletingOrders = {};
+
+  Future<void> _deleteOrder(_CustRow row) async {
+    final orderId = row.orderId;
+    if (orderId == null || _deletingOrders.contains(orderId)) return;
+    final code = row.orderNumber ?? '';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dCtx) => AlertDialog(
+        title: Text('Delete order $code?'),
+        content: const Text(
+            'This permanently removes the order, its items, supplier orders, '
+            'disputes and payments. The WhatsApp lead will be restored so you '
+            'can convert it again.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dCtx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            style: TextButton.styleFrom(foregroundColor: const Color(0xFFDC2626)),
+            onPressed: () => Navigator.pop(dCtx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    if (mounted) setState(() => _deletingOrders.add(orderId));
+    RenderLog.write('co_order_delete_370', 'orderId:$orderId,code:$code');
+    try {
+      final res = await Supabase.instance.client
+          .rpc('delete_order', params: {'p_order_id': orderId});
+      final map = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+      if (!mounted) return;
+      if (map['error'] != null) {
+        showToast(context, 'Delete failed: ${map['error']}', isError: true);
+      } else {
+        showToast(context, 'Order deleted — lead restored');
+      }
+    } catch (e) {
+      if (mounted) showToast(context, 'Delete error: $e', isError: true);
+    } finally {
+      if (mounted) setState(() => _deletingOrders.remove(orderId));
+    }
+  }
 
   // ── Build ──────────────────────────────────────────────────────────────────
 
@@ -1804,6 +1850,29 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                         )
                       : const SizedBox()),
             ],
+            // CHANGE #370 — Delete order (re-added; #369 removed it on purpose).
+            // Only on real converted orders, immediately left of the chevron.
+            if (row.orderId != null)
+              GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () {}, // absorb tap so it doesn't also toggle row expand
+                child: IconButton(
+                  onPressed: _deletingOrders.contains(row.orderId)
+                      ? null
+                      : () => _deleteOrder(row),
+                  icon: _deletingOrders.contains(row.orderId)
+                      ? const SizedBox(
+                          width: 16, height: 16,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: Color(0xFFDC2626)))
+                      : const Icon(Icons.delete_outline,
+                          size: 18, color: Color(0xFFDC2626)),
+                  tooltip: 'Delete order',
+                  visualDensity: VisualDensity.compact,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                ),
+              ),
             SizedBox(
               width: 32,
               child: AnimatedRotation(
@@ -1864,6 +1933,29 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                 const SizedBox(width: 6),
                 _SourceBadge(source: row.source),
                 const SizedBox(width: 4),
+                // CHANGE #370 — Delete order (re-added; #369 removed it on
+                // purpose). Only on real converted orders, left of the chevron.
+                if (row.orderId != null)
+                  GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () {}, // absorb tap so it doesn't also expand the card
+                    child: IconButton(
+                      onPressed: _deletingOrders.contains(row.orderId)
+                          ? null
+                          : () => _deleteOrder(row),
+                      icon: _deletingOrders.contains(row.orderId)
+                          ? const SizedBox(
+                              width: 14, height: 14,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2, color: Color(0xFFDC2626)))
+                          : const Icon(Icons.delete_outline,
+                              size: 16, color: Color(0xFFDC2626)),
+                      tooltip: 'Delete order',
+                      visualDensity: VisualDensity.compact,
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                    ),
+                  ),
                 AnimatedRotation(
                   turns: isExpanded ? 0.5 : 0.0,
                   duration: const Duration(milliseconds: 200),

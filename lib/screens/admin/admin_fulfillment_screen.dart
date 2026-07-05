@@ -256,6 +256,9 @@ class _MergedProduct {
   // span several order_items; the issue chip / Dispute Type column must not read only
   // firstLineData (which can be a clean line while a sibling carries the flag).
   final String? mergedCountIssue;
+  // C364: summed issue_qty across all flagged lines — the disputed units shown in the
+  // "In dispute — <n> unit(s)" row chip. 0 when no line carries a disputed qty.
+  final int mergedIssueQty;
 
   const _MergedProduct({
     required this.productId,
@@ -272,6 +275,7 @@ class _MergedProduct {
     this.bagBreakdown,
     this.firstLineData,
     this.mergedCountIssue,
+    this.mergedIssueQty = 0,
   });
 }
 
@@ -1106,6 +1110,12 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         final ci = r['count_issue']?.toString();
         if (ci != null && ci.isNotEmpty && ci != 'null') { mergedCountIssue = ci; break; }
       }
+      // C364: sum issue_qty across all flagged lines -> disputed units for the row chip.
+      final mergedIssueQty = lines.fold<int>(0, (s, r) {
+        final ci = r['count_issue']?.toString();
+        final flagged = ci != null && ci.isNotEmpty && ci != 'null';
+        return s + (flagged ? ((r['issue_qty'] as num?)?.toInt() ?? 0) : 0);
+      });
       final oiids = lines
           .map((r) => r['order_item_id']?.toString() ?? '')
           .where((s) => s.isNotEmpty)
@@ -1142,6 +1152,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         bagBreakdown: bagBreakdown,
         firstLineData: Map<String, dynamic>.from(first),
         mergedCountIssue: mergedCountIssue,
+        mergedIssueQty: mergedIssueQty,
       ));
     }
     // CHANGE #269 — strict A-Z, no status grouping
@@ -1196,6 +1207,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     }
     final vis = confirmButtonVisual(unsatisfiedLines: unsatisfied);
     RenderLog.write('c363_gate', 'tab=$tab,balanced=${vis.enabled}');
+    // C364: the gate recomputes (reading issue_qty) after every qty entry/edit/clear.
+    RenderLog.write('c364_gate', 'tab=$tab,balanced=${vis.enabled}');
     return vis;
   }
 
@@ -1664,6 +1677,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       RenderLog.write('c174_admin_open_predicate',
           'tab_badge_count=$rawOpenCount;inner_open_count=$rawOpenCount;equal=true');
       RenderLog.write('c189_dispute_index_built', 'count=${itemMap.length}');
+      // C364: resolved/cancelled disputes drop out of the active index above -> the item
+      // moves to Inactive/resolved in the Disputes tab live (in-place fill closed the line).
+      RenderLog.write('c364_disp_close',
+          'active=${itemMap.length};resolved=${disputes.length - itemMap.length}');
       context.findAncestorStateOfType<_AdminFulfillmentScreenState>()?._setDisputeCount(rawOpenCount);
       setState(() { _disputeMap = map; _disputeItemMap = itemMap; });
     } catch (_) {}
@@ -2821,6 +2838,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             _changeBagPendingOldBag.remove(supplier);
           }
         });
+        // C364: warehouse rows re-rendered from fresh payload on the realtime/refetch path —
+        // a resolved dispute's raised received (e.g. 3/4 -> 4/4) reflects here (spec 4).
+        RenderLog.write('c364_recv_reflect', 'tab=warehouse;items=${stateItems.length}');
       } catch (e) {
         final errMsg = e.toString();
         if (mounted) setState(() => _error = errMsg);
@@ -2861,6 +2881,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           RenderLog.write('c168_focus_clamped', 'true');
         }
       });
+      // C364: shop rows re-rendered from fresh payload on the realtime/refetch path —
+      // a resolved dispute's in-place received (e.g. 3/4 -> 4/4) reflects here (spec 4).
+      RenderLog.write('c364_recv_reflect', 'tab=shop;items=${reloadItems.length}');
     } catch (_) {}
   }
 
@@ -5272,9 +5295,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
               // the mobile merged layout silently dropped issue flags the single
               // tile and web row showed. Now shared with both.
               Builder(builder: (_) {
-                final lbl = issueChipLabel(merged.mergedCountIssue); // C361: any flagged line
+                // C364: "In dispute — <n> unit(s)" using the summed disputed qty.
+                final lbl = disputedChipLabel(merged.mergedCountIssue, merged.mergedIssueQty);
                 if (lbl == null) return const SizedBox.shrink();
                 RenderLog.write('c351_chip', 'kind=${merged.mergedCountIssue}');
+                RenderLog.write('c364_qty_shown', 'where=row,qty=${merged.mergedIssueQty}');
                 return _issueChip(lbl);
               }),
               // #265: arrival status line removed — "Arrival pending"/"Arrived" not shown on Warehouse rows
@@ -6147,12 +6172,18 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                           }
                           RenderLog.write('c357_disp_cell',
                               'tab=$tab,kind=${deskDisputeItem?.kind ?? mp.mergedCountIssue}');
+                          // C364: append the disputed units (flagged issue_qty) to the web row.
+                          final int dispN = mp.mergedIssueQty;
+                          final label = dispN > 0
+                              ? '$kindLabel — $dispN unit${dispN == 1 ? '' : 's'}'
+                              : kindLabel;
+                          if (dispN > 0) RenderLog.write('c364_qty_shown', 'where=row,qty=$dispN');
                           return Row(mainAxisSize: MainAxisSize.min, children: [
                             Container(width: 7, height: 7,
                                 decoration: const BoxDecoration(
                                     color: Color(0xFFB45309), shape: BoxShape.circle)),
                             const SizedBox(width: 6),
-                            Flexible(child: Text(kindLabel,
+                            Flexible(child: Text(label,
                                 style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText),
                                 maxLines: 1, overflow: TextOverflow.ellipsis)),
                           ]);
@@ -15651,14 +15682,17 @@ class _DisputesScreenState extends State<_DisputesScreen> {
                     maxLines: 1, overflow: TextOverflow.ellipsis),
               ],
 
-              // (d) Quantities
+              // (d) Quantities — C364: summed disputed qty per product ("Disputed: <n>").
               const SizedBox(height: 2),
-              Text(
-                'Ord ${agg.orderedQty.toInt()} · Rec ${agg.receivedQty.toInt()} · '
-                'Disputed ${agg.disputedQty.toInt()}'
-                '${agg.lines.length > 1 ? ' · ${agg.lines.length} orders' : ''}',
-                style: const TextStyle(fontSize: 11, color: _kSub),
-              ),
+              Builder(builder: (_) {
+                RenderLog.write('c364_qty_shown', 'where=disp_tab,qty=${agg.disputedQty.toInt()}');
+                return Text(
+                  'Ord ${agg.orderedQty.toInt()} · Rec ${agg.receivedQty.toInt()} · '
+                  'Disputed: ${agg.disputedQty.toInt()}'
+                  '${agg.lines.length > 1 ? ' · ${agg.lines.length} orders' : ''}',
+                  style: const TextStyle(fontSize: 11, color: _kSub),
+                );
+              }),
 
               // (e+f) Status chips
               const SizedBox(height: 4),

@@ -101,6 +101,21 @@ String? issueChipLabel(String? countIssue) {
   };
 }
 
+/// C364: row chip that shows HOW MUCH is in dispute, e.g. "In dispute — 2 units".
+/// [issueQty] = the line's disputed count (issue_qty) or the matched dispute short_qty.
+/// Returns null when the line has no dispute flag (nothing renders). When flagged but the
+/// qty is unknown (e.g. a whole-line 'wrong'), falls back to a plain "In dispute" chip.
+/// Shared so the mobile card + web table row show the identical label (no drift).
+String? disputedChipLabel(String? countIssue, int? issueQty) {
+  if (countIssue == null || countIssue.isEmpty || countIssue == 'null') {
+    return null;
+  }
+  RenderLog.write('c355_shared', 'fn=disputedChip');
+  final n = issueQty ?? 0;
+  if (n > 0) return 'In dispute — $n unit${n == 1 ? '' : 's'}';
+  return 'In dispute';
+}
+
 /// Canonical status-pill label. C361: the web "Item Status" column re-derived this
 /// inline (capitalised) with a different casing than the _StatePill chip in the SAME
 /// row ("Received" vs "received"). One definition so a pill and any text column that
@@ -320,12 +335,12 @@ ResponseButtonState responseButtonState({
 // balanced and never block.
 // ════════════════════════════════════════════════════════════════════════════
 
-/// #363: qty already disputed on a line, by kind, measured against the stage [ref].
-///   short      (count_issue='short')             -> ref - counted   (the shortfall is disputed)
-///   few_wrong / damaged                          -> issue_qty
-///   excess     (count_issue='excess')            -> counted - ref   (ref<=counted+disputed trivially → never blocks)
+/// #363/#364: qty already disputed on a line, by kind. #364 — the popup now stores an
+/// editable disputed qty in issue_qty for EVERY qty kind (incl short), so the gate reads
+/// issue_qty as the disputed amount (a PARTIAL short with issue_qty < the gap must stay RED).
+///   short / few_wrong / damaged / excess         -> issue_qty (the entered disputed units)
 ///   wrong      (count_issue='wrong')             -> ref             (whole line disputed)
-///   not_coming (fulfillment_state='not_coming')  -> ref - counted
+///   not_coming (fulfillment_state='not_coming')  -> ref - counted   (whole remaining gap)
 ///   no flag                                      -> 0               (an unflagged short keeps the button RED)
 int confirmDisputedQty({
   required int ref,
@@ -341,13 +356,11 @@ int confirmDisputedQty({
   switch (ci) {
     case 'wrong':
       return ref;
-    case 'short':
-      return ref - counted;
+    case 'short': // C364: read the entered disputed qty, NOT the whole gap
     case 'few_wrong':
     case 'damaged':
-      return issueQty ?? 0;
     case 'excess':
-      return counted - ref;
+      return issueQty ?? 0;
     default:
       return 0;
   }

@@ -152,8 +152,9 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
   Future<void> _clear() async {
     if (_saving) return;
     setState(() => _saving = true);
-    // C359: clearing a short un-does the report-missing (fw_product_undo) via the parent.
-    if ((_selected == 'short' || (widget.isShort && _cleanIssue(widget.existingIssue) == null)) &&
+    // C364: a NEW short (count_issue='short') clears via fw_set_line_issue('clear') below.
+    // Only a LEGACY report-missing short (isShort flag, no count_issue) undoes via the parent.
+    if (widget.isShort && _cleanIssue(widget.existingIssue) == null &&
         widget.onReportMissing != null) {
       try {
         await widget.onReportMissing!(null); // null = clear/undo the short
@@ -198,22 +199,8 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
     final qty = _qty;
     final name = _nameCtrl.text.trim();
     final proofUrl = _proofUrl;
-    // C359: "Report missing / Short" — reuse the parent's existing report-missing
-    // flow (fw_product_action). Flag only; the confirm RPC raises the dispute later.
-    if (issue == 'short') {
-      try {
-        await widget.onReportMissing!(qty); // qty = units received
-        if (!mounted) return;
-        RenderLog.write('c359_flag_marked', 'issue=short');
-        widget.onSaved();
-      } catch (e) {
-        if (!mounted) return;
-        setState(() => _saving = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e'), backgroundColor: const Color(0xFFDC2626)));
-      }
-      return;
-    }
+    // C364: 'short' now flows through fw_set_line_issue with the entered disputed qty
+    // (stored in issue_qty), exactly like the other qty kinds — no separate report-missing call.
     try {
       if (widget.isLocked) {
         final kind = issue == 'wrong' ? 'wrong_item' : issue;
@@ -243,7 +230,8 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
         'p_order_item_id': widget.orderItemId,
         'p_issue': issue,
       };
-      if ((issue == 'few_wrong' || issue == 'damaged' || issue == 'excess') && qty > 0) {
+      // C364: send the entered disputed qty for ALL qty kinds incl 'short' (stored in issue_qty).
+      if ((issue == 'short' || issue == 'few_wrong' || issue == 'damaged' || issue == 'excess') && qty > 0) {
         params['p_qty'] = qty;
       }
       if (name.isNotEmpty && (issue == 'wrong' || issue == 'few_wrong')) {
@@ -262,6 +250,7 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
       }
       RenderLog.write('c351_flag_saved', 'issue=$issue,qty=$qty');
       RenderLog.write('c359_flag_marked', 'issue=$issue'); // C359: flagged, not yet disputed
+      RenderLog.write('c364_qty_submit', 'tab=${widget.tab ?? "?"},qty=$qty'); // C364: disputed qty saved
       widget.onSaved();
     } catch (e) {
       if (!mounted) return;
@@ -338,10 +327,10 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
     );
   }
 
-  // C363-B: exactly FIVE dispute options, shown ALWAYS with NO count-based exceptions.
-  // "Report missing / Short" is intentionally NOT here — a plain short is detected by
-  // voice counting (counted < ordered) and auto-raised at confirm.
+  // C364: SIX dispute options, always shown. "Report missing / short" is back so the
+  // disputed units of a short line can be entered explicitly (backend stores it in issue_qty).
   static const _options = [
+    ('short',      Icons.report_gmailerrorred_outlined, 'Report missing / short', 'Fewer units arrived than ordered'),
     ('wrong',      Icons.swap_horiz_rounded,         'Wrong item',        'Whole line is wrong'),
     ('few_wrong',  Icons.remove_circle_outline,      'Few units wrong',   'Some units are wrong'),
     ('damaged',    Icons.broken_image_outlined,      'Damaged / expired', 'Units are damaged or expired'),
@@ -356,7 +345,7 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
     return Builder(builder: (_) {
       final opts = _gatedOptions;
       RenderLog.write('c351_section', 'n=${opts.length}');
-      // C363-B: all five options always shown (n must be 5).
+      // C364: all six options always shown ('short' restored for explicit disputed-qty entry).
       RenderLog.write('c363_opts5', 'n=${opts.length}');
       final hasExisting = _cleanIssue(widget.existingIssue) != null;
       const title = 'Report issue';
@@ -436,14 +425,13 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
       onTap: () => setState(() {
         if (_selected == value) return;
         _selected = value;
-        // C359/C361: pre-fill the qty stepper to the actual discrepancy so a save without
-        // stepping matches the per-line balance point — short = units counted; excess = the
-        // amount over the stage reference (else 'excess' silently defaulted to 1).
-        _qty = value == 'short'
-            ? widget.receivedQty.clamp(0, _ref)
-            : value == 'excess'
-                ? (widget.receivedQty - _ref).clamp(1, 9999)
-                : 1;
+        // C364: pre-fill the "Disputed units" stepper to the actual discrepancy — the GAP
+        // (ordered/expected − received) for short/few_wrong/damaged/not_coming, or the
+        // over-count (received − ref) for excess. A save without stepping then matches the
+        // per-line balance point (issue_qty == the disputed units).
+        _qty = value == 'excess'
+            ? (widget.receivedQty - _ref).clamp(1, 9999)
+            : (_ref - widget.receivedQty).clamp(1, _ref > 0 ? _ref : 1);
       }),
       child: Container(
         margin: const EdgeInsets.only(bottom: 4),
@@ -477,34 +465,10 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
 
   Widget _buildInputs() {
     final issue = _selected!;
-    // C359: short — enter how many actually arrived; the rest is the missing gap
-    // that the confirm RPC raises as a short dispute. No name / no photo needed.
-    if (issue == 'short') {
-      // C360: reconcile against the stage reference (expected at warehouse, ordered
-      // at shop) so "missing" == the short qty the backend raises (ref - received).
-      final missing = (_ref - _qty).clamp(0, _ref);
-      return Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min,
-          children: [
-        Text('Units received (of $_ref)',
-            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText)),
-        const SizedBox(height: 6),
-        Row(children: [
-          _RisStepper(
-            value: _qty,
-            min: 0,
-            max: _ref,
-            onChanged: (v) => setState(() => _qty = v),
-          ),
-          const SizedBox(width: 10),
-          Text('$missing missing',
-              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _kAmber)),
-        ]),
-        const SizedBox(height: 6),
-        const Text('The missing units are raised as a short dispute when you confirm.',
-            style: TextStyle(fontSize: 11, color: _kSub)),
-      ]);
-    }
-    final needsQty = issue == 'few_wrong' || issue == 'damaged' || issue == 'excess';
+    // C364: ONE "Disputed units" stepper for every qty kind (short/few_wrong/damaged/excess).
+    // The value IS the disputed count sent as p_qty to fw_set_line_issue (stored in issue_qty) —
+    // no more inverted "units received". Default is pre-filled to the gap in _buildOption.
+    final needsQty = issue == 'short' || issue == 'few_wrong' || issue == 'damaged' || issue == 'excess';
     final needsName = issue == 'few_wrong' || issue == 'wrong';
     final nameRequired = issue == 'few_wrong';
     final max = issue == 'excess' ? 9999 : _maxQty;
@@ -512,11 +476,16 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min,
         children: [
       if (needsQty) ...[
-        Text(
-          issue == 'few_wrong' ? 'Wrong units (max $max)' :
-          issue == 'damaged'   ? 'Damaged units (max $max)' : 'Excess units',
-          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText),
-        ),
+        Builder(builder: (_) {
+          RenderLog.write('c364_qty_field', 'tab=${widget.tab ?? "?"},default=$_qty');
+          RenderLog.write('c364_qty_shown', 'where=popup,qty=$_qty');
+          return Text(
+            issue == 'excess'
+                ? 'Disputed units — how many?'
+                : 'Disputed units — how many?  (max $max)',
+            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText),
+          );
+        }),
         const SizedBox(height: 6),
         Row(children: [
           _RisStepper(

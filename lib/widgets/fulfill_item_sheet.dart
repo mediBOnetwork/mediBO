@@ -1170,6 +1170,9 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
             // C351: unified 5-option report-issue section
             ReportIssueSection(
               orderItemId: _itemId ?? '',
+              // C365: product scope (this sheet is dead code; kept compiling).
+              supplierName: widget.item['supplier']?.toString() ?? '',
+              productId: (widget.item['product_id'] as num?)?.toInt() ?? 0,
               orderedQty: _ordQty,
               receivedQty: _localRecQty,
               isLocked: _initiallyLocked,

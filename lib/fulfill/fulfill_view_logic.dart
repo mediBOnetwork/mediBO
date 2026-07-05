@@ -101,18 +101,25 @@ String? issueChipLabel(String? countIssue) {
   };
 }
 
-/// C364: row chip that shows HOW MUCH is in dispute, e.g. "In dispute — 2 units".
-/// [issueQty] = the line's disputed count (issue_qty) or the matched dispute short_qty.
-/// Returns null when the line has no dispute flag (nothing renders). When flagged but the
-/// qty is unknown (e.g. a whole-line 'wrong'), falls back to a plain "In dispute" chip.
-/// Shared so the mobile card + web table row show the identical label (no drift).
-String? disputedChipLabel(String? countIssue, int? issueQty) {
+/// C365: renders a qty with its pack type pluralised, e.g. `2 strips` (falls back to
+/// `unit`/`units`). Shared so the breakdown, row chip and popup render the identical string.
+String qtyWithPack(int n, String? packType) {
+  final p = (packType == null || packType.trim().isEmpty) ? 'unit' : packType.trim();
+  return '$n ${n == 1 ? p : '${p}s'}';
+}
+
+/// C364/C365: row chip that shows HOW MUCH is in dispute WITH pack type, e.g.
+/// "In dispute — 2 strips". [issueQty] = the disputed count (aggregated issue_qty or the
+/// matched dispute short_qty). Returns null when the line has no dispute flag (nothing
+/// renders). Flagged but qty unknown (a whole-line 'wrong') -> plain "In dispute". Shared
+/// so the mobile card + web table row show the identical label (no drift).
+String? disputedChipLabel(String? countIssue, int? issueQty, [String? packType]) {
   if (countIssue == null || countIssue.isEmpty || countIssue == 'null') {
     return null;
   }
   RenderLog.write('c355_shared', 'fn=disputedChip');
   final n = issueQty ?? 0;
-  if (n > 0) return 'In dispute — $n unit${n == 1 ? '' : 's'}';
+  if (n > 0) return 'In dispute — ${qtyWithPack(n, packType)}';
   return 'In dispute';
 }
 
@@ -387,6 +394,21 @@ bool lineSatisfiesConfirmGate({
   final disputed = confirmDisputedQty(
       ref: ref, counted: counted, countIssue: countIssue, issueQty: issueQty, state: state);
   return ref <= counted + disputed;
+}
+
+/// #365-F: does a whole PRODUCT (summed over its order-lines) satisfy the confirm gate?
+/// refTotal <= countedTotal + disputedTotal. refTotal = Σ (ordered@shop / expected@warehouse),
+/// countedTotal = Σ (shop_qty@shop / received_qty@warehouse), disputedTotal = Σ per-line
+/// confirmDisputedQty. This aggregated rule matches the one-row-per-product display and lets a
+/// multi-line dispute (distributed across lines by fw_set_product_issue) cover the full gap and
+/// turn the button green. A product with nothing to reconcile (refTotal<=0) never blocks.
+bool productSatisfiesConfirmGate({
+  required int refTotal,
+  required int countedTotal,
+  required int disputedTotal,
+}) {
+  if (refTotal <= 0) return true;
+  return refTotal <= countedTotal + disputedTotal;
 }
 
 /// #363-A: the confirm button's visual — GREEN + enabled when NO line is unsatisfied,

@@ -16,6 +16,12 @@ const _kAmberBorder = Color(0xFFFCD34D);
 /// Replaces the old ad-hoc "Few item wrong / Wrong item / Not coming" buttons.
 class ReportIssueSection extends StatefulWidget {
   final String orderItemId;
+  // C365: PRODUCT scope — the dispute popup is aggregated (one row per product). These drive
+  // the NEW fw_set_product_issue RPC which distributes the disputed qty across ALL the
+  // supplier+product order-lines and caps at the TOTAL gap. orderedQty/receivedQty/refQty below
+  // are now the PRODUCT aggregate totals (not one line), so the stepper cap = the total gap.
+  final String supplierName;
+  final int productId;
   final int orderedQty;
   final int receivedQty;
   // C360: stage REFERENCE qty for gating + qty math (short/excess boundary, stepper
@@ -44,6 +50,8 @@ class ReportIssueSection extends StatefulWidget {
     super.key,
     this.tab,
     required this.orderItemId,
+    required this.supplierName,
+    required this.productId,
     required this.orderedQty,
     required this.receivedQty,
     this.refQty,
@@ -116,11 +124,14 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
 
   bool get _saveEnabled {
     if (_selected == null || _saving) return false;
-    if (_selected == 'few_wrong') {
+    // C365: few_wrong + wrong both need a qty AND the wrong-item name.
+    if (_selected == 'few_wrong' || _selected == 'wrong') {
       return _qty >= 1 && _nameCtrl.text.trim().isNotEmpty;
     }
-    // C359: short — received qty may be 0..ordered (0 = fully missing); always valid.
-    if (_selected == 'short') return true;
+    // short/damaged/excess need a qty >= 1 (the stepper enforces min 1). not_coming needs none.
+    if (_selected == 'short' || _selected == 'damaged' || _selected == 'excess') {
+      return _qty >= 1;
+    }
     return true;
   }
 
@@ -170,8 +181,10 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
       return;
     }
     try {
-      final res = await Supabase.instance.client.rpc('fw_set_line_issue', params: {
-        'p_order_item_id': widget.orderItemId,
+      // C365: PRODUCT-level clear un-flags ALL the product's order-lines at once.
+      final res = await Supabase.instance.client.rpc('fw_set_product_issue', params: {
+        'p_supplier': widget.supplierName,
+        'p_product_id': widget.productId,
         'p_issue': 'clear',
       }) as Map;
       if (!mounted) return;
@@ -179,10 +192,11 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
       if (err != null) {
         setState(() => _saving = false);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $err'), backgroundColor: const Color(0xFFDC2626)));
+          SnackBar(content: Text(_productIssueError(err, res)), backgroundColor: const Color(0xFFDC2626)));
         return;
       }
       RenderLog.write('c351_flag_cleared', 'ok=1');
+      RenderLog.write('c365_prod_issue', 'product=${widget.productId},disputed=0,gap=0');
       widget.onSaved();
     } catch (e) {
       if (!mounted) return;
@@ -226,12 +240,15 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
         return;
       }
 
+      // C365: PRODUCT-level flag — fw_set_product_issue distributes the disputed qty across ALL
+      // the supplier+product order-lines and caps at the TOTAL gap. Send p_qty for every kind
+      // except not_coming (incl 'wrong', whose _qty is preset to the full ordered_total).
       final params = <String, dynamic>{
-        'p_order_item_id': widget.orderItemId,
+        'p_supplier': widget.supplierName,
+        'p_product_id': widget.productId,
         'p_issue': issue,
       };
-      // C364: send the entered disputed qty for ALL qty kinds incl 'short' (stored in issue_qty).
-      if ((issue == 'short' || issue == 'few_wrong' || issue == 'damaged' || issue == 'excess') && qty > 0) {
+      if (issue != 'not_coming' && qty > 0) {
         params['p_qty'] = qty;
       }
       if (name.isNotEmpty && (issue == 'wrong' || issue == 'few_wrong')) {
@@ -239,24 +256,48 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
       }
       if (proofUrl != null) params['p_proof_url'] = proofUrl;
 
-      final res = await Supabase.instance.client.rpc('fw_set_line_issue', params: params) as Map;
+      final res = await Supabase.instance.client.rpc('fw_set_product_issue', params: params) as Map;
       if (!mounted) return;
       final err = res['error']?.toString();
       if (err != null) {
+        // C365: on qty_required{max}, snap the stepper to the backend's max so the retry is valid.
+        if (err.startsWith('qty_required')) {
+          final max = (res['max'] as num?)?.toInt();
+          if (max != null && max > 0) _qty = max;
+        }
         setState(() => _saving = false);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $err'), backgroundColor: const Color(0xFFDC2626)));
+          SnackBar(content: Text(_productIssueError(err, res)), backgroundColor: const Color(0xFFDC2626)));
         return;
       }
+      final disputed = (res['disputed'] as num?)?.toInt() ?? qty;
+      final gap = (res['gap'] as num?)?.toInt() ?? 0;
       RenderLog.write('c351_flag_saved', 'issue=$issue,qty=$qty');
       RenderLog.write('c359_flag_marked', 'issue=$issue'); // C359: flagged, not yet disputed
       RenderLog.write('c364_qty_submit', 'tab=${widget.tab ?? "?"},qty=$qty'); // C364: disputed qty saved
+      RenderLog.write('c365_prod_issue', 'product=${widget.productId},disputed=$disputed,gap=$gap');
       widget.onSaved();
     } catch (e) {
       if (!mounted) return;
       setState(() => _saving = false);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Error: $e'), backgroundColor: const Color(0xFFDC2626)));
+    }
+  }
+
+  // C365: friendly text for the typed fw_set_product_issue error codes.
+  String _productIssueError(String code, Map res) {
+    if (code.startsWith('qty_required')) {
+      final max = (res['max'] as num?)?.toInt();
+      return max != null ? 'Enter disputed units (max $max)' : 'Enter the disputed units';
+    }
+    switch (code) {
+      case 'wrong_item_name_required': return 'Enter the wrong item name';
+      case 'line_locked': return 'Already confirmed — undo the response first to edit';
+      case 'product_not_for_supplier': return 'This product is not from this supplier';
+      case 'not_authorized': return 'Not allowed';
+      case 'bad_issue': return 'Invalid issue type';
+      default: return 'Error: $code';
     }
   }
 
@@ -425,13 +466,14 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
       onTap: () => setState(() {
         if (_selected == value) return;
         _selected = value;
-        // C364: pre-fill the "Disputed units" stepper to the actual discrepancy — the GAP
-        // (ordered/expected − received) for short/few_wrong/damaged/not_coming, or the
-        // over-count (received − ref) for excess. A save without stepping then matches the
-        // per-line balance point (issue_qty == the disputed units).
+        // C364/C365: pre-fill the "Disputed units" stepper. GAP (aggregate ref − received) for
+        // short/few_wrong/damaged; over-count (received − ref) for excess; FULL ordered_total for
+        // 'wrong' (whole product). A save without stepping matches the product balance point.
         _qty = value == 'excess'
             ? (widget.receivedQty - _ref).clamp(1, 9999)
-            : (_ref - widget.receivedQty).clamp(1, _ref > 0 ? _ref : 1);
+            : value == 'wrong'
+                ? (_ref > 0 ? _ref : 1)
+                : (_ref - widget.receivedQty).clamp(1, _ref > 0 ? _ref : 1);
       }),
       child: Container(
         margin: const EdgeInsets.only(bottom: 4),
@@ -465,13 +507,14 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
 
   Widget _buildInputs() {
     final issue = _selected!;
-    // C364: ONE "Disputed units" stepper for every qty kind (short/few_wrong/damaged/excess).
-    // The value IS the disputed count sent as p_qty to fw_set_line_issue (stored in issue_qty) —
-    // no more inverted "units received". Default is pre-filled to the gap in _buildOption.
-    final needsQty = issue == 'short' || issue == 'few_wrong' || issue == 'damaged' || issue == 'excess';
+    // C365: the "Disputed units" stepper shows for EVERY dispute type except not_coming
+    // (short/few_wrong/damaged/excess/wrong). The value IS the disputed count sent as p_qty to
+    // fw_set_product_issue. Default pre-filled in _buildOption (gap; wrong = full ordered_total).
+    final needsQty = issue != 'not_coming';
     final needsName = issue == 'few_wrong' || issue == 'wrong';
-    final nameRequired = issue == 'few_wrong';
-    final max = issue == 'excess' ? 9999 : _maxQty;
+    final nameRequired = issue == 'few_wrong' || issue == 'wrong';
+    // C365: cap = the aggregate gap (short/few_wrong/damaged); excess uncapped; wrong = full ordered.
+    final max = issue == 'excess' ? 9999 : issue == 'wrong' ? (_ref > 0 ? _ref : 1) : _maxQty;
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min,
         children: [
@@ -479,6 +522,9 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
         Builder(builder: (_) {
           RenderLog.write('c364_qty_field', 'tab=${widget.tab ?? "?"},default=$_qty');
           RenderLog.write('c364_qty_shown', 'where=popup,qty=$_qty');
+          // C365: qty field renders for this type; stepper max = the total gap.
+          RenderLog.write('c365_qty_alltypes', 'type=$issue');
+          RenderLog.write('c365_qty_max', 'tab=${widget.tab ?? "?"},max=$max');
           return Text(
             issue == 'excess'
                 ? 'Disputed units — how many?'

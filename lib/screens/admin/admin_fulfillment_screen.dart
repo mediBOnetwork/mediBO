@@ -245,6 +245,9 @@ class _MergedProduct {
   final int receivedTotal;
   // #331: sum of shop_qty across all lines; null if any line has no shop count yet
   final int? shopQtyTotal;
+  // C365: sum of counted shop_qty (uncounted lines counted as 0) — the true counted total
+  // for a partially-counted product (drives the popup gap/breakdown, not inflated to ordered).
+  final int shopQtyCounted;
   // #333: sum of expected across all lines (forwarded qty at warehouse; ordered at shop)
   final int? expectedTotal;
   final List<String> orderItemIds; // underlying line IDs — for dispute lookup only
@@ -268,6 +271,7 @@ class _MergedProduct {
     required this.orderedTotal,
     required this.receivedTotal,
     this.shopQtyTotal,
+    this.shopQtyCounted = 0,
     this.expectedTotal,
     required this.orderItemIds,
     required this.combinedState,
@@ -1101,6 +1105,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         shopSum += sq;
       }
       final shopQtyTotal = anyUncounted ? null : shopSum;
+      // C365: running SUM of counted shop_qty (uncounted lines = 0) — the real counted total
+      // even for a partially-counted product, so the popup gap/breakdown is not inflated.
+      final shopQtyCounted = lines.fold<int>(
+          0, (s, r) => s + (((r['shop_qty'] as num?)?.toInt()) ?? 0));
       // #333: expected per product — sum of backend 'expected' field (forwarded qty at warehouse)
       final expectedTotal = lines.fold(0, (s, r) => s + ((r['expected'] as num?)?.toInt() ?? ordQtyOf(r)));
       // C361: first flagged count_issue across ALL underlying lines (chip/Dispute Type
@@ -1145,6 +1153,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         orderedTotal: orderedTotal,
         receivedTotal: receivedTotal,
         shopQtyTotal: shopQtyTotal,
+        shopQtyCounted: shopQtyCounted,
         expectedTotal: expectedTotal,
         orderItemIds: oiids,
         combinedState: combinedState,
@@ -1184,31 +1193,47 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         ids.contains(l['order_item_id']?.toString()) && _lineIsCandidate(l));
   }
 
-  // C363: confirm-button visual over the whole tab. GREEN + clickable ONLY when EVERY
-  // line satisfies ref<=counted+disputed (an unflagged short does NOT balance → stays
-  // RED until a dispute is assigned); otherwise RED + disabled. One shared rule so the
-  // mobile card + web table layouts agree by construction.
+  // C365: confirm-button visual over the whole tab, aggregated PER PRODUCT. A product
+  // balances when refTotal <= countedTotal + disputedTotal (summed over its order-lines);
+  // GREEN + clickable only when EVERY product balances, else RED. This matches the one-row-
+  // per-product display and lets a multi-line dispute (distributed by fw_set_product_issue)
+  // cover the full gap and reach green. ref=ordered@shop / expected@warehouse (preserves #360).
   ConfirmButtonVisual get _confirmVisual {
     final tab = widget.arrivals ? 'warehouse' : 'shop';
-    int unsatisfied = 0;
+    final byProduct = <String, List<Map<String, dynamic>>>{};
     for (final l in _items) {
-      final ok = lineSatisfiesConfirmGate(
-        arrivals: widget.arrivals,
-        ordered: ordQtyOf(l),
-        shopQty: (l['shop_qty'] as num?)?.toInt(),
-        received: recQtyOf(l),
-        expected: (l['expected'] as num?)?.toInt(),
-        countIssue: l['count_issue']?.toString(),
-        issueQty: (l['issue_qty'] as num?)?.toInt(),
-        state: stateOf(l),
-      );
-      RenderLog.write('c361_balance', 'tab=$tab,satisfied=$ok'); // per-line gate vs backend contract
+      final pid = (l['product_id'] ?? l['order_item_id'])?.toString() ?? '';
+      byProduct.putIfAbsent(pid, () => []).add(l);
+    }
+    int unsatisfied = 0;
+    for (final entry in byProduct.entries) {
+      int refTotal = 0, countedTotal = 0, disputedTotal = 0;
+      for (final l in entry.value) {
+        final ordered = ordQtyOf(l);
+        final expected = (l['expected'] as num?)?.toInt();
+        final received = recQtyOf(l);
+        final shopQty = (l['shop_qty'] as num?)?.toInt();
+        final ref = stageRefFor(arrivals: widget.arrivals, ordered: ordered, expected: expected);
+        final counted = countedQtyFor(arrivals: widget.arrivals, shopQty: shopQty, received: received);
+        refTotal += ref;
+        countedTotal += counted;
+        disputedTotal += confirmDisputedQty(
+          ref: ref, counted: counted,
+          countIssue: l['count_issue']?.toString(),
+          issueQty: (l['issue_qty'] as num?)?.toInt(),
+          state: stateOf(l),
+        );
+      }
+      final ok = productSatisfiesConfirmGate(
+          refTotal: refTotal, countedTotal: countedTotal, disputedTotal: disputedTotal);
+      RenderLog.write('c361_balance', 'tab=$tab,product=${entry.key},satisfied=$ok');
       if (!ok) unsatisfied++;
     }
     final vis = confirmButtonVisual(unsatisfiedLines: unsatisfied);
     RenderLog.write('c363_gate', 'tab=$tab,balanced=${vis.enabled}');
-    // C364: the gate recomputes (reading issue_qty) after every qty entry/edit/clear.
     RenderLog.write('c364_gate', 'tab=$tab,balanced=${vis.enabled}');
+    // C365: aggregated per-product gate — reaches green once every product's disputed covers its gap.
+    RenderLog.write('c365_gate', 'tab=$tab,balanced=${vis.enabled}');
     return vis;
   }
 
@@ -5295,11 +5320,13 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
               // the mobile merged layout silently dropped issue flags the single
               // tile and web row showed. Now shared with both.
               Builder(builder: (_) {
-                // C364: "In dispute — <n> unit(s)" using the summed disputed qty.
-                final lbl = disputedChipLabel(merged.mergedCountIssue, merged.mergedIssueQty);
+                // C365: "In dispute — <n> <pack>" using the summed disputed qty + pack type.
+                final lbl = disputedChipLabel(
+                    merged.mergedCountIssue, merged.mergedIssueQty, merged.packType);
                 if (lbl == null) return const SizedBox.shrink();
                 RenderLog.write('c351_chip', 'kind=${merged.mergedCountIssue}');
                 RenderLog.write('c364_qty_shown', 'where=row,qty=${merged.mergedIssueQty}');
+                if (merged.mergedIssueQty > 0) RenderLog.write('c365_breakdown', 'where=row');
                 return _issueChip(lbl);
               }),
               // #265: arrival status line removed — "Arrival pending"/"Arrived" not shown on Warehouse rows
@@ -5367,9 +5394,13 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       orderedTotal: merged.orderedTotal,
       receivedTotal: merged.receivedTotal,
       shopQtyTotal: merged.shopQtyTotal,
+      shopQtyCounted: merged.shopQtyCounted,
       expectedTotal: merged.expectedTotal,
       combinedState: merged.combinedState,
       existingDispute: existingDispute,
+      // C365: product-level flag + summed disputed qty for the aggregated popup pre-fill.
+      mergedCountIssue: merged.mergedCountIssue,
+      mergedIssueQty: merged.mergedIssueQty,
       arrivals: widget.arrivals,
       // CHANGE #277: pass bag context for dynamic Got all
       activeBagNo: widget.arrivals ? (_activeBag?['bag_no'] as num?)?.toInt() : null,
@@ -6172,12 +6203,15 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                           }
                           RenderLog.write('c357_disp_cell',
                               'tab=$tab,kind=${deskDisputeItem?.kind ?? mp.mergedCountIssue}');
-                          // C364: append the disputed units (flagged issue_qty) to the web row.
+                          // C365: append the disputed units WITH pack type to the web row.
                           final int dispN = mp.mergedIssueQty;
                           final label = dispN > 0
-                              ? '$kindLabel — $dispN unit${dispN == 1 ? '' : 's'}'
+                              ? '$kindLabel — ${qtyWithPack(dispN, mp.packType)}'
                               : kindLabel;
-                          if (dispN > 0) RenderLog.write('c364_qty_shown', 'where=row,qty=$dispN');
+                          if (dispN > 0) {
+                            RenderLog.write('c364_qty_shown', 'where=row,qty=$dispN');
+                            RenderLog.write('c365_breakdown', 'where=row');
+                          }
                           return Row(mainAxisSize: MainAxisSize.min, children: [
                             Container(width: 7, height: 7,
                                 decoration: const BoxDecoration(
@@ -9458,6 +9492,9 @@ class _ProductReceiveSheet extends StatefulWidget {
   // C354: shop-stage counted total (sum shop_qty); null if any line uncounted. Used so the
   // Report-issue gating sees the SHOP count at shop stage, not the warehouse received_qty.
   final int? shopQtyTotal;
+  // C365: true counted shop_qty total (uncounted lines = 0) — feeds the popup gap/breakdown so a
+  // partially-counted product isn't inflated to full ordered.
+  final int shopQtyCounted;
   // C360: warehouse expected total (sum forwarded shop_qty). The Report-issue gating +
   // balance reference at warehouse is `expected`, not raw ordered.
   final int? expectedTotal;
@@ -9479,6 +9516,10 @@ class _ProductReceiveSheet extends StatefulWidget {
   // C361: true when the product spans >1 order-line. The short/report-missing flow is
   // product-level (fw_product_action distributes), so it is only offered single-line.
   final bool multiLine;
+  // C365: product-level existing dispute flag (any flagged line) + summed disputed qty,
+  // so the aggregated popup pre-fills the current product-level disputed value.
+  final String? mergedCountIssue;
+  final int mergedIssueQty;
 
   const _ProductReceiveSheet({
     required this.supplierName,
@@ -9489,6 +9530,7 @@ class _ProductReceiveSheet extends StatefulWidget {
     required this.orderedTotal,
     required this.receivedTotal,
     this.shopQtyTotal,
+    this.shopQtyCounted = 0,
     this.expectedTotal,
     required this.combinedState,
     this.existingDispute,
@@ -9500,6 +9542,8 @@ class _ProductReceiveSheet extends StatefulWidget {
     this.onReload,
     this.itemData,
     this.multiLine = false,
+    this.mergedCountIssue,
+    this.mergedIssueQty = 0,
   });
 
   @override
@@ -10132,11 +10176,25 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
   Widget build(BuildContext context) {
     final ord = _orderedTotal;
     final state = _localState;
+    // C365 (E): unify the header status with the LIST ROW — derive from fulfillRowView on the
+    // AGGREGATE product totals (received>=ordered rule) so the popup and list can never diverge.
+    final rv365 = fulfillRowView(
+      arrivals: widget.arrivals,
+      ordered: widget.orderedTotal,
+      shopQty: widget.shopQtyTotal,
+      received: widget.receivedTotal,
+      expected: widget.expectedTotal,
+      combinedState: widget.combinedState,
+    );
+    final unifiedStatus = rv365.pillState;
+    // C365 (D): breakdown values — counted total (Σ received @wh / Σ shop_qty @shop), disputed (Σ issue_qty).
+    final countedTotal = widget.arrivals ? widget.receivedTotal : widget.shopQtyCounted;
+    final disputedTotal = widget.mergedIssueQty;
     // C359: counting is VOICE-ONLY — the manual Got-all / Report-missing buttons
     // were removed from this popup. The only remaining in-flight guard is Undo.
     final isBusy = _undoing;
-    final bg = _stateBgMap[state] ?? _kPendingBg;
-    final fg = _stateFgMap[state] ?? _kPendingFg;
+    final bg = _stateBgMap[unifiedStatus] ?? _kPendingBg;
+    final fg = _stateFgMap[unifiedStatus] ?? _kPendingFg;
     final isActioned = state != 'pending';
 
     // C359: this popup only opens for a dispute candidate. "Report missing / Short"
@@ -10158,20 +10216,33 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
               Text(widget.productName,
                   style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: _kText),
                   maxLines: 2, overflow: TextOverflow.ellipsis),
-              const SizedBox(height: 2),
-              Text('Ordered: $ord$_unitLabel',
-                  style: const TextStyle(fontSize: 12, color: _kSub)),
               const SizedBox(height: 4),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(20)),
-                child: Text(
-                  const <String, String>{
-                    'wrong': 'Wrong item', 'not_coming': 'Not coming',
-                  }[state] ?? state.replaceAll('_', ' '),
-                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: fg),
-                ),
-              ),
+              // C365 (D): Ordered / Received / In dispute breakdown WITH pack type.
+              Builder(builder: (_) {
+                RenderLog.write('c365_breakdown', 'where=popup');
+                final pack = widget.packType;
+                return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text('Ordered — ${qtyWithPack(ord, pack)}',
+                      style: const TextStyle(fontSize: 12, color: _kSub)),
+                  Text('Received — ${qtyWithPack(countedTotal, pack)}',
+                      style: const TextStyle(fontSize: 12, color: _kSub)),
+                  if (disputedTotal > 0)
+                    Text('In dispute — ${qtyWithPack(disputedTotal, pack)}',
+                        style: const TextStyle(
+                            fontSize: 12, fontWeight: FontWeight.w600, color: _kPendingFg)),
+                ]);
+              }),
+              const SizedBox(height: 4),
+              // C365 (E): unified status label — same fulfillRowView source as the list row.
+              Builder(builder: (_) {
+                RenderLog.write('c365_status_one', 'status=$unifiedStatus');
+                return Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(20)),
+                  child: Text(statusPillLabel(unifiedStatus),
+                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: fg)),
+                );
+              }),
             ]),
           ),
           if (isActioned) ...[
@@ -10215,30 +10286,30 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
         // C351/C359: unified report-issue section — now includes "Report missing / Short".
         if (widget.itemData != null) ...[
           ReportIssueSection(
-            // C354: at SHOP stage the counted total lives in shop_qty, not received_qty
-            // (a warehouse field that is 0 until arrivals). Feeding received_qty here made
-            // the gate always see recv==0 → always 'full' options. Use the stage's own count.
+            // C365: PRODUCT-scoped popup — feed the AGGREGATE totals (not one candidate line) so
+            // the disputed-units cap = the product's TOTAL gap (fixes the "max 2/3" multi-line bug),
+            // and pass supplier + product_id so it calls the product-level fw_set_product_issue.
             tab: widget.arrivals ? 'warehouse' : 'shop',
             orderItemId: widget.itemData!['order_item_id']?.toString() ?? '',
-            // C361: qtys are the CANDIDATE LINE's own (itemData IS that line), NOT the
-            // merged product totals — a line-level flag must balance the specific line.
-            orderedQty: (widget.itemData!['ordered'] as num?)?.toInt() ?? widget.orderedTotal,
+            supplierName: widget.supplierName,
+            productId: widget.productId,
+            // Display "Ordered" = the product's total ordered.
+            orderedQty: widget.orderedTotal,
+            // counted total: warehouse = Σ received_qty; shop = Σ counted shop_qty (uncounted=0),
+            // so the gap = ref − Σcounted is correct even when some sibling lines are uncounted.
             receivedQty: widget.arrivals
-                ? ((widget.itemData!['received_qty'] as num?)?.toInt() ?? 0)
-                : ((widget.itemData!['shop_qty'] as num?)?.toInt() ?? 0),
-            // C360/C361: gating/qty reference — WAREHOUSE = the line's expected (forwarded
-            // shop_qty), SHOP = the line's ordered. Matches the backend dispute reference so
-            // 'excess' shows + 'short' balances for over/under-forward warehouse lines.
+                ? widget.receivedTotal
+                : widget.shopQtyCounted,
+            // C360/C365: stage reference TOTAL — WAREHOUSE = Σ expected (forwarded), SHOP = Σ ordered.
+            // gap = ref − counted becomes the aggregate total gap.
             refQty: widget.arrivals
-                ? ((widget.itemData!['expected'] as num?)?.toInt()
-                    ?? (widget.itemData!['shop_qty'] as num?)?.toInt()
-                    ?? (widget.itemData!['ordered'] as num?)?.toInt()
-                    ?? widget.orderedTotal)
-                : ((widget.itemData!['ordered'] as num?)?.toInt() ?? widget.orderedTotal),
+                ? (widget.expectedTotal ?? widget.orderedTotal)
+                : widget.orderedTotal,
             isLocked: widget.itemData!['received_locked'] == true ||
                 widget.itemData!['collect_locked'] == true,
-            existingIssue: widget.itemData!['count_issue']?.toString(),
-            existingIssueQty: (widget.itemData!['issue_qty'] as num?)?.toInt(),
+            // C365: product-level existing flag (any flagged line) + summed disputed qty.
+            existingIssue: widget.mergedCountIssue,
+            existingIssueQty: widget.mergedIssueQty > 0 ? widget.mergedIssueQty : null,
             existingWrongName: widget.itemData!['wrong_received_note']?.toString(),
             existingProofUrl: widget.itemData!['wrong_proof_url']?.toString(),
             // C359: short/missing reuses the existing report-missing flow (fw_product_action).

@@ -1291,10 +1291,16 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       final srcNameLeft = (nameBbox.left * srcW - srcXStart - leftPadPx / globalScale)
           .clamp(0.0, srcCanvasW.toDouble()).round();
 
-      // ── Sauvola adaptive binarization — BAND PIXELS ONLY ─────────────────────
-      // Eliminates gray boxes by definition: local thresholding maps every paper
-      // region to white and every stroke to black regardless of lighting.
+      // ── CHANGE #373: ink CLASSIFICATION only (Sauvola adaptive) — used
+      // solely to find where the handwritten ink ends, for the right-edge
+      // trim below. The pixel data (`data`) is NEVER overwritten here: a
+      // prior version of this function binarized every pixel (mapping paper
+      // to white / any stroke to black), which turned coloured ink — e.g.
+      // light-blue pen — into black specks. That whole code path is removed
+      // (not hidden behind a flag) so the crop keeps its true photographed
+      // colour; only the ink/not-ink classification is retained internally.
       final bandH = srcBandBot - srcBandTop;
+      final inkMask = Uint8List(srcCanvasW * srcCanvasH); // 1 = ink, 0 = not
       if (bandH > 0) {
         // Window ≈ 1/3 of band height, forced odd, minimum 5
         int winSize = ((bandH / 3.0).round() | 1);
@@ -1304,7 +1310,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         const double k = 0.2;
         const double R = 128.0;
 
-        // Grayscale array (full canvas)
+        // Grayscale array (full canvas) — classification only, never drawn.
         final gray = Float64List(srcCanvasW * srcCanvasH);
         for (int py = 0; py < srcCanvasH; py++) {
           for (int px = 0; px < srcCanvasW; px++) {
@@ -1326,54 +1332,26 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
           }
         }
 
-        // Count ink pixels for blank-crop guard
-        int inkPixels = 0;
-        final totalBand = bandH * (srcCanvasW - srcNameLeft).clamp(0, srcCanvasW);
-
-        for (int py = 0; py < srcCanvasH; py++) {
-          for (int px = 0; px < srcCanvasW; px++) {
-            final idx = (py * srcCanvasW + px) * 4;
-            // Outside band or left of name anchor → white
-            if (py < srcBandTop || py >= srcBandBot || px < srcNameLeft) {
-              data[idx] = 255; data[idx+1] = 255; data[idx+2] = 255; data[idx+3] = 255;
-              continue;
-            }
-            // Sauvola local threshold
+        for (int py = srcBandTop; py < srcBandBot; py++) {
+          for (int px = srcNameLeft; px < srcCanvasW; px++) {
             final x1 = (px - hw).clamp(0, srcCanvasW);
             final x2 = (px + hw + 1).clamp(0, srcCanvasW);
             final y1 = (py - hw).clamp(0, srcCanvasH);
             final y2 = (py + hw + 1).clamp(0, srcCanvasH);
             final count = (x2 - x1) * (y2 - y1);
-            if (count == 0) {
-              data[idx] = 255; data[idx+1] = 255; data[idx+2] = 255; data[idx+3] = 255;
-              continue;
-            }
+            if (count == 0) continue;
             final s  = sat [y2*W1+x2] - sat [y1*W1+x2] - sat [y2*W1+x1] + sat [y1*W1+x1];
             final s2 = sat2[y2*W1+x2] - sat2[y1*W1+x2] - sat2[y2*W1+x1] + sat2[y1*W1+x1];
             final mean = s / count;
             final variance = (s2 / count - mean * mean).clamp(0.0, double.infinity);
             final std = sqrt(variance);
             final threshold = mean * (1.0 + k * (std / R - 1.0));
-            final isInk = gray[py * srcCanvasW + px] < threshold;
-            if (isInk) inkPixels++;
-            final outV = isInk ? 0 : 255;
-            data[idx] = outV; data[idx+1] = outV; data[idx+2] = outV; data[idx+3] = 255;
+            if (gray[py * srcCanvasW + px] < threshold) {
+              inkMask[py * srcCanvasW + px] = 1;
+            }
           }
-        }
-
-        // Blank-crop guard: < 0.5% ink pixels → output plain white
-        if (totalBand > 0 && (inkPixels / totalBand) < 0.005) {
-          for (int i = 0; i < data.length; i += 4) {
-            data[i] = 255; data[i+1] = 255; data[i+2] = 255; data[i+3] = 255;
-          }
-        }
-      } else {
-        for (int i = 0; i < data.length; i += 4) {
-          data[i] = 255; data[i+1] = 255; data[i+2] = 255; data[i+3] = 255;
         }
       }
-
-      srcCtx.putImageData(srcImgData, 0, 0);
 
       // ── Pixel-snap right edge: extend past Gemini's name xmax to true ink ────
       // Strategy: scan from nameBbox.right up to lineBbox.right (Gemini's row
@@ -1395,7 +1373,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         // Require ≥2 ink pixels: single-pixel ruled lines are ignored.
         int inkCount = 0;
         for (int py = srcBandTop; py < srcBandBot; py++) {
-          if (data[(py * srcCanvasW + px) * 4] < 128) {
+          if (inkMask[py * srcCanvasW + px] == 1) {
             inkCount++;
             if (inkCount >= 2) break;
           }
@@ -1412,7 +1390,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       final cropSrcW = (inkRightCol + rightPadSrcPx).clamp(1, srcCanvasW);
       final outW = (cropSrcW * globalScale).round().clamp(10, 9999);
 
-      // ── Cubic-downscale binarized crop to output size ─────────────────────────
+      // ── Downscale ORIGINAL-COLOUR crop to output size (no binarization) ──────
       final canvas = html.CanvasElement(width: outW, height: outH);
       final ctx = canvas.context2D;
       ctx.fillStyle = '#ffffff';
@@ -3985,24 +3963,18 @@ Widget _lineItemCrop(_MatchRow row, Size? imageSize, {TextStyle? fallbackStyle})
       waitDuration: const Duration(milliseconds: 400),
       child: Builder(builder: (ctx) {
         try { RenderLog.write('c316_img_contain', '1'); } catch (_) {}
+        // CHANGE #373 — no colour/threshold filter on the crop: render the
+        // line-region crop in its true photographed colour (a prior change's
+        // ColorFiltered contrast boost, #372, is removed here; the crop itself
+        // is no longer binarized either — see _processOneCrop).
+        try { RenderLog.write('crop_original_color_373', '1'); } catch (_) {}
         return FittedBox(
           fit: BoxFit.scaleDown,
           alignment: Alignment.centerLeft,
-          // CHANGE #372 — presentation-only contrast boost (darkens ink,
-          // whitens paper) so faint low-light pen photos stay readable.
-          // No pixel data persisted; this is a display-time filter only.
-          child: ColorFiltered(
-            colorFilter: const ColorFilter.matrix(<double>[
-              1.8, 0, 0, 0, -102,
-              0, 1.8, 0, 0, -102,
-              0, 0, 1.8, 0, -102,
-              0, 0, 0, 1, 0,
-            ]),
-            child: Image.memory(
-              crop,
-              filterQuality: FilterQuality.high,
-              gaplessPlayback: true,
-            ),
+          child: Image.memory(
+            crop,
+            filterQuality: FilterQuality.high,
+            gaplessPlayback: true,
           ),
         );
       }),

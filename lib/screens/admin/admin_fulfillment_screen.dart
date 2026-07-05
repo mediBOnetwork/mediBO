@@ -12742,6 +12742,31 @@ class _PackTabState extends State<_PackTab>
     );
   }
 
+  // #368: neutral-warning "Not bagged" pill — informational only (blocks packing, not an error).
+  // Matches the muted warning palette (bg #FEF3C7 / text #92400E) from the design system.
+  Widget _buildNotBaggedChip() {
+    try { RenderLog.write('c368_notbagged', 'src=tile'); } catch (_) {}
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFEF3C7),
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: const Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(Icons.shopping_bag_outlined, size: 12, color: Color(0xFF92400E)),
+            SizedBox(width: 4),
+            Text('Not bagged',
+                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF92400E))),
+          ]),
+        ),
+      ),
+    );
+  }
+
   // #347: item card — stacked multi-bag tags; mismatch chip removed; Counted colour vs received
   Widget _buildPackItemTile(Map<String, dynamic> item) {
     final name       = item['product_name']?.toString() ?? '—';
@@ -12753,6 +12778,8 @@ class _PackTabState extends State<_PackTab>
     final packedQty  = (item['packed_qty'] as num?)?.toInt() ?? 0;
     final countedQty = (item['counted_qty'] as num?)?.toInt();
     final ct         = countedQty ?? 0;
+    // #368: an item can only be packed if it is mapped to a bag.
+    final isBagged   = item['is_bagged'] == true;
 
     // §2: bags[] array — stacked tags. Falls back to bag_no if bags not present.
     final rawBags = item['bags'];
@@ -12827,6 +12854,8 @@ class _PackTabState extends State<_PackTab>
                 // so the packer never chases them. Backend already excludes these from
                 // dispatch-ready, so the chip is informational and blocks nothing.
                 _buildPackDisputeChip(item),
+                // #368: workflow note — an un-bagged line can't be packed yet.
+                if (!isBagged) _buildNotBaggedChip(),
                 const SizedBox(height: 5),
                 // Received
                 _packChip('Received • $received/$ordered$pt', received, ordered),
@@ -13114,7 +13143,17 @@ class _PackTabState extends State<_PackTab>
       } catch (_) {}
       if (!mounted) return;
       if (resMap['error'] != null) {
-        _showPackSnack('Not fully packed (${resMap['packed']}/${resMap['total']})');
+        final err = resMap['error'].toString();
+        if (err == 'not_fully_packed') {
+          // #368(C): surface the backend packed/total threshold so the packer knows
+          // exactly how many bagged lines still need packing before dispatch.
+          try {
+            RenderLog.write('c368_dispatch', 'packed=${resMap['packed']};total=${resMap['total']}');
+          } catch (_) {}
+          _showPackSnack('Not fully packed (${resMap['packed']}/${resMap['total']})');
+        } else {
+          _showPackSnack('Could not update dispatch ($err)');
+        }
       }
     } catch (e) {
       if (mounted) _showPackSnack('Error: $e');
@@ -13695,6 +13734,36 @@ class _PackingScreenState extends State<_PackingScreen>
   late final AnimationController _holdProgressCtrl;
   bool _undoing = false;
 
+  // #368: per-item chosen pack qty (keyed by order_item_id). Absent => default to
+  // packable_qty. Only used for partially-bagged lines (packable_qty < ordered).
+  final Map<String, int> _chosenQty = {};
+
+  // #368: single client-side "done" predicate. Backend dispatch-ready keys off
+  // packed_qty >= least(bagged,ordered) (== packable_qty), NOT ordered — so raw
+  // item['packed'] (packed_qty>=ordered) would never flip true for a partially-bagged
+  // line even after packing everything possible. Use this everywhere instead.
+  bool _isItemDone(Map<String, dynamic> item) {
+    final packableQty = (item['packable_qty'] as num?)?.toInt() ?? 0;
+    final packedQty   = (item['packed_qty'] as num?)?.toInt() ?? 0;
+    return packableQty > 0 && packedQty >= packableQty;
+  }
+
+  // #368: qty the Pack action will submit for this item — clamped to [1, packable_qty],
+  // defaulting to packable_qty when the user hasn't touched the stepper.
+  int _chosenQtyFor(Map<String, dynamic> item) {
+    final packableQty = (item['packable_qty'] as num?)?.toInt() ?? 0;
+    if (packableQty <= 0) return 0;
+    final id = item['order_item_id']?.toString() ?? '';
+    final v = _chosenQty[id] ?? packableQty;
+    return v.clamp(1, packableQty);
+  }
+
+  void _showPackingSnack(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(msg), duration: const Duration(seconds: 3)));
+  }
+
   @override
   void initState() {
     super.initState();
@@ -13727,13 +13796,14 @@ class _PackingScreenState extends State<_PackingScreen>
       final items    = ((m['items'] as List?) ?? const [])
           .map((i) => Map<String, dynamic>.from(i as Map))
           .toList();
-      final rollup   = m['rollup'] is Map ? Map<String, dynamic>.from(m['rollup'] as Map) : <String, dynamic>{};
       // #346: old flat fields gone; derive navigation counters from items[]
-      final packed   = (rollup['packed']  as num?)?.toInt() ?? items.where((i) => i['packed'] == true).length;
+      // #368: "done" = packed to bagged capacity (_isItemDone), NOT raw item['packed']
+      // (which requires packed_qty>=ordered and never flips for partially-bagged lines).
       final total    = items.length;
-      final left     = items.where((i) => i['packed'] != true).length;
+      final packed   = items.where(_isItemDone).length;
+      final left     = items.where((i) => !_isItemDone(i)).length;
       final bagCount = items.map((i) => i['bag_no']).where((b) => b != null).toSet().length;
-      final startIdx = items.indexWhere((i) => i['packed'] != true);
+      final startIdx = items.indexWhere((i) => !_isItemDone(i));
       final allDone  = startIdx == -1;
       final startPage = allDone ? 0 : startIdx;
       if (!mounted) return;
@@ -13776,18 +13846,18 @@ class _PackingScreenState extends State<_PackingScreen>
     if (i < 0 || i >= _items.length) return null;
     final B = (_items[i]['bag_no'] as num?)?.toInt() ?? 0;
 
-    // Step 1: next unpacked after i in same bag
+    // Step 1: next not-done after i in same bag (#368: _isItemDone, not raw 'packed')
     for (int j = i + 1; j < _items.length; j++) {
       final jBag = (_items[j]['bag_no'] as num?)?.toInt() ?? 0;
       if (jBag != B) break;
-      if (_items[j]['packed'] != true) return j;
+      if (!_isItemDone(_items[j])) return j;
     }
 
     // Step 2: one-time backwards sweep within bag B
     int? earliestInB;
     for (int j = 0; j < _items.length; j++) {
       final jBag = (_items[j]['bag_no'] as num?)?.toInt() ?? 0;
-      if (jBag == B && _items[j]['packed'] != true) {
+      if (jBag == B && !_isItemDone(_items[j])) {
         earliestInB = j;
         break;
       }
@@ -13807,38 +13877,71 @@ class _PackingScreenState extends State<_PackingScreen>
       if (kBag != B) return k;
     }
 
-    // Step 4: i was in the last bag — any unpacked item anywhere
+    // Step 4: i was in the last bag — any not-done item anywhere
     for (int m = 0; m < _items.length; m++) {
-      if (_items[m]['packed'] != true) return m;
+      if (!_isItemDone(_items[m])) return m;
     }
 
-    return null; // all items packed
+    return null; // all items done
   }
 
   // ── CHANGE #298: pack + auto-advance ────────────────────────────────────────
   Future<void> _packAndAdvance(int index) async {
     if (_marking || index < 0 || index >= _items.length) return;
     final item     = _items[index];
-    final wasPacked = item['packed'] == true;
+    final wasDone  = _isItemDone(item);
 
-    if (!wasPacked) {
-      // Mark packed via RPC, then update local state
+    if (!wasDone) {
+      // #368(A): un-bagged lines cannot be packed. Gate client-side (backend is the
+      // source of truth and also refuses via 'not_bagged'). Do NOT call the RPC.
+      final isBagged = item['is_bagged'] == true;
+      if (!isBagged) {
+        try { RenderLog.write('c368_notbagged', 'src=packing;idx=$index'); } catch (_) {}
+        _showPackingSnack('Map this item to a bag first');
+        return;
+      }
+
+      // #368(B): pack up to packable_qty (defaults to packable_qty).
+      final ordered   = (item['ordered'] as num?)?.toInt() ?? 0;
+      final chosenQty = _chosenQtyFor(item);
+
+      // #368 bug#1: ALWAYS pass p_qty so PostgREST picks the 3-arg overload that
+      // actually writes packed_qty (the 2-arg legacy overload never did).
       setState(() => _marking = true);
       final itemId = item['order_item_id']?.toString() ?? '';
       try {
-        await Supabase.instance.client.rpc('pack_mark_item',
-            params: {'p_order_item_id': itemId, 'p_packed': true});
+        final dynamic res = await Supabase.instance.client.rpc('pack_mark_item',
+            params: {'p_order_item_id': itemId, 'p_packed': true, 'p_qty': chosenQty});
         if (!mounted) return;
+        final resMap = res is String
+            ? (jsonDecode(res) as Map).cast<String, dynamic>()
+            : Map<String, dynamic>.from(res as Map);
+        if (resMap['error'] != null) {
+          final err = resMap['error'].toString();
+          setState(() => _marking = false);
+          _showPackingSnack(err == 'not_bagged'
+              ? 'Map this item to a bag first'
+              : 'Could not pack ($err)');
+          return;
+        }
+        final newPackedQty = (resMap['packed_qty'] as num?)?.toInt() ?? chosenQty;
+        final fully        = resMap['fully_packed'] == true;
         setState(() {
-          _items[index] = {...item, 'packed': true};
-          _packedCount++;
-          _leftCount = (_leftCount - 1).clamp(0, _totalItems);
-          if (_leftCount == 0) _allPacked = true;
-          _marking = false;
+          // Patch local from authoritative RPC response (server truth).
+          _items[index] = {...item, 'packed_qty': newPackedQty, 'packed': fully};
+          _packedCount = _items.where(_isItemDone).length;
+          _leftCount   = _items.where((i) => !_isItemDone(i)).length;
+          _allPacked   = _leftCount == 0;
+          _marking     = false;
         });
         try {
           RenderLog.write('c293_btn_toggle',
               'was=unpacked;now=packed;idx=$index');
+          // #368: partial pack — packed fewer than the full ordered line (either the
+          // bagged capacity is below ordered, or the user stepped the qty down).
+          if (newPackedQty < ordered) {
+            RenderLog.write('c368_pack_qty', 'packed=$newPackedQty;ordered=$ordered');
+          }
         } catch (_) {}
       } catch (e) {
         if (mounted) {
@@ -13849,6 +13952,10 @@ class _PackingScreenState extends State<_PackingScreen>
         }
         return;
       }
+
+      // #368: if the user under-packed (packed_qty < packable_qty) the item isn't
+      // "done" yet — stay put rather than auto-advancing past an incomplete line.
+      if (!_isItemDone(_items[index])) return;
     }
 
     // Compute and perform navigation
@@ -13875,18 +13982,20 @@ class _PackingScreenState extends State<_PackingScreen>
   Future<void> _performUndo(int index) async {
     if (_marking || index < 0 || index >= _items.length) return;
     final item = _items[index];
-    if (item['packed'] != true) return; // nothing to undo
+    if (!_isItemDone(item)) return; // nothing to undo (#368: done-predicate)
     HapticFeedback.mediumImpact();
     setState(() => _marking = true);
     final itemId = item['order_item_id']?.toString() ?? '';
     try {
+      // #368 bug#1: pass p_qty:null so the 3-arg overload runs and actually clears
+      // packed_qty (the 2-arg legacy overload left it stale).
       await Supabase.instance.client.rpc('pack_mark_item',
-          params: {'p_order_item_id': itemId, 'p_packed': false});
+          params: {'p_order_item_id': itemId, 'p_packed': false, 'p_qty': null});
       if (!mounted) return;
       setState(() {
-        _items[index] = {...item, 'packed': false};
-        _packedCount = (_packedCount - 1).clamp(0, _totalItems);
-        _leftCount++;
+        _items[index] = {...item, 'packed': false, 'packed_qty': 0};
+        _packedCount = _items.where(_isItemDone).length;
+        _leftCount   = _items.where((i) => !_isItemDone(i)).length;
         _allPacked = false;
         _marking = false;
       });
@@ -13961,20 +14070,21 @@ class _PackingScreenState extends State<_PackingScreen>
     _holdProgressCtrl.stop();
     if (index < 0 || index >= _items.length) { _undoing = false; return; }
     final item = _items[index];
-    if (item['packed'] != true) { _undoing = false; return; }
+    if (!_isItemDone(item)) { _undoing = false; return; } // #368: done-predicate
     HapticFeedback.mediumImpact();
     setState(() => _marking = true);
     final itemId = item['order_item_id']?.toString() ?? '';
     try {
+      // #368 bug#1: pass p_qty:null so the 3-arg overload clears packed_qty.
       final dynamic res = await Supabase.instance.client.rpc(
         'pack_mark_item',
-        params: {'p_order_item_id': itemId, 'p_packed': false},
+        params: {'p_order_item_id': itemId, 'p_packed': false, 'p_qty': null},
       );
       if (!mounted) return;
       setState(() {
-        _items[index] = {...item, 'packed': false};
-        _packedCount = (_packedCount - 1).clamp(0, _totalItems);
-        _leftCount++;
+        _items[index] = {...item, 'packed': false, 'packed_qty': 0};
+        _packedCount = _items.where(_isItemDone).length;
+        _leftCount   = _items.where((i) => !_isItemDone(i)).length;
         _allPacked = false;
         _marking = false;
       });
@@ -14001,7 +14111,7 @@ class _PackingScreenState extends State<_PackingScreen>
     final result = <int, Map<String, int>>{};
     for (final item in _items) {
       final bn    = (item['bag_no'] as num?)?.toInt() ?? 0;
-      final done  = item['packed'] == true;
+      final done  = _isItemDone(item); // #368: done-predicate
       final entry = result.putIfAbsent(bn, () => {'packed': 0, 'total': 0});
       entry['total'] = (entry['total'] ?? 0) + 1;
       if (done) entry['packed'] = (entry['packed'] ?? 0) + 1;
@@ -14041,7 +14151,7 @@ class _PackingScreenState extends State<_PackingScreen>
   }
 
   void _showPackedPopup() {
-    final sorted = _items.where((i) => i['packed'] == true).toList()
+    final sorted = _items.where(_isItemDone).toList() // #368: done-predicate
         ..sort((a, b) => (a['product_name']?.toString() ?? '')
             .compareTo(b['product_name']?.toString() ?? ''));
     try { RenderLog.write('c292_hdr_popup', 'which=packed;rows=${sorted.length}'); } catch (_) {}
@@ -14049,7 +14159,7 @@ class _PackingScreenState extends State<_PackingScreen>
   }
 
   void _showLeftPopup() {
-    final sorted = _items.where((i) => i['packed'] != true).toList()
+    final sorted = _items.where((i) => !_isItemDone(i)).toList() // #368: done-predicate
         ..sort((a, b) => (a['product_name']?.toString() ?? '')
             .compareTo(b['product_name']?.toString() ?? ''));
     try { RenderLog.write('c292_hdr_popup', 'which=left;rows=${sorted.length}'); } catch (_) {}
@@ -14143,7 +14253,7 @@ class _PackingScreenState extends State<_PackingScreen>
               final name     = item['product_name']?.toString() ?? '—';
               final packType = item['pack_type']?.toString() ?? '';
               final qty      = (item['ordered'] as num?)?.toInt() ?? (item['qty'] as num?)?.toInt() ?? 0;
-              final isPacked = item['packed'] == true;
+              final isPacked = _isItemDone(item); // #368: done-predicate
               final qtyLabel = packType.isNotEmpty ? '$qty $packType' : '$qty';
               return Container(
                 decoration: const BoxDecoration(
@@ -14329,6 +14439,106 @@ class _PackingScreenState extends State<_PackingScreen>
     ]);
   }
 
+  // ── #368: per-item pack affordance ──────────────────────────────────────────
+  //  - un-bagged      → neutral-warning "Not bagged" note (can't pack yet)
+  //  - bagged & done  → "Packed X / ordered" summary
+  //  - bagged, partial (packable_qty < ordered) → +/- stepper (default packable_qty)
+  //  - bagged, full (packable_qty == ordered)   → nothing (single Pack button flow)
+  Widget _buildPackControls(Map<String, dynamic> item, int index) {
+    final isBagged    = item['is_bagged'] == true;
+    final ordered     = (item['ordered'] as num?)?.toInt() ?? 0;
+    final packableQty = (item['packable_qty'] as num?)?.toInt() ?? 0;
+    final packedQty   = (item['packed_qty'] as num?)?.toInt() ?? 0;
+    final done        = _isItemDone(item);
+
+    if (!isBagged) {
+      try { RenderLog.write('c368_notbagged', 'src=packing;idx=$index'); } catch (_) {}
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFEF3C7),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: const Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(Icons.shopping_bag_outlined, size: 16, color: Color(0xFF92400E)),
+            SizedBox(width: 6),
+            Flexible(
+              child: Text('Not bagged — map this item to a bag before packing',
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
+                      color: Color(0xFF92400E))),
+            ),
+          ]),
+        ),
+      );
+    }
+
+    if (done) {
+      final partial = packableQty < ordered;
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Text(
+          partial
+              ? 'Packed $packedQty / $ordered  ·  only $packableQty bagged'
+              : 'Packed $packedQty / $ordered',
+          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
+              color: _kReceivedFg),
+          textAlign: TextAlign.center,
+        ),
+      );
+    }
+
+    // Bagged, not done, fully bagged → keep the simple single-tap Pack flow.
+    if (packableQty >= ordered) return const SizedBox.shrink();
+
+    // Bagged, not done, partially bagged → qty stepper.
+    return _packQtyStepper(item, packableQty, ordered);
+  }
+
+  Widget _packQtyStepper(Map<String, dynamic> item, int packableQty, int ordered) {
+    final id      = item['order_item_id']?.toString() ?? '';
+    final chosen  = _chosenQtyFor(item);
+    void setQty(int v) {
+      final clamped = v.clamp(1, packableQty);
+      setState(() => _chosenQty[id] = clamped);
+    }
+
+    Widget stepBtn(IconData icon, VoidCallback? onTap) => SizedBox(
+      width: 44, height: 44,
+      child: Material(
+        color: onTap == null ? const Color(0xFFF3F4F6) : const Color(0xFFEFF6FF),
+        borderRadius: BorderRadius.circular(10),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: onTap,
+          child: Icon(icon, size: 20,
+              color: onTap == null ? const Color(0xFF9CA3AF) : const Color(0xFF1E40AF)),
+        ),
+      ),
+    );
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Text('Only $packableQty of $ordered bagged',
+            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
+                color: Color(0xFF92400E))),
+        const SizedBox(height: 6),
+        Row(mainAxisSize: MainAxisSize.min, children: [
+          stepBtn(Icons.remove_rounded, chosen > 1 ? () => setQty(chosen - 1) : null),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            child: Text('Pack $chosen',
+                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700,
+                    color: _kText)),
+          ),
+          stepBtn(Icons.add_rounded, chosen < packableQty ? () => setQty(chosen + 1) : null),
+        ]),
+      ]),
+    );
+  }
+
   // ── Per-item card page ───────────────────────────────────────────────────────
   Widget _buildItemPage(int index) {
     if (index >= _items.length) return const SizedBox.shrink();
@@ -14353,7 +14563,7 @@ class _PackingScreenState extends State<_PackingScreen>
     final posInBag    = bagItems.indexWhere(
         (i) => i['order_item_id']?.toString() == itemId) + 1;
     final itemsInBag  = bagItems.length;
-    final packedInBag = bagItems.where((i) => i['packed'] == true).length;
+    final packedInBag = bagItems.where(_isItemDone).length; // #368: done-predicate
 
     // CHANGE #298 layout constants (instrumented once per card build)
     const double kCounterBagGap = 20;   // (#7) bigger gap counter → bag band
@@ -14417,6 +14627,9 @@ class _PackingScreenState extends State<_PackingScreen>
               overflow: TextOverflow.ellipsis),
           // CHANGE #298 (#6): tiny gap name→image
           const SizedBox(height: kNameImgGap),
+          // #368: bag-gate note / partial-pack stepper (shrinks away for the common
+          // fully-bagged case so the image layout is unchanged there).
+          _buildPackControls(item, index),
           // IMAGE — tap-thirds for image cycling; swipe (outer PageView) for items
           Expanded(
             child: _ItemImageView(
@@ -14438,8 +14651,18 @@ class _PackingScreenState extends State<_PackingScreen>
   //             Short tap does NOTHING. Progress fill animates while holding.
   Widget _buildPackedButton() {
     final item     = (_currentIndex < _items.length) ? _items[_currentIndex] : null;
-    final isPacked = item?['packed'] == true;
-    final disabled = _marking || _undoing || item == null;
+    // #368: "packed" for UI = packed to bagged capacity (_isItemDone), not raw 'packed'.
+    final isPacked = item != null && _isItemDone(item);
+    final disabled = _marking || _undoing || item == null; // truly busy → no-op
+    final isBagged = item != null && item['is_bagged'] == true;
+    final packableQty = (item?['packable_qty'] as num?)?.toInt() ?? 0;
+    final ordered     = (item?['ordered'] as num?)?.toInt() ?? 0;
+    // #368: not-bagged is permanently blocked but tappable (tap → toast).
+    final blocked = item != null && !isBagged;
+    // #368: control-render gate log — fires on every render of the pack control.
+    try {
+      RenderLog.write('c368_pack_gate', 'is_bagged=$isBagged;packable=$packableQty');
+    } catch (_) {}
 
     if (isPacked && !_marking) {
       // ── PACKED STATE: hold-to-undo bar ─────────────────────────────────────
@@ -14498,7 +14721,20 @@ class _PackingScreenState extends State<_PackingScreen>
       );
     }
 
-    // ── UNPACKED STATE (or _marking): tap = pack + advance (unchanged) ──────
+    // ── UNPACKED STATE (or _marking): tap = pack + advance ──────────────────
+    // #368: not-bagged → grey "Not bagged" bar, but keep the tap wired so the tap
+    // shows the "map to a bag first" toast (distinct from _marking/_undoing busy).
+    final busy      = _marking || _undoing;
+    final greyLook  = disabled || blocked;
+    final chosenQty = (item != null && isBagged) ? _chosenQtyFor(item) : 0;
+    final String label;
+    if (blocked) {
+      label = 'Not bagged';
+    } else if (isBagged && packableQty < ordered) {
+      label = 'Pack $chosenQty';
+    } else {
+      label = 'Pack';
+    }
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
       child: GestureDetector(
@@ -14510,19 +14746,19 @@ class _PackingScreenState extends State<_PackingScreen>
           width: double.infinity,
           height: 56,
           decoration: BoxDecoration(
-            color: disabled ? const Color(0xFFE5E7EB) : _kGreen,
+            color: greyLook ? const Color(0xFFE5E7EB) : _kGreen,
             borderRadius: BorderRadius.circular(14),
           ),
           alignment: Alignment.center,
-          child: _marking || _undoing
+          child: busy
               ? const SizedBox(
                   width: 24, height: 24,
                   child: CircularProgressIndicator(
                       color: Colors.white, strokeWidth: 2.5))
-              : const Text('Pack',
+              : Text(label,
                   style: TextStyle(
                       fontSize: 18, fontWeight: FontWeight.w700,
-                      color: Colors.white)),
+                      color: blocked ? const Color(0xFF6B7280) : Colors.white)),
         ),
       ),
     );

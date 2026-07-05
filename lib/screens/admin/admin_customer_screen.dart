@@ -1663,15 +1663,40 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         (lead.customerName != null && lead.customerName!.trim().isNotEmpty)
             ? lead.customerName!.trim()
             : lead.senderPhone;
-    final pharmacyName = lead.pharmacy.isNotEmpty ? lead.pharmacy : displayName;
+
+    // CHANGE #374 — root cause of the false "pending approval" / "Not
+    // Registered" bug: `lead.isApproved` was resolved in _load() via a
+    // fragile phone-digit match against pharmacy_profiles (ppByPhone), which
+    // silently defaults to false on any format mismatch, and `id` below was
+    // wrongly set to the auth user id instead of the pharmacy_profiles row
+    // id. Both fed straight into the ViewAs identity that the checkout gate
+    // (cart_screen.dart) and My Profile screen key off. Read
+    // pharmacy_profiles fresh here, keyed by the authoritative `userId` from
+    // wa_convert_start, instead of trusting the phone-matched lead fields.
+    Map<String, dynamic>? profRow;
+    try {
+      profRow = await Supabase.instance.client
+          .from('pharmacy_profiles')
+          .select()
+          .eq('user_id', userId)
+          .maybeSingle();
+    } catch (_) {}
+    if (!mounted) return;
+    final isApproved = profRow?['approved'] == true &&
+        profRow?['status'] != 'suspended' &&
+        profRow?['is_deleted'] != true;
+    final resolvedPharmacyName =
+        (profRow?['pharmacy_name'] as String?)?.trim().isNotEmpty == true
+            ? (profRow!['pharmacy_name'] as String).trim()
+            : (lead.pharmacy.isNotEmpty ? lead.pharmacy : displayName);
     viewAs.activate(
       ViewAsRole.customer,
       ViewAsIdentity(
-        id: userId,
-        name: pharmacyName,
+        id: (profRow?['id'] as String?) ?? userId,
+        name: resolvedPharmacyName,
         email: '',
         userId: userId,
-        isApproved: lead.isApproved,
+        isApproved: isApproved,
       ),
     );
 
@@ -1688,7 +1713,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         pharmacy: lead.pharmacy,
         phone: lead.senderPhone,
         address: '',
-        isApproved: lead.isApproved,
+        isApproved: isApproved,
       );
       BulkUploadScreen.navToBulkUpload?.call();
     });

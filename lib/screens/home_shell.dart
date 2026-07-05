@@ -877,7 +877,7 @@ class _MobileProfileAvatar extends StatelessWidget {
           } else if (isCustomerViewAs) {
             // In customer ViewAs mode, show the impersonated customer's profile
             Navigator.push(context,
-                MaterialPageRoute(builder: (_) => ProfileScreen(viewAsProfileId: viewAs.identity!.id)));
+                MaterialPageRoute(builder: (_) => ProfileScreen(viewAsUserId: viewAs.identity!.userId)));
           } else if (onAdminNav != null) {
             _showAdminSheet(context, auth);
           } else {
@@ -3649,7 +3649,7 @@ class _DesktopProfileButton extends StatelessWidget {
         if (val == 'profile' && context.mounted) {
           if (isCustomerViewAs) {
             Navigator.push(context, MaterialPageRoute(
-              builder: (_) => ProfileScreen(viewAsProfileId: viewAs.identity!.id),
+              builder: (_) => ProfileScreen(viewAsUserId: viewAs.identity!.userId),
             ));
           } else {
             Navigator.push(context,

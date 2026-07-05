@@ -119,6 +119,8 @@ class _CartScreenState extends State<CartScreen> {
           return;
         }
         final netPayable = items.fold(0.0, (s, i) => s + (i['line_total'] as double));
+        // CHANGE #374 — impersonation place-order path (admin_writeas_place_order).
+        RenderLog.write('actas_order_fix_374', 'userId:$customerId,approved:${viewAs.identity?.isApproved}');
         final orderId = await Supabase.instance.client.rpc(
           'admin_writeas_place_order',
           params: {
@@ -174,7 +176,19 @@ class _CartScreenState extends State<CartScreen> {
           ),
         );
       } catch (e) {
-        if (mounted) showToast(context, 'Could not place order: $e', isError: true);
+        // CHANGE #374 — surface the RPC's specific gate errors with friendly text.
+        final msg = e.toString();
+        if (mounted) {
+          if (msg.contains('account_pending_approval')) {
+            showToast(context, 'Customer not approved', isError: true);
+          } else if (msg.contains('forbidden') && msg.contains('super_admin')) {
+            showToast(context,
+                'Only a super admin can place orders on behalf of a customer',
+                isError: true);
+          } else {
+            showToast(context, 'Could not place order: $e', isError: true);
+          }
+        }
       } finally {
         if (mounted) setState(() => _orderInProgress = false);
       }

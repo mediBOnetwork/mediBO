@@ -8,9 +8,15 @@ import 'auth/business_details_screen.dart';
 import 'admin/view_as_picker_dialog.dart';
 
 class ProfileScreen extends StatefulWidget {
-  // When set (View As Customer), load THIS pharmacy_profiles.id instead of current user's.
-  final String? viewAsProfileId;
-  const ProfileScreen({super.key, this.viewAsProfileId});
+  // CHANGE #374 — when set (View As Customer), load the impersonated
+  // customer's pharmacy_profiles by their auth USER ID (pharmacy_profiles.
+  // user_id), not the pharmacy_profiles row id. Root cause of a false "Not
+  // Registered" screen: some ViewAs-activation call sites (the Leads
+  // Convert-to-Order flow) only had the user id on hand and were passing it
+  // in as if it were the pharmacy row id, so the old `.eq('id', ...)` lookup
+  // matched nothing. Keying on user_id here works regardless of that.
+  final String? viewAsUserId;
+  const ProfileScreen({super.key, this.viewAsUserId});
 
   @override
   State<ProfileScreen> createState() => _ProfileScreenState();
@@ -23,7 +29,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   @override
   void initState() {
     super.initState();
-    if (widget.viewAsProfileId != null) _fetchViewAsProfile();
+    if (widget.viewAsUserId != null) _fetchViewAsProfile();
   }
 
   Future<void> _fetchViewAsProfile() async {
@@ -32,7 +38,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       final res = await Supabase.instance.client
           .from('pharmacy_profiles')
           .select()
-          .eq('id', widget.viewAsProfileId!)
+          .eq('user_id', widget.viewAsUserId!)
           .maybeSingle();
       if (mounted) setState(() { _viewAsProfileRow = res; _viewAsLoading = false; });
     } catch (_) {
@@ -42,7 +48,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final isViewAs = widget.viewAsProfileId != null;
+    final isViewAs = widget.viewAsUserId != null;
 
     // In View As mode: use the fetched row; otherwise use the real auth profile.
     final auth = UserState.of(context);

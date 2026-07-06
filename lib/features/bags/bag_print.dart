@@ -9,12 +9,7 @@ import '../../utils/render_log.dart';
 const Color kBagHeaderGreen = Brand.green;
 const int _kHeaderGreen = 0xFF1B7A43;
 
-// Fixed card shape (matches the on-screen "Bag 1" card): constant across
-// EVERY density — only the number of cards per A4 page changes, never the
-// card's own proportions.
-const double _cardAspect = 1 / 1.30; // width / height
 const double _headerFrac = 0.18; // header band height as fraction of card height
-const double _padFrac = 0.06; // body padding as fraction of card width
 
 class BagPrintItem {
   final String bagNo;   // exactly what the card shows, e.g. "Bag 1"
@@ -35,23 +30,30 @@ List<int> _gridFor(int n) {
   return [cols, (n / cols).ceil()];
 }
 
+// One fixed header font size per column count — same size on EVERY card of a
+// given sheet, so "Bag 1" and "Bag 24" never differ in size on the same page.
+double _fontSizeForCols(int cols) {
+  if (cols <= 2) return 12;
+  if (cols == 3) return 10;
+  if (cols == 4) return 8.5;
+  return 8;
+}
+
 Future<void> printBags(List<BagPrintItem> bags, int perPage) async {
   if (bags.isEmpty) return;
   final g = _gridFor(perPage);
   final cols = g[0], rows = g[1];
+  final double fontSize = _fontSizeForCols(cols);
 
   const mm = PdfPageFormat.mm;
-  const double gut = 6.0;
+  const double gut = 5.0;
   final double areaW = (210 - 16) * mm; // 8mm L/R margins
   final double areaH = (297 - 20) * mm; // 10mm T/B margins
 
-  // Fit the FIXED-aspect card into the slot, keep aspect, take the smaller
-  // scale so the grid block centers with even outer margins — cards never
-  // stretch or reshape as density changes.
-  final double slotW = (areaW - (cols - 1) * gut) / cols;
-  final double slotH = (areaH - (rows - 1) * gut) / rows;
-  final double cardW = math.min(slotW, slotH * _cardAspect);
-  final double cardH = cardW / _cardAspect;
+  // Cards FILL the slots (no aspect lock) so they tile the whole printable
+  // area with only the small fixed gutter between them — no dead margins.
+  final double cardW = (areaW - (cols - 1) * gut) / cols;
+  final double cardH = (areaH - (rows - 1) * gut) / rows;
 
   final doc = pw.Document();
   for (var start = 0; start < bags.length; start += perPage) {
@@ -65,40 +67,36 @@ Future<void> printBags(List<BagPrintItem> bags, int perPage) async {
           marginTop: 10 * mm,
           marginBottom: 10 * mm,
         ),
-        build: (ctx) => pw.Center(
-          child: pw.Column(
-            mainAxisAlignment: pw.MainAxisAlignment.center,
-            children: List.generate(rows, (r) {
-              return pw.Padding(
-                padding: pw.EdgeInsets.only(bottom: r < rows - 1 ? gut : 0),
-                child: pw.Row(
-                  mainAxisAlignment: pw.MainAxisAlignment.center,
-                  children: List.generate(cols, (c) {
-                    final idx = r * cols + c;
-                    return pw.Padding(
-                      padding: pw.EdgeInsets.only(right: c < cols - 1 ? gut : 0),
-                      child: idx < slice.length
-                          ? _card(slice[idx], cardW, cardH)
-                          : pw.SizedBox(width: cardW, height: cardH),
-                    );
-                  }),
-                ),
-              );
-            }),
-          ),
+        build: (ctx) => pw.Column(
+          children: List.generate(rows, (r) {
+            return pw.Padding(
+              padding: pw.EdgeInsets.only(bottom: r < rows - 1 ? gut : 0),
+              child: pw.Row(
+                children: List.generate(cols, (c) {
+                  final idx = r * cols + c;
+                  return pw.Padding(
+                    padding: pw.EdgeInsets.only(right: c < cols - 1 ? gut : 0),
+                    child: idx < slice.length
+                        ? _card(slice[idx], cardW, cardH, fontSize)
+                        : pw.SizedBox(width: cardW, height: cardH),
+                  );
+                }),
+              ),
+            );
+          }),
         ),
       ),
     );
   }
-  RenderLog.write('c386_pdf_built_$perPage', bags.length);
-  RenderLog.write('c386_card_aspect_fixed', 1);
+  RenderLog.write('c387_pdf_built_$perPage', bags.length);
+  RenderLog.write('c387_fixed_font_fill', 1);
   await Printing.layoutPdf(onLayout: (_) async => doc.save());
 }
 
-pw.Widget _card(BagPrintItem b, double w, double h) {
+pw.Widget _card(BagPrintItem b, double w, double h, double fontSize) {
   final double headerH = h * _headerFrac;
-  final double pad = w * _padFrac;
-  final double qr = w - 2 * pad; // square side, sized to fill the body width
+  final double bodyH = h - headerH;
+  final double qr = math.min(w, bodyH) - 8; // even padding, max square
 
   return pw.SizedBox(
     width: w,
@@ -119,13 +117,14 @@ pw.Widget _card(BagPrintItem b, double w, double h) {
               topLeft: pw.Radius.circular(4), topRight: pw.Radius.circular(4)),
           ),
           child: pw.Center(
-            child: pw.FittedBox(
-              fit: pw.BoxFit.scaleDown,
-              child: pw.Text(b.bagNo,
-                  style: pw.TextStyle(
-                      color: PdfColors.white,
-                      fontWeight: pw.FontWeight.bold,
-                      fontSize: 11)),
+            child: pw.Text(
+              b.bagNo,
+              maxLines: 1,
+              softWrap: false,
+              style: pw.TextStyle(
+                  color: PdfColors.white,
+                  fontWeight: pw.FontWeight.bold,
+                  fontSize: fontSize),
             ),
           ),
         ),

@@ -43,4 +43,74 @@ void main() {
       });
     }
   });
+
+  group('CHANGE #391 — cells always fit the page (no dropped last row)', () {
+    for (final perPage in [4, 6, 9, 12, 24]) {
+      test('perPage=$perPage: rows*cellH+gutters+safety <= areaH, cols*cellW+gutters <= areaW', () {
+        final layout = layoutFor(perPage);
+        final totalH = layout.rows * layout.cellH +
+            (layout.rows - 1) * kBagGutterPt +
+            kBagSafetyPt;
+        final totalW = layout.cols * layout.cellW + (layout.cols - 1) * kBagGutterPt;
+
+        expect(layout.fits, isTrue, reason: 'layoutFor($perPage).fits must be true');
+        expect(totalH, lessThanOrEqualTo(bagAreaHPt + 0.01),
+            reason: 'rows*cellH+gutters+safety must not exceed the printable height '
+                '(this is the anti-dropped-last-row proof)');
+        expect(totalW, lessThanOrEqualTo(bagAreaWPt + 0.01),
+            reason: 'cols*cellW+gutters must not exceed the printable width');
+      });
+
+      test('perPage=$perPage over 30 fake bags: full coverage + capacity check', () {
+        const total = 30;
+        final g = gridFor(perPage);
+        final cap = g[0] * g[1];
+        final pages = paginateBagIndices(total, perPage);
+        expect(pages.length, (total / cap).ceil());
+        for (var p = 0; p < pages.length - 1; p++) {
+          expect(pages[p].length, cap, reason: 'non-last page must hold exactly $cap cells');
+        }
+        final seen = pages.expand((p) => p).toList();
+        expect(seen, List.generate(total, (i) => i));
+      });
+    }
+
+    test('Bag-N font is PROPORTIONAL to card size: 4B font > 24B font', () {
+      final font4 = fontSizeForCellH(layoutFor(4).cellH);
+      final font24 = fontSizeForCellH(layoutFor(24).cellH);
+      expect(font4, greaterThan(font24),
+          reason: '4B cards (bigger) must have a bigger font than 24B cards (smaller)');
+
+      // Formula check: fontSize == clamp(cellH*0.11, 6.0, 20.0) for every density —
+      // this is the actual proportionality proof (font scales linearly with
+      // cellH until it hits the 6-20pt clamp range; 4B/6B/8B/12B/16B all sit
+      // at the 20pt ceiling since their cellH*0.11 exceeds 20, which is
+      // expected/correct clamp behavior, not a bug).
+      for (final n in [4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24]) {
+        final cellH = layoutFor(n).cellH;
+        final expected = (cellH * 0.11).clamp(6.0, 20.0);
+        expect(fontSizeForCellH(cellH), expected,
+            reason: 'fontSizeForCellH must equal clamp(cellH*0.11, 6, 20) for ${n}B');
+      }
+
+      // Among densities where the formula is NOT clamped (cellH*0.11 < 20pt),
+      // font must be non-decreasing with cellH (ties are legitimate when two
+      // densities share the same row count, e.g. 18B/24B both have rows=6 ->
+      // identical cellH -> identical font — that's correct proportional
+      // behavior, not a bug).
+      final unclamped = [10, 14, 18, 20, 22, 24];
+      final byCellH = [...unclamped]..sort((a, b) =>
+          layoutFor(a).cellH.compareTo(layoutFor(b).cellH));
+      for (var i = 1; i < byCellH.length; i++) {
+        final smaller = fontSizeForCellH(layoutFor(byCellH[i - 1]).cellH);
+        final bigger = fontSizeForCellH(layoutFor(byCellH[i]).cellH);
+        expect(bigger, greaterThanOrEqualTo(smaller),
+            reason: 'font must not decrease as cellH increases in the unclamped range');
+      }
+      // And the extremes of the unclamped range must differ strictly.
+      expect(fontSizeForCellH(layoutFor(10).cellH),
+          greaterThan(fontSizeForCellH(layoutFor(22).cellH)),
+          reason: '10B (bigger cells) must have a strictly bigger font than 22B (smallest cells)');
+    });
+  });
 }

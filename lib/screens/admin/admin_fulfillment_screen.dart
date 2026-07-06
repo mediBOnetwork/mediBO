@@ -13229,18 +13229,24 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
       widget.mentions.map((m) => Map<String, dynamic>.from(m)).toList();
   final Set<String> _mentionLoading = {};
 
-  // #338: packed products are frozen — hold disabled, pill dimmed with lock
-  Set<int> get _packedProductIds => widget.packItems
-      .where((i) => i['packed'] == true)
-      .map((i) => (i['product_id'] as num?)?.toInt())
-      .whereType<int>()
-      .toSet();
+  @override
+  void initState() {
+    super.initState();
+    RenderLog.write('c389_pack_popup_open', 'orderId:${widget.orderId}');
+  }
 
   // #342: icon-tap handler for pack mentions (replaces #338 hold).
   Future<void> _handlePackMentionToggle(String id, String status) async {
     if (id.isEmpty || _mentionLoading.contains(id)) return;
     final isDeleted = status == 'deleted';
     final action = isDeleted ? 'readd' : 'delete';
+    // CHANGE #389 — the mention's own qty is the delta this tap applies to
+    // the pack line's counted total (pack_counted_qty server-side).
+    final mentionQty =
+        (_mentions.firstWhere((m) => m['id']?.toString() == id, orElse: () => const {})['qty'] as num?)
+                ?.toInt() ??
+            0;
+    RenderLog.write('c389_pack_qty_write_$mentionQty', 'action=$action;id=${id.substring(0, id.length.clamp(0, 8))}');
     setState(() => _mentionLoading.add(id));
     try {
       final dynamic raw = await Supabase.instance.client.rpc(
@@ -13253,6 +13259,8 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
       if (res['ok'] == true) {
         final newStatus =
             res['status']?.toString() ?? (isDeleted ? 'readded' : 'deleted');
+        RenderLog.write('c389_pack_qty_ok',
+            'new_total=${res['new_total'] ?? 'null'}');
         RenderLog.write(action == 'readd' ? 'c342_readd_pack' : 'c342_del_pack',
             'id=${id.substring(0, id.length.clamp(0, 8))};new_status=$newStatus;new_total=${res['new_total'] ?? 'null'}');
         try {
@@ -13278,6 +13286,7 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
         final applyErr = (res['apply'] as Map?)?['error']?.toString() ?? '';
         RenderLog.write('c343_toggle_err_${err.isEmpty ? 'unknown' : err.substring(0, err.length.clamp(0, 20))}',
             'stage=pack');
+        RenderLog.write('c389_pack_qty_err', 'error=${err.isEmpty ? applyErr : err}');
         if (mounted) {
           if (err.contains('packed_locked')) {
             ScaffoldMessenger.of(context).showSnackBar(
@@ -13308,6 +13317,7 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
     } catch (e) {
       RenderLog.write('c343_toggle_err_exception',
           'detail=${e.toString().substring(0, e.toString().length.clamp(0, 60))};stage=pack');
+      RenderLog.write('c389_pack_qty_err', 'error=exception');
       if (mounted) {
         ScaffoldMessenger.of(context)
             .showSnackBar(const SnackBar(content: Text("Couldn't update count — try again")));
@@ -13441,6 +13451,9 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
     final playSeq = _playingSeq;
     // #343: icons only in per-clip view; All view is a read-only aggregate
     final showActions = _selectedSeq != null;
+    // CHANGE #389 — showActions gates the standalone header (only) vs.
+    // _MentionClipTable's own header (only) below; exactly one ever mounts.
+    RenderLog.write('c389_header_once', showActions ? 'mode=clip' : 'mode=all');
 
     return DraggableScrollableSheet(
       initialChildSize: 0.65,
@@ -13544,27 +13557,34 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
                 ]),
               ),
             ),
-          // Table header row
-          Container(
-            color: const Color(0xFFF5F6F8),
-            child: Row(children: [
-              Expanded(child: Padding(
-                padding: const EdgeInsets.fromLTRB(14, 6, 4, 6),
-                child: const Text('Product',
-                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _kSub)),
-              )),
-              const SizedBox(width: _kNameToBadgeMinGap),
-              SizedBox(width: _kBadgeClusterMaxW, child: const Text('Qty spoken',
-                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _kSub))),
-              const SizedBox(width: _kBadgeToTotalGap),
-              SizedBox(width: _kTotalColW, child: Padding(
-                padding: const EdgeInsets.only(right: 10),
-                child: const Text('Total', textAlign: TextAlign.right,
-                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _kSub)),
-              )),
-            ]),
-          ),
-          const Divider(height: 1),
+          // CHANGE #389 — this standalone header used to render unconditionally,
+          // but the per-clip branch below hands off to _MentionClipTable, which
+          // draws its OWN identical header (line ~8120) — showing the header
+          // twice whenever a "Clip N" chip was selected. The "All" grouped view
+          // has no header of its own, so it still needs this one. Gate on
+          // !showActions so exactly one header ever renders.
+          if (!showActions) ...[
+            Container(
+              color: const Color(0xFFF5F6F8),
+              child: Row(children: [
+                Expanded(child: Padding(
+                  padding: const EdgeInsets.fromLTRB(14, 6, 4, 6),
+                  child: const Text('Product',
+                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _kSub)),
+                )),
+                const SizedBox(width: _kNameToBadgeMinGap),
+                SizedBox(width: _kBadgeClusterMaxW, child: const Text('Qty spoken',
+                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _kSub))),
+                const SizedBox(width: _kBadgeToTotalGap),
+                SizedBox(width: _kTotalColW, child: Padding(
+                  padding: const EdgeInsets.only(right: 10),
+                  child: const Text('Total', textAlign: TextAlign.right,
+                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _kSub)),
+                )),
+              ]),
+            ),
+            const Divider(height: 1),
+          ],
           // #344: clip view → shared _MentionClipTable; All view → grouped read-only table
           if (showActions) ...[
             // Per-clip view: one row per mention, whole-row tint, shared widget
@@ -13588,10 +13608,20 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
                         child: _MentionClipTable(
                           rows: filtered,
                           frozenAll: false,
-                          isFrozenRow: (r) {
-                            final pid = (r['product_id'] as num?)?.toInt();
-                            return pid != null && _packedProductIds.contains(pid);
-                          },
+                          // CHANGE #389 — previously gated already-packed
+                          // products via isFrozenRow, which set onTap to a
+                          // hard `null` (MentionActionIcon + _MentionClipTable
+                          // only route frozen taps to onFrozenTap when
+                          // frozenAll is true; per-row frozen with
+                          // frozenAll:false fell through to null — a silent
+                          // no-op with zero feedback). The backend
+                          // (pack_mention_set_status) already rejects a
+                          // packed line with a clean 'packed_locked' error,
+                          // and _handlePackMentionToggle already shows the
+                          // right SnackBar for it — so leaving rows tappable
+                          // and letting the server be the single source of
+                          // truth on lock state actually surfaces feedback
+                          // instead of hiding it.
                           mentionLoading: _mentionLoading,
                           onToggle: (r) => _handlePackMentionToggle(
                               r['id']?.toString() ?? '',

@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <meta name="build-commit" content="603426c">
+  <meta name="build-commit" content="a2032ed">
   <!-- CHANGE #238: SW permanently disabled. Unregister ALL SWs + wipe all caches on every load.
        No sessionStorage guard — runs unconditionally so even users whose old SW served this
        HTML from cache will have SWs cleared on the very next in-SW-controlled load.
@@ -139,10 +139,10 @@
        On every load, fetches /version.json (no-cache). If the live commit differs
        from the build-stamped commit below, does ONE hard reload so the PWA gets the
        newest bundle instead of staying on a stale cached build.
-       603426c is replaced with the actual short commit hash by deploy.sh. -->
+       a2032ed is replaced with the actual short commit hash by deploy.sh. -->
   <script>
     (function () {
-      var _builtCommit = '603426c';
+      var _builtCommit = 'a2032ed';
       var _sessionKey  = 'c220_pwa_reloaded';
       function _rlWrite(key, val) {
         try {
@@ -160,7 +160,7 @@
           // Already reloaded once this session — skip to prevent loop.
           if (sessionStorage.getItem(_sessionKey)) return;
           // Skip if placeholder was not stamped (local dev / test build).
-          if (_builtCommit === '603426c') return;
+          if (_builtCommit === 'a2032ed') return;
           fetch('/version.json?_t=' + Date.now(), { cache: 'no-store' })
             .then(function (r) { return r.json(); })
             .then(function (data) {
@@ -176,7 +176,7 @@
       });
       // Wire confirmation — written once regardless of outcome.
       window.addEventListener('DOMContentLoaded', function () {
-        if (_builtCommit !== '603426c') {
+        if (_builtCommit !== 'a2032ed') {
           _rlWrite('c220_pwa_check_wired', 1);
         }
       });
@@ -470,7 +470,7 @@
     })();
   </script>
 
-  <script src="flutter_bootstrap.js?v=603426c" async></script>
+  <script src="flutter_bootstrap.js?v=a2032ed" async></script>
   <script>
     var recaptchaResolve = null;
     var recaptchaWidgetId = null;

@@ -382,6 +382,11 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   List<Lead> _leads = [];
   // orderId → per-product inquiry status from get_order_item_inquiry_status
   final Map<String, List<Map<String, dynamic>>> _orderItemStatuses = {};
+  // CHANGE #384 — MEDICINE.id → brief catalog row (image_url_1, marketer,
+  // pack_qty/pack_type/pack_size, salt_composition), keyed by product_id, for
+  // the Customer Orders item cards. Merged-into across loads so re-expanding
+  // an order never refetches an id already resolved.
+  final Map<int, Map<String, dynamic>> _medBriefs = {};
   final ScrollController _scrollCtrl = ScrollController();
 
   final List<RealtimeChannel> _realtimeChannels = [];
@@ -668,6 +673,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         // button-present claim.
         RenderLog.write('c186_delete_order',
             'change:369,button_present:false,reason:real_orders_are_permanent');
+        // CHANGE #384 — fire-and-forget; never blocks the tab's own load.
+        _loadMedicineBriefs(orders, carts);
       }
     } catch (e) {
       if (mounted) {
@@ -678,6 +685,64 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       _loadInFlight = false;
     }
     _loadLeads();
+  }
+
+  // CHANGE #384 — one batched MEDICINE lookup (by distinct product_id) for
+  // the Customer Orders + cart item cards. Skips ids already cached so
+  // re-expanding an order never refetches. Never throws into _load(); a
+  // failed/partial fetch just leaves those item cards at name+qty+price.
+  Future<void> _loadMedicineBriefs(
+      List<_CustRow> orders, List<_CustRow> carts) async {
+    final ids = <int>{};
+    for (final row in [...orders, ...carts]) {
+      for (final item in [...row.items, ...row.removedItems]) {
+        final pid = int.tryParse(item.productId ?? '');
+        if (pid != null && !_medBriefs.containsKey(pid)) ids.add(pid);
+      }
+    }
+    if (ids.isEmpty) return;
+    final idList = ids.toList();
+    final fetched = <int, Map<String, dynamic>>{};
+    try {
+      final client = Supabase.instance.client;
+      for (var i = 0; i < idList.length; i += 300) {
+        final chunk =
+            idList.sublist(i, i + 300 > idList.length ? idList.length : i + 300);
+        final rows = await client
+            .from('MEDICINE')
+            .select(
+                'id, image_url_1, marketer, pack_qty, pack_type, pack_size, salt_composition')
+            .inFilter('id', chunk) as List;
+        for (final r in rows) {
+          final m = Map<String, dynamic>.from(r as Map);
+          fetched[(m['id'] as num).toInt()] = m;
+        }
+      }
+    } catch (_) {
+      // Silent — cards degrade to name+qty+price only.
+    }
+    if (mounted && fetched.isNotEmpty) {
+      setState(() => _medBriefs.addAll(fetched));
+    }
+  }
+
+  // CHANGE #384 — null-safe MEDICINE display fields for one order/cart item,
+  // with the same pack fallback chain as Product.fromMap (pack_qty →
+  // pack_size → pack_type). Unknown/uncached product_id yields all nulls so
+  // the card just omits those lines rather than fabricating text.
+  Map<String, String?> _medDisplayFields(String? productId) {
+    final pid = int.tryParse(productId ?? '');
+    final brief = pid != null ? _medBriefs[pid] : null;
+    String? nz(String? s) => (s != null && s.trim().isNotEmpty) ? s.trim() : null;
+    final pack = nz(brief?['pack_qty'] as String?) ??
+        nz(brief?['pack_size'] as String?) ??
+        nz(brief?['pack_type'] as String?);
+    return {
+      'image': nz(brief?['image_url_1'] as String?),
+      'company': nz(brief?['marketer'] as String?),
+      'pack': pack,
+      'composition': nz(brief?['salt_composition'] as String?),
+    };
   }
 
   Future<void> _loadLeads() async {
@@ -2117,13 +2182,14 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     );
   }
 
-  // CHANGE #382 — Customer Orders item-row thumbnail. Same
+  // CHANGE #382/384 — Customer Orders item-row thumbnail. Same
   // Image.network+errorBuilder pattern as widgets/order_item_card.dart
   // (_buildImageTile): null/empty url renders the placeholder directly;
   // a broken image URL falls back to the same placeholder via errorBuilder.
-  // Never shows a broken-image glyph.
-  Widget _custOrderItemThumb(String? imageUrl) {
-    const size = 76.0;
+  // Never shows a broken-image glyph. isDesktop bumps the tile slightly on
+  // wider viewports (72) vs mobile (64).
+  Widget _custOrderItemThumb(String? imageUrl, {bool isDesktop = false}) {
+    final size = isDesktop ? 72.0 : 64.0;
     if (imageUrl != null && imageUrl.isNotEmpty) {
       return ClipRRect(
         borderRadius: BorderRadius.circular(13),
@@ -2267,7 +2333,18 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
 
           // Null-guarded derived text — a missing value hides its line/token,
           // never renders "null"/"undefined"/"NaN"/"₹null".
-          final packLine = (item.packSize ?? '').trim();
+          // CHANGE #384 — image/company/composition/pack now come from a
+          // batched MEDICINE lookup keyed by item.productId (see
+          // _loadMedicineBriefs/_medDisplayFields); item.packSize (populated
+          // only for cart_items rows) still wins when present.
+          final med = _medDisplayFields(item.productId);
+          try {
+            RenderLog.write('c384_item_medicine',
+                'productId:${item.productId ?? "?"}:hasImage:${med['image'] != null}:hasCompany:${med['company'] != null}:hasPack:${(med['pack'] ?? '').isNotEmpty}');
+          } catch (_) {}
+          final packLine = (item.packSize?.trim().isNotEmpty == true)
+              ? item.packSize!.trim()
+              : (med['pack'] ?? '');
           final priceVal = (item.price != null && item.price! > 0)
               ? item.price
               : ((item.mrp != null && item.mrp! > 0) ? item.mrp : null);
@@ -2283,17 +2360,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
               border: Border.all(color: const Color(0xFFE5E7EB), width: 0.5),
             ),
             child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              // CHANGE #382 — _ItemLine (parsed from orders.items JSONB, see
-              // _parseItems) carries no image_url field today — the JSONB
-              // itself is only ever written with product_name/quantity/
-              // price/mrp/gst_percent/line_total (cart_screen.dart order
-              // insert). Per ticket scope (no new query/RPC for this),
-              // imageUrl is always null here — the tile still uses the same
-              // Image.network+errorBuilder pattern as
-              // widgets/order_item_card.dart so it's ready to light up the
-              // moment an image field is ever added, but today it always
-              // shows the placeholder, never a broken-image glyph.
-              _custOrderItemThumb(null),
+              _custOrderItemThumb(med['image'], isDesktop: isDesktop),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
@@ -2306,14 +2373,33 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                             fontSize: 15,
                             fontWeight: FontWeight.w600,
                             color: Color(0xFF111827))),
+                    if (med['company'] != null) ...[
+                      const SizedBox(height: 2),
+                      Text(med['company']!.toUpperCase(),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w600,
+                              color: Color(0xFF9CA3AF),
+                              letterSpacing: 0.8)),
+                    ],
+                    if (med['composition'] != null) ...[
+                      const SizedBox(height: 2),
+                      Text(med['composition']!,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              fontSize: 12, color: Color(0xFF6B7280), height: 1.3)),
+                    ],
                     if (packLine.isNotEmpty) ...[
                       const SizedBox(height: 2),
                       Text(packLine,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
                               fontSize: 12.5, color: Color(0xFF6B7280))),
                     ],
-                    // No company/marketer field exists on _ItemLine for real
-                    // orders today — line omitted entirely (not fabricated).
                     const SizedBox(height: 8),
                     Wrap(
                       spacing: 12,

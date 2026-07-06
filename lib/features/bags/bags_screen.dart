@@ -22,6 +22,7 @@ class _BagsScreenState extends State<BagsScreen> {
   void initState() {
     super.initState();
     _load();
+    RenderLog.write('c385_print_btn_shown', 1);
   }
 
   @override
@@ -106,6 +107,7 @@ class _BagsScreenState extends State<BagsScreen> {
       return;
     }
     const densities = [4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24];
+    RenderLog.write('c385_print_dialog_opened', 1);
     await showDialog(
       context: context,
       builder: (ctx) => Dialog(
@@ -153,7 +155,7 @@ class _BagsScreenState extends State<BagsScreen> {
       context: context,
       barrierDismissible: false,
       builder: (_) => const Center(
-        child: CircularProgressIndicator(color: kBagHeaderRed),
+        child: CircularProgressIndicator(color: kBagHeaderGreen),
       ),
     );
     try {
@@ -256,7 +258,7 @@ class _BagCard extends StatelessWidget {
         Container(
           width: double.infinity,
           padding: const EdgeInsets.symmetric(vertical: 8),
-          color: kBagHeaderRed,
+          color: kBagHeaderGreen,
           child: Text(
             'Bag $bagNo',
             textAlign: TextAlign.center,

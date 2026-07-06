@@ -52,6 +52,8 @@ dependencies:
   audioplayers: ^6.0.0
   image: ^4.0.0
   zxing2: ^0.2.3
+  printing: ^5.13.0
+  pdf: ^3.11.0
 
 dev_dependencies:
   flutter_test:

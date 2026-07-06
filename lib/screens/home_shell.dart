@@ -296,6 +296,10 @@ class _HomeShellState extends State<HomeShell> {
         WidgetsBinding.instance.addPostFrameCallback((_) => AdminCustomerScreen.triggerFocus());
         break;
       case 'bills': setState(() { _index = 7; _cartOpen = false; }); break;
+      case 'bags':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const BagsScreen()));
+        break;
       case 'mr': setState(() { _index = 8; _cartOpen = false; }); break;
       case 'companies': setState(() { _index = 9; _cartOpen = false; }); break;
       case 'delivery_partners': setState(() { _index = 10; _cartOpen = false; }); break;
@@ -3596,6 +3600,14 @@ class _DesktopProfileButton extends StatelessWidget {
               Icon(Icons.medication_outlined, size: 16, color: Color(0xFF374151)),
               SizedBox(width: 10),
               Text('Add Medicine', style: TextStyle(fontSize: 14, color: Color(0xFF374151))),
+            ]),
+          ),
+          const PopupMenuItem(
+            value: 'bags',
+            child: Row(children: [
+              Icon(Icons.qr_code_2, size: 16, color: Color(0xFF374151)),
+              SizedBox(width: 10),
+              Text('Bags', style: TextStyle(fontSize: 14, color: Color(0xFF374151))),
             ]),
           ),
           const PopupMenuItem(

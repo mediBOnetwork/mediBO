@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../utils/render_log.dart';
+import 'bag_print.dart';
 
 class BagsScreen extends StatefulWidget {
   const BagsScreen({super.key});
@@ -97,10 +98,75 @@ class _BagsScreenState extends State<BagsScreen> {
     }
   }
 
+  Future<void> _showPrintDialog() async {
+    if (_filtered.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No bags to print')),
+      );
+      return;
+    }
+    const densities = [4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24];
+    await showDialog(
+      context: context,
+      builder: (ctx) => Dialog(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 420),
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Print bags',
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 16),
+                  Wrap(
+                    spacing: 10,
+                    runSpacing: 10,
+                    children: densities.map((n) {
+                      return OutlinedButton(
+                        onPressed: () {
+                          Navigator.pop(ctx);
+                          _printBags(n);
+                        },
+                        child: Text('${n}B'),
+                      );
+                    }).toList(),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _printBags(int perPage) async {
+    final items = _filtered
+        .map((b) => BagPrintItem('Bag ${b['bag_no']}', b['bag_code'] as String))
+        .toList();
+    RenderLog.write('c383_bags_print', 'perPage=$perPage;count=${items.length}');
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(
+        child: CircularProgressIndicator(color: kBagHeaderRed),
+      ),
+    );
+    try {
+      await printBags(items, perPage);
+    } finally {
+      if (mounted) Navigator.of(context, rootNavigator: true).pop();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final w = MediaQuery.of(context).size.width;
-    final cols = w >= 1100 ? 4 : (w >= 700 ? 3 : 2);
+    final cols = w > 1000 ? 4 : (w >= 600 ? 3 : 2);
 
     return Scaffold(
       backgroundColor: const Color(0xFFF5F6F8),
@@ -109,6 +175,13 @@ class _BagsScreenState extends State<BagsScreen> {
         foregroundColor: Colors.white,
         title: const Text('Bags', style: TextStyle(fontWeight: FontWeight.w700)),
         elevation: 0,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.print),
+            tooltip: 'Print bags',
+            onPressed: _showPrintDialog,
+          ),
+        ],
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator(color: Color(0xFF1B7A43)))
@@ -173,7 +246,6 @@ class _BagCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final bagNo = bag['bag_no'] as int;
     final bagCode = bag['bag_code'] as String;
-    final status = bag['status'] as String;
 
     return Card(
       elevation: 2,
@@ -184,7 +256,7 @@ class _BagCard extends StatelessWidget {
         Container(
           width: double.infinity,
           padding: const EdgeInsets.symmetric(vertical: 8),
-          color: const Color(0xFF1B7A43),
+          color: kBagHeaderRed,
           child: Text(
             'Bag $bagNo',
             textAlign: TextAlign.center,
@@ -201,10 +273,6 @@ class _BagCard extends StatelessWidget {
               gapless: true,
             ),
           ),
-        ),
-        Padding(
-          padding: const EdgeInsets.only(bottom: 10),
-          child: _StatusBadge(status: status, onTap: onToggle),
         ),
       ]),
     );

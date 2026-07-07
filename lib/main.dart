@@ -470,6 +470,7 @@ class _AppRootState extends State<_AppRoot> {
                 'change:241,version_watcher:enabled,poll_interval:45s'); } catch (_) {}
             try { RenderLog.write('c245_ordercode_sites', '5'); } catch (_) {}
             try { RenderLog.write('c245_orders_query_patched', '0'); } catch (_) {}
+            try { RenderLog.write('c396_footer_removed', '1'); } catch (_) {}
             try {
               await VersionWatcher.instance.init();
               VersionWatcher.instance.start();

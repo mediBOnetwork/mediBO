@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <meta name="build-commit" content="42d79e9">
+  <meta name="build-commit" content="17bba78">
   <!-- CHANGE #238: SW permanently disabled. Unregister ALL SWs + wipe all caches on every load.
        No sessionStorage guard — runs unconditionally so even users whose old SW served this
        HTML from cache will have SWs cleared on the very next in-SW-controlled load.
@@ -139,10 +139,10 @@
        On every load, fetches /version.json (no-cache). If the live commit differs
        from the build-stamped commit below, does ONE hard reload so the PWA gets the
        newest bundle instead of staying on a stale cached build.
-       42d79e9 is replaced with the actual short commit hash by deploy.sh. -->
+       17bba78 is replaced with the actual short commit hash by deploy.sh. -->
   <script>
     (function () {
-      var _builtCommit = '42d79e9';
+      var _builtCommit = '17bba78';
       var _sessionKey  = 'c220_pwa_reloaded';
       function _rlWrite(key, val) {
         try {
@@ -160,7 +160,7 @@
           // Already reloaded once this session — skip to prevent loop.
           if (sessionStorage.getItem(_sessionKey)) return;
           // Skip if placeholder was not stamped (local dev / test build).
-          if (_builtCommit === '42d79e9') return;
+          if (_builtCommit === '17bba78') return;
           fetch('/version.json?_t=' + Date.now(), { cache: 'no-store' })
             .then(function (r) { return r.json(); })
             .then(function (data) {
@@ -176,7 +176,7 @@
       });
       // Wire confirmation — written once regardless of outcome.
       window.addEventListener('DOMContentLoaded', function () {
-        if (_builtCommit !== '42d79e9') {
+        if (_builtCommit !== '17bba78') {
           _rlWrite('c220_pwa_check_wired', 1);
         }
       });
@@ -470,7 +470,7 @@
     })();
   </script>
 
-  <script src="flutter_bootstrap.js?v=42d79e9" async></script>
+  <script src="flutter_bootstrap.js?v=17bba78" async></script>
   <script>
     var recaptchaResolve = null;
     var recaptchaWidgetId = null;
@@ -822,9 +822,11 @@
   <!-- Static crawlable links for Google OAuth verification and SEO.
        Flutter renders to canvas so crawlers cannot see Flutter widgets.
        These anchors are present in the raw HTML before any JS runs.
-       CHANGE #397: z-index:-1 so this never paints over #boot-loader (z-index:0)
+       CHANGE #398: z-index:-1 so this never paints over #boot-loader (z-index:0)
        or #flutter-loading (z-index:9999) during boot — crawlers still see the
-       raw anchors regardless of CSS stacking; real users never see this bar. -->
+       raw anchors regardless of CSS stacking; real users never see this bar
+       on the loading screen. The Flutter footer (homepage-only) is unrelated
+       to this div and never touches the splash/root shell. -->
   <div id="static-legal-links" style="position:absolute;bottom:0;left:0;font-size:12px;color:#444;padding:8px 16px;background:#0F4C35;width:100%;box-sizing:border-box;z-index:-1;">
     <a href="https://medibo.in/privacy" style="color:#ccc;margin-right:16px;">Privacy Policy</a>
     <a href="https://medibo.in/terms" style="color:#ccc;margin-right:16px;">Terms &amp; Conditions</a>

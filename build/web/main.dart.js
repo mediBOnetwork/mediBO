@@ -149626,8 +149626,6 @@ A.c("c383_bags_status_hidden",1)
 A.c("c383_bags_print_wired",1)
 A.c("c385_build","385")
 A.c("c385_bags_green_header",1)
-A.c("c397_footer_restored_home",1)
-A.c("c397_footer_hidden_on_splash",1)
 q=13
 d=window.location.href
 d.toString
@@ -149932,7 +149930,7 @@ A.bky.prototype={
 $1(a){return this.aEl(a)},
 aEl(a){var s=0,r=A.q(t.H),q=1,p=[],o,n,m
 var $async$$1=A.m(function(b,c){if(b===1){p.push(c)
-s=q}for(;;)switch(s){case 0:try{A.c("boot_status","painted")}catch(l){}try{A.c("c237_cache_bust","change:237,no_cache_headers:true,sw_kill_script:true,sw_reload_guard:true")}catch(l){}try{A.c("c238_sw_disabled","change:238,service_worker:disabled,sw_unregister_on_load:true,network_first:true")}catch(l){}try{A.c("c239_sw_killed","change:239,sw_file_deleted:true,no_registration:true")}catch(l){}try{A.c("c240_killsw_restored","change:240,killsw_served:true,self_unregister:true,bootstrap_sw_null:true")}catch(l){}try{A.c("c241_autoupdate","change:241,version_watcher:enabled,poll_interval:45s")}catch(l){}try{A.c("c245_ordercode_sites","5")}catch(l){}try{A.c("c245_orders_query_patched","0")}catch(l){}q=3
+s=q}for(;;)switch(s){case 0:try{A.c("boot_status","painted")}catch(l){}try{A.c("c237_cache_bust","change:237,no_cache_headers:true,sw_kill_script:true,sw_reload_guard:true")}catch(l){}try{A.c("c238_sw_disabled","change:238,service_worker:disabled,sw_unregister_on_load:true,network_first:true")}catch(l){}try{A.c("c239_sw_killed","change:239,sw_file_deleted:true,no_registration:true")}catch(l){}try{A.c("c240_killsw_restored","change:240,killsw_served:true,self_unregister:true,bootstrap_sw_null:true")}catch(l){}try{A.c("c241_autoupdate","change:241,version_watcher:enabled,poll_interval:45s")}catch(l){}try{A.c("c245_ordercode_sites","5")}catch(l){}try{A.c("c245_orders_query_patched","0")}catch(l){}try{A.c("c398_footer_on_home","1")}catch(l){}try{A.c("c398_footer_off_splash","1")}catch(l){}q=3
 n=$.cf5()
 s=6
 return A.h(n.Yc(),$async$$1)

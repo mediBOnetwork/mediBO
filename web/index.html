@@ -820,8 +820,11 @@
 
   <!-- Static crawlable links for Google OAuth verification and SEO.
        Flutter renders to canvas so crawlers cannot see Flutter widgets.
-       These anchors are present in the raw HTML before any JS runs. -->
-  <div id="static-legal-links" style="position:absolute;bottom:0;left:0;font-size:12px;color:#444;padding:8px 16px;background:#0F4C35;width:100%;box-sizing:border-box;">
+       These anchors are present in the raw HTML before any JS runs.
+       CHANGE #397: z-index:-1 so this never paints over #boot-loader (z-index:0)
+       or #flutter-loading (z-index:9999) during boot — crawlers still see the
+       raw anchors regardless of CSS stacking; real users never see this bar. -->
+  <div id="static-legal-links" style="position:absolute;bottom:0;left:0;font-size:12px;color:#444;padding:8px 16px;background:#0F4C35;width:100%;box-sizing:border-box;z-index:-1;">
     <a href="https://medibo.in/privacy" style="color:#ccc;margin-right:16px;">Privacy Policy</a>
     <a href="https://medibo.in/terms" style="color:#ccc;margin-right:16px;">Terms &amp; Conditions</a>
     <a href="https://medibo.in/about-app" style="color:#ccc;">About mediBO</a>

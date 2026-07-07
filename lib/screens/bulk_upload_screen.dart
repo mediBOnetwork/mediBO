@@ -2733,17 +2733,12 @@ class _WhatsAppCard extends StatelessWidget {
   final bool showGateNote;
   const _WhatsAppCard({this.showGateNote = true});
 
-  void _openWhatsApp(BuildContext context) {
-    final auth = UserState.of(context);
-    final profile = auth.profile;
-    final msg = 'Hello mediBO, I\'m placing a new order, check the image I\'ve sent.\n'
-        'My Details:\n'
-        'Customer name - ${profile?.customerName ?? ''}\n'
-        'Pharmacy name - ${profile?.pharmacyName ?? ''}\n'
-        'WhatsApp no - ${profile?.whatsappNo ?? ''}\n'
-        'Customer code - ${profile?.customerCode ?? ''}';
+  void _openWhatsApp() {
+    // CHANGE #400: mediBO's business number, short fixed message — no customer details.
+    final msg = Uri.encodeComponent("Hello mediBO, I'm placing a new order. ✨");
+    try { RenderLog.write('c400_wa_order_fixed', 'true'); } catch (_) {} // CHANGE #400
     html.window.open(
-      'https://wa.me/918357881873?text=${Uri.encodeComponent(msg)}',
+      'https://wa.me/919329252090?text=$msg',
       '_blank',
     );
   }
@@ -2762,7 +2757,7 @@ class _WhatsAppCard extends StatelessWidget {
     if (canOrder) {
       btnLabel = 'Send Order on WhatsApp';
       gateNote = null;
-      onTap = () => _openWhatsApp(context);
+      onTap = () => _openWhatsApp();
     } else if (!isAuthenticated) {
       btnLabel = 'Login to Send Order';
       gateNote = 'Login required to place orders';

@@ -449,6 +449,10 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
     return _items.length;
   }
 
+  List<String> get _categoryNames =>
+      _meta?.categories.map((c) => c.name).toList(growable: false) ??
+      const <String>[];
+
   @override
   Widget build(BuildContext context) {
     return MouseRegion(
@@ -507,6 +511,14 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
             ),
           ),
           const _TrustBadges(),
+          _Footer(
+            categories: _categoryNames,
+            onCategory: widget.onCategorySelected,
+            onSearch: widget.onFooterSearch,
+            onBulkUpload: widget.onFooterBulkUpload,
+            onOrders: widget.onFooterOrders,
+            onCart: widget.onFooterCart,
+          ),
         ],
           ),
         ),
@@ -1506,6 +1518,259 @@ class _TrustItem extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────── Footer ───────────────────────────
+
+class _Footer extends StatelessWidget {
+  final List<String> categories;
+  final ValueChanged<String> onCategory;
+  final VoidCallback? onSearch;
+  final VoidCallback? onBulkUpload;
+  final VoidCallback? onOrders;
+  final VoidCallback? onCart;
+
+  const _Footer({
+    required this.categories,
+    required this.onCategory,
+    this.onSearch,
+    this.onBulkUpload,
+    this.onOrders,
+    this.onCart,
+  });
+
+  static const _kBg = Color(0xFF1B5E20);
+  static const _kAccent = Color(0xFF4CAF50);
+  static const _kLink = Color(0xFFA5D6A7);
+  static const _kHeading = TextStyle(
+    color: Colors.white,
+    fontSize: 14,
+    fontWeight: FontWeight.w700,
+    letterSpacing: 1.1,
+  );
+  static const _kLinkStyle = TextStyle(
+    color: _kLink,
+    fontSize: 13,
+    height: 1.6,
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    final shown = categories.take(8).toList();
+    return Container(
+      width: double.infinity,
+      color: _kBg,
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: _kMaxContent),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(24, 48, 24, 0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                LayoutBuilder(
+                  builder: (ctx, c) {
+                    final wide = c.maxWidth >= 600;
+                    if (wide) {
+                      return Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(flex: 2, child: _brandCol()),
+                          Expanded(flex: 2, child: _categoryCol(shown)),
+                          Expanded(flex: 2, child: _servicesCol()),
+                          Expanded(flex: 2, child: _quickCol(context)),
+                          Expanded(flex: 2, child: _legalCol(context)),
+                        ],
+                      );
+                    }
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _brandCol(),
+                        const SizedBox(height: 32),
+                        _categoryCol(shown),
+                        const SizedBox(height: 32),
+                        _servicesCol(),
+                        const SizedBox(height: 32),
+                        _quickCol(context),
+                        const SizedBox(height: 32),
+                        _legalCol(context),
+                      ],
+                    );
+                  },
+                ),
+                const SizedBox(height: 40),
+                Divider(color: Colors.white.withValues(alpha: 0.15)),
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 20),
+                  child: LayoutBuilder(
+                    builder: (ctx, c) {
+                      final wide = c.maxWidth >= 600;
+                      if (wide) {
+                        return Row(
+                          children: [
+                            Text(
+                              '© 2026 mediBO | All rights reserved',
+                              style: TextStyle(
+                                  color: Colors.white.withValues(alpha: 0.6),
+                                  fontSize: 12),
+                            ),
+                            const Spacer(),
+                            Text(
+                              'DL 20B: WLF20B2025CT000337  ·  DL 21B: WLF21B2025CT000337',
+                              style: TextStyle(
+                                  color: Colors.white.withValues(alpha: 0.45),
+                                  fontSize: 11),
+                            ),
+                          ],
+                        );
+                      }
+                      return Column(
+                        children: [
+                          Text(
+                            '© 2026 mediBO | All rights reserved',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                                color: Colors.white.withValues(alpha: 0.6),
+                                fontSize: 12),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            'DL 20B: WLF20B2025CT000337  ·  DL 21B: WLF21B2025CT000337',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                                color: Colors.white.withValues(alpha: 0.45),
+                                fontSize: 11),
+                          ),
+                        ],
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _brandCol() {
+    return Padding(
+      padding: const EdgeInsets.only(right: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: const [
+              Icon(Icons.local_pharmacy, color: _kAccent, size: 24),
+              SizedBox(width: 8),
+              Text('mediBO',
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 20,
+                      fontWeight: FontWeight.w800)),
+            ],
+          ),
+          const SizedBox(height: 12),
+          const Text(
+            'Your trusted B2B pharmacy distributor. Genuine medicines delivered to pharmacies & clinics.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: _kLink, fontSize: 12, height: 1.6),
+          ),
+          const SizedBox(height: 16),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: const [
+              Icon(Icons.call, size: 13, color: _kAccent),
+              SizedBox(width: 6),
+              Text('9329252090', style: _kLinkStyle),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: const [
+              Icon(Icons.mail, size: 13, color: _kAccent),
+              SizedBox(width: 6),
+              Text('medibonetwork@gmail.com', style: _kLinkStyle),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _categoryCol(List<String> shown) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text('SHOP BY CATEGORY', style: _kHeading),
+        const SizedBox(height: 16),
+        for (final c in shown)
+          _footerLink(prettyCategory(c), () => onCategory(c)),
+      ],
+    );
+  }
+
+  Widget _servicesCol() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text('OUR SERVICES', style: _kHeading),
+        const SizedBox(height: 16),
+        _footerLink('Search Medicines', onSearch),
+        _footerLink('Bulk Upload', onBulkUpload),
+        _footerLink('My Orders', onOrders),
+        _footerLink('Cart', onCart),
+      ],
+    );
+  }
+
+  Widget _quickCol(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text('QUICK LINKS', style: _kHeading),
+        const SizedBox(height: 16),
+        _footerLink('About Us',
+            () => Navigator.pushNamed(context, '/about-app')),
+        _footerLink('Contact Us',
+            () => Navigator.pushNamed(context, '/contact')),
+      ],
+    );
+  }
+
+  Widget _legalCol(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text('LEGAL', style: _kHeading),
+        const SizedBox(height: 16),
+        _footerLink('Terms & Conditions',
+            () => Navigator.pushNamed(context, '/terms')),
+        _footerLink('Privacy Policy',
+            () => Navigator.pushNamed(context, '/privacy')),
+        _footerLink('Refund & Return',
+            () => Navigator.pushNamed(context, '/refund')),
+        _footerLink('Shipping Policy',
+            () => Navigator.pushNamed(context, '/shipping')),
+        _footerLink('Cancellation Policy',
+            () => Navigator.pushNamed(context, '/cancellation')),
+      ],
+    );
+  }
+
+  static Widget _footerLink(String label, VoidCallback? onTap) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: InkWell(
+        onTap: onTap,
+        child: Text(label, style: _kLinkStyle),
       ),
     );
   }

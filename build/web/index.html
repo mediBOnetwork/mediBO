@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <meta name="build-commit" content="17bba78">
+  <meta name="build-commit" content="1924db9">
   <!-- CHANGE #238: SW permanently disabled. Unregister ALL SWs + wipe all caches on every load.
        No sessionStorage guard — runs unconditionally so even users whose old SW served this
        HTML from cache will have SWs cleared on the very next in-SW-controlled load.
@@ -139,10 +139,10 @@
        On every load, fetches /version.json (no-cache). If the live commit differs
        from the build-stamped commit below, does ONE hard reload so the PWA gets the
        newest bundle instead of staying on a stale cached build.
-       17bba78 is replaced with the actual short commit hash by deploy.sh. -->
+       1924db9 is replaced with the actual short commit hash by deploy.sh. -->
   <script>
     (function () {
-      var _builtCommit = '17bba78';
+      var _builtCommit = '1924db9';
       var _sessionKey  = 'c220_pwa_reloaded';
       function _rlWrite(key, val) {
         try {
@@ -160,7 +160,7 @@
           // Already reloaded once this session — skip to prevent loop.
           if (sessionStorage.getItem(_sessionKey)) return;
           // Skip if placeholder was not stamped (local dev / test build).
-          if (_builtCommit === '17bba78') return;
+          if (_builtCommit === '1924db9') return;
           fetch('/version.json?_t=' + Date.now(), { cache: 'no-store' })
             .then(function (r) { return r.json(); })
             .then(function (data) {
@@ -176,7 +176,7 @@
       });
       // Wire confirmation — written once regardless of outcome.
       window.addEventListener('DOMContentLoaded', function () {
-        if (_builtCommit !== '17bba78') {
+        if (_builtCommit !== '1924db9') {
           _rlWrite('c220_pwa_check_wired', 1);
         }
       });
@@ -470,7 +470,7 @@
     })();
   </script>
 
-  <script src="flutter_bootstrap.js?v=17bba78" async></script>
+  <script src="flutter_bootstrap.js?v=1924db9" async></script>
   <script>
     var recaptchaResolve = null;
     var recaptchaWidgetId = null;
@@ -579,6 +579,16 @@
     };
   </script>
 
+  <!-- CHANGE #399: mediboIsCoarsePointer() — true when the primary pointer is touch -->
+  <script>
+    window.mediboIsCoarsePointer = function () {
+      try {
+        return (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) ||
+            ('ontouchstart' in window);
+      } catch (e) { return false; }
+    };
+  </script>
+
   <!-- ═══════════════════════════════════════════════════════════════════════
        GOOGLE IDENTITY SERVICES (GIS) BRIDGE — CHANGE #310c
        Always uses renderButton() — never prompt()/FedCM.
@@ -587,6 +597,9 @@
        renderButton() always shows a tappable Google button; callback fires reliably.
        Overlay: backdrop-click + Cancel button + 90s auto-cancel (can never get stuck).
        GIS load timeout: 3s → rejects → Dart falls through to OAuth redirect.
+       CHANGE #399: dismiss handlers ignore clicks in the first 400ms after the
+       overlay opens, to swallow the touch-originated ghost click that was
+       instantly closing this overlay on touch devices (see showOverlay() below).
        ═══════════════════════════════════════════════════════════════════════ -->
 
   <div id="gis-rb-overlay"
@@ -651,8 +664,23 @@
             }
 
             ov.style.display    = 'flex';
-            btn.onclick         = function () { settle(reject, 'user-cancelled'); };
-            ov.onclick          = function (ev) { if (ev.target === ov) settle(reject, 'user-cancelled'); };
+            // CHANGE #399: touch devices fire a synthesized trailing "click" a few
+            // hundred ms after the touchend that opened this overlay. That ghost
+            // click lands on the freshly-shown backdrop (same screen coordinates as
+            // the app's "Continue" button) and used to instantly dismiss the overlay
+            // we just opened — the reported "blink". Ignore dismiss clicks that
+            // arrive within GRACE_MS of showing the overlay; a real cancel tap
+            // always comes well after that.
+            var openedAt = Date.now();
+            var GRACE_MS = 400;
+            btn.onclick = function () {
+              if (Date.now() - openedAt < GRACE_MS) return;
+              settle(reject, 'user-cancelled');
+            };
+            ov.onclick = function (ev) {
+              if (Date.now() - openedAt < GRACE_MS) return;
+              if (ev.target === ov) settle(reject, 'user-cancelled');
+            };
             autoTimer = setTimeout(function () { settle(reject, 'overlay-timeout'); }, 90000);
           }
 

@@ -148,8 +148,6 @@ void main() {
     RenderLog.write('c383_bags_print_wired', 1);
     RenderLog.write('c385_build', '385');
     RenderLog.write('c385_bags_green_header', 1);
-    RenderLog.write('c397_footer_restored_home', 1);
-    RenderLog.write('c397_footer_hidden_on_splash', 1);
 
     // Selftest hook (guarded; no-op without exact secret; mark for removal in #64).
     // Triggers signInWithPassword then defers the selftest_login trace to the

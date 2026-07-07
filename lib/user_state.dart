@@ -466,6 +466,11 @@ class AuthNotifier extends ChangeNotifier {
   //   User dismissing the prompt just re-enables the button — no browser redirect.
   // Attempt B: Standard OAuth PKCE redirect — only used when GIS can't load at all.
   Future<void> signInWithGoogle() async {
+    // CHANGE #399: log input type + launch marker synchronously, before any
+    // await, so the tap-to-launch chain has no async gap.
+    try { RenderLog.write('c399_input_type', isCoarsePointer() ? 'touch' : 'mouse'); } catch (_) {}
+    try { RenderLog.write('c399_google_auth_launch', 'fired'); } catch (_) {}
+
     // ── Attempt A: GIS programmatic prompt ──────────────────────────────────
     bool gisLibraryUnavailable = false;
     try {

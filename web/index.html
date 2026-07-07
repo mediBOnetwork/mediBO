@@ -578,6 +578,16 @@
     };
   </script>
 
+  <!-- CHANGE #399: mediboIsCoarsePointer() — true when the primary pointer is touch -->
+  <script>
+    window.mediboIsCoarsePointer = function () {
+      try {
+        return (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) ||
+            ('ontouchstart' in window);
+      } catch (e) { return false; }
+    };
+  </script>
+
   <!-- ═══════════════════════════════════════════════════════════════════════
        GOOGLE IDENTITY SERVICES (GIS) BRIDGE — CHANGE #310c
        Always uses renderButton() — never prompt()/FedCM.
@@ -586,6 +596,9 @@
        renderButton() always shows a tappable Google button; callback fires reliably.
        Overlay: backdrop-click + Cancel button + 90s auto-cancel (can never get stuck).
        GIS load timeout: 3s → rejects → Dart falls through to OAuth redirect.
+       CHANGE #399: dismiss handlers ignore clicks in the first 400ms after the
+       overlay opens, to swallow the touch-originated ghost click that was
+       instantly closing this overlay on touch devices (see showOverlay() below).
        ═══════════════════════════════════════════════════════════════════════ -->
 
   <div id="gis-rb-overlay"
@@ -650,8 +663,23 @@
             }
 
             ov.style.display    = 'flex';
-            btn.onclick         = function () { settle(reject, 'user-cancelled'); };
-            ov.onclick          = function (ev) { if (ev.target === ov) settle(reject, 'user-cancelled'); };
+            // CHANGE #399: touch devices fire a synthesized trailing "click" a few
+            // hundred ms after the touchend that opened this overlay. That ghost
+            // click lands on the freshly-shown backdrop (same screen coordinates as
+            // the app's "Continue" button) and used to instantly dismiss the overlay
+            // we just opened — the reported "blink". Ignore dismiss clicks that
+            // arrive within GRACE_MS of showing the overlay; a real cancel tap
+            // always comes well after that.
+            var openedAt = Date.now();
+            var GRACE_MS = 400;
+            btn.onclick = function () {
+              if (Date.now() - openedAt < GRACE_MS) return;
+              settle(reject, 'user-cancelled');
+            };
+            ov.onclick = function (ev) {
+              if (Date.now() - openedAt < GRACE_MS) return;
+              if (ev.target === ov) settle(reject, 'user-cancelled');
+            };
             autoTimer = setTimeout(function () { settle(reject, 'overlay-timeout'); }, 90000);
           }
 

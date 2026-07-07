@@ -14,6 +14,16 @@ bool isMobileWeb() {
   try { return _mediboIsMobileJs(); } catch (_) { return false; }
 }
 
+@JS('mediboIsCoarsePointer')
+external bool _mediboIsCoarsePointerJs();
+
+/// CHANGE #399: true when the primary pointer is touch (coarse), for
+/// diagnosing touch-vs-mouse Google sign-in behavior via render-log.
+/// Defaults to false if JS is unavailable.
+bool isCoarsePointer() {
+  try { return _mediboIsCoarsePointerJs(); } catch (_) { return false; }
+}
+
 @JS('mediboGisSignIn')
 external JSPromise<JSString?> _mediboGisSignIn(JSString clientId, JSString hashedNonce);
 

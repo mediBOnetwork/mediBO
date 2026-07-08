@@ -6,6 +6,8 @@ import '../models/wa_conversation.dart';
 import 'wa_conversation_tile.dart';
 import 'wa_chat_screen.dart';
 
+const String kC414OthersTabShowsUnknown = 'c414_others_tab_shows_unknown';
+
 class WaHomeScreen extends StatelessWidget {
   const WaHomeScreen({super.key});
 
@@ -54,7 +56,11 @@ class WaHomeScreen extends StatelessWidget {
           children: [
             _ConversationListView(type: 'customer'),
             _ConversationListView(type: 'supplier'),
-            _ConversationListView(type: 'unknown'),  // CHANGE #297
+            // CHANGE #414: was 'unknown', which wa_conversations(p_type) never
+            // matches (it only recognizes 'customer'|'supplier'|'other') — so
+            // this tab always fetched zero rows. Fixed to the exact literal
+            // the RPC expects.
+            _ConversationListView(type: 'other'),
           ],
         ),
       ),
@@ -121,12 +127,16 @@ class _ConversationListViewState extends State<_ConversationListView>
         _error = null;
       });
       // CHANGE #297: instrument Others tab on load
-      if (widget.type == 'unknown') {
+      if (widget.type == 'other') {
         try {
           RenderLog.write('c297_others_built', 'Others');
           RenderLog.write('c297_others_n', list.length);
           RenderLog.write('c297_others_first',
               list.isNotEmpty ? list.first.senderPhone : 'none');
+          // CHANGE #414: sentinel proving the Others tab now fetches with
+          // p_type='other' (was the never-matching 'unknown') and renders
+          // whatever wa_conversations('other') returns, unfiltered.
+          RenderLog.write(kC414OthersTabShowsUnknown, 'n:${list.length}');
         } catch (_) {}
       }
     } catch (e) {
@@ -231,7 +241,7 @@ class _ConversationListViewState extends State<_ConversationListView>
       });
       RenderLog.write('c209_wa_realtime_resync', list.length);
       // CHANGE #297: keep Others instrumentation current after resync
-      if (widget.type == 'unknown') {
+      if (widget.type == 'other') {
         try {
           RenderLog.write('c297_others_n', list.length);
           RenderLog.write('c297_others_first',
@@ -268,7 +278,7 @@ class _ConversationListViewState extends State<_ConversationListView>
             const Icon(Icons.error_outline, size: 40, color: Color(0xFF6B7280)),
             const SizedBox(height: 12),
             Text(
-              'Could not load ${widget.type == 'unknown' ? 'other' : widget.type} conversations.',
+              'Could not load ${widget.type} conversations.',
               style: const TextStyle(fontSize: 14, color: Color(0xFF6B7280)),
               textAlign: TextAlign.center,
             ),
@@ -294,7 +304,7 @@ class _ConversationListViewState extends State<_ConversationListView>
     if (conversations.isEmpty) {
       return Center(
         child: Text(
-          widget.type == 'unknown'
+          widget.type == 'other'
               ? 'No conversations yet.'
               : 'No ${widget.type} conversations yet.',
           style: const TextStyle(fontSize: 15, color: Color(0xFF6B7280)),
@@ -323,7 +333,7 @@ class _ConversationListViewState extends State<_ConversationListView>
             conversation: c,
             onTap: () async {
               // CHANGE #297: log which Others conversation was opened
-              if (widget.type == 'unknown') {
+              if (widget.type == 'other') {
                 try {
                   RenderLog.write('c297_others_open', c.senderPhone);
                 } catch (_) {}

@@ -34,6 +34,28 @@ class VersionWatcher {
   static const Duration _interval   = Duration(seconds: 45);
   static const Duration _autoReload = Duration(seconds: 6);
 
+  // CHANGE #415: sentinel proving the seed-retry hardening below is in the
+  // live bundle.
+  static const String kC415 = 'c415_version_watcher_seed_retry';
+
+  // CHANGE #415: true once _bootCommit has been set from an actual
+  // successful fetch (either the initial seed, a background retry, or —
+  // as a last-resort fallback — the first poll). Distinct from checking
+  // `_bootCommit == null` so the intent ("do we have a real baseline yet?")
+  // stays explicit even while a background retry may be racing a poll.
+  bool _seeded = false;
+
+  // Backoff between initial-seed retry attempts if the very first fetch
+  // fails (e.g. a transient network hiccup right at page load). 5 attempts
+  // total: the immediate one in init(), plus 4 retries at these gaps —
+  // covering ~4.5s, comfortably before the first poll at _firstDelay (5s).
+  static const List<Duration> _seedRetryDelays = [
+    Duration(milliseconds: 500),
+    Duration(seconds: 1),
+    Duration(seconds: 1),
+    Duration(seconds: 2),
+  ];
+
   Future<String?> _fetchCommit() async {
     try {
       final ts = DateTime.now().millisecondsSinceEpoch;
@@ -62,10 +84,56 @@ class VersionWatcher {
   }
 
   /// Call once after first paint to seed the boot commit hash.
+  ///
+  /// CHANGE #415: the initial fetch used to be a single, unretried attempt —
+  /// if it failed (transient network hiccup right at load), _bootCommit
+  /// stayed null and the FIRST successful poll would silently adopt
+  /// whatever was live as the baseline instead of comparing, swallowing any
+  /// version transition that happened in that window. Now: try once
+  /// immediately (unchanged fast path for the common case), and if that
+  /// fails, kick off a short background retry loop WITHOUT awaiting it here
+  /// — so init() itself still returns promptly and never delays start() or
+  /// blocks the caller/UI.
   Future<void> init() async {
-    _bootCommit = await _fetchCommit();
     try {
-      RenderLog.write('c241_vw_init', 'boot=${_bootCommit ?? "null"}');
+      RenderLog.write(kC415, 'init_start');
+    } catch (_) {}
+    final first = await _fetchCommit();
+    if (first != null) {
+      _bootCommit = first;
+      _seeded = true;
+      try {
+        RenderLog.write('c241_vw_init', 'boot=$first');
+      } catch (_) {}
+      return;
+    }
+    try {
+      RenderLog.write('c241_vw_init', 'boot=null');
+    } catch (_) {}
+    // ignore: unawaited_futures
+    _retrySeed();
+  }
+
+  /// Background retry loop for the initial seed, only entered when the
+  /// first attempt in init() failed. Stops early if a poll (or an earlier
+  /// retry) has already seeded the baseline in the meantime.
+  Future<void> _retrySeed() async {
+    for (final delay in _seedRetryDelays) {
+      if (_seeded) return;
+      await Future.delayed(delay);
+      if (_seeded) return;
+      final commit = await _fetchCommit();
+      if (commit != null) {
+        _bootCommit = commit;
+        _seeded = true;
+        try {
+          RenderLog.write(kC415, 'retry_success:boot=$commit');
+        } catch (_) {}
+        return;
+      }
+    }
+    try {
+      RenderLog.write(kC415, 'retry_exhausted');
     } catch (_) {}
   }
 
@@ -86,8 +154,15 @@ class VersionWatcher {
           'c241_vw_poll', 'live=${live ?? "null"} boot=${_bootCommit ?? "null"}');
     } catch (_) {}
     if (live == null) return;
-    if (_bootCommit == null) {
+    // CHANGE #415: last-resort fallback — only reached if init()'s immediate
+    // attempt AND every background retry (_retrySeed) failed, i.e. a
+    // genuinely prolonged outage. Legitimate "no baseline yet" case, so
+    // adopt it without a false popup. In the normal/common case _seeded is
+    // already true well before the first poll (5s), via the retries above,
+    // so this branch is rarely taken — that's the whole point of the fix.
+    if (!_seeded) {
       _bootCommit = live;
+      _seeded = true;
       return;
     }
     if (live != _bootCommit) {

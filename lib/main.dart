@@ -249,6 +249,8 @@ class _PharmaB2BAppState extends State<PharmaB2BApp> {
       );
       _viewAs.activate(roleValue, identity);
       RenderLog.write('view_as_restore', '${roleValue.name}:$id');
+      RenderLog.write(CartModel.kC410ImpersonationPersist,
+          'rehydrated:${roleValue.name}:$id:userId:${identity.userId}');
     } catch (e) {
       try {
         final msg = e.toString();

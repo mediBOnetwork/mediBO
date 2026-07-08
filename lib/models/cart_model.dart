@@ -79,6 +79,15 @@ class CartModel extends ChangeNotifier {
   String? _viewAsUserId;
   bool get isViewAs => _viewAsUserId != null;
 
+  // c410_impersonation_persist: generation counter so an in-flight
+  // _loadFromSupabase() call (e.g. the admin's own cart, kicked off at boot
+  // before ViewAs restoration from SharedPreferences completes) can never
+  // overwrite a NEWER load's result — e.g. the impersonated customer's cart
+  // — just because its (longer) request chain happens to resolve later.
+  // Every call captures the generation at its start and is dropped if a
+  // newer call has since begun by the time it's ready to mutate state.
+  int _loadGen = 0;
+
   Future<void> enterViewAs(String userId) async {
     _viewAsUserId = userId;
     _lines.clear();
@@ -253,18 +262,23 @@ class CartModel extends ChangeNotifier {
 
   // ── Supabase ──────────────────────────────────────────────────────────────
 
+  static const kC410ImpersonationPersist = 'c410_impersonation_persist';
+
   Future<void> _loadFromSupabase([String? overrideUid]) async {
+    final gen = ++_loadGen;
+    RenderLog.write(kC410ImpersonationPersist, 'gen:$gen;viewAs:$_viewAsUserId');
     try {
       // ViewAs mode: load the impersonated customer's cart via super-admin RPC.
       if (_viewAsUserId != null) {
         final rows = await Supabase.instance.client
             .rpc('admin_preview_customer_cart', params: {'p_user_id': _viewAsUserId!}) as List;
-        _lines.clear();
-        _adminRemovedLines.clear();
         // #401: cart_items has no buyable column — re-fetch current buyability
         // by id so a snapshot line reflects the product's real availability.
         final buyableIds = rows.map((r) => r['product_id'] as String).toList();
         final buyableFlags = await MedicineRepository().fetchBuyableFlags(buyableIds);
+        if (gen != _loadGen) return; // a newer load superseded this one
+        _lines.clear();
+        _adminRemovedLines.clear();
         RenderLog.write('c401_cart_uses_buyable', 'true');
         for (final row in rows) {
           final product = Product.fromCartData(
@@ -315,13 +329,14 @@ class CartModel extends ChangeNotifier {
           .select()
           .eq('user_id', uid)
           .order('id', ascending: true);
-      _lines.clear();
-      _adminRemovedLines.clear();
       // #401: cart_items has no buyable column — re-fetch current buyability
       // by id so a snapshot line reflects the product's real availability.
       final buyableIds = rows.map((r) => r['product_id'] as String).toList();
       final buyableFlags = await MedicineRepository().fetchBuyableFlags(buyableIds);
+      if (gen != _loadGen) return; // a newer load (e.g. ViewAs) superseded this one
       RenderLog.write('c401_cart_uses_buyable', 'true');
+      final newLines = <String, CartLine>{};
+      final newAdminRemoved = <CartLine>[];
       for (final row in rows) {
         final product = Product.fromCartData(
           id: row['product_id'] as String,
@@ -339,13 +354,19 @@ class CartModel extends ChangeNotifier {
         final addedByAdmin = (row['added_by'] as String?) == 'admin';
         final cartItemId = (row['id'] as num?)?.toInt();
         if (removedByAdmin) {
-          _adminRemovedLines.add(CartLine(product, row['quantity'] as int,
+          newAdminRemoved.add(CartLine(product, row['quantity'] as int,
               addedByAdmin: addedByAdmin, cartItemId: cartItemId));
         } else {
-          _lines[product.id] = CartLine(product, row['quantity'] as int,
+          newLines[product.id] = CartLine(product, row['quantity'] as int,
               addedByAdmin: addedByAdmin, cartItemId: cartItemId);
         }
       }
+      _lines
+        ..clear()
+        ..addAll(newLines);
+      _adminRemovedLines
+        ..clear()
+        ..addAll(newAdminRemoved);
       _recomputeTotals();
       notifyListeners();
 

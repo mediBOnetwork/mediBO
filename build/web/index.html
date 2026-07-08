@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <meta name="build-commit" content="0f27a85">
+  <meta name="build-commit" content="25138ed">
   <!-- CHANGE #238: SW permanently disabled. Unregister ALL SWs + wipe all caches on every load.
        No sessionStorage guard — runs unconditionally so even users whose old SW served this
        HTML from cache will have SWs cleared on the very next in-SW-controlled load.
@@ -139,10 +139,10 @@
        On every load, fetches /version.json (no-cache). If the live commit differs
        from the build-stamped commit below, does ONE hard reload so the PWA gets the
        newest bundle instead of staying on a stale cached build.
-       0f27a85 is replaced with the actual short commit hash by deploy.sh. -->
+       25138ed is replaced with the actual short commit hash by deploy.sh. -->
   <script>
     (function () {
-      var _builtCommit = '0f27a85';
+      var _builtCommit = '25138ed';
       var _sessionKey  = 'c220_pwa_reloaded';
       function _rlWrite(key, val) {
         try {
@@ -160,7 +160,7 @@
           // Already reloaded once this session — skip to prevent loop.
           if (sessionStorage.getItem(_sessionKey)) return;
           // Skip if placeholder was not stamped (local dev / test build).
-          if (_builtCommit === '0f27a85') return;
+          if (_builtCommit === '25138ed') return;
           fetch('/version.json?_t=' + Date.now(), { cache: 'no-store' })
             .then(function (r) { return r.json(); })
             .then(function (data) {
@@ -176,7 +176,7 @@
       });
       // Wire confirmation — written once regardless of outcome.
       window.addEventListener('DOMContentLoaded', function () {
-        if (_builtCommit !== '0f27a85') {
+        if (_builtCommit !== '25138ed') {
           _rlWrite('c220_pwa_check_wired', 1);
         }
       });
@@ -470,7 +470,7 @@
     })();
   </script>
 
-  <script src="flutter_bootstrap.js?v=0f27a85" async></script>
+  <script src="flutter_bootstrap.js?v=25138ed" async></script>
   <script>
     var recaptchaResolve = null;
     var recaptchaWidgetId = null;
@@ -866,6 +866,11 @@
   </noscript>
 
   <!-- CHANGE #237: reload once when a new SW activates (kill-SW triggers controllerchange). -->
+  <!-- c409_sw_autoupdate: also force an immediate update check on any pre-existing SW
+       registration on every load, instead of waiting for the browser's background
+       (~24h) check — so a returning tab with an old SW discovers + installs the
+       kill-SW right away rather than staying stale until a hard refresh. Never
+       calls register() itself: this app intentionally registers no new SW. -->
   <script>
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.addEventListener('controllerchange', function () {
@@ -873,6 +878,9 @@
         window.__reloadedForSW = true;
         window.location.reload();
       });
+      navigator.serviceWorker.getRegistration().then(function (reg) {
+        if (reg) reg.update().catch(function () {});
+      }).catch(function () {});
     }
   </script>
 </body>

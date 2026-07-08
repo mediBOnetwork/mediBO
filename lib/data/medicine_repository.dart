@@ -63,6 +63,28 @@ class MedicineRepository {
   static String? browseRpcError;
   static set _browseRpcError(String? v) => browseRpcError = v;
 
+  /// #401: cart_items stores a point-in-time price/name snapshot with no
+  /// `buyable` column, so cart lines must re-fetch current buyability by id
+  /// to know if a line is still orderable. Returns id -> buyable (missing
+  /// ids, e.g. a deleted product, are simply absent from the map).
+  Future<Map<String, bool>> fetchBuyableFlags(List<String> ids) async {
+    if (ids.isEmpty) return {};
+    try {
+      final rows = await _client
+          .from('MEDICINE')
+          .select('id,buyable')
+          .inFilter('id', ids);
+      final out = <String, bool>{};
+      for (final r in rows as List) {
+        final row = r as Map<String, dynamic>;
+        out[row['id'].toString()] = row['buyable'] == true;
+      }
+      return out;
+    } catch (_) {
+      return {};
+    }
+  }
+
   /// Estimated total row count from Postgres planner stats — instant,
   /// no sequential scan. Accuracy: within ~1-2% after autovacuum.
   Future<int> fetchTotalEstimate() async {

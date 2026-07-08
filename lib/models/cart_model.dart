@@ -9,6 +9,7 @@ import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'product.dart';
+import '../data/medicine_repository.dart';
 import '../util.dart';
 import '../utils/order_code.dart';
 import '../utils/render_log.dart';
@@ -260,6 +261,11 @@ class CartModel extends ChangeNotifier {
             .rpc('admin_preview_customer_cart', params: {'p_user_id': _viewAsUserId!}) as List;
         _lines.clear();
         _adminRemovedLines.clear();
+        // #401: cart_items has no buyable column — re-fetch current buyability
+        // by id so a snapshot line reflects the product's real availability.
+        final buyableIds = rows.map((r) => r['product_id'] as String).toList();
+        final buyableFlags = await MedicineRepository().fetchBuyableFlags(buyableIds);
+        RenderLog.write('c401_cart_uses_buyable', 'true');
         for (final row in rows) {
           final product = Product.fromCartData(
             id: row['product_id'] as String,
@@ -271,6 +277,7 @@ class CartModel extends ChangeNotifier {
             packSize: (row['pack_size'] as String?) ?? '',
             category: (row['category'] as String?) ?? 'Other',
             gstPercent: (row['gst_percent'] as num?)?.toDouble() ?? 12.0,
+            buyable: buyableFlags[row['product_id'] as String],
           );
           final addedByAdmin = (row['added_by'] as String?) == 'admin';
           final cartItemId = (row['id'] as num?)?.toInt();
@@ -309,6 +316,11 @@ class CartModel extends ChangeNotifier {
           .order('id', ascending: true);
       _lines.clear();
       _adminRemovedLines.clear();
+      // #401: cart_items has no buyable column — re-fetch current buyability
+      // by id so a snapshot line reflects the product's real availability.
+      final buyableIds = rows.map((r) => r['product_id'] as String).toList();
+      final buyableFlags = await MedicineRepository().fetchBuyableFlags(buyableIds);
+      RenderLog.write('c401_cart_uses_buyable', 'true');
       for (final row in rows) {
         final product = Product.fromCartData(
           id: row['product_id'] as String,
@@ -320,6 +332,7 @@ class CartModel extends ChangeNotifier {
           packSize: (row['pack_size'] as String?) ?? '',
           category: (row['category'] as String?) ?? 'Other',
           gstPercent: (row['gst_percent'] as num?)?.toDouble() ?? 12.0,
+          buyable: buyableFlags[row['product_id'] as String],
         );
         final removedByAdmin = (row['removed_by_admin'] as bool?) ?? false;
         final addedByAdmin = (row['added_by'] as String?) == 'admin';

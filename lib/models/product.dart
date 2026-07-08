@@ -223,6 +223,7 @@ class Product {
     String packSize = '',
     String category = 'Other',
     double gstPercent = 12.0,
+    bool? buyable,
   }) {
     return Product(
       id: id,
@@ -239,6 +240,7 @@ class Product {
       gstPercent: gstPercent,
       moq: 1,
       stock: 100,
+      buyable: buyable,
       schedule: 'OTC',
       requiresPrescription: false,
       discount: 0.0,

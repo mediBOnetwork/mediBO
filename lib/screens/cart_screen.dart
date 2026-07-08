@@ -684,6 +684,9 @@ class _CartItemCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = line.product;
+    // #401: cart line availability uses the same Product.isBuyable helper
+    // (buyable==true only) as the product card — status/scrapping ignored.
+    RenderLog.write('c401_avail_helper_unified', p.isBuyable ? 'buyable' : 'unavailable');
     final discPct = cartDiscountPercent(cart.mrpTotal);
     final salePrice = p.mrp * (1 - discPct / 100);
 

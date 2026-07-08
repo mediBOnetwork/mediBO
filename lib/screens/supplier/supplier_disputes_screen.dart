@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../services/fulfill_realtime.dart' show kC416;
 import '../../utils/render_log.dart';
 import '../../widgets/fulfill_item_sheet.dart' show ProofThumbnail;
 import '../admin/dispute/dispute_models.dart';
@@ -100,7 +101,14 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
 
   Future<void> _load() async {
     if (!mounted) return;
-    setState(() { _loading = true; _error = null; });
+    // #416: SILENT refetch — spinner only on first load. A realtime-driven
+    // refetch (from the postgres_changes subscription above) must patch the
+    // existing list in place, never flash a full-screen loader.
+    if (_disputes.isEmpty) {
+      setState(() { _loading = true; _error = null; });
+    } else if (_error != null) {
+      setState(() => _error = null);
+    }
     try {
       final result = await fetchSupplierDisputesList(actingSupplier: _actingSupplier);
       if (!mounted) return;
@@ -108,6 +116,7 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
       _supplierName = result.supplier;
       RenderLog.write('c189_reminder_loaded',
           'supplier=$_supplierName;acting=$_acting;count=${result.items.length}');
+      RenderLog.write(kC416, 'supplier_disputes_synced:count=${result.items.length}');
       setState(() { _disputes = result.items; _loading = false; });
     } on DisputeException catch (e) {
       if (!mounted) return;

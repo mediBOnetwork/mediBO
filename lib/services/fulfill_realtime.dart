@@ -4,6 +4,10 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../utils/render_log.dart';
 
+/// #416: sentinel proving the Bags/Disputes tabs are driven by Supabase
+/// Realtime postgres_changes, not a polling timer.
+const kC416 = 'c416_realtime_bags_disputes';
+
 /// CHANGE #353: ONE shared realtime channel for the whole Fulfill area.
 ///
 /// Subscribes postgres_changes on order_items, supplier_disputes,
@@ -25,7 +29,7 @@ class FulfillRealtime {
   // #355 had dropped supplier_count_mode because it was NOT published; the backend
   // has since published it, so it is restored here — this makes Confirm-counting
   // stage flips (shop↔warehouse) and arrivals_confirmed changes sync cross-device.
-  // All six are published; `orders` carries order-level status changes.
+  // All published; `orders` carries order-level status changes.
   static const tables = [
     'order_items',
     'supplier_disputes',
@@ -36,6 +40,15 @@ class FulfillRealtime {
     'orders',
     // C356: re-added now that it is in the supabase_realtime publication.
     'supplier_count_mode',
+    // #416: the Bag tab's list/status fields (bag full/empty, arrivals_confirmed,
+    // supplier_fully_locked — see fw_list_bags) live on `bags`, and per-bag/
+    // per-supplier session state lives on `bag_sessions`/`bag_supplier_usage`.
+    // Without these, a change to any of the three never reached the tab at all
+    // (postgres_changes only fires for subscribed tables) — verified published
+    // via pg_publication_tables before adding.
+    'bags',
+    'bag_sessions',
+    'bag_supplier_usage',
   ];
 
   final Set<void Function(Set<String> changedTables)> _listeners = {};
@@ -127,6 +140,7 @@ class FulfillRealtime {
           }
           RenderLog.write('c353_rt_state', 's=up');
           RenderLog.write('c355_rt_sub', 'tables=${tables.length}');
+          RenderLog.write(kC416, 'subscribed:tables=${tables.length}');
           if (reconnect) {
             // One full refetch after re-subscribe — events may have been missed.
             _notify({...tables});

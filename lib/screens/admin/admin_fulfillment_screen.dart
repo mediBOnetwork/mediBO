@@ -10846,6 +10846,7 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
   // visible (replaces the bag_tab_order_items_v2 channel).
   void refreshFromRealtime() {
     if (!mounted) return;
+    RenderLog.write(kC416, 'bag_tab_synced');
     _load(silent: true);
     if (_expandedBagNo != null) {
       _loadItems(_expandedBagNo!);
@@ -15313,6 +15314,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
       // C358 B3: Disputes list rendered after a (realtime-driven) refetch — includes
       // 'shop_logged' flagged disputes which the backend returns as active.
       RenderLog.write('c358_disp_synced', 'n=${items.length}');
+      RenderLog.write(kC416, 'disputes_tab_synced:n=${items.length}');
       // c188: first parse = models_loaded
       if (items.isNotEmpty) {
         RenderLog.write('c188_models_loaded', 'count=${items.length}');

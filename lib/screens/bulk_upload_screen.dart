@@ -3758,6 +3758,9 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
   }
 
   Widget _buildWeb(int matched, int manuallyMatched, int partial, int unrecognized, bool canAdd) {
+    // #403: desktop table STATUS+HIDE columns removed, grid aligned to shared
+    // flex widths. Mobile path (_buildMobile) is untouched.
+    try { RenderLog.write('c403_bulk_table_web_cleaned', 'true'); } catch (_) {}
     final badge = widget.isFromFile
         ? (widget.fileName != null && widget.fileName!.length > 20
             ? '${widget.fileName!.substring(0, 17)}…'
@@ -3921,19 +3924,26 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
                   bottom: BorderSide(color: Color(0xFFE5E7EB)),
                 ),
               ),
+              // #403: desktop-only column grid — STATUS + HIDE removed; flex
+              // ratios shared verbatim with _ExpandableMatchRow's data row so
+              // header and cells line up (LINE ITEM 6 : MATCHED SKU 6 : PACK 3
+              // : COMPANY 5 : QTY 2 : AVAIL 5 : APPROVE 2).
               child: const Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  Expanded(flex: 28, child: Text('LINE ITEM', style: _kTh)),
-                  Expanded(flex: 20, child: Text('MATCHED SKU', style: _kTh)),
-                  Expanded(flex: 6, child: Text('PACK', style: _kTh)),
-                  Expanded(flex: 9, child: Text('COMPANY', style: _kTh)),
-                  Expanded(flex: 5, child: Text('QTY', style: _kTh)),
-                  Expanded(flex: 7, child: Text('AVAIL', style: _kTh)),
-                  Expanded(flex: 8, child: Text('STATUS', textAlign: TextAlign.center, style: _kTh)),
-                  SizedBox(width: 12),
-                  Expanded(flex: 3, child: Text('HIDE', textAlign: TextAlign.center, style: _kTh)),
-                  SizedBox(width: 12),
-                  Expanded(flex: 5, child: Text('APPROVE', textAlign: TextAlign.center, style: _kTh)),
+                  Expanded(flex: 6, child: Text('LINE ITEM', style: _kTh)),
+                  SizedBox(width: 10),
+                  Expanded(flex: 6, child: Text('MATCHED SKU', style: _kTh)),
+                  SizedBox(width: 10),
+                  Expanded(flex: 3, child: Text('PACK', style: _kTh)),
+                  SizedBox(width: 10),
+                  Expanded(flex: 5, child: Text('COMPANY', style: _kTh)),
+                  SizedBox(width: 10),
+                  Expanded(flex: 2, child: Text('QTY', style: _kTh)),
+                  SizedBox(width: 10),
+                  Expanded(flex: 5, child: Text('AVAIL', style: _kTh)),
+                  SizedBox(width: 10),
+                  Expanded(flex: 2, child: Text('APPROVE', textAlign: TextAlign.center, style: _kTh)),
                 ],
               ),
             ),
@@ -4116,39 +4126,18 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
     final row = widget.row;
     final isEven = widget.index % 2 == 0;
 
-    // Status badge styling
-    Color badgeColor;
-    Color badgeText;
-    String label;
-    Color leftBorderColor;
+    // #403: desktop STATUS chip removed — only the left border stripe color
+    // (still keyed off match status/hidden) survives from this switch.
+    final Color leftBorderColor;
     if (row.isHidden) {
-      badgeColor = const Color(0xFFF3F4F6);
-      badgeText = const Color(0xFF9CA3AF);
-      label = 'Hidden';
       leftBorderColor = const Color(0xFFD1D5DB);
     } else {
-      switch (row.status) {
-        case _MatchStatus.matched:
-          badgeColor = const Color(0xFFDCFCE7);
-          badgeText = const Color(0xFF15803D);
-          label = 'Matched';
-          leftBorderColor = const Color(0xFF15803D);
-        case _MatchStatus.manuallyMatched:
-          badgeColor = const Color(0xFFE0E7FF);
-          badgeText = const Color(0xFF3730A3);
-          label = 'Manually Matched';
-          leftBorderColor = const Color(0xFF3730A3);
-        case _MatchStatus.partial:
-          badgeColor = const Color(0xFFFEF3C7);
-          badgeText = const Color(0xFF92400E);
-          label = 'Partial';
-          leftBorderColor = const Color(0xFFEA580C);
-        case _MatchStatus.unrecognized:
-          badgeColor = const Color(0xFFFEE2E2);
-          badgeText = const Color(0xFFDC2626);
-          label = 'Unrecognized';
-          leftBorderColor = const Color(0xFFDC2626);
-      }
+      leftBorderColor = switch (row.status) {
+        _MatchStatus.matched => const Color(0xFF15803D),
+        _MatchStatus.manuallyMatched => const Color(0xFF3730A3),
+        _MatchStatus.partial => const Color(0xFFEA580C),
+        _MatchStatus.unrecognized => const Color(0xFFDC2626),
+      };
     }
 
     final bottomBorder = (!widget.last || widget.isExpanded)
@@ -4178,22 +4167,23 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
               ),
             ),
             padding: const EdgeInsets.fromLTRB(17, 12, 12, 12),
+            // #403: desktop-only grid — STATUS + HIDE columns removed; flex
+            // ratios match the header exactly (LINE ITEM 6 : MATCHED SKU 6 :
+            // PACK 3 : COMPANY 5 : QTY 2 : AVAIL 5 : APPROVE 2), with a fixed
+            // gap between every column so COMPANY never crowds into QTY.
             child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                // c314_desktop_header_full: desktop row unchanged — eye + pill still present.
-                Builder(builder: (ctx) {
-                  try { RenderLog.write('c314_desktop_header_full', '1'); } catch (_) {}
-                  return const SizedBox.shrink();
-                }),
                 Expanded(
-                  flex: 28,
+                  flex: 6,
                   child: SizedBox(
                     height: 56,
                     child: _lineItemCrop(row, widget.uploadedImageSize),
                   ),
                 ),
+                const SizedBox(width: 10),
                 Expanded(
-                  flex: 20,
+                  flex: 6,
                   child: Text(
                     row.selectedProduct?.name ??
                         (row.status != _MatchStatus.unrecognized ? row.matchedSku : '—'),
@@ -4210,8 +4200,9 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
                     ),
                   ),
                 ),
+                const SizedBox(width: 10),
                 Expanded(
-                  flex: 6,
+                  flex: 3,
                   child: Text(
                     row.selectedProduct != null ? _packShort(row.selectedProduct!) : '',
                     maxLines: 1,
@@ -4219,9 +4210,9 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
                     style: const TextStyle(fontSize: 12, color: Color(0xFF374151)),
                   ),
                 ),
-                Flexible(
-                  flex: 9,
-                  fit: FlexFit.loose,
+                const SizedBox(width: 10),
+                Expanded(
+                  flex: 5,
                   child: Text(
                     row.selectedProduct?.manufacturer ?? '',
                     maxLines: 1,
@@ -4229,13 +4220,16 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
                     style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
                   ),
                 ),
+                const SizedBox(width: 10),
                 Expanded(
-                  flex: 5,
+                  flex: 2,
                   child: Text('${row.qty}',
+                      textAlign: TextAlign.center,
                       style: const TextStyle(fontSize: 13, color: Color(0xFF374151))),
                 ),
+                const SizedBox(width: 10),
                 Expanded(
-                  flex: 7,
+                  flex: 5,
                   child: Builder(builder: (_avCtx) {
                     try { RenderLog.write('c316_detail_avna', '1'); } catch (_) {}
                     final p = row.selectedProduct;
@@ -4261,53 +4255,10 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
                     );
                   }),
                 ),
-                // STATUS column — fixed-width badge (sized to widest "Manually Matched")
-                Expanded(
-                  flex: 8,
-                  child: SizedBox(
-                    width: 124,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
-                      decoration: BoxDecoration(
-                        color: badgeColor,
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: Text(label,
-                          textAlign: TextAlign.center,
-                          overflow: TextOverflow.ellipsis,
-                          maxLines: 1,
-                          style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w600,
-                              color: badgeText)),
-                    ),
-                  ),
-                ),
-                // HIDE column — eye icon centered under its header
-                const SizedBox(width: 12),
-                Expanded(
-                  flex: 3,
-                  child: Center(
-                    child: GestureDetector(
-                      onTap: widget.onHideToggle,
-                      behavior: HitTestBehavior.opaque,
-                      child: Padding(
-                        padding: const EdgeInsets.all(3),
-                        child: Icon(
-                          row.isHidden
-                              ? Icons.visibility_outlined
-                              : Icons.visibility_off_outlined,
-                          size: 16,
-                          color: const Color(0xFF6B7280),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
+                const SizedBox(width: 10),
                 // APPROVE column — per-row retry for unrecognized; checkbox for others
-                const SizedBox(width: 12),
                 Expanded(
-                  flex: 5,
+                  flex: 2,
                   child: Center(
                     child: (row.status == _MatchStatus.unrecognized && !row.isHidden)
                         ? _isRowRetrying
@@ -5559,11 +5510,13 @@ class _SearchResultRow extends StatelessWidget {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            // LINE ITEM column — blank spacer (aligns with main table)
-            const Expanded(flex: 28, child: SizedBox()),
+            // #403: flex ratios match _ExpandableMatchRow's desktop grid
+            // (STATUS/HIDE columns no longer exist to leave blank spacers for).
+            const Expanded(flex: 6, child: SizedBox()),
+            const SizedBox(width: 10),
             // MATCHED SKU column — product name
             Expanded(
-              flex: 20,
+              flex: 6,
               child: Text(product.name,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
@@ -5571,38 +5524,39 @@ class _SearchResultRow extends StatelessWidget {
                       fontSize: 12, fontWeight: FontWeight.w500,
                       color: Color(0xFF374151))),
             ),
+            const SizedBox(width: 10),
             // PACK column
             Expanded(
-              flex: 6,
+              flex: 3,
               child: Text(_packShort(product),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
             ),
+            const SizedBox(width: 10),
             // COMPANY column
             Expanded(
-              flex: 9,
+              flex: 5,
               child: Text(product.manufacturer,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
             ),
+            const SizedBox(width: 10),
             // QTY column — blank spacer
-            const Expanded(flex: 5, child: SizedBox()),
-            // MRP column — black to match row text, no green
+            const Expanded(flex: 2, child: SizedBox()),
+            const SizedBox(width: 10),
+            // MRP column (shown in the AVAIL column's slot) — black to match row text, no green
             Expanded(
-              flex: 7,
+              flex: 5,
               child: Text(rupees(product.mrp),
                   style: const TextStyle(
                       fontSize: 12, fontWeight: FontWeight.w500,
                       color: Color(0xFF374151))),
             ),
-            // STATUS / HIDE / APPROVE columns — blank spacers
-            const Expanded(flex: 8, child: SizedBox()),
-            const SizedBox(width: 12),
-            const Expanded(flex: 3, child: SizedBox()),
-            const SizedBox(width: 12),
-            const Expanded(flex: 5, child: SizedBox()),
+            const SizedBox(width: 10),
+            // APPROVE column — blank spacer
+            const Expanded(flex: 2, child: SizedBox()),
           ],
         ),
       ),
@@ -5626,9 +5580,11 @@ class _WebPanelSkeletonRow extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          const Expanded(flex: 28, child: SizedBox()),
+          // #403: flex ratios match _ExpandableMatchRow's desktop grid.
+          const Expanded(flex: 6, child: SizedBox()),
+          const SizedBox(width: 10),
           Expanded(
-            flex: 20,
+            flex: 6,
             child: Container(
               height: 10,
               margin: const EdgeInsets.only(right: 8),
@@ -5638,8 +5594,9 @@ class _WebPanelSkeletonRow extends StatelessWidget {
               ),
             ),
           ),
+          const SizedBox(width: 10),
           Expanded(
-            flex: 6,
+            flex: 3,
             child: Container(
               height: 10,
               margin: const EdgeInsets.only(right: 6),
@@ -5649,8 +5606,9 @@ class _WebPanelSkeletonRow extends StatelessWidget {
               ),
             ),
           ),
+          const SizedBox(width: 10),
           Expanded(
-            flex: 9,
+            flex: 5,
             child: Container(
               height: 10,
               margin: const EdgeInsets.only(right: 6),
@@ -5660,9 +5618,11 @@ class _WebPanelSkeletonRow extends StatelessWidget {
               ),
             ),
           ),
-          const Expanded(flex: 5, child: SizedBox()),
+          const SizedBox(width: 10),
+          const Expanded(flex: 2, child: SizedBox()),
+          const SizedBox(width: 10),
           Expanded(
-            flex: 7,
+            flex: 5,
             child: Container(
               height: 10,
               decoration: BoxDecoration(
@@ -5671,11 +5631,8 @@ class _WebPanelSkeletonRow extends StatelessWidget {
               ),
             ),
           ),
-          const Expanded(flex: 8, child: SizedBox()),
-          const SizedBox(width: 12),
-          const Expanded(flex: 3, child: SizedBox()),
-          const SizedBox(width: 12),
-          const Expanded(flex: 5, child: SizedBox()),
+          const SizedBox(width: 10),
+          const Expanded(flex: 2, child: SizedBox()),
         ],
       ),
     );
@@ -5777,11 +5734,13 @@ class _AlternativeRow extends StatelessWidget {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
+            // #403: flex ratios match _ExpandableMatchRow's desktop grid.
             // LINE ITEM column — blank spacer
-            const Expanded(flex: 28, child: SizedBox()),
+            const Expanded(flex: 6, child: SizedBox()),
+            const SizedBox(width: 10),
             // MATCHED SKU column — product name only (company goes to COMPANY column)
             Expanded(
-              flex: 20,
+              flex: 6,
               child: Text(
                 product.name,
                 maxLines: 1,
@@ -5793,9 +5752,10 @@ class _AlternativeRow extends StatelessWidget {
                 ),
               ),
             ),
+            const SizedBox(width: 10),
             // PACK column
             Expanded(
-              flex: 6,
+              flex: 3,
               child: Text(
                 packShort,
                 maxLines: 1,
@@ -5803,9 +5763,10 @@ class _AlternativeRow extends StatelessWidget {
                 style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280)),
               ),
             ),
+            const SizedBox(width: 10),
             // COMPANY column — aligned under main row's company cell, ellipsis if long
             Expanded(
-              flex: 9,
+              flex: 5,
               child: Text(
                 product.manufacturer,
                 maxLines: 1,
@@ -5813,22 +5774,21 @@ class _AlternativeRow extends StatelessWidget {
                 style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
               ),
             ),
+            const SizedBox(width: 10),
             // QTY column — blank spacer
-            const Expanded(flex: 5, child: SizedBox()),
-            // MRP column — aligned under main row's MRP cell
+            const Expanded(flex: 2, child: SizedBox()),
+            const SizedBox(width: 10),
+            // MRP column (shown in the AVAIL column's slot) — aligned under main row's cell
             Expanded(
-              flex: 7,
+              flex: 5,
               child: Text(
                 rupees(product.mrp),
                 style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: priceColor),
               ),
             ),
-            // STATUS / HIDE / APPROVE columns — blank for alternate rows
-            const Expanded(flex: 8, child: SizedBox()),
-            const SizedBox(width: 12),
-            const Expanded(flex: 3, child: SizedBox()),
-            const SizedBox(width: 12),
-            const Expanded(flex: 5, child: SizedBox()),
+            const SizedBox(width: 10),
+            // APPROVE column — blank spacer
+            const Expanded(flex: 2, child: SizedBox()),
           ],
         ),
       ),

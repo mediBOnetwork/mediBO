@@ -674,6 +674,15 @@ class CartModel extends ChangeNotifier {
     _cachedTotalGst = _lines.values.fold(0.0, (s, l) => s + l.lineGst);
   }
 
+  // CHANGE #412: display-only sort. Bulk-upload items keep their existing
+  // bulkOrder-first grouping (= bulk-upload list order, unchanged). Within
+  // each group, items are sorted by cart_items.id ascending — i.e. the
+  // order they were added — instead of relying on incidental Map iteration
+  // order. Nulls (not yet round-tripped to Supabase, e.g. a brand-new line)
+  // sort last, since they're the most recently added. Read-only: does not
+  // touch add/remove/sync/quantity logic.
+  static const kC412CartSortById = 'c411_cart_sort_by_id';
+
   List<CartLine> get lines {
     final bulk = <CartLine>[];
     final others = <CartLine>[];
@@ -681,6 +690,15 @@ class CartModel extends ChangeNotifier {
       if (l.bulkOrder != null) bulk.add(l); else others.add(l);
     }
     bulk.sort((a, b) => a.bulkOrder!.compareTo(b.bulkOrder!));
+    others.sort((a, b) {
+      final ai = a.cartItemId;
+      final bi = b.cartItemId;
+      if (ai == null && bi == null) return 0;
+      if (ai == null) return 1;
+      if (bi == null) return -1;
+      return ai.compareTo(bi);
+    });
+    RenderLog.write(kC412CartSortById, 'bulk:${bulk.length};others:${others.length}');
     return [...bulk, ...others];
   }
   List<CartLine> get adminRemovedLines => List.unmodifiable(_adminRemovedLines);

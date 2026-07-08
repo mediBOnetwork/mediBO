@@ -3762,6 +3762,7 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
     // flex widths. Mobile path (_buildMobile) is untouched.
     try { RenderLog.write('c403_bulk_table_web_cleaned', 'true'); } catch (_) {}
     try { RenderLog.write('c404_bulk_headers_centered', 'true'); } catch (_) {}
+    try { RenderLog.write('c405_bulk_mrp_status_cols', 'true'); } catch (_) {}
     final badge = widget.isFromFile
         ? (widget.fileName != null && widget.fileName!.length > 20
             ? '${widget.fileName!.substring(0, 17)}…'
@@ -3925,14 +3926,13 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
                   bottom: BorderSide(color: Color(0xFFE5E7EB)),
                 ),
               ),
-              // #403: desktop-only column grid — STATUS + HIDE removed; flex
-              // ratios shared verbatim with _ExpandableMatchRow's data row so
-              // header and cells line up (LINE ITEM 6 : MATCHED SKU 6 : PACK 3
-              // : COMPANY 5 : QTY 2 : AVAIL 5 : APPROVE 2).
-              // #404: header alignment matches each column's cell alignment —
-              // LINE ITEM/MATCHED SKU/COMPANY stay left (their values are
-              // left-aligned text/images); PACK/QTY/AVAIL/APPROVE are centered
-              // to sit directly over their centered values.
+              // #403/#404/#405: desktop-only column grid — flex ratios shared
+              // verbatim with _ExpandableMatchRow's data row AND the
+              // alternative-row widgets so header and every row line up:
+              // LINE ITEM 6 : MATCHED SKU 6 : PACK 3 : COMPANY 5 : QTY 2 :
+              // MRP 3 : STATUS 5 : APPROVE 2. LINE ITEM/MATCHED SKU/COMPANY
+              // stay left (their values are left-aligned text/images); PACK/
+              // QTY/MRP/STATUS/APPROVE are centered to sit over their values.
               child: const Row(
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
@@ -3946,7 +3946,9 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
                   SizedBox(width: 10),
                   Expanded(flex: 2, child: Text('QTY', textAlign: TextAlign.center, style: _kTh)),
                   SizedBox(width: 10),
-                  Expanded(flex: 5, child: Text('AVAIL', textAlign: TextAlign.center, style: _kTh)),
+                  Expanded(flex: 3, child: Text('MRP', textAlign: TextAlign.center, style: _kTh)),
+                  SizedBox(width: 10),
+                  Expanded(flex: 5, child: Text('STATUS', textAlign: TextAlign.center, style: _kTh)),
                   SizedBox(width: 10),
                   Expanded(flex: 2, child: Text('APPROVE', textAlign: TextAlign.center, style: _kTh)),
                 ],
@@ -4043,11 +4045,13 @@ class _AvailChip extends StatelessWidget {
         color: available ? const Color(0xFFDCFCE7) : const Color(0xFFFEE2E2),
         borderRadius: BorderRadius.circular(12),
       ),
+      // #405: STATUS column must never clip "Not available" — no overflow
+      // ellipsis; the column is sized wide enough for the full label.
       child: Text(
         available ? 'Available' : 'Not available',
         textAlign: TextAlign.center,
         maxLines: 1,
-        overflow: TextOverflow.ellipsis,
+        softWrap: false,
         style: TextStyle(
           fontSize: 11,
           fontWeight: FontWeight.w600,
@@ -4264,9 +4268,25 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
                       style: const TextStyle(fontSize: 13, color: Color(0xFF374151))),
                 ),
                 const SizedBox(width: 10),
+                // #405: MRP column (new) — sits between QTY and STATUS.
+                Expanded(
+                  flex: 3,
+                  child: Center(
+                    child: Text(
+                      row.selectedProduct != null && row.selectedProduct!.hasMrp
+                          ? rupees(row.selectedProduct!.mrp)
+                          : '—',
+                      textAlign: TextAlign.center,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: Color(0xFF374151)),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
                 Expanded(
                   flex: 5,
-                  // #404: centered under the AVAIL header (was left-hugging the column).
+                  // #404: centered under the STATUS header (was left-hugging the column).
                   child: Center(
                     child: Builder(builder: (_avCtx) {
                       try { RenderLog.write('c316_detail_avna', '1'); } catch (_) {}
@@ -5521,6 +5541,7 @@ class _SearchResultRow extends StatelessWidget {
   // Web: flex layout aligned to the main table columns — same x per column as _AlternativeRow._buildWeb()
   Widget _buildWeb() {
     try { RenderLog.write('c404_alt_availability_shown', 'true'); } catch (_) {}
+    try { RenderLog.write('c405_bulk_mrp_status_cols', 'true'); } catch (_) {}
     return InkWell(
       onTap: onTap,
       child: Container(
@@ -5532,8 +5553,9 @@ class _SearchResultRow extends StatelessWidget {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            // #403: flex ratios match _ExpandableMatchRow's desktop grid
-            // (STATUS/HIDE columns no longer exist to leave blank spacers for).
+            // #403/#405: flex ratios match _ExpandableMatchRow's desktop grid
+            // (LINE ITEM 6 : MATCHED SKU 6 : PACK 3 : COMPANY 5 : QTY 2 :
+            // MRP 3 : STATUS 5 : APPROVE 2).
             const Expanded(flex: 6, child: SizedBox()),
             const SizedBox(width: 10),
             // MATCHED SKU column — product name
@@ -5551,6 +5573,7 @@ class _SearchResultRow extends StatelessWidget {
             Expanded(
               flex: 3,
               child: Text(_packShort(product),
+                  textAlign: TextAlign.center,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
@@ -5565,19 +5588,28 @@ class _SearchResultRow extends StatelessWidget {
                   style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
             ),
             const SizedBox(width: 10),
-            // #404: QTY column repurposed to show this alternative's own
-            // availability chip (from the search_medicines_priority `buyable`
-            // field already parsed onto Product) — not just the selected row.
-            Expanded(flex: 2, child: Center(child: _AvailChip(available: product.isBuyable))),
+            // QTY column — blank spacer (alternatives have no order qty)
+            const Expanded(flex: 2, child: SizedBox()),
             const SizedBox(width: 10),
-            // MRP column (shown in the AVAIL column's slot) — black to match row text, no green
+            // #405: MRP column (new)
             Expanded(
-              flex: 5,
-              child: Text(rupees(product.mrp),
+              flex: 3,
+              child: Center(
+                child: Text(
+                  product.hasMrp ? rupees(product.mrp) : '—',
+                  textAlign: TextAlign.center,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
                       fontSize: 12, fontWeight: FontWeight.w500,
-                      color: Color(0xFF374151))),
+                      color: Color(0xFF374151)),
+                ),
+              ),
             ),
+            const SizedBox(width: 10),
+            // #405: STATUS column (renamed from AVAIL) — this alternative's
+            // own availability chip, not just the selected row's.
+            Expanded(flex: 5, child: Center(child: _AvailChip(available: product.isBuyable))),
             const SizedBox(width: 10),
             // APPROVE column — blank spacer
             const Expanded(flex: 2, child: SizedBox()),
@@ -5643,8 +5675,23 @@ class _WebPanelSkeletonRow extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 10),
+          // QTY column — blank spacer
           const Expanded(flex: 2, child: SizedBox()),
           const SizedBox(width: 10),
+          // #405: MRP shimmer (new column)
+          Expanded(
+            flex: 3,
+            child: Container(
+              height: 10,
+              margin: const EdgeInsets.only(right: 6),
+              decoration: BoxDecoration(
+                color: const Color(0xFFBBF7D0),
+                borderRadius: BorderRadius.circular(4),
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          // #405: STATUS shimmer (renamed from AVAIL)
           Expanded(
             flex: 5,
             child: Container(
@@ -5743,6 +5790,7 @@ class _AlternativeRow extends StatelessWidget {
 
   Widget _buildWeb() {
     try { RenderLog.write('c404_alt_availability_shown', 'true'); } catch (_) {}
+    try { RenderLog.write('c405_bulk_mrp_status_cols', 'true'); } catch (_) {}
     final nameColor = isSelected ? const Color(0xFF16A34A) : const Color(0xFF374151);
     final priceColor = isSelected ? const Color(0xFF16A34A) : const Color(0xFF6B7280);
     final packShort = _packShort(product);
@@ -5783,6 +5831,7 @@ class _AlternativeRow extends StatelessWidget {
               flex: 3,
               child: Text(
                 packShort,
+                textAlign: TextAlign.center,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280)),
@@ -5800,19 +5849,26 @@ class _AlternativeRow extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 10),
-            // #404: QTY column repurposed to show this alternative's own
-            // availability chip (from the search_medicines_priority `buyable`
-            // field already parsed onto Product) — not just the selected row.
-            Expanded(flex: 2, child: Center(child: _AvailChip(available: product.isBuyable))),
+            // QTY column — blank spacer (alternatives have no order qty)
+            const Expanded(flex: 2, child: SizedBox()),
             const SizedBox(width: 10),
-            // MRP column (shown in the AVAIL column's slot) — aligned under main row's cell
+            // #405: MRP column — aligned under main row's cell
             Expanded(
-              flex: 5,
-              child: Text(
-                rupees(product.mrp),
-                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: priceColor),
+              flex: 3,
+              child: Center(
+                child: Text(
+                  product.hasMrp ? rupees(product.mrp) : '—',
+                  textAlign: TextAlign.center,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: priceColor),
+                ),
               ),
             ),
+            const SizedBox(width: 10),
+            // #405: STATUS column (renamed from AVAIL) — this alternative's
+            // own availability chip, not just the selected row's.
+            Expanded(flex: 5, child: Center(child: _AvailChip(available: product.isBuyable))),
             const SizedBox(width: 10),
             // APPROVE column — blank spacer
             const Expanded(flex: 2, child: SizedBox()),

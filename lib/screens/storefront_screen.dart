@@ -335,6 +335,12 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
         const c408Search = 'c408_search_all_matches';
         RenderLog.write(c408Search,
             'term=$term;rows=${page.length};includes_non_buyable=$anyNonBuyable');
+        // Re-verification sentinel (same code path, distinct literal so a
+        // fresh deploy can be proven independently of any prior build that
+        // happened to reuse a version number).
+        const String kC408SearchSentinel = 'c408_web_search_all_matches';
+        RenderLog.write(kC408SearchSentinel,
+            'term=$term;rows=${page.length};includes_non_buyable=$anyNonBuyable');
       }
       final ended = page.length < MedicineRepository.pageSize || page.length >= 200;
       if (_onlyBuyable) {

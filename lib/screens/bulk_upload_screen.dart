@@ -3761,6 +3761,7 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
     // #403: desktop table STATUS+HIDE columns removed, grid aligned to shared
     // flex widths. Mobile path (_buildMobile) is untouched.
     try { RenderLog.write('c403_bulk_table_web_cleaned', 'true'); } catch (_) {}
+    try { RenderLog.write('c404_bulk_headers_centered', 'true'); } catch (_) {}
     final badge = widget.isFromFile
         ? (widget.fileName != null && widget.fileName!.length > 20
             ? '${widget.fileName!.substring(0, 17)}…'
@@ -3928,6 +3929,10 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
               // ratios shared verbatim with _ExpandableMatchRow's data row so
               // header and cells line up (LINE ITEM 6 : MATCHED SKU 6 : PACK 3
               // : COMPANY 5 : QTY 2 : AVAIL 5 : APPROVE 2).
+              // #404: header alignment matches each column's cell alignment —
+              // LINE ITEM/MATCHED SKU/COMPANY stay left (their values are
+              // left-aligned text/images); PACK/QTY/AVAIL/APPROVE are centered
+              // to sit directly over their centered values.
               child: const Row(
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
@@ -3935,13 +3940,13 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
                   SizedBox(width: 10),
                   Expanded(flex: 6, child: Text('MATCHED SKU', style: _kTh)),
                   SizedBox(width: 10),
-                  Expanded(flex: 3, child: Text('PACK', style: _kTh)),
+                  Expanded(flex: 3, child: Text('PACK', textAlign: TextAlign.center, style: _kTh)),
                   SizedBox(width: 10),
                   Expanded(flex: 5, child: Text('COMPANY', style: _kTh)),
                   SizedBox(width: 10),
-                  Expanded(flex: 2, child: Text('QTY', style: _kTh)),
+                  Expanded(flex: 2, child: Text('QTY', textAlign: TextAlign.center, style: _kTh)),
                   SizedBox(width: 10),
-                  Expanded(flex: 5, child: Text('AVAIL', style: _kTh)),
+                  Expanded(flex: 5, child: Text('AVAIL', textAlign: TextAlign.center, style: _kTh)),
                   SizedBox(width: 10),
                   Expanded(flex: 2, child: Text('APPROVE', textAlign: TextAlign.center, style: _kTh)),
                 ],
@@ -4022,6 +4027,36 @@ const _kTh = TextStyle(
   color: Color(0xFF9CA3AF),
   letterSpacing: 0.5,
 );
+
+/// #404: shared availability pill (desktop) — used by the main match row's
+/// AVAIL column and by every fuzzy-match/search alternative row, so a
+/// candidate's `buyable` status is visible everywhere it's rendered.
+class _AvailChip extends StatelessWidget {
+  final bool available;
+  const _AvailChip({required this.available});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: available ? const Color(0xFFDCFCE7) : const Color(0xFFFEE2E2),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Text(
+        available ? 'Available' : 'Not available',
+        textAlign: TextAlign.center,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w600,
+          color: available ? const Color(0xFF15803D) : const Color(0xFFDC2626),
+        ),
+      ),
+    );
+  }
+}
 
 class _ExpandableMatchRow extends StatefulWidget {
   final _MatchRow row;
@@ -4205,6 +4240,7 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
                   flex: 3,
                   child: Text(
                     row.selectedProduct != null ? _packShort(row.selectedProduct!) : '',
+                    textAlign: TextAlign.center,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(fontSize: 12, color: Color(0xFF374151)),
@@ -4230,30 +4266,15 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
                 const SizedBox(width: 10),
                 Expanded(
                   flex: 5,
-                  child: Builder(builder: (_avCtx) {
-                    try { RenderLog.write('c316_detail_avna', '1'); } catch (_) {}
-                    final p = row.selectedProduct;
-                    if (p == null) return const SizedBox.shrink();
-                    final avail = p.isBuyable;
-                    return Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                      decoration: BoxDecoration(
-                        color: avail ? const Color(0xFFDCFCE7) : const Color(0xFFFEE2E2),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Text(
-                        avail ? 'Available' : 'Not available',
-                        textAlign: TextAlign.center,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
-                          color: avail ? const Color(0xFF15803D) : const Color(0xFFDC2626),
-                        ),
-                      ),
-                    );
-                  }),
+                  // #404: centered under the AVAIL header (was left-hugging the column).
+                  child: Center(
+                    child: Builder(builder: (_avCtx) {
+                      try { RenderLog.write('c316_detail_avna', '1'); } catch (_) {}
+                      final p = row.selectedProduct;
+                      if (p == null) return const SizedBox.shrink();
+                      return _AvailChip(available: p.isBuyable);
+                    }),
+                  ),
                 ),
                 const SizedBox(width: 10),
                 // APPROVE column — per-row retry for unrecognized; checkbox for others
@@ -5499,6 +5520,7 @@ class _SearchResultRow extends StatelessWidget {
 
   // Web: flex layout aligned to the main table columns — same x per column as _AlternativeRow._buildWeb()
   Widget _buildWeb() {
+    try { RenderLog.write('c404_alt_availability_shown', 'true'); } catch (_) {}
     return InkWell(
       onTap: onTap,
       child: Container(
@@ -5543,8 +5565,10 @@ class _SearchResultRow extends StatelessWidget {
                   style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
             ),
             const SizedBox(width: 10),
-            // QTY column — blank spacer
-            const Expanded(flex: 2, child: SizedBox()),
+            // #404: QTY column repurposed to show this alternative's own
+            // availability chip (from the search_medicines_priority `buyable`
+            // field already parsed onto Product) — not just the selected row.
+            Expanded(flex: 2, child: Center(child: _AvailChip(available: product.isBuyable))),
             const SizedBox(width: 10),
             // MRP column (shown in the AVAIL column's slot) — black to match row text, no green
             Expanded(
@@ -5718,6 +5742,7 @@ class _AlternativeRow extends StatelessWidget {
   Widget build(BuildContext context) => isMobile ? _buildMobile() : _buildWeb();
 
   Widget _buildWeb() {
+    try { RenderLog.write('c404_alt_availability_shown', 'true'); } catch (_) {}
     final nameColor = isSelected ? const Color(0xFF16A34A) : const Color(0xFF374151);
     final priceColor = isSelected ? const Color(0xFF16A34A) : const Color(0xFF6B7280);
     final packShort = _packShort(product);
@@ -5775,8 +5800,10 @@ class _AlternativeRow extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 10),
-            // QTY column — blank spacer
-            const Expanded(flex: 2, child: SizedBox()),
+            // #404: QTY column repurposed to show this alternative's own
+            // availability chip (from the search_medicines_priority `buyable`
+            // field already parsed onto Product) — not just the selected row.
+            Expanded(flex: 2, child: Center(child: _AvailChip(available: product.isBuyable))),
             const SizedBox(width: 10),
             // MRP column (shown in the AVAIL column's slot) — aligned under main row's cell
             Expanded(

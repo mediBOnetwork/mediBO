@@ -706,21 +706,6 @@ class CartModel extends ChangeNotifier {
   // ── Public API ────────────────────────────────────────────────────────────
 
   void add(Product product) {
-    if (isViewAs) {
-      final existing = _lines[product.id];
-      final int qty;
-      if (existing == null) {
-        qty = product.moq;
-        _lines[product.id] = CartLine(product, qty);
-      } else {
-        existing.quantity += 1;
-        qty = existing.quantity;
-      }
-      _recomputeTotals();
-      notifyListeners();
-      _viewAsUpsert(product, qty);
-      return;
-    }
     final existing = _lines[product.id];
     final int qty;
     if (existing == null) {
@@ -732,34 +717,15 @@ class CartModel extends ChangeNotifier {
     }
     _recomputeTotals();
     notifyListeners();
-    _persist(product, qty);
+    _writeUpsert(product, qty);
   }
 
   void setQuantity(Product product, int qty) {
-    if (isViewAs) {
-      if (qty <= 0) {
-        _lines.remove(product.id);
-        _recomputeTotals();
-        notifyListeners();
-        _viewAsRemove(product.id);
-      } else {
-        final line = _lines[product.id];
-        if (line == null) {
-          _lines[product.id] = CartLine(product, qty);
-        } else {
-          line.quantity = qty;
-        }
-        _recomputeTotals();
-        notifyListeners();
-        _viewAsUpsert(product, qty);
-      }
-      return;
-    }
     if (qty <= 0) {
       _lines.remove(product.id);
       _recomputeTotals();
       notifyListeners();
-      _persistDelete(product.id);
+      _writeRemove(product.id);
     } else {
       final line = _lines[product.id];
       if (line == null) {
@@ -769,7 +735,7 @@ class CartModel extends ChangeNotifier {
       }
       _recomputeTotals();
       notifyListeners();
-      _persist(product, qty);
+      _writeUpsert(product, qty);
     }
   }
 
@@ -778,20 +744,15 @@ class CartModel extends ChangeNotifier {
   /// product so the bulkOrder is set correctly on re-sync.
   void setBulkQuantity(Product product, int qty, int bulkOrder) {
     // CHANGE #326: ViewAs must persist via server RPC, not local store.
-    if (isViewAs) {
-      _lines[product.id] = CartLine(product, qty,
-          bulkOrder: bulkOrder, addedByAdmin: true);
-      _recomputeTotals();
-      notifyListeners();
-      RenderLog.write('c326_bulk_upsert',
-          'product:${product.id}:qty:$qty:user:$_viewAsUserId');
-      _viewAsUpsert(product, qty); // admin_writeas_cart_upsert + reload from server
-      return;
-    }
-    _lines[product.id] = CartLine(product, qty, bulkOrder: bulkOrder);
+    _lines[product.id] = CartLine(product, qty,
+        bulkOrder: bulkOrder, addedByAdmin: isViewAs);
     _recomputeTotals();
     notifyListeners();
-    _persist(product, qty);
+    if (isViewAs) {
+      RenderLog.write('c326_bulk_upsert',
+          'product:${product.id}:qty:$qty:user:$_viewAsUserId');
+    }
+    _writeUpsert(product, qty);
   }
 
   void increment(Product product) =>
@@ -807,21 +768,14 @@ class CartModel extends ChangeNotifier {
   }
 
   void remove(Product product) {
-    if (isViewAs) {
-      _lines.remove(product.id);
-      _recomputeTotals();
-      notifyListeners();
-      _viewAsRemove(product.id);
-      return;
-    }
     _lines.remove(product.id);
-    if (!hasSampleItems) {
+    if (!isViewAs && !hasSampleItems) {
       _sampleTimer?.cancel();
       _sampleTimer = null;
     }
     _recomputeTotals();
     notifyListeners();
-    _persistDelete(product.id);
+    _writeRemove(product.id);
   }
 
   void removeById(String productId) {
@@ -829,11 +783,35 @@ class CartModel extends ChangeNotifier {
     if (line != null) remove(line.product);
   }
 
+  // #407: single guard that EVERY cart write funnels through — a future
+  // add/update/remove call site can never forget to check ViewAs and
+  // silently persist under the admin's own account instead of the
+  // impersonated customer's. RenderLog confirms the CUSTOMER uid was used,
+  // never the admin's.
+  void _writeUpsert(Product product, int qty) {
+    if (isViewAs) {
+      RenderLog.write('c407_actingas_cart_write', 'customer_uid:$_viewAsUserId:not_admin');
+      _viewAsUpsert(product, qty);
+    } else {
+      _persist(product, qty);
+    }
+  }
+
+  void _writeRemove(String productId) {
+    if (isViewAs) {
+      RenderLog.write('c407_actingas_cart_write', 'customer_uid:$_viewAsUserId:not_admin:remove');
+      _viewAsRemove(productId);
+    } else {
+      _persistDelete(productId);
+    }
+  }
+
   void clear() {
     if (isViewAs) {
       _lines.clear();
       _recomputeTotals();
       notifyListeners();
+      RenderLog.write('c407_actingas_cart_write', 'customer_uid:$_viewAsUserId:not_admin:clear');
       _viewAsClear();
       return;
     }

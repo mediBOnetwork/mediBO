@@ -10590,10 +10590,20 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
       // C355: a phone wake / network flip can leave a zombie WebSocket that never
       // fires 'closed', so future remote events never arrive until reload. Force a
       // fresh re-subscribe + full refetch on resume to recover it.
-      FulfillRealtime.instance.forceReconnect();
-      _scheduleCollectReload();
-      _scheduleDisputeReload();
-      _arrivalsKey.currentState?.refresh();
+      //
+      // #416: on Flutter Web, AppLifecycleState.resumed fires on ordinary browser
+      // tab focus/blur (switching tabs, an autofill popup, alt-tab) — NOT only on
+      // a genuine network drop. Doing the full reconnect+refetch bundle below on
+      // every one of those blips is exactly what made the Bags/Disputes tabs look
+      // like they were polling every couple of seconds. Only run recovery when the
+      // socket is ACTUALLY down; a healthy channel needs no forced work here.
+      if (!FulfillRealtime.instance.isUp) {
+        RenderLog.write(kC416, 'lifecycle_recover:socket_was_down');
+        FulfillRealtime.instance.forceReconnect();
+        _scheduleCollectReload();
+        _scheduleDisputeReload();
+        _arrivalsKey.currentState?.refresh();
+      }
     }
   }
 

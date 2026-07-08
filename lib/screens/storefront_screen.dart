@@ -321,6 +321,14 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
         final anyNonBuyable = page.any((p) => p.buyable != true) ? 'y' : 'n';
         RenderLog.write('c109_search_untouched',
             'term=$term;rows=${page.length};includes_no_image=$anyNoImage;includes_non_buyable=$anyNonBuyable');
+        // CHANGE #407: confirms search still renders unavailable rows (greyed,
+        // add-to-cart disabled via ProductCard.isBuyable) rather than hiding
+        // them — no buyable filter exists on this path (kept identical on web
+        // and mobile since both share this widget).
+        if (kIsWeb && anyNonBuyable == 'y') {
+          RenderLog.write('c407_web_search_shows_unavailable',
+              'term=$term;rows=${page.length}');
+        }
       }
       final ended = page.length < MedicineRepository.pageSize || page.length >= 200;
       if (_onlyBuyable) {

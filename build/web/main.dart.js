@@ -163082,11 +163082,13 @@ A.c("c132c_disputes_view",r)
 A.c("c132c_resolve_wired",r)
 A.c("c132c_copylink_wired",r)},
 o5(a){var s,r=this
-if(a===B.eF&&r.c!=null){$.PJ().bv_()
+if(a===B.eF&&r.c!=null){s=$.PJ()
+if(!s.r){A.c("c416_realtime_bags_disputes","lifecycle_recover:socket_was_down")
+s.bv_()
 r.arK()
 r.bi2()
 s=r.Q.ga7()
-if(s!=null)s.abU(0)}},
+if(s!=null)s.abU(0)}}},
 n(){var s,r,q=this
 $.az.jI(q)
 s=q.y

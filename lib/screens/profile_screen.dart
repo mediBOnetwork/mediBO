@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/user_profile.dart';
 import '../user_state.dart';
+import '../utils/render_log.dart';
 import '../view_as_state.dart';
 import 'auth/business_details_screen.dart';
 import 'admin/view_as_picker_dialog.dart';
@@ -63,11 +64,30 @@ class _ProfileScreenState extends State<ProfileScreen> {
         : (authUser?.email ?? '');
     final isRegistered = isViewAs ? (profile != null) : auth.isRegistered;
 
-    if (isViewAs && _viewAsLoading) {
+    // #402: while the real (non-ViewAs) profile fetch is still in flight,
+    // wait for it instead of judging isRegistered on a not-yet-loaded profile
+    // (which would flash the "Registration required" form for a real user).
+    // auth.loading always resolves to false (see UserState._init/_onAuthChange
+    // guards), so this can never hang.
+    if ((isViewAs && _viewAsLoading) || (!isViewAs && auth.loading)) {
       return const Scaffold(
         backgroundColor: Color(0xFFF9FAFB),
         body: Center(child: CircularProgressIndicator(color: Color(0xFF1B7A43))),
       );
+    }
+
+    // #402: a genuine fetch error (not just "no row") for a profile we've
+    // never successfully loaded — show a retry option, not a false
+    // "please register" screen.
+    final fetchErrorUnknown =
+        !isViewAs && auth.profileFetchError && profile == null;
+
+    if (fetchErrorUnknown) {
+      RenderLog.write('c402_profile_fetch_err', 'true');
+    } else if (isRegistered) {
+      RenderLog.write('c402_profile_loaded_existing', 'true');
+    } else {
+      RenderLog.write('c402_profile_loaded_empty', 'true');
     }
 
     return Scaffold(
@@ -149,8 +169,62 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   ),
                 ),
 
+                // #402: fetch failed and we don't know the real state yet —
+                // offer retry instead of assuming unregistered.
+                if (fetchErrorUnknown) ...[
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+                    child: Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFFF7ED),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: const Color(0xFFFDBA74)),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          const Row(
+                            children: [
+                              Icon(Icons.wifi_off,
+                                  size: 18, color: Color(0xFFC2410C)),
+                              SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  "Couldn't load your profile. Check your connection and try again.",
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                    color: Color(0xFFC2410C),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 10),
+                          SizedBox(
+                            height: 44,
+                            child: OutlinedButton(
+                              onPressed: () => UserState.read(context).retryLoadProfile(),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: const Color(0xFFC2410C),
+                                side: const BorderSide(color: Color(0xFFFDBA74)),
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(8)),
+                              ),
+                              child: const Text('Retry',
+                                  style: TextStyle(
+                                      fontWeight: FontWeight.w700, fontSize: 14)),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+
                 // Unregistered: complete registration CTA
-                if (!isRegistered) ...[
+                if (!isRegistered && !fetchErrorUnknown) ...[
                   Padding(
                     padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
                     child: Container(

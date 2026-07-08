@@ -14,6 +14,7 @@ import '../util.dart';
 import '../view_as_state.dart';
 import '../widgets/animations.dart';
 import 'auth/login_screen.dart';
+import 'profile_screen.dart';
 
 class CartScreen extends StatefulWidget {
   final VoidCallback? onOrderPlaced;
@@ -207,7 +208,10 @@ class _CartScreenState extends State<CartScreen> {
         title: 'Registration required',
         message: 'Complete your pharmacy registration to place orders.',
         actionLabel: 'Go to Profile',
-        onAction: () => Navigator.of(context).pop(),
+        // #402: this used to just pop the cart route instead of opening the
+        // Profile/registration screen — fixed to actually navigate there.
+        onAction: () => Navigator.of(context)
+            .push(MaterialPageRoute(builder: (_) => const ProfileScreen())),
       );
       return;
     }

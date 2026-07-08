@@ -22,10 +22,15 @@ class AuthNotifier extends ChangeNotifier {
   String? _supplierStatus; // 'ok'|'pending_approval'|'not_found'|'conflict'
   RealtimeChannel? _profileChannel;
   int _initStartMs = 0;
+  // #402: true when the last pharmacy_profiles fetch threw (network/etc.) —
+  // distinct from a clean "no row" result, so the Profile screen can show a
+  // retry option instead of wrongly claiming the user is unregistered.
+  bool _profileFetchError = false;
 
   bool get loading => _loading;
   bool get profileLoading => _profileLoading;
   bool get needsProfile => _needsProfile;
+  bool get profileFetchError => _profileFetchError;
   bool get isAdmin => _isAdmin;
   bool get isSuperAdmin => _isSuperAdmin;
   bool get isSupplier => _isSupplier;
@@ -301,6 +306,7 @@ class AuthNotifier extends ChangeNotifier {
           .select()
           .eq('user_id', userId)
           .maybeSingle();
+      _profileFetchError = false;
       if (res != null) {
         _profile = UserProfile.fromJson(res);
         _needsProfile = false;
@@ -309,9 +315,21 @@ class AuthNotifier extends ChangeNotifier {
         _needsProfile = true;
       }
     } catch (_) {
-      _needsProfile = true;
+      // #402: a fetch error is not the same as "no row" — don't clobber an
+      // already-known profile, and don't claim unregistered on a network blip.
+      _profileFetchError = true;
+      if (_profile == null) _needsProfile = true;
     }
     _subscribeProfileRealtime(userId);
+  }
+
+  /// #402: lets the Profile screen retry after a fetch error instead of
+  /// being stuck showing "couldn't load" with no way forward.
+  Future<void> retryLoadProfile() async {
+    final userId = Supabase.instance.client.auth.currentUser?.id;
+    if (userId == null) return;
+    await _loadProfile(userId);
+    notifyListeners();
   }
 
   void _subscribeProfileRealtime(String userId) {

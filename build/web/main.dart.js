@@ -21841,7 +21841,7 @@ _.dx=$},
 a2X:function a2X(){},
 atm:function atm(){},
 cl7(a,b){var s,r,q,p,o,n,m,l,k,j,i,h,g,f,e
-if(a==null)a=B.Ea
+if(a==null)a=B.Eb
 s=J.a0(a)
 r=s.gv(a)-1
 q=A.at(0,null,!1,t.Ei)
@@ -22035,7 +22035,7 @@ r.gab9()
 q.sab9(r.gab9())
 r.gaaY()
 q.saaY(r.gaaY())
-s.pL(0,B.Ea,q)
+s.pL(0,B.Eb,q)
 s.scu(0,b.gcu(b))
 s.sdC(0,b.gdC(b))
 s.fx=b.gbFL()
@@ -84265,7 +84265,7 @@ p=q.ax
 if(p!=null)p.b1(0)
 q.eR()}this.ah()},
 aWY(a,b){var s,r=null,q=A.b([],t.p)
-for(s=0;q.length<7;s=(s+1)%7)q.push(new A.uN(!0,new A.cF(B.a1,r,r,A.k(B.Eb[s],r,r,r,r,r,a,r,r,r),r),r))
+for(s=0;q.length<7;s=(s+1)%7)q.push(new A.uN(!0,new A.cF(B.a1,r,r,A.k(B.Ec[s],r,r,r,r,r,a,r,r,r),r),r))
 return q},
 B(a3){var s,r,q,p,o,n,m,l,k,j,i,h,g,f,e,d,c,b,a,a0=this,a1=null,a2=A.eA(a3,B.bV,t.v)
 a2.toString
@@ -109770,7 +109770,7 @@ q.T=c.cT
 q.cy=c.c
 q.ad=c.ek
 q.ag=c.dg
-q.bgM(b==null?B.Ea:b)
+q.bgM(b==null?B.Eb:b)
 if(s!==r)q.aub()},
 aDE(a,b){return this.pL(0,null,b)},
 aFt(){var s,r,q,p,o,n,m,l,k,j,i,h,g,f,e,d,c,b,a,a0,a1,a2,a3,a4,a5,a6,a7,a8,a9,b0,b1,b2,b3,b4,b5,b6=this,b7={}
@@ -112983,7 +112983,7 @@ this.dW()}}
 A.A_.prototype={
 k(a){return"Entry#"+A.cx(this)+"("+this.d.k(0)+")"}}
 A.Qc.prototype={
-Y(){return new A.ZX(A.b5(t.me),B.E9,null,null)},
+Y(){return new A.ZX(A.b5(t.me),B.Ea,null,null)},
 bDC(a,b){return this.w.$2(a,b)},
 bxU(a,b){return this.x.$2(a,b)}}
 A.ZX.prototype={
@@ -128019,7 +128019,7 @@ gMj(){return A.cPl()},
 b5D(){if(this.x)return
 this.Vr()},
 aFs(){var s,r,q,p,o,n,m,l,k,j,i,h,g,f,e,d,c=this,b=null,a=c.c
-if(a===-1||c.d===-1||c.b.length===0)return new A.zm(b,b,B.k8,B.E8,c.b.length!==0)
+if(a===-1||c.d===-1||c.b.length===0)return new A.zm(b,b,B.k8,B.E9,c.b.length!==0)
 if(!c.as){a=c.agy(c.d,a)
 c.d=a
 c.c=c.agy(c.c,a)}a=c.b[c.d]
@@ -129353,8 +129353,8 @@ h=n.A()
 g=h?q.gR(0).b:B.bpP
 f=A.b(new Array(5),k)
 for(e=0;e<5;++e)f[e]=new A.P8(e,j)
-m.push(new A.na(null,d.acu(g,i.c,l,f)))}while(n.A())d.ZY(q.gR(0).b,B.E9,l)
-for(q=new A.bD(r,r.$ti.j("bD<2>")).ga4(0),s=new A.ff(q,new A.c15(A.b5(s)));s.A();)d.ZY(q.gR(0),B.E9,l)
+m.push(new A.na(null,d.acu(g,i.c,l,f)))}while(n.A())d.ZY(q.gR(0).b,B.Ea,l)
+for(q=new A.bD(r,r.$ti.j("bD<2>")).ga4(0),s=new A.ff(q,new A.c15(A.b5(s)));s.A();)d.ZY(q.gR(0),B.Ea,l)
 d.p1=m
 d.auE()
 l.W(0)
@@ -163328,6 +163328,7 @@ case 2:return A.n(o.at(-1),r)}})
 return A.p($async$KZ,r)},
 abV(){var s,r,q=this
 if(q.c==null)return
+A.c("c416_realtime_bags_disputes","bag_tab_synced")
 q.CF(!0)
 s=q.r
 if(s!=null)q.JX(s)
@@ -166406,6 +166407,7 @@ if(n.c==null){s=1
 break}l=A.chP(m)
 A.c("c354_live","tab=disputes,src=load")
 A.c("c358_disp_synced","n="+J.O(l))
+A.c("c416_realtime_bags_disputes","disputes_tab_synced:n="+J.O(l))
 if(J.O(l)!==0)A.c("c188_models_loaded","count="+J.O(l))
 J.jU(l,new A.bxF())
 e=l
@@ -187090,7 +187092,7 @@ A.c("c355_reconnect","n="+ ++s.z)
 s.a5B()
 s.r=!1
 s.RW()
-s.a4S(A.dS(B.Ec,t.N))},
+s.a4S(A.dS(B.E8,t.N))},
 RW(){var s,r,q,p,o,n=this
 if(n.a.a===0&&!n.y)return
 try{q=$.a2().b
@@ -187098,7 +187100,7 @@ q===$&&A.a()
 q=q.ax
 q===$&&A.a()
 s=q.kh(0,"fulfill_rt_c353",B.dH)
-for(p=0;p<6;++p){r=B.Ec[p]
+for(p=0;p<9;++p){r=B.E8[p]
 s=s.lb(new A.aK7(n,r),B.hf,"public",r)}J.cwm(s,new A.aK8(n))
 n.b=s}catch(o){n.arP()}},
 bb1(a){var s,r=this
@@ -187146,8 +187148,9 @@ s=q.w&&!q.r
 q.r=!0
 if(!q.x){q.x=!0
 A.c("c353_ready","rt=v1")}A.c(p,"s=up")
-A.c("c355_rt_sub","tables=6")
-if(s){r=A.dS(B.Ec,t.N)
+A.c("c355_rt_sub","tables=9")
+A.c("c416_realtime_bags_disputes","subscribed:tables=9")
+if(s){r=A.dS(B.E8,t.N)
 q.a4S(r)}q.w=!0}else if(a===B.a5l||a===B.xd||a===B.a5m){r=this.a
 if(r.r)A.c(p,"s=down")
 r.r=!1
@@ -235258,6 +235261,7 @@ B.V3=s([6430,6400,6400,6400,3225,3225,3225,3225,944,944,944,944,976,976,976,976,
 B.akT=new A.P(0.07058823529411765,0,0,0,B.z)
 B.aeU=new A.bA(0,B.aj,B.akT,B.Q,8)
 B.bps=s([B.aeU],t.V)
+B.E8=s(["order_items","supplier_disputes","bag_item_counts","supplier_orders","orders","supplier_count_mode","bags","bag_sessions","bag_supplier_usage"],t.s)
 B.aMs=s([1,26,19],t.t)
 B.aMr=s([1,26,16],t.t)
 B.aMq=s([1,26,13],t.t)
@@ -235439,14 +235443,14 @@ B.Vd=s([],t.wi)
 B.bpH=s([],A.aI("L<tc<@>>"))
 B.bpI=s([],t.Vz)
 B.bpM=s([],t.H9)
-B.E8=s([],t.AO)
+B.E9=s([],t.AO)
 B.bpK=s([],t.FQ)
 B.bpD=s([],t.D1)
-B.Ea=s([],t.QF)
+B.Eb=s([],t.QF)
 B.c5h=s([],t.nk)
 B.bpU=s([],t.Lx)
 B.bpC=s([],t.AS)
-B.E9=s([],t.p)
+B.Ea=s([],t.p)
 B.c5i=s([],t.n_)
 B.bpG=s([],A.aI("L<n_>"))
 B.V6=s([],t.ov)
@@ -235461,7 +235465,7 @@ B.avv=new A.ad(B.NS,15,B.bY,null,null)
 B.bOP=new A.A(!0,B.bY,null,null,null,null,12,B.a3,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null)
 B.bRw=new A.D("Count & resolve items to confirm",null,B.bOP,null,null,null,null,null,null,null,null)
 B.bq3=s([B.avv,B.au,B.bRw],t.p)
-B.Eb=s(["S","M","T","W","T","F","S"],t.s)
+B.Ec=s(["S","M","T","W","T","F","S"],t.s)
 B.bqe=s([3614090360,3905402710,606105819,3250441966,4118548399,1200080426,2821735955,4249261313,1770035416,2336552879,4294925233,2304563134,1804603682,4254626195,2792965006,1236535329,4129170786,3225465664,643717713,3921069994,3593408605,38016083,3634488961,3889429448,568446438,3275163606,4107603335,1163531501,2850285829,4243563512,1735328473,2368359562,4294588738,2272392833,1839030562,4259657740,2763975236,1272893353,4139469664,3200236656,681279174,3936430074,3572445317,76029189,3654602809,3873151461,530742520,3299628645,4096336452,1126891415,2878612391,4237533241,1700485571,2399980690,4293915773,2240044497,1873313359,4264355552,2734768916,1309151649,4149444226,3174756917,718787259,3951481745],t.t)
 B.Vf=s(["J","F","M","A","M","J","J","A","S","O","N","D"],t.s)
 B.Vg=s(["qty","quantity","units","pcs","pack","nos","pieces"],t.s)
@@ -235473,7 +235477,6 @@ B.bBC=new A.yS(2,"up")
 B.bBD=new A.yS(3,"average")
 B.bBE=new A.yS(4,"paeth")
 B.Vi=s([B.bBA,B.bBB,B.bBC,B.bBD,B.bBE],A.aI("L<yS>"))
-B.Ec=s(["order_items","supplier_disputes","bag_item_counts","supplier_orders","orders","supplier_count_mode"],t.s)
 B.dx=new A.vr(0,"helvetica")
 B.nG=new A.vr(1,"courier")
 B.is=new A.vr(2,"timesRoman")
@@ -241286,8 +241289,8 @@ B.FT=new A.Lu(1,"nextLine")
 B.xk=new A.Lu(2,"forward")
 B.xl=new A.Lu(3,"backward")
 B.k8=new A.Xe(2,"none")
-B.a5K=new A.zm(null,null,B.k8,B.E8,!0)
-B.a5L=new A.zm(null,null,B.k8,B.E8,!1)
+B.a5K=new A.zm(null,null,B.k8,B.E9,!0)
+B.a5L=new A.zm(null,null,B.k8,B.E9,!1)
 B.bF=new A.zn(0,"next")
 B.bR=new A.zn(1,"previous")
 B.bZ=new A.zn(2,"end")
@@ -244062,7 +244065,7 @@ s($,"cSQ","ceR",()=>new A.a5())
 r($,"cAA","csz",()=>{var q=new A.aRc()
 q.tT($.ceR())
 return q})
-s($,"cYv","cvJ",()=>new A.aFp("en_US",B.bj1,B.bt3,B.Vf,B.Vf,B.w5,B.w5,B.nl,B.nl,B.Uv,B.Uv,B.Ux,B.Ux,B.Eb,B.Eb,B.bm9,B.bsk,B.biO))
+s($,"cYv","cvJ",()=>new A.aFp("en_US",B.bj1,B.bt3,B.Vf,B.Vf,B.w5,B.w5,B.nl,B.nl,B.Uv,B.Uv,B.Ux,B.Ux,B.Ec,B.Ec,B.bm9,B.bsk,B.biO))
 r($,"cWI","c8R",()=>A.cmk("initializeDateFormatting(<locale>)",$.cvJ()))
 r($,"cYq","cfH",()=>A.cmk("initializeDateFormatting(<locale>)",B.bvB))
 s($,"cYh","cvF",()=>48)

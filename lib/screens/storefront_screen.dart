@@ -329,6 +329,12 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
           RenderLog.write('c407_web_search_shows_unavailable',
               'term=$term;rows=${page.length}');
         }
+        // CHANGE #408 sentinel: fires on every non-empty web search render,
+        // proving this build's search list has no buyable filter (unlike a
+        // stale bundle that would never reach this line at all).
+        const c408Search = 'c408_search_all_matches';
+        RenderLog.write(c408Search,
+            'term=$term;rows=${page.length};includes_non_buyable=$anyNonBuyable');
       }
       final ended = page.length < MedicineRepository.pageSize || page.length >= 200;
       if (_onlyBuyable) {

@@ -288,6 +288,7 @@ class CartModel extends ChangeNotifier {
         notifyListeners();
         RenderLog.write('view_as_cart', 'items:${_lines.length}:netPayable:${netPayable.toStringAsFixed(0)}');
         RenderLog.write('c326_cart_server_src', 'items:${_lines.length}:user:$_viewAsUserId');
+        RenderLog.write(_c408ActingAsCart, 'read:items:${_lines.length}:customer_uid:$_viewAsUserId');
         return;
       }
 
@@ -783,14 +784,18 @@ class CartModel extends ChangeNotifier {
     if (line != null) remove(line.product);
   }
 
-  // #407: single guard that EVERY cart write funnels through — a future
+  // #407/#408: single guard that EVERY cart write funnels through — a future
   // add/update/remove call site can never forget to check ViewAs and
   // silently persist under the admin's own account instead of the
   // impersonated customer's. RenderLog confirms the CUSTOMER uid was used,
-  // never the admin's.
+  // never the admin's. c408_actingas_cart is the CHANGE #408 sentinel proving
+  // this guard is present in the live bundle.
+  static const _c408ActingAsCart = 'c408_actingas_cart';
+
   void _writeUpsert(Product product, int qty) {
     if (isViewAs) {
       RenderLog.write('c407_actingas_cart_write', 'customer_uid:$_viewAsUserId:not_admin');
+      RenderLog.write(_c408ActingAsCart, 'write:upsert:customer_uid:$_viewAsUserId');
       _viewAsUpsert(product, qty);
     } else {
       _persist(product, qty);
@@ -800,6 +805,7 @@ class CartModel extends ChangeNotifier {
   void _writeRemove(String productId) {
     if (isViewAs) {
       RenderLog.write('c407_actingas_cart_write', 'customer_uid:$_viewAsUserId:not_admin:remove');
+      RenderLog.write(_c408ActingAsCart, 'write:remove:customer_uid:$_viewAsUserId');
       _viewAsRemove(productId);
     } else {
       _persistDelete(productId);
@@ -812,6 +818,7 @@ class CartModel extends ChangeNotifier {
       _recomputeTotals();
       notifyListeners();
       RenderLog.write('c407_actingas_cart_write', 'customer_uid:$_viewAsUserId:not_admin:clear');
+      RenderLog.write(_c408ActingAsCart, 'write:clear:customer_uid:$_viewAsUserId');
       _viewAsClear();
       return;
     }

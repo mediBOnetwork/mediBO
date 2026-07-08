@@ -674,23 +674,28 @@ class CartModel extends ChangeNotifier {
     _cachedTotalGst = _lines.values.fold(0.0, (s, l) => s + l.lineGst);
   }
 
-  // CHANGE #412: display-only sort. Bulk-upload items keep their existing
-  // bulkOrder-first grouping (= bulk-upload list order, unchanged). Within
-  // each group, items are sorted by cart_items.id ascending — i.e. the
-  // order they were added — instead of relying on incidental Map iteration
-  // order. Nulls (not yet round-tripped to Supabase, e.g. a brand-new line)
-  // sort last, since they're the most recently added. Read-only: does not
-  // touch add/remove/sync/quantity logic.
+  // CHANGE #412 (superseded by #413 below): the bulkOrder-first grouping
+  // this used to do didn't reliably reproduce the bulk-upload list order,
+  // because bulkOrder (the row index at sync time) doesn't always end up
+  // written to cart_items.id in that same order (see #413 Part 2 — the
+  // bulk-upload writes were fire-and-forget/parallel, so id assignment
+  // could race ahead of list order).
   static const kC412CartSortById = 'c411_cart_sort_by_id';
 
+  // CHANGE #413: single stable sort of ALL cart lines by cart_items id
+  // ascending — the only reliable "order added" signal (id is a bigint
+  // auto-increment PK; no stored bulk-list-position column exists). No
+  // more bulk/non-bulk grouping: with bulk-upload writes now inserted
+  // sequentially (see BulkUploadScreen._addMatchedToCart awaiting
+  // CartModel.setBulkQuantity), id order already equals bulk-upload list
+  // order, so a plain id-ascending sort reproduces it directly. Lines
+  // without an id yet (not round-tripped to Supabase) sort last, as the
+  // most recently added.
+  static const kC413CartInsertionOrder = 'c413_cart_insertion_order';
+
   List<CartLine> get lines {
-    final bulk = <CartLine>[];
-    final others = <CartLine>[];
-    for (final l in _lines.values) {
-      if (l.bulkOrder != null) bulk.add(l); else others.add(l);
-    }
-    bulk.sort((a, b) => a.bulkOrder!.compareTo(b.bulkOrder!));
-    others.sort((a, b) {
+    final sorted = _lines.values.toList();
+    sorted.sort((a, b) {
       final ai = a.cartItemId;
       final bi = b.cartItemId;
       if (ai == null && bi == null) return 0;
@@ -698,8 +703,9 @@ class CartModel extends ChangeNotifier {
       if (bi == null) return -1;
       return ai.compareTo(bi);
     });
-    RenderLog.write(kC412CartSortById, 'bulk:${bulk.length};others:${others.length}');
-    return [...bulk, ...others];
+    RenderLog.write(kC412CartSortById, 'lines:${sorted.length}');
+    RenderLog.write(kC413CartInsertionOrder, 'lines:${sorted.length}');
+    return sorted;
   }
   List<CartLine> get adminRemovedLines => List.unmodifiable(_adminRemovedLines);
   List<Order> get orders => List.unmodifiable(_orders.reversed);
@@ -782,7 +788,15 @@ class CartModel extends ChangeNotifier {
   /// Add or replace a bulk-upload item, stamping it with [bulkOrder] (its row
   /// index in the preview). Always overwrites any existing entry for this
   /// product so the bulkOrder is set correctly on re-sync.
-  void setBulkQuantity(Product product, int qty, int bulkOrder) {
+  ///
+  /// CHANGE #413: unlike every other write call site (which stays
+  /// fire-and-forget via the unchanged _writeUpsert/_persist), this AWAITS
+  /// its own write. It mirrors _writeUpsert/_persist's exact branching
+  /// inline rather than calling them, so their (and every other caller's)
+  /// behavior is untouched. This lets BulkUploadScreen._addMatchedToCart
+  /// await each row in turn, so cart_items.id assignment order matches the
+  /// bulk-upload list order instead of racing over the network.
+  Future<void> setBulkQuantity(Product product, int qty, int bulkOrder) async {
     // CHANGE #326: ViewAs must persist via server RPC, not local store.
     _lines[product.id] = CartLine(product, qty,
         bulkOrder: bulkOrder, addedByAdmin: isViewAs);
@@ -792,7 +806,20 @@ class CartModel extends ChangeNotifier {
       RenderLog.write('c326_bulk_upsert',
           'product:${product.id}:qty:$qty:user:$_viewAsUserId');
     }
-    _writeUpsert(product, qty);
+    RenderLog.write(kC413CartInsertionOrder,
+        'insert:bulkOrder:$bulkOrder;product:${product.id}');
+    if (isViewAs) {
+      RenderLog.write('c407_actingas_cart_write', 'customer_uid:$_viewAsUserId:not_admin');
+      RenderLog.write(_c408ActingAsCart, 'write:upsert:customer_uid:$_viewAsUserId');
+      await _viewAsUpsert(product, qty);
+    } else if (_isLoggedIn) {
+      await _upsertToSupabase(product, qty);
+    } else {
+      final guestUid = _getOrCreateGuestUid();
+      await _upsertToSupabase(product, qty, guestUid);
+      if (_cartChannel == null) _subscribeToCartRealtime(guestUid);
+      _saveToLocalStorage();
+    }
   }
 
   void increment(Product product) =>

@@ -2277,8 +2277,11 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         // guaranteed in the cart regardless of any stale-reload or race.
         // Count as "added" only when the product was genuinely absent (qty==0).
         // Uses row index so bulk ordering is preserved on re-add.
+        // CHANGE #413: awaited so each row's write completes (and gets its
+        // cart_items.id assigned) before the next row starts — sequential,
+        // not parallel, so id order == bulk-upload list order.
         final priorQty = cart.quantityOf(newProductId);
-        cart.setBulkQuantity(product, row.qty, i);
+        await cart.setBulkQuantity(product, row.qty, i);
         if (priorQty == 0) addedCount++;
         newLineItemMap[key] = newProductId;
 

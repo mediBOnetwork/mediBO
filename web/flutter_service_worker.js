@@ -1,11 +1,18 @@
 // mediBO self-destruct service worker — unregisters itself and purges all caches.
 // Exists so browsers with an OLD Flutter SW installed (pre-#238) fetch this on their
-// ~24h update check, install it, immediately self-unregister, and release control.
+// update check, install it, immediately self-unregister, and release control.
 // No new SW is registered (flutter_bootstrap has serviceWorkerVersion:null), so this
 // is a one-time cleanup that ages out on its own.
+// c409_sw_autoupdate: clients.claim() added so an activating instance of this SW
+// takes control of already-open tabs immediately (not just newly-navigated ones),
+// making the forced client.navigate() below reach every open tab reliably instead
+// of depending on matchAll() timing relative to the old SW's release of control.
 self.addEventListener('install', function (e) { self.skipWaiting(); });
 self.addEventListener('activate', function (e) {
   e.waitUntil((async function () {
+    try {
+      await self.clients.claim();
+    } catch (err) {}
     try {
       var keys = await caches.keys();
       await Promise.all(keys.map(function (k) { return caches.delete(k); }));

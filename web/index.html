@@ -865,6 +865,11 @@
   </noscript>
 
   <!-- CHANGE #237: reload once when a new SW activates (kill-SW triggers controllerchange). -->
+  <!-- c409_sw_autoupdate: also force an immediate update check on any pre-existing SW
+       registration on every load, instead of waiting for the browser's background
+       (~24h) check — so a returning tab with an old SW discovers + installs the
+       kill-SW right away rather than staying stale until a hard refresh. Never
+       calls register() itself: this app intentionally registers no new SW. -->
   <script>
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.addEventListener('controllerchange', function () {
@@ -872,6 +877,9 @@
         window.__reloadedForSW = true;
         window.location.reload();
       });
+      navigator.serviceWorker.getRegistration().then(function (reg) {
+        if (reg) reg.update().catch(function () {});
+      }).catch(function () {});
     }
   </script>
 </body>

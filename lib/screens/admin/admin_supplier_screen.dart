@@ -176,6 +176,9 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   bool _loading = true;
   _SupFilter _filter = _SupFilter.suppliers;
   _SupSortMode _sortMode = _SupSortMode.spnDesc;
+  // CHANGE #426: client-side search filter for the Suppliers list.
+  String _supplierQuery = '';
+  final TextEditingController _supplierSearchCtl = TextEditingController();
   bool _hasPendingChanges = false;
   bool _refreshLoading = false;
   // Supplier detail expand — only one supplier open at a time.
@@ -323,6 +326,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     for (final ch in _channels) ch.unsubscribe();
     _channels.clear();
     _scrollCtrl.dispose();
+    _supplierSearchCtl.dispose();
     _closeSendPopover();
     _closeMovePickerOverlay();
     super.dispose();
@@ -405,6 +409,17 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       _suppliers.sort((a, b) =>
           a.supplierName.toLowerCase().compareTo(b.supplierName.toLowerCase()));
     }
+  }
+
+  // CHANGE #426: client-side search over the already-loaded (and already-
+  // sorted) _suppliers list — name / code / city / phone, substring match.
+  bool _supplierMatches(_SupRow s, String q) {
+    if (q.isEmpty) return true;
+    final hay = [s.supplierName, s.supplierCode, s.city, s.phone]
+        .where((e) => e.isNotEmpty)
+        .map((e) => e.toLowerCase())
+        .join(' ');
+    return hay.contains(q);
   }
 
   Future<void> _refreshSuppliers({bool isSave = false}) async {
@@ -3085,13 +3100,43 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
 
   Widget _buildSuppliersView(bool isDesktop) {
     final pad = isDesktop ? 28.0 : 16.0;
+    RenderLog.write('c426_supplier_search', 'box=on');
+    final visibleSuppliers =
+        _suppliers.where((s) => _supplierMatches(s, _supplierQuery)).toList();
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       const SizedBox(height: 10),
+      Padding(
+        padding: EdgeInsets.fromLTRB(pad, 0, pad, 8),
+        child: TextField(
+          controller: _supplierSearchCtl,
+          onChanged: (v) => setState(() => _supplierQuery = v.trim().toLowerCase()),
+          textInputAction: TextInputAction.search,
+          style: const TextStyle(fontSize: 13),
+          decoration: InputDecoration(
+            hintText: 'Search suppliers by name, code, city, phone',
+            prefixIcon: const Icon(Icons.search, size: 18),
+            suffixIcon: _supplierQuery.isEmpty
+                ? null
+                : IconButton(
+                    icon: const Icon(Icons.clear, size: 18),
+                    onPressed: () => setState(() {
+                      _supplierSearchCtl.clear();
+                      _supplierQuery = '';
+                    }),
+                  ),
+            isDense: true,
+            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+          ),
+        ),
+      ),
       if (_suppliers.isEmpty)
         _emptyState('0 approved suppliers')
+      else if (visibleSuppliers.isEmpty)
+        _emptyState('No suppliers found')
       else ...[
         if (isDesktop) _suppliersTableHeader(),
-        ..._suppliers.map((r) => isDesktop ? _desktopSupRow(r) : _mobileSupCard(r)),
+        ...visibleSuppliers.map((r) => isDesktop ? _desktopSupRow(r) : _mobileSupCard(r)),
       ],
       const SizedBox(height: 32),
       _buildDeletedSection(isDesktop),

@@ -26,6 +26,7 @@ import '../../widgets/inquiry_v12.dart';
 import '../../widgets/order_item_card.dart';
 import '../../widgets/sup_pay_panel.dart';
 import 'admin_add_medicine_screen.dart';
+import 'unmapped_companies_screen.dart';
 
 const _ocrEdgeFn =
     'https://swojhmarmaijkshsbeih.supabase.co/functions/v1/gemini-ocr';
@@ -1013,6 +1014,15 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                       );
               }),
             ],
+            if (_filter == _SupFilter.suppliers) ...[
+              IconButton(
+                onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const UnmappedCompaniesScreen())),
+                icon: const Icon(Icons.rule_outlined, color: Color(0xFF6B7280), size: 20),
+                tooltip: 'Map Companies',
+                visualDensity: VisualDensity.compact,
+              ),
+            ],
             IconButton(
               onPressed: _filter == _SupFilter.inquiry
                   ? () { _fetchInquiryOverview(); _fetchUnassignedItems(); }
@@ -1129,6 +1139,16 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
               ]),
             ));
           }
+          items.add(const PopupMenuDivider());
+          // CHANGE #430: entry point for the Unmapped Companies review screen.
+          items.add(const PopupMenuItem<String>(
+            value: 'map_companies',
+            child: Row(children: [
+              Icon(Icons.rule_outlined, size: 18, color: Color(0xFF6B7280)),
+              SizedBox(width: 10),
+              Text('Map Companies', style: TextStyle(fontSize: 14)),
+            ]),
+          ));
         }
         return items;
       },
@@ -1142,6 +1162,9 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           setState(() { _sortMode = _SupSortMode.nameAsc; _applySort(); });
           RenderLog.write('c252_sort_instant', 'mode=name_asc');
           RenderLog.write('supplier_sort_mode', 'name_asc');
+        } else if (v == 'map_companies') {
+          Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const UnmappedCompaniesScreen()));
         }
       },
     );

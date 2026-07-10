@@ -95,8 +95,8 @@ void main() {
     } catch (_) {
       RenderLog.setBuildHash('unknown');
     }
-    // CHANGE #431: solid-bg .v3 icons/splash, "+" mark replaced with m logo everywhere.
-    RenderLog.write('c431_logo', 'icons=v3;bg=solid');
+    // CHANGE #432: restored ORIGINAL 1080x1080 logo, resize-only (no trim/reshape/gloss).
+    RenderLog.write('c432_logo', 'icons=v4;resize_only');
     // #108 static build properties (flat list, responsive popup)
     RenderLog.write('inq_flat_list', 1);
     RenderLog.write('inq_toggle_removed', 1);

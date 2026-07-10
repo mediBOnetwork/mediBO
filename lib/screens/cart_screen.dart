@@ -28,20 +28,40 @@ class CartScreen extends StatefulWidget {
 class _CartScreenState extends State<CartScreen> {
   bool _orderInProgress = false;
 
-  // CHANGE #324: ViewAs checkbox state — admin-added items checked, customer items unchecked.
+  // CHANGE #324/#435: ViewAs checkbox state — admin-added items checked, customer
+  // items unchecked, by default. Re-applied on EVERY build (not just once) so rows
+  // that arrive in a later rebuild (partial load, then full load) also get defaulted
+  // correctly — the #324 bug was that the default only ran once, so admin rows that
+  // showed up after the first non-empty build stayed unchecked forever.
+  // _viewAsManualOverride tracks ids the user has explicitly toggled this session —
+  // those keep the user's choice across rebuilds; everything else re-derives from
+  // added_by every time.
   final Set<String> _viewAsChecked = {};
-  bool _viewAsCheckedInited = false;
+  final Set<String> _viewAsManualOverride = {};
 
-  void _initViewAsChecked(List<CartLine> lines) {
-    _viewAsChecked.clear();
+  void _applyViewAsDefaults(List<CartLine> lines) {
+    var adminCount = 0;
+    var checkedCount = 0;
     for (final line in lines) {
-      if (line.addedByAdmin) _viewAsChecked.add(line.product.id);
+      final id = line.product.id;
+      if (line.addedByAdmin) adminCount++;
+      if (!_viewAsManualOverride.contains(id)) {
+        // user's explicit choice (if any) wins — everything else re-derives from added_by.
+        if (line.addedByAdmin) {
+          _viewAsChecked.add(id);
+        } else {
+          _viewAsChecked.remove(id);
+        }
+      }
+      if (_viewAsChecked.contains(id)) checkedCount++;
     }
-    _viewAsCheckedInited = true;
+    RenderLog.write('c435_cart_defaults',
+        'rows=${lines.length};admin=$adminCount;checked=$checkedCount');
   }
 
   void _toggleViewAsChecked(String productId) {
     setState(() {
+      _viewAsManualOverride.add(productId);
       if (_viewAsChecked.contains(productId)) {
         _viewAsChecked.remove(productId);
       } else {
@@ -159,11 +179,11 @@ class _CartScreenState extends State<CartScreen> {
         } catch (_) {}
         if (!mounted) return;
         // CHANGE #324: remove ONLY the ordered (checked) rows; leave unchecked
-        // customer-added rows in the cart.
+        // customer-added rows in the cart. Defaults re-apply automatically on the
+        // next build (CHANGE #435) — no manual reinit needed.
         for (final line in checkedLines) {
           cart.remove(line.product);
         }
-        setState(() { _viewAsCheckedInited = false; }); // reinit after cart refreshes
         showDialog(
           context: context,
           barrierDismissible: false,
@@ -358,14 +378,15 @@ class _CartScreenState extends State<CartScreen> {
       return const _EmptyCart();
     }
 
-    // CHANGE #324: init ViewAs checkboxes once per session (admin-added → checked).
-    if (cart.isViewAs && !_viewAsCheckedInited && cart.lines.isNotEmpty) {
-      _initViewAsChecked(cart.lines);
-      RenderLog.write('c324_cart_checkbox', 'lines:${cart.lines.length} checked:${_viewAsChecked.length}');
-    }
-    if (!cart.isViewAs && _viewAsCheckedInited) {
+    // CHANGE #324/#435: re-apply ViewAs checkbox defaults (admin-added → checked)
+    // on EVERY build, not just once — see _applyViewAsDefaults for why.
+    if (cart.isViewAs) {
+      _applyViewAsDefaults(cart.lines);
+    } else if (_viewAsChecked.isNotEmpty || _viewAsManualOverride.isNotEmpty) {
+      // Left ViewAs mode — reset session state so re-entering (same or different
+      // customer) starts fresh from the added_by defaults.
       _viewAsChecked.clear();
-      _viewAsCheckedInited = false;
+      _viewAsManualOverride.clear();
     }
 
     // Compute selected total for ViewAs footer.

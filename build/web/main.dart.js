@@ -150118,7 +150118,7 @@ s=10
 break
 case 7:s=1
 break
-case 10:A.c("c431_logo","icons=v3;bg=solid")
+case 10:A.c("c432_logo","icons=v4;resize_only")
 A.c("inq_flat_list",1)
 A.c("inq_toggle_removed",1)
 A.c("inq_company_header_removed",1)

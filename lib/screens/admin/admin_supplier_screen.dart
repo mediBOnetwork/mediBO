@@ -7869,6 +7869,7 @@ class _SpnDropdownState extends State<_SpnDropdown> {
           value: _selected?.label,
           isExpanded: true,
           isDense: true,
+          menuMaxHeight: 400,
           style: const TextStyle(fontSize: 11, color: Color(0xFF065F46)),
           icon: const Icon(Icons.expand_more, size: 14, color: Color(0xFF6B7280)),
           items: items,
@@ -7883,6 +7884,7 @@ class _SpnDropdownState extends State<_SpnDropdown> {
       // ignore: deprecated_member_use
       value: _selected?.label,
       isExpanded: true,
+      menuMaxHeight: 400,
       decoration: InputDecoration(
         filled: true, fillColor: const Color(0xFFF5F6F8),
         contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
@@ -7899,12 +7901,16 @@ class _SpnDropdownState extends State<_SpnDropdown> {
   }
 }
 
-// ── "+ Add new option…" prompt: label + points, calls spn_option_add ─────────
+// ── "+ Add new option…" prompt: label (+ points for cd_condition/payment_term
+// only — margin/behaviour auto-derive points from the label server-side),
+// calls spn_option_add ─────────
 Future<SpnOption?> _promptAddSpnOption(BuildContext context, String field) {
+  final needsPoints = spnFieldsNeedingManualPoints.contains(field);
   final labelCtrl = TextEditingController();
   final pointsCtrl = TextEditingController();
   String? error;
   bool submitting = false;
+  RenderLog.write('c437_spn_addopt', 'points_for=cd,payment;auto=margin,behaviour');
   return showDialog<SpnOption>(
     context: context,
     builder: (dialogCtx) => StatefulBuilder(builder: (dialogCtx, setSt) => AlertDialog(
@@ -7917,13 +7923,15 @@ Future<SpnOption?> _promptAddSpnOption(BuildContext context, String field) {
             autofocus: true,
             decoration: const InputDecoration(labelText: 'Label'),
           ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: pointsCtrl,
-            keyboardType: const TextInputType.numberWithOptions(signed: true),
-            inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9\-]'))],
-            decoration: const InputDecoration(labelText: 'Points'),
-          ),
+          if (needsPoints) ...[
+            const SizedBox(height: 12),
+            TextField(
+              controller: pointsCtrl,
+              keyboardType: const TextInputType.numberWithOptions(signed: true),
+              inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9\-]'))],
+              decoration: const InputDecoration(labelText: 'Points'),
+            ),
+          ],
           if (error != null) ...[
             const SizedBox(height: 8),
             Text(error!, style: const TextStyle(color: Color(0xFF991B1B), fontSize: 12)),
@@ -7938,9 +7946,12 @@ Future<SpnOption?> _promptAddSpnOption(BuildContext context, String field) {
         ElevatedButton(
           onPressed: submitting ? null : () async {
             final label = labelCtrl.text.trim();
-            final points = int.tryParse(pointsCtrl.text.trim());
             if (label.isEmpty) { setSt(() => error = 'Label is required'); return; }
-            if (points == null) { setSt(() => error = 'Enter a whole number for points'); return; }
+            int? points;
+            if (needsPoints) {
+              points = int.tryParse(pointsCtrl.text.trim());
+              if (points == null) { setSt(() => error = 'Enter a whole number for points'); return; }
+            }
             setSt(() { submitting = true; error = null; });
             try {
               final added = await SpnOptionsCache.instance.addSpnOption(field, label, points);

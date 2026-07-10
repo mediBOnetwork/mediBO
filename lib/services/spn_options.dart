@@ -42,6 +42,10 @@ const Map<String, String> spnFieldDisplayLabel = {
   'payment_term': 'Payment Term',
 };
 
+// Fields with fixed tiers where points must be hand-entered when adding a new
+// option. margin/behaviour derive points from the label server-side instead.
+const Set<String> spnFieldsNeedingManualPoints = {'cd_condition', 'payment_term'};
+
 // Process-wide cache of spn_options rows, grouped by field. One RPC call
 // populates every SpnDropdown; addSpnOption() updates the cache in place so
 // newly-added options show up immediately without a full refetch.
@@ -80,12 +84,10 @@ class SpnOptionsCache {
 
   List<SpnOption> cacheFor(String field) => _cache?[field] ?? const [];
 
-  Future<SpnOption> addSpnOption(String field, String label, int points) async {
-    final row = await Supabase.instance.client.rpc('spn_option_add', params: {
-      'p_field': field,
-      'p_label': label,
-      'p_points': points,
-    }).single();
+  Future<SpnOption> addSpnOption(String field, String label, int? points) async {
+    final params = <String, dynamic>{'p_field': field, 'p_label': label};
+    if (points != null) params['p_points'] = points;
+    final row = await Supabase.instance.client.rpc('spn_option_add', params: params).single();
     final opt = SpnOption(row['label'] as String, (row['points'] as num).toInt());
     final map = _cache ??= <String, List<SpnOption>>{};
     final list = List<SpnOption>.from(map[field] ?? const []);

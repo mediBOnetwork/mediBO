@@ -803,15 +803,7 @@ class _LocationHeader extends StatelessWidget {
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Container(
-                            width: 28,
-                            height: 28,
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF1B5E20),
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            child: const Icon(Icons.add, color: Colors.white, size: 17),
-                          ),
+                          Image.asset('assets/images/medibo_logo.png', width: 28, height: 28),
                           const SizedBox(width: 7),
                           RichText(
                             text: const TextSpan(
@@ -2545,15 +2537,7 @@ class _LoginPanelLogo extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Container(
-          width: 48,
-          height: 48,
-          decoration: BoxDecoration(
-            color: const Color(0xFF1B5E20),
-            borderRadius: BorderRadius.circular(10),
-          ),
-          child: const Icon(Icons.add, color: Colors.white, size: 28),
-        ),
+        Image.asset('assets/images/medibo_logo.png', width: 48, height: 48),
         const SizedBox(width: 10),
         RichText(
           text: const TextSpan(
@@ -3236,15 +3220,7 @@ class _DesktopHeader extends StatelessWidget {
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Container(
-                        width: 40,
-                        height: 40,
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF1B5E20),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: const Icon(Icons.add, color: Colors.white, size: 24),
-                      ),
+                      Image.asset('assets/images/medibo_logo.png', width: 40, height: 40),
                       const SizedBox(width: 10),
                       RichText(
                         text: const TextSpan(
@@ -3976,15 +3952,7 @@ class _AdminDesktopHeader extends StatelessWidget {
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Container(
-                      width: 40,
-                      height: 40,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF1B5E20),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: const Icon(Icons.add, color: Colors.white, size: 24),
-                    ),
+                    Image.asset('assets/images/medibo_logo.png', width: 40, height: 40),
                     const SizedBox(width: 10),
                     RichText(
                       text: const TextSpan(

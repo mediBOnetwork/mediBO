@@ -550,15 +550,7 @@ class _MediBoLogo extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Container(
-          width: 48,
-          height: 48,
-          decoration: BoxDecoration(
-            color: const Color(0xFF1B5E20),
-            borderRadius: BorderRadius.circular(10),
-          ),
-          child: const Icon(Icons.add, color: Colors.white, size: 28),
-        ),
+        Image.asset('assets/images/medibo_logo.png', width: 48, height: 48),
         const SizedBox(width: 10),
         RichText(
           text: const TextSpan(

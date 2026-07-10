@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <meta name="build-commit" content="f6dd745">
+  <meta name="build-commit" content="d102f14">
   <!-- CHANGE #238: SW permanently disabled. Unregister ALL SWs + wipe all caches on every load.
        No sessionStorage guard — runs unconditionally so even users whose old SW served this
        HTML from cache will have SWs cleared on the very next in-SW-controlled load.
@@ -64,8 +64,8 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 
   <!-- iOS touch icons (Safari "Add to Home Screen") -->
-  <link rel="apple-touch-icon" href="icons/apple-touch-icon.v2.png">
-  <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon.v2.png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.v3.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon.v3.png">
 
   <style>
     /* Disable the dark flash that mobile browsers show on tap */
@@ -129,7 +129,7 @@
   </style>
 
   <!-- Favicon -->
-  <link rel="icon" type="image/png" href="favicon.png?v=2"/>
+  <link rel="icon" type="image/png" href="favicon.png?v=3"/>
 
   <!-- PWA manifest -->
   <link rel="manifest" href="manifest.json">
@@ -138,10 +138,10 @@
        On every load, fetches /version.json (no-cache). If the live commit differs
        from the build-stamped commit below, does ONE hard reload so the PWA gets the
        newest bundle instead of staying on a stale cached build.
-       f6dd745 is replaced with the actual short commit hash by deploy.sh. -->
+       d102f14 is replaced with the actual short commit hash by deploy.sh. -->
   <script>
     (function () {
-      var _builtCommit = 'f6dd745';
+      var _builtCommit = 'd102f14';
       var _sessionKey  = 'c220_pwa_reloaded';
       function _rlWrite(key, val) {
         try {
@@ -159,7 +159,7 @@
           // Already reloaded once this session — skip to prevent loop.
           if (sessionStorage.getItem(_sessionKey)) return;
           // Skip if placeholder was not stamped (local dev / test build).
-          if (_builtCommit === 'f6dd745') return;
+          if (_builtCommit === 'd102f14') return;
           fetch('/version.json?_t=' + Date.now(), { cache: 'no-store' })
             .then(function (r) { return r.json(); })
             .then(function (data) {
@@ -175,7 +175,7 @@
       });
       // Wire confirmation — written once regardless of outcome.
       window.addEventListener('DOMContentLoaded', function () {
-        if (_builtCommit !== 'f6dd745') {
+        if (_builtCommit !== 'd102f14') {
           _rlWrite('c220_pwa_check_wired', 1);
         }
       });
@@ -469,7 +469,7 @@
     })();
   </script>
 
-  <script src="flutter_bootstrap.js?v=f6dd745" async></script>
+  <script src="flutter_bootstrap.js?v=d102f14" async></script>
   <script>
     var recaptchaResolve = null;
     var recaptchaWidgetId = null;

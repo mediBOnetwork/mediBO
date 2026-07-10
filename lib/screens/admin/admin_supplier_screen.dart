@@ -8020,11 +8020,12 @@ class _SupOptField {
 
 // All optional supplier_profiles columns (excludes OCR-filled, points, SPN, system cols).
 // Columns OCR fills: supplier_name, street_address, city, contact_no, whatsapp_no, email, supplier_code.
+// SPN option lists mirror _SpnInlineSectionState._spnOptions (the inline SPN editor) exactly.
 List<_SupOptField> _buildSpnFields() => [
-  _SupOptField(column: 'margin',        label: 'Margin'),
-  _SupOptField(column: 'cd_condition',  label: 'CD Condition', options: ['', 'NO CONDITION', '2K+ BILL', '3K+ BILL']),
-  _SupOptField(column: 'behaviour',     label: 'Behaviour'),
-  _SupOptField(column: 'payment_term',  label: 'Payment Term'),
+  _SupOptField(column: 'margin',        label: 'Margin',       options: ['', '1', '2', '3', '4', '5', '6', '7', '8']),
+  _SupOptField(column: 'cd_condition',  label: 'CD Condition', options: ['', 'NO CONDITION', '2K+ Bill', '3K+ Bill']),
+  _SupOptField(column: 'behaviour',     label: 'Behaviour',    options: ['', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10']),
+  _SupOptField(column: 'payment_term',  label: 'Payment Term', options: ['', 'cash', 'credit']),
 ];
 
 List<_SupOptField> _buildOtherFields() => [
@@ -8374,6 +8375,7 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
     }
 
     // Review screen
+    RenderLog.write('c427_import_spn', 'margin=dd;cd=dd;behaviour=dd;payterm=dd');
     return Dialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
@@ -8925,6 +8927,7 @@ class _SupCardMultiImportDialogState extends State<_SupCardMultiImportDialog> {
     }
 
     // Review form — same layout as single-image
+    RenderLog.write('c427_import_spn', 'margin=dd;cd=dd;behaviour=dd;payterm=dd');
     return Dialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),

@@ -40332,8 +40332,9 @@ break A}if("dl_2"===a){s="DL 2"
 break A}if("gst"===a){s="GST"
 break A}s="\u2014 Ignore \u2014"
 break A}return s},
-cp_(){var s=$.au(),r=A.b(["","NO CONDITION","2K+ BILL","3K+ BILL"],t.s)
-return A.b([new A.hj("margin","Margin",null,new A.aL(B.a_,s)),new A.hj("cd_condition","CD Condition",r,new A.aL(B.a_,s)),new A.hj("behaviour","Behaviour",null,new A.aL(B.a_,s)),new A.hj("payment_term","Payment Term",null,new A.aL(B.a_,s))],t.Nt)},
+cp_(){var s=t.s,r=A.b(["","1","2","3","4","5","6","7","8"],s),q=$.au(),p=A.b(["","NO CONDITION","2K+ Bill","3K+ Bill"],s),o=A.b(["","1","2","3","4","5","6","7","8","9","10"],s)
+s=A.b(["","cash","credit"],s)
+return A.b([new A.hj("margin","Margin",r,new A.aL(B.a_,q)),new A.hj("cd_condition","CD Condition",p,new A.aL(B.a_,q)),new A.hj("behaviour","Behaviour",o,new A.aL(B.a_,q)),new A.hj("payment_term","Payment Term",s,new A.aL(B.a_,q))],t.Nt)},
 cdC(){var s=null,r=$.au(),q=A.b(["","cash","credit"],t.s)
 return A.b([new A.hj("contact_name","Contact Name",s,new A.aL(B.a_,r)),new A.hj("contact_person","Contact Person",s,new A.aL(B.a_,r)),new A.hj("phone","Phone (alt)",s,new A.aL(B.a_,r)),new A.hj("state","State",s,new A.aL(B.a_,r)),new A.hj("pin_code","Pin Code",s,new A.aL(B.a_,r)),new A.hj("pincode","Pincode",s,new A.aL(B.a_,r)),new A.hj("gstin","GSTIN",s,new A.aL(B.a_,r)),new A.hj("gst","GST No.",s,new A.aL(B.a_,r)),new A.hj("drug_license","Drug License",s,new A.aL(B.a_,r)),new A.hj("dl_1","Drug License 1",s,new A.aL(B.a_,r)),new A.hj("dl_2","Drug License 2",s,new A.aL(B.a_,r)),new A.hj("payment_type","Payment Type",q,new A.aL(B.a_,r)),new A.hj("store_type","Store Type",s,new A.aL(B.a_,r)),new A.hj("stockist_type","Stockist Type",s,new A.aL(B.a_,r)),new A.hj("range_zone","Range / Zone",s,new A.aL(B.a_,r)),new A.hj("deal","Deal",s,new A.aL(B.a_,r)),new A.hj("other_contact","Other Contact",s,new A.aL(B.a_,r)),new A.hj("map_link","Map Link",s,new A.aL(B.a_,r)),new A.hj("address","Address (alt)",s,new A.aL(B.a_,r)),new A.hj("notes","Notes",s,new A.aL(B.a_,r))],t.Nt)},
 c5d(a,b){return A.hs(a.length,new A.c5j(a,b),!0,t.l)},
@@ -174864,7 +174865,8 @@ if(g!=null){s=A.r(12)
 return A.fJ(h,h,new A.c9(B.zJ,new A.H(B.fo,A.G(A.b([B.pC,B.ae,A.k(g,h,h,h,h,h,B.e_,B.ad,h,h),B.al,A.d1(B.od,new A.bYz(a),h)],t.p),B.u,B.l,B.I),h),h),h,h,h,h,B.cv,h,new A.aG(s,B.E),h)}g=i.d
 s=g===B.aaM
 if(s||g===B.aaO){g=A.r(12)
-return A.fJ(h,h,new A.c9(B.zK,new A.H(B.dT,A.G(A.b([B.eX,B.al,A.k(s?"Reading image with Gemini\u2026":"Importing supplier\u2026",h,h,h,h,h,B.cb,B.ad,h,h)],t.p),B.u,B.l,B.I),h),h),h,h,h,h,B.cv,h,new A.aG(g,B.E),h)}g=A.r(12)
+return A.fJ(h,h,new A.c9(B.zK,new A.H(B.dT,A.G(A.b([B.eX,B.al,A.k(s?"Reading image with Gemini\u2026":"Importing supplier\u2026",h,h,h,h,h,B.cb,B.ad,h,h)],t.p),B.u,B.l,B.I),h),h),h,h,h,h,B.cv,h,new A.aG(g,B.E),h)}A.c("c427_import_spn","margin=dd;cd=dd;behaviour=dd;payterm=dd")
+g=A.r(12)
 s=A.bB(a,h,t.w).w
 r=i.a.c.name
 r.toString
@@ -175299,7 +175301,8 @@ if(g!=null){s=A.r(12)
 return A.fJ(h,h,new A.c9(B.zJ,new A.H(B.fo,A.G(A.b([B.pC,B.ae,A.k(g,h,h,h,h,h,B.e_,B.ad,h,h),B.al,A.d1(B.od,new A.bZa(a),h)],t.p),B.u,B.l,B.I),h),h),h,h,h,h,B.cv,h,new A.aG(s,B.E),h)}g=i.d
 s=g===B.aav
 if(s||g===B.aax){g=A.r(12)
-return A.fJ(h,h,new A.c9(B.zK,new A.H(B.dT,A.G(A.b([B.eX,B.al,A.k(s?i.e:"Importing supplier\u2026",h,h,h,h,h,B.cb,B.ad,h,h)],t.p),B.u,B.l,B.I),h),h),h,h,h,h,B.cv,h,new A.aG(g,B.E),h)}g=A.r(12)
+return A.fJ(h,h,new A.c9(B.zK,new A.H(B.dT,A.G(A.b([B.eX,B.al,A.k(s?i.e:"Importing supplier\u2026",h,h,h,h,h,B.cb,B.ad,h,h)],t.p),B.u,B.l,B.I),h),h),h,h,h,h,B.cv,h,new A.aG(g,B.E),h)}A.c("c427_import_spn","margin=dd;cd=dd;behaviour=dd;payterm=dd")
+g=A.r(12)
 s=A.bB(a,h,t.w).w
 r=i.a.c.length
 q=r===1?"":"s"

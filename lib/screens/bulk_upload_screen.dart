@@ -2284,6 +2284,18 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
             removedCount++;
           }
 
+          final priorQty = cart.quantityOf(newProductId);
+          // CHANGE #420: if this product is ALREADY in the cart (individually
+          // added earlier, or from any other prior action), delete its
+          // existing row first — awaited, so the delete has actually
+          // committed on the server — so the insert below gets a NEW
+          // id/position in bulk order instead of upserting the old row in
+          // place at its old position. Qty is always the bulk quantity
+          // (setBulkQuantity's upsert sets it directly), replacing whatever
+          // was there before rather than summing.
+          if (priorQty > 0) {
+            await cart.removeByIdAwaited(newProductId);
+          }
           // Always call setBulkQuantity for every matched row so the item is
           // guaranteed in the cart regardless of any stale-reload or race.
           // Count as "added" only when the product was genuinely absent (qty==0).
@@ -2291,8 +2303,8 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
           // CHANGE #413: awaited so each row's write completes (and gets its
           // cart_items.id assigned) before the next row starts — sequential,
           // not parallel, so id order == bulk-upload list order. CHANGE #420:
-          // the _addingToCart guard above now keeps this the ONLY writer.
-          final priorQty = cart.quantityOf(newProductId);
+          // the _addingToCart guard keeps this the ONLY writer, and the
+          // delete-then-insert above repositions dupes into bulk order.
           await cart.setBulkQuantity(product, row.qty, i);
           if (priorQty == 0) addedCount++;
           newLineItemMap[key] = newProductId;

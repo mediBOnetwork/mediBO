@@ -2749,9 +2749,21 @@ class _WhatsAppCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final auth = UserState.of(context);
-    final canOrder = auth.canOrder;
+    // CHANGE #433: this card must reflect the ACTING-AS pharmacy's real
+    // approved state, not the admin's own (null) profile — mirrors the
+    // ViewAsState.identity.isApproved check already used by cart_screen.dart
+    // for order placement. Without this, an admin acting-as an APPROVED
+    // customer falsely fell through to "Complete Registration to Order"
+    // because auth.isRegistered/auth.canOrder were evaluated against the
+    // admin's own (profile-less) account.
+    final viewAs = ViewAsState.of(context);
+    final isActingAsCustomer = viewAs.isActive && viewAs.role == ViewAsRole.customer;
     final isAuthenticated = auth.isAuthenticated;
-    final isRegistered = auth.isRegistered;
+    final isRegistered = isActingAsCustomer ? true : auth.isRegistered;
+    final approved = isActingAsCustomer
+        ? (viewAs.identity?.isApproved ?? false)
+        : (auth.profile?.isApproved ?? false);
+    final canOrder = isActingAsCustomer ? approved : auth.canOrder;
 
     // Determine button label and gate message.
     final String btnLabel;
@@ -2776,6 +2788,8 @@ class _WhatsAppCard extends StatelessWidget {
       gateNote = 'Your account is pending admin approval';
       onTap = null;
     }
+    RenderLog.write('c433_wa_gate',
+        'approved=${approved.toString()};shows_register=${(!isRegistered).toString()}');
 
     return Container(
       decoration: BoxDecoration(

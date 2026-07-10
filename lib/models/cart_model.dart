@@ -850,6 +850,35 @@ class CartModel extends ChangeNotifier {
     if (line != null) remove(line.product);
   }
 
+  /// CHANGE #420: awaitable counterpart to [removeById] — mirrors its exact
+  /// isViewAs / admin_writeas_* routing, but returns the underlying Future so
+  /// a caller can guarantee the delete has actually committed on the server
+  /// before issuing a follow-up write (e.g. the bulk add-to-cart handler
+  /// repositioning an already-in-cart item into bulk order). [removeById] and
+  /// [remove] are unchanged — every existing caller is unaffected.
+  Future<void> removeByIdAwaited(String productId) async {
+    final line = _lines[productId];
+    if (line == null) return;
+    _lines.remove(productId);
+    if (!isViewAs && !hasSampleItems) {
+      _sampleTimer?.cancel();
+      _sampleTimer = null;
+    }
+    _recomputeTotals();
+    notifyListeners();
+    if (isViewAs) {
+      RenderLog.write('c407_actingas_cart_write', 'customer_uid:$_viewAsUserId:not_admin:remove');
+      RenderLog.write(_c408ActingAsCart, 'write:remove:customer_uid:$_viewAsUserId');
+      await _viewAsRemove(productId);
+    } else if (_isLoggedIn) {
+      await _deleteFromSupabase(productId);
+    } else {
+      final guestUid = _getGuestUid();
+      if (guestUid != null) await _deleteFromSupabase(productId, guestUid);
+      _saveToLocalStorage();
+    }
+  }
+
   // #407/#408: single guard that EVERY cart write funnels through — a future
   // add/update/remove call site can never forget to check ViewAs and
   // silently persist under the admin's own account instead of the

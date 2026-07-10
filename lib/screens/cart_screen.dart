@@ -30,14 +30,22 @@ class _CartScreenState extends State<CartScreen> {
 
   // CHANGE #324: ViewAs checkbox state — admin-added items checked, customer items unchecked.
   final Set<String> _viewAsChecked = {};
-  bool _viewAsCheckedInited = false;
+  // CHANGE #421: ids that have already had their default seeded. Seeding must
+  // happen ONCE per item, the first time it's seen — never again on a later
+  // rebuild/refresh — so it can't silently override a toggle the user already
+  // made, and so an item that arrives mid-session (e.g. an admin adds more
+  // items to this cart while it's open) still gets seeded correctly.
+  final Set<String> _viewAsCheckedSeenIds = {};
 
   void _initViewAsChecked(List<CartLine> lines) {
-    _viewAsChecked.clear();
     for (final line in lines) {
-      if (line.addedByAdmin) _viewAsChecked.add(line.product.id);
+      final id = line.product.id;
+      if (_viewAsCheckedSeenIds.contains(id)) continue; // already seeded — leave as-is
+      _viewAsCheckedSeenIds.add(id);
+      // added_by null/unknown (old rows) reads as addedByAdmin==false — safe
+      // "customer" default, no crash.
+      if (line.addedByAdmin) _viewAsChecked.add(id);
     }
-    _viewAsCheckedInited = true;
   }
 
   void _toggleViewAsChecked(String productId) {
@@ -159,11 +167,13 @@ class _CartScreenState extends State<CartScreen> {
         } catch (_) {}
         if (!mounted) return;
         // CHANGE #324: remove ONLY the ordered (checked) rows; leave unchecked
-        // customer-added rows in the cart.
+        // customer-added rows in the cart. CHANGE #421: no selection-state
+        // reset needed here — _viewAsChecked/_viewAsCheckedSeenIds track by
+        // product id and are left as-is; any item that reappears later is
+        // still seeded correctly since a removed id's tracking entry is inert.
         for (final line in checkedLines) {
           cart.remove(line.product);
         }
-        setState(() { _viewAsCheckedInited = false; }); // reinit after cart refreshes
         showDialog(
           context: context,
           barrierDismissible: false,
@@ -358,14 +368,19 @@ class _CartScreenState extends State<CartScreen> {
       return const _EmptyCart();
     }
 
-    // CHANGE #324: init ViewAs checkboxes once per session (admin-added → checked).
-    if (cart.isViewAs && !_viewAsCheckedInited && cart.lines.isNotEmpty) {
+    // CHANGE #324/#421: seed ViewAs checkboxes (admin-added → checked). Runs
+    // every build but only ever seeds ids not seen before — see
+    // _initViewAsChecked — so it never overrides a toggle the user already made.
+    if (cart.isViewAs && cart.lines.isNotEmpty) {
       _initViewAsChecked(cart.lines);
       RenderLog.write('c324_cart_checkbox', 'lines:${cart.lines.length} checked:${_viewAsChecked.length}');
     }
-    if (!cart.isViewAs && _viewAsCheckedInited) {
+    if (!cart.isViewAs && _viewAsCheckedSeenIds.isNotEmpty) {
+      // Leaving ViewAs — product ids are catalog-wide, not per-customer, so
+      // this must be cleared before a later ViewAs session (possibly for a
+      // different customer) reuses the same ids.
       _viewAsChecked.clear();
-      _viewAsCheckedInited = false;
+      _viewAsCheckedSeenIds.clear();
     }
 
     // Compute selected total for ViewAs footer.

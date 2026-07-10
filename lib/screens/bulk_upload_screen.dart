@@ -17,6 +17,7 @@ import 'package:xml/xml.dart' as xmlp;
 import '../app_state.dart';
 import '../config/api_keys.dart';
 import '../models/product.dart';
+import '../services/bulk_ocr_service.dart';
 import '../user_state.dart';
 import '../view_as_state.dart';
 import '../util.dart';
@@ -284,6 +285,21 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
   // same apparent handwriting size. Computed from median line height after OCR.
   double? _cropGlobalScale;
 
+  // CHANGE #419: bulk OCR now runs as an app-level background job so it
+  // survives tab switches / app restarts instead of dying with this State.
+  // Inline (Bulk-tab-only) error banner — replaces the old global toast.
+  String? _bulkOcrError;
+  // Raw content + binary-ness of the file currently in flight, kept so the
+  // BulkOcrService listener (which fires later, out of band) can still fall
+  // back to local heuristic parsing on failure exactly like the old inline
+  // try/catch did.
+  String? _pendingRawContent;
+  bool _pendingIsBinary = false;
+  // Dedup guard so a 'done'/'error' job state is only applied once — needed
+  // because resumeLatestIfAny() can re-observe the same finished job every
+  // time the Bulk tab remounts.
+  String? _lastAppliedOcrSignature;
+
   // Static (session-lifetime) cache of the last uploaded image.
   // Survives State recreation caused by GlobalKey reparenting failures,
   // navigation away-and-back, or any other rebuild path that calls initState.
@@ -344,6 +360,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
   void dispose() {
     if (_gWaConvertTrigger == _checkAndStartConvert) _gWaConvertTrigger = null;
     if (BulkUploadScreen.onWaOrderPlaced == _doWaFinalize) BulkUploadScreen.onWaOrderPlaced = null;
+    BulkOcrService.instance.removeListener(_onBulkOcrChanged);
     _scrollCtrl.dispose();
     super.dispose();
   }
@@ -351,6 +368,10 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
   @override
   void initState() {
     super.initState();
+    BulkOcrService.instance.addListener(_onBulkOcrChanged);
+    // Covers app-close mid-processing: re-checks the DB for the latest job
+    // so a still-running or just-finished OCR shows up without a fresh upload.
+    BulkOcrService.instance.resumeLatestIfAny();
     _gWaConvertTrigger = _checkAndStartConvert;
     // Pick up any pending convert that was set before initState ran.
     if (BulkUploadScreen._pendingWaConvert != null) {
@@ -414,6 +435,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       _matchTotal = 0;
       _bulkLineItemMap = {};
       _isFromFile = true;
+      _bulkOcrError = null;
     });
     // CHANGE #323: register hook so cart_screen can finalize the WA order
     // (source stamp + mark done) when the user taps cart Place Order.
@@ -467,15 +489,11 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
       setState(() => _step = _LoadStep.aiAnalyzing);
       final rawContent = 'IMAGE_BYTES:$mimeType:${base64Encode(bytes)}';
-      final extracted = await _extractWithGeminiAI(rawContent, imageName);
-      if (extracted.isEmpty) throw Exception('No medicines found in image');
-
-      setState(() {
-        _step = _LoadStep.matching;
-        _matchTotal = extracted.length;
-        _matchProgress = 0;
-      });
-      await _runMatchPipeline(extracted, bytes, _uploadedImageSize, mimeType, imageName);
+      _pendingRawContent = rawContent;
+      _pendingIsBinary = true;
+      // Fires _onBulkOcrChanged asynchronously when the job completes — even
+      // if the user has since navigated away from Bulk.
+      await _startOcrJob(rawContent);
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -483,8 +501,8 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         _isFromFile = false;
         _fileName = null;
         _bulkLineItemMap = {};
+        _bulkOcrError = _friendlyError(e);
       });
-      showToast(context, _friendlyError(e), duration: const Duration(seconds: 6));
     }
   }
 
@@ -781,6 +799,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       _fileName = file.name;
       _matchProgress = 0;
       _matchTotal = 0;
+      _bulkOcrError = null;
     });
 
     try {
@@ -809,20 +828,6 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       final fileExt = file.name.toLowerCase().split('.').last;
       final isStructuredSheet =
           const {'xlsx', 'xls', 'ods', 'csv', 'tsv'}.contains(fileExt);
-      List<Map<String, dynamic>> extracted;
-      if (isStructuredSheet) {
-        extracted = _extractWithFallback(rawContent);
-      } else {
-        try {
-          extracted = await _extractWithGeminiAI(rawContent, file.name);
-        } catch (e) {
-          debugPrint('[BulkUpload] Extraction error (isBinary=$isBinary): $e');
-          if (isBinary) rethrow;
-          extracted = _extractWithFallback(rawContent);
-        }
-      }
-
-      if (extracted.isEmpty) throw Exception('No medicine rows found in file');
 
       // Extract original image bytes + size. Stored in screen State (not in
       // rows) so they survive layout breakpoint switches without re-decoding.
@@ -847,13 +852,25 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         _saveImageToPrefs(origImageBytes, origMimeType, origImageSize!);
       }
 
-      // Step 3: fuzzy-match + crop pipeline (shared with WA convert path).
-      setState(() {
-        _step = _LoadStep.matching;
-        _matchTotal = extracted.length;
-        _matchProgress = 0;
-      });
-      await _runMatchPipeline(extracted, origImageBytes, origImageSize, origMimeType, file.name);
+      if (isStructuredSheet) {
+        final extracted = _extractWithFallback(rawContent);
+        if (extracted.isEmpty) throw Exception('No medicine rows found in file');
+        setState(() {
+          _step = _LoadStep.matching;
+          _matchTotal = extracted.length;
+          _matchProgress = 0;
+        });
+        await _runMatchPipeline(extracted, origImageBytes, origImageSize, origMimeType, file.name);
+        try { RenderLog.write('c312_ingest_done', file.name); } catch (_) {}
+        return;
+      }
+
+      // Non-structured (image/PDF/plain-text) content — hand off to the
+      // background OCR job. _onBulkOcrChanged() picks up the result later,
+      // even if the user has since navigated away from the Bulk tab.
+      _pendingRawContent = rawContent;
+      _pendingIsBinary = isBinary;
+      await _startOcrJob(rawContent);
       try { RenderLog.write('c312_ingest_done', file.name); } catch (_) {}
     } catch (e) {
       try { RenderLog.write('c312_ingest_err', e.toString().length > 80 ? e.toString().substring(0, 80) : e.toString()); } catch (_) {}
@@ -863,9 +880,9 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         _isFromFile = false;
         _fileName = null;
         _bulkLineItemMap = {};
+        _bulkOcrError = _friendlyError(e);
       });
       _clearSession();
-      showToast(context, _friendlyError(e), duration: const Duration(seconds: 6));
     }
   }
 
@@ -1343,118 +1360,145 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     }
   }
 
-  static bool _isNetworkOrApiError(Object e) {
-    final msg = e.toString().toLowerCase();
-    return msg.contains('http') ||
-        msg.contains('network') ||
-        msg.contains('socket') ||
-        msg.contains('timeout') ||
-        msg.contains('api error') ||
-        msg.contains('quota');
-  }
-
-  // Retries up to 3 times; images are preprocessed once then retried with
-  // progressively broader prompts. Network/API errors abort immediately.
-  Future<List<Map<String, dynamic>>> _extractWithGeminiAI(
-      String rawContent, String fileName) async {
-    final isImage = rawContent.startsWith('IMAGE_BYTES:');
-
-    // Preprocess image once before all attempts.
-    final content = isImage ? await _enhanceImageForOCR(rawContent) : rawContent;
-
-    Object? lastError;
-
-    for (int attempt = 0; attempt < 3; attempt++) {
-      try {
-        final result = await _callGeminiOnce(content, attempt: attempt);
-        if (result.isNotEmpty) return result;
-        // Empty result — retry with next prompt variant.
-        if (attempt < 2) {
-          await Future.delayed(Duration(milliseconds: 800 * (attempt + 1)));
-          continue;
-        }
-        // All 3 attempts returned empty.
-        if (isImage) {
-          throw Exception(
-              'Could not read medicines from the photo. Try better lighting or a clearer shot of the list.');
-        }
-        throw Exception('empty_response');
-      } catch (e) {
-        lastError = e;
-        // Network/API errors — no point retrying.
-        if (_isNetworkOrApiError(e)) {
-          debugPrint('[Gemini] Network/API error on attempt $attempt — aborting: $e');
-          rethrow;
-        }
-        if (attempt < 2) {
-          await Future.delayed(Duration(milliseconds: 600 * (attempt + 1)));
-        }
-      }
-    }
-
-    throw lastError!;
-  }
-
   static const _ocrEdgeFn =
       'https://swojhmarmaijkshsbeih.supabase.co/functions/v1/gemini-ocr';
 
-  Future<List<Map<String, dynamic>>> _callGeminiOnce(
-      String rawContent, {int attempt = 0}) async {
+  // CHANGE #419: enqueues one bulk_ocr_jobs row and returns immediately — the
+  // actual OCR result/error arrives later via BulkOcrService's polling and
+  // is picked up by _onBulkOcrChanged(), so it survives navigating away from
+  // the Bulk tab (or closing the app) while the job is still running.
+  Future<void> _startOcrJob(String rawContent) async {
     final isPdf = rawContent.startsWith('PDF_BYTES:');
     final isImage = rawContent.startsWith('IMAGE_BYTES:');
+
+    // Preprocess image once, exactly as the old direct-call path did.
+    final content = isImage ? await _enhanceImageForOCR(rawContent) : rawContent;
 
     String imageBase64 = '';
     String mimeType = 'text/plain';
     String prompt;
 
     if (isImage) {
-      final withoutPrefix = rawContent.substring('IMAGE_BYTES:'.length);
+      final withoutPrefix = content.substring('IMAGE_BYTES:'.length);
       final colonIdx = withoutPrefix.indexOf(':');
       mimeType = withoutPrefix.substring(0, colonIdx);
       imageBase64 = withoutPrefix.substring(colonIdx + 1);
-      debugPrint('[OCR] Image upload — mime=$mimeType payload=${imageBase64.length} chars attempt=$attempt');
-      prompt = attempt < 2 ? _geminiImagePrompt : _geminiImageFallbackPrompt;
+      prompt = _geminiImagePrompt;
     } else if (isPdf) {
-      imageBase64 = rawContent.substring('PDF_BYTES:'.length);
+      imageBase64 = content.substring('PDF_BYTES:'.length);
       mimeType = 'application/pdf';
-      debugPrint('[OCR] PDF upload — payload=${imageBase64.length} chars attempt=$attempt');
       prompt = _geminiPrompt;
     } else {
-      debugPrint('[OCR] Text upload — length=${rawContent.length} chars attempt=$attempt');
-      prompt = _geminiTextPrompt(rawContent);
+      prompt = _geminiTextPrompt(content);
     }
 
-    final Map<String, dynamic> requestBody = {
-      'image_base64': imageBase64,
-      'mime_type': mimeType,
-      'prompt': prompt,
-    };
+    await BulkOcrService.instance.start(
+      imageBase64: imageBase64,
+      mimeType: mimeType,
+      prompt: prompt,
+      mode: null,
+    );
+  }
 
-    final response = await http.post(
-      Uri.parse(_ocrEdgeFn),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode(requestBody),
-    ).timeout(const Duration(seconds: 60));
-
-    debugPrint('[OCR] HTTP ${response.statusCode} — body(200)=${response.statusCode == 200 ? response.body.substring(0, response.body.length.clamp(0, 400)) : response.body}');
-    if (response.statusCode != 200) {
-      throw Exception('OCR API error (HTTP ${response.statusCode}). Please try again.');
-    }
-
-    final data = jsonDecode(response.body) as Map<String, dynamic>;
-
-    // Prefer structured items returned by edge function (image path with box_2d).
-    final rawItems = data['items'];
-    if (rawItems is List && rawItems.isNotEmpty) {
-      return rawItems.cast<Map<String, dynamic>>();
-    }
-
-    // Fallback: parse JSON array from raw text (PDFs, text uploads, old format).
-    final text = data['text'] as String? ?? '';
+  // Parses the JSON items array out of job.result — the same string
+  // gemini-ocr used to return as data['text'] (bare `[...]`, or the array
+  // embedded inside `{"items": [...]}` for the image prompt).
+  List<Map<String, dynamic>> _parseGeminiResponseText(String text) {
     if (text.isEmpty) return [];
     final match = RegExp(r'\[[\s\S]*\]').firstMatch(text);
     if (match == null) throw Exception('no_json_in_response');
     return (jsonDecode(match.group(0)!) as List).cast<Map<String, dynamic>>();
+  }
+
+  // Reacts to BulkOcrService state changes — fires even if the user has
+  // navigated away from the Bulk tab (it stays alive in the IndexedStack) or
+  // reopened the app mid-job (via resumeLatestIfAny in initState).
+  void _onBulkOcrChanged() {
+    if (!mounted) return;
+    final st = BulkOcrService.instance.state;
+    if (st.phase == 'processing') {
+      if (_step == _LoadStep.idle) setState(() => _step = _LoadStep.aiAnalyzing);
+      return;
+    }
+    if (st.phase == 'idle') return;
+
+    // Only act once per finished job — resumeLatestIfAny() can re-observe
+    // the same done/error row every time the Bulk tab remounts.
+    final signature = st.phase == 'done' ? 'done:${st.result}' : 'error:${st.error}';
+    if (signature == _lastAppliedOcrSignature) return;
+    _lastAppliedOcrSignature = signature;
+
+    if (st.phase == 'done') {
+      _handleOcrDone(st.result ?? '');
+    } else {
+      _handleOcrFailure(Exception(st.error ?? 'AI failed'));
+    }
+  }
+
+  Future<void> _handleOcrDone(String text) async {
+    List<Map<String, dynamic>> extracted;
+    try {
+      extracted = _parseGeminiResponseText(text);
+    } catch (e) {
+      _handleOcrFailure(e);
+      return;
+    }
+
+    if (extracted.isEmpty && _waConvert == null && !_pendingIsBinary &&
+        _pendingRawContent != null) {
+      extracted = _extractWithFallback(_pendingRawContent!);
+    }
+    if (extracted.isEmpty) {
+      _handleOcrFailure(Exception(_waConvert != null
+          ? 'No medicines found in image'
+          : 'No medicine rows found in file'));
+      return;
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _step = _LoadStep.matching;
+      _matchTotal = extracted.length;
+      _matchProgress = 0;
+    });
+    await _runMatchPipeline(extracted, _uploadedImageBytes, _uploadedImageSize,
+        _uploadedMimeType ?? 'image/jpeg', _fileName ?? '');
+  }
+
+  void _handleOcrFailure(Object e) {
+    if (!mounted) return;
+    if (_waConvert != null) {
+      BulkUploadScreen.onWaOrderPlaced = null;
+      setState(() {
+        _waConvert = null;
+        _bulkLineItemMap = {};
+        _rows = _kSampleRows;
+        _step = _LoadStep.idle;
+        _bulkOcrError = _friendlyError(e);
+      });
+      return;
+    }
+    if (!_pendingIsBinary && _pendingRawContent != null) {
+      final fallback = _extractWithFallback(_pendingRawContent!);
+      if (fallback.isNotEmpty) {
+        setState(() {
+          _step = _LoadStep.matching;
+          _matchTotal = fallback.length;
+          _matchProgress = 0;
+        });
+        _runMatchPipeline(fallback, _uploadedImageBytes, _uploadedImageSize,
+            _uploadedMimeType ?? 'image/jpeg', _fileName ?? '');
+        return;
+      }
+    }
+    setState(() {
+      _step = _LoadStep.idle;
+      _isFromFile = false;
+      _fileName = null;
+      _bulkLineItemMap = {};
+      _bulkOcrError = _friendlyError(e);
+    });
+    _clearSession();
   }
 
   // Fallback parser for structured files (CSV/TSV/XLSX/ODS) and typed-PDF text.
@@ -1843,19 +1887,6 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       'Return ONLY valid JSON:\n'
       '{"items": [{"name": "Augmentin 625 tab", "qty": 5, '
       '"box_2d": [120, 50, 155, 380], "name_box_2d": [120, 53, 155, 260]}, ...]}';
-
-  static const _geminiImageFallbackPrompt =
-      'This is a photo of a handwritten medicine list from a pharmacy. '
-      'Extract EVERY medicine name visible.\n\n'
-      'For each medicine line return one object with:\n'
-      '- "name": medicine entry as best you can read\n'
-      '- "qty": order quantity integer (use 1 if not visible)\n'
-      '- "box_2d": [ymin, xmin, ymax, xmax] 0-1000. Full line extent.\n'
-      '- "name_box_2d": [ymin, xmin, ymax, xmax] 0-1000. Same y as box_2d, '
-      'x covers every word of the complete product name (stop only before trailing tab/cap/pack).\n\n'
-      'Return ONLY valid JSON:\n'
-      '{"items": [{"name": "medicine name", "qty": 1, '
-      '"box_2d": [y0, x0, y1, x1], "name_box_2d": [y0, x0, y1, xname]}, ...]}';
 
   static String _geminiTextPrompt(String content) =>
       'You are an expert Indian pharmacy procurement assistant.\n'
@@ -2540,6 +2571,13 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const _PageHeader(),
+                  if (_bulkOcrError != null) ...[
+                    const SizedBox(height: 16),
+                    _BulkOcrErrorBanner(
+                      message: _bulkOcrError!,
+                      onDismiss: () => setState(() => _bulkOcrError = null),
+                    ),
+                  ],
                   const SizedBox(height: 28),
                   _MainLayout(
                     rows: _rows,
@@ -2568,6 +2606,47 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+// ─── Inline OCR error banner (CHANGE #419 — replaces the old global toast) ───
+
+class _BulkOcrErrorBanner extends StatelessWidget {
+  final String message;
+  final VoidCallback onDismiss;
+  const _BulkOcrErrorBanner({required this.message, required this.onDismiss});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFEF2F2),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFFFCA5A5)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.error_outline, color: Color(0xFFDC2626), size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              message,
+              style: const TextStyle(color: Color(0xFF991B1B), fontSize: 14),
+            ),
+          ),
+          InkWell(
+            onTap: onDismiss,
+            child: const Padding(
+              padding: EdgeInsets.all(2),
+              child: Icon(Icons.close, color: Color(0xFF991B1B), size: 18),
+            ),
+          ),
+        ],
       ),
     );
   }

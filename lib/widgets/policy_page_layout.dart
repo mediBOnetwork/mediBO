@@ -26,6 +26,7 @@ class PolicyPageLayout extends StatelessWidget {
   Widget build(BuildContext context) {
     RenderLog.write('screen', title.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '_'));
     RenderLog.write('layout', 'policy_page_layout_v1');
+    RenderLog.write('c425_logo', 'mark=medibo_logo;src=asset');
 
     return Scaffold(
       backgroundColor: Colors.white,
@@ -59,10 +60,11 @@ class PolicyPageLayout extends StatelessWidget {
                     const SizedBox(height: 20),
                     // ── Branded header (mirrors /about) ───────────────────
                     Row(
-                      children: const [
-                        Icon(Icons.local_pharmacy, color: Brand.green, size: 30),
-                        SizedBox(width: 12),
-                        Column(
+                      children: [
+                        Image.asset('assets/images/medibo_logo.png',
+                            height: 30, filterQuality: FilterQuality.medium),
+                        const SizedBox(width: 12),
+                        const Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text('mediBO',

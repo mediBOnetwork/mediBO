@@ -1679,6 +1679,7 @@ class _Footer extends StatelessWidget {
   }
 
   Widget _brandCol() {
+    RenderLog.write('c425_logo', 'mark=medibo_logo;src=asset');
     return Padding(
       padding: const EdgeInsets.only(right: 16),
       child: Column(
@@ -1686,10 +1687,11 @@ class _Footer extends StatelessWidget {
         children: [
           Row(
             mainAxisSize: MainAxisSize.min,
-            children: const [
-              Icon(Icons.local_pharmacy, color: _kAccent, size: 24),
-              SizedBox(width: 8),
-              Text('mediBO',
+            children: [
+              Image.asset('assets/images/medibo_logo.png',
+                  height: 24, filterQuality: FilterQuality.medium),
+              const SizedBox(width: 8),
+              const Text('mediBO',
                   style: TextStyle(
                       color: Colors.white,
                       fontSize: 20,

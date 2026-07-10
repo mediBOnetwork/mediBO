@@ -17,6 +17,7 @@ import 'package:xml/xml.dart' as xmlp;
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../services/match_status_service.dart';
+import '../../services/spn_options.dart';
 import '../../utils/render_log.dart';
 import '../../utils/safe_parse.dart';
 import '../../widgets/code_field.dart';
@@ -7345,6 +7346,28 @@ class _CompanyCell extends StatelessWidget {
 
 // ── SPN inline section (mirrors Companies grid, 4 fixed columns) ─────────────
 
+// Field order + short table-header labels shared by the inline editor and the
+// Import-from-Image review dialog. Options themselves come from spn_options
+// via SpnOptionsCache — no hardcoded lists here anymore (CHANGE #428).
+const _spnCols = [
+  ('MARGIN',       'margin'),
+  ('CD CONDITION', 'cd_condition'),
+  ('BEHAVIOUR',    'behaviour'),
+  ('PAYMENT TERM', 'payment_term'),
+];
+
+// Writes label + points for each selected SPN option into a supplier_profiles
+// insert/update payload. Unselected fields are left out entirely (optional).
+void _applySpnValuesToRec(Map<String, dynamic> rec, Map<String, SpnOption?> values) {
+  for (final col in _spnCols) {
+    final field = col.$2;
+    final opt = values[field];
+    if (opt == null) continue;
+    rec[spnLabelColumn[field]!] = opt.label;
+    rec[spnPointsColumn[field]!] = opt.points;
+  }
+}
+
 class _SpnInlineSection extends StatefulWidget {
   final String supplierId;
   final String supplierName;
@@ -7361,23 +7384,9 @@ class _SpnInlineSection extends StatefulWidget {
 }
 
 class _SpnInlineSectionState extends State<_SpnInlineSection> {
-  static const _spnCols = [
-    ('MARGIN',       'margin'),
-    ('CD CONDITION', 'cd_condition'),
-    ('BEHAVIOUR',    'behaviour'),
-    ('PAYMENT TERM', 'payment_term'),
-  ];
-
-  static const _spnOptions = {
-    'margin':       ['1','2','3','4','5','6','7','8'],
-    'cd_condition': ['NO CONDITION','2K+ Bill','3K+ Bill'],
-    'behaviour':    ['1','2','3','4','5','6','7','8','9','10'],
-    'payment_term': ['cash','credit'],
-  };
-
   // Survives state recreation: user-picked values keyed by supplierId.
   // Cleared on dispose so stale values don't leak when panel is closed/reopened.
-  static final Map<String, Map<String, String?>> _userCache = {};
+  static final Map<String, Map<String, SpnOption?>> _userCache = {};
 
   // Frozen at initState — never re-derived from widget after that.
   late final String _supplierId;
@@ -7385,8 +7394,8 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
   bool _loading = true;
   bool _loadCancelled = false;
   bool _saving = false;
-  final Map<String, String?> _values = {};
-  final Map<String, String?> _savedValues = {};
+  final Map<String, SpnOption?> _values = {};
+  final Map<String, SpnOption?> _savedValues = {};
   int _changeCounter = 0;
 
   bool get _isDirty => _spnCols.any((col) => _values[col.$2] != _savedValues[col.$2]);
@@ -7410,13 +7419,21 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
     super.dispose();
   }
 
+  static SpnOption? _optFromRow(Map<String, dynamic> row, String field) {
+    final label = row[spnLabelColumn[field]] as String?;
+    if (label == null || label.trim().isEmpty) return null;
+    final points = (row[spnPointsColumn[field]] as num?)?.toInt() ?? 0;
+    return SpnOption(label, points);
+  }
+
   Future<void> _load() async {
     _loadCancelled = false;
     if (mounted) setState(() => _loading = true);
     try {
       final rows = await Supabase.instance.client
           .from('supplier_profiles')
-          .select('margin, cd_condition, behaviour, payment_type')
+          .select('margin, cd_condition, behaviour, payment_type, '
+              'margin_points, cd_points, behaviour_points, payment_term_points')
           .eq('id', _supplierId)
           .limit(1);
       if (_loadCancelled) return;
@@ -7425,14 +7442,11 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
         // User-cached values take precedence — never overwrite a user pick with a stale DB reload.
         final cached = _userCache[_supplierId] ?? {};
         setState(() {
-          _savedValues['margin']       = row['margin'] as String?;
-          _savedValues['cd_condition'] = row['cd_condition'] as String?;
-          _savedValues['behaviour']    = row['behaviour'] as String?;
-          _savedValues['payment_term'] = row['payment_type'] as String?;
-          _values['margin']       = cached['margin']       ?? row['margin'] as String?;
-          _values['cd_condition'] = cached['cd_condition'] ?? row['cd_condition'] as String?;
-          _values['behaviour']    = cached['behaviour']    ?? row['behaviour'] as String?;
-          _values['payment_term'] = cached['payment_term'] ?? row['payment_type'] as String?;
+          for (final col in _spnCols) {
+            final field = col.$2;
+            _savedValues[field] = _optFromRow(row, field);
+            _values[field] = cached.containsKey(field) ? cached[field] : _savedValues[field];
+          }
           _loading = false;
         });
       } else {
@@ -7449,16 +7463,17 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
     final id = _supplierId;
     if (id.isEmpty) { setState(() => _saving = false); return; }
     try {
-      // Write each field individually — same proven mechanism as _writeField.
+      // Write each field individually — label + points together (points come
+      // from the selected option, not a hardcoded map — CHANGE #428).
       bool allOk = true;
       for (final col in _spnCols) {
         final field = col.$2;
-        final val = _values[field];
-        // DB column name: payment_term UI key → payment_type DB column
-        final dbCol = (field == 'payment_term') ? 'payment_type' : field;
+        final opt = _values[field];
+        final dbCol = spnLabelColumn[field]!;
+        final pointsCol = spnPointsColumn[field]!;
         final res = await Supabase.instance.client
             .from('supplier_profiles')
-            .update({dbCol: val})
+            .update({dbCol: opt?.label, pointsCol: opt?.points})
             .eq('id', id)
             .select('id')
             .timeout(const Duration(seconds: 10));
@@ -7467,7 +7482,7 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
           RenderLog.write('spn_save_field_failed', '$field rows:0');
           break;
         }
-        RenderLog.write('spn_save_field_ok', '$field=$val');
+        RenderLog.write('spn_save_field_ok', '$field=${opt?.label}');
       }
 
       if (!allOk) {
@@ -7478,17 +7493,10 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
         return;
       }
 
-      // Await recompute so points + SPN update before we tell the parent to re-sort.
-      try {
-        await Supabase.instance.client
-            .rpc('recompute_supplier_points', params: {'p_id': id})
-            .timeout(const Duration(seconds: 10));
-        RenderLog.write('spn_recompute_ok', id);
-      } catch (e) {
-        // Non-fatal: points will re-sync on next page load.
-        RenderLog.write('spn_recompute_err', e.toString());
-      }
-
+      // SPN is a generated column derived straight from the points columns above —
+      // no recompute RPC needed (and calling the legacy recompute_supplier_points
+      // RPC here would overwrite cd_points/behaviour_points with its own older,
+      // label-regex-based formula, clobbering the option's explicit points).
       RenderLog.write('spn_saved_supabase', 'confirmed:$id');
 
       if (mounted) {
@@ -7507,36 +7515,6 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
         setState(() => _saving = false);
         showToast(context, 'Save error: $e', isError: true);
       }
-    }
-  }
-
-  Future<void> _writeField([String? changedField, String? changedVal]) async {
-    RenderLog.write('spn_writefield_entered', changedField ?? 'none');
-    final id = _supplierId;
-    RenderLog.write('spn_writefield_id', id.isEmpty ? 'EMPTY' : id);
-    if (id.isEmpty) { RenderLog.write('spn_writefield_dead', 'EMPTY_ID'); return; }
-    final dbCol = (changedField == 'payment_term') ? 'payment_type' : (changedField ?? 'margin');
-    final val   = changedVal ?? _values[changedField ?? 'margin'];
-    try {
-      RenderLog.write('spn_writefield_before_await', '1');
-      final res = await Supabase.instance.client
-          .from('supplier_profiles')
-          .update({dbCol: val})
-          .eq('id', id)
-          .select('id')
-          .timeout(const Duration(seconds: 8));
-      RenderLog.write('spn_writefield_after_await', res.isEmpty ? 'EMPTY_0_ROWS' : 'OK_${res.length}');
-      RenderLog.write('spn_write_done', '$changedField=$changedVal rows=${res.length}@${DateTime.now().millisecondsSinceEpoch}');
-      if (res.isNotEmpty) {
-        Supabase.instance.client
-            .rpc('recompute_supplier_points', params: {'p_id': id})
-            .then((_) {})
-            .catchError((_) {});
-      }
-      if (mounted) showToast(context, res.isEmpty ? 'Save failed — try again' : 'Saved ✓', isError: res.isEmpty, duration: const Duration(milliseconds: 800));
-    } catch (e) {
-      RenderLog.write('spn_writefield_exception', e.toString());
-      if (mounted) showToast(context, 'Save error: $e', isError: true);
     }
   }
 
@@ -7572,7 +7550,7 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
     );
   }
 
-  void _onPick(String field, String? val) {
+  void _onPick(String field, SpnOption? val) {
     _changeCounter++;
     RenderLog.write('spn_change_count', _changeCounter.toString());
     RenderLog.write('spn_save_dirty_green', 'true');
@@ -7584,6 +7562,7 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
   Widget build(BuildContext context) {
     RenderLog.write('spn_panel', 1);
     RenderLog.write('spn_dropdowns', 4);
+    RenderLog.write('c428_spn_inline', 'margin,cd,behaviour,payterm=dyn+add');
     return Container(
       decoration: const BoxDecoration(
         color: Color(0xFFF0F7FF),
@@ -7662,7 +7641,6 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
                   key: ValueKey('${_supplierId}_${col.$2}'),
                   field: col.$2,
                   initialValue: _values[col.$2],
-                  options: _spnOptions[col.$2]!,
                   onPick: _onPick,
                 )),
               ],
@@ -7705,7 +7683,6 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
               key: ValueKey('${_supplierId}_${col.$2}_m'),
               field: col.$2,
               initialValue: _values[col.$2],
-              options: _spnOptions[col.$2]!,
               onPick: _onPick,
             ),
             const SizedBox(height: 10),
@@ -7716,31 +7693,121 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
   }
 }
 
-// ── SPN inline DropdownButton — StatefulWidget so parent rebuilds never reset value ──
+// ── SPN dropdown — shared by the inline editor AND the Import-from-Image
+// review dialog (CHANGE #428). Options load from spn_options via
+// SpnOptionsCache; a trailing "+ Add new option…" item prompts for a new
+// label + points, persists it via spn_option_add, then auto-selects it.
+const _kAddNewSpnOption = '__spn_add_new__';
 
 class _SpnDropdown extends StatefulWidget {
   final String field;
-  final String? initialValue;
-  final List<String> options;
-  final void Function(String field, String? val) onPick;
-  const _SpnDropdown({super.key, required this.field, required this.initialValue, required this.options, required this.onPick});
+  final SpnOption? initialValue;
+  final void Function(String field, SpnOption? val) onPick;
+  // Non-null → form style with this label shown above (Import dialog).
+  // Null → compact inline chip style (inline SPN editor table cell).
+  final String? formLabel;
+  const _SpnDropdown({
+    super.key,
+    required this.field,
+    required this.initialValue,
+    required this.onPick,
+    this.formLabel,
+  });
 
   @override
   State<_SpnDropdown> createState() => _SpnDropdownState();
 }
 
 class _SpnDropdownState extends State<_SpnDropdown> {
-  String? _selected;
+  SpnOption? _selected;
+  List<SpnOption>? _options;
 
   @override
   void initState() {
     super.initState();
     _selected = widget.initialValue;
+    _loadOptions();
+  }
+
+  Future<void> _loadOptions() async {
+    try {
+      final map = await SpnOptionsCache.instance.fetch();
+      if (!mounted) return;
+      setState(() => _options = map[widget.field] ?? const []);
+    } catch (_) {
+      if (mounted) setState(() => _options = const []);
+    }
+  }
+
+  Future<void> _handleChange(String? code) async {
+    if (code == _kAddNewSpnOption) {
+      final added = await _promptAddSpnOption(context, widget.field);
+      if (!mounted) return;
+      if (added == null) {
+        // Cancelled — the dropdown already visually jumped to "+ Add new
+        // option…" via its own onChanged; force a rebuild so `value:`
+        // (reactive/controlled) snaps the display back to _selected.
+        setState(() {});
+        return;
+      }
+      setState(() {
+        _options = SpnOptionsCache.instance.cacheFor(widget.field);
+        _selected = added;
+      });
+      widget.onPick(widget.field, added);
+      return;
+    }
+    final opt = code == null
+        ? null
+        : (_options ?? const []).firstWhere((o) => o.label == code, orElse: () => SpnOption(code, 0));
+    setState(() => _selected = opt);
+    widget.onPick(widget.field, opt);
   }
 
   @override
   Widget build(BuildContext context) {
-    final filled = _selected != null && _selected!.isNotEmpty;
+    final loading = _options == null;
+    final items = <DropdownMenuItem<String>>[
+      DropdownMenuItem<String>(
+        value: null,
+        child: Text(widget.formLabel != null ? '— select —' : '—',
+            style: TextStyle(fontSize: widget.formLabel != null ? 13 : 11, color: const Color(0xFF9CA3AF))),
+      ),
+      for (final opt in _options ?? const [])
+        DropdownMenuItem<String>(
+          value: opt.label,
+          child: Text(opt.label,
+              style: TextStyle(fontSize: widget.formLabel != null ? 13 : 11, color: const Color(0xFF111827))),
+        ),
+      DropdownMenuItem<String>(
+        value: _kAddNewSpnOption,
+        child: Text('+ Add new option…',
+            style: TextStyle(
+                fontSize: widget.formLabel != null ? 13 : 11,
+                fontWeight: FontWeight.w600,
+                color: const Color(0xFF1B7A43))),
+      ),
+    ];
+
+    final dropdown = loading
+        ? SizedBox(
+            height: widget.formLabel != null ? 44 : 36,
+            child: const Center(child: SizedBox(width: 14, height: 14,
+                child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF1B7A43)))),
+          )
+        : (widget.formLabel != null ? _buildForm(items) : _buildCompact(items));
+
+    if (widget.formLabel == null) return dropdown;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(widget.formLabel!, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
+          color: Color(0xFF6B7280), letterSpacing: 0.3)),
+      const SizedBox(height: 4),
+      dropdown,
+    ]);
+  }
+
+  Widget _buildCompact(List<DropdownMenuItem<String>> items) {
+    final filled = _selected != null;
     return Container(
       height: 36,
       padding: const EdgeInsets.symmetric(horizontal: 6),
@@ -7751,25 +7818,97 @@ class _SpnDropdownState extends State<_SpnDropdown> {
       ),
       child: DropdownButtonHideUnderline(
         child: DropdownButton<String>(
-          value: _selected,
-          hint: const Text('—', style: TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
+          value: _selected?.label,
           isExpanded: true,
           isDense: true,
           style: const TextStyle(fontSize: 11, color: Color(0xFF065F46)),
           icon: const Icon(Icons.expand_more, size: 14, color: Color(0xFF6B7280)),
-          items: [
-            const DropdownMenuItem<String>(value: null, child: Text('—', style: TextStyle(fontSize: 11, color: Color(0xFF9CA3AF)))),
-            for (final opt in widget.options)
-              DropdownMenuItem<String>(value: opt, child: Text(opt, style: const TextStyle(fontSize: 11, color: Color(0xFF111827)))),
-          ],
-          onChanged: (val) {
-            setState(() => _selected = val);
-            widget.onPick(widget.field, val);
-          },
+          items: items,
+          onChanged: _handleChange,
         ),
       ),
     );
   }
+
+  Widget _buildForm(List<DropdownMenuItem<String>> items) {
+    return DropdownButtonFormField<String>(
+      // ignore: deprecated_member_use
+      value: _selected?.label,
+      isExpanded: true,
+      decoration: InputDecoration(
+        filled: true, fillColor: const Color(0xFFF5F6F8),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+            borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+            borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+        focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+            borderSide: const BorderSide(color: Color(0xFF1B7A43), width: 1.5)),
+      ),
+      items: items,
+      onChanged: _handleChange,
+    );
+  }
+}
+
+// ── "+ Add new option…" prompt: label + points, calls spn_option_add ─────────
+Future<SpnOption?> _promptAddSpnOption(BuildContext context, String field) {
+  final labelCtrl = TextEditingController();
+  final pointsCtrl = TextEditingController();
+  String? error;
+  bool submitting = false;
+  return showDialog<SpnOption>(
+    context: context,
+    builder: (dialogCtx) => StatefulBuilder(builder: (dialogCtx, setSt) => AlertDialog(
+      title: Text('Add ${spnFieldDisplayLabel[field] ?? field} option'),
+      content: SizedBox(
+        width: 320,
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          TextField(
+            controller: labelCtrl,
+            autofocus: true,
+            decoration: const InputDecoration(labelText: 'Label'),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: pointsCtrl,
+            keyboardType: const TextInputType.numberWithOptions(signed: true),
+            inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9\-]'))],
+            decoration: const InputDecoration(labelText: 'Points'),
+          ),
+          if (error != null) ...[
+            const SizedBox(height: 8),
+            Text(error!, style: const TextStyle(color: Color(0xFF991B1B), fontSize: 12)),
+          ],
+        ]),
+      ),
+      actions: [
+        TextButton(
+          onPressed: submitting ? null : () => Navigator.of(dialogCtx).pop(),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          onPressed: submitting ? null : () async {
+            final label = labelCtrl.text.trim();
+            final points = int.tryParse(pointsCtrl.text.trim());
+            if (label.isEmpty) { setSt(() => error = 'Label is required'); return; }
+            if (points == null) { setSt(() => error = 'Enter a whole number for points'); return; }
+            setSt(() { submitting = true; error = null; });
+            try {
+              final added = await SpnOptionsCache.instance.addSpnOption(field, label, points);
+              if (dialogCtx.mounted) Navigator.of(dialogCtx).pop(added);
+            } catch (e) {
+              setSt(() { submitting = false; error = 'Failed: $e'; });
+            }
+          },
+          child: submitting
+              ? const SizedBox(width: 16, height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+              : const Text('Add'),
+        ),
+      ],
+    )),
+  ).whenComplete(() { labelCtrl.dispose(); pointsCtrl.dispose(); });
 }
 
 // ── Per-row keep-N / clear-all trim buttons [1][2][3][4][5][X] ───────────────
@@ -8020,14 +8159,8 @@ class _SupOptField {
 
 // All optional supplier_profiles columns (excludes OCR-filled, points, SPN, system cols).
 // Columns OCR fills: supplier_name, street_address, city, contact_no, whatsapp_no, email, supplier_code.
-// SPN option lists mirror _SpnInlineSectionState._spnOptions (the inline SPN editor) exactly.
-List<_SupOptField> _buildSpnFields() => [
-  _SupOptField(column: 'margin',        label: 'Margin',       options: ['', '1', '2', '3', '4', '5', '6', '7', '8']),
-  _SupOptField(column: 'cd_condition',  label: 'CD Condition', options: ['', 'NO CONDITION', '2K+ Bill', '3K+ Bill']),
-  _SupOptField(column: 'behaviour',     label: 'Behaviour',    options: ['', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10']),
-  _SupOptField(column: 'payment_term',  label: 'Payment Term', options: ['', 'cash', 'credit']),
-];
-
+// SPN fields (margin/cd_condition/behaviour/payment_term) are rendered with the
+// dynamic _SpnDropdown (spn_options-backed) instead of this generic mechanism — CHANGE #428.
 List<_SupOptField> _buildOtherFields() => [
   _SupOptField(column: 'contact_name',   label: 'Contact Name'),
   _SupOptField(column: 'contact_person', label: 'Contact Person'),
@@ -8125,7 +8258,7 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
   final _newCompCtrl = TextEditingController();
 
   // Optional extra fields — split into SPN points and Other details
-  late final List<_SupOptField> _spnFields;
+  final Map<String, SpnOption?> _spnValues = {for (final c in _spnCols) c.$2: null};
   late final List<_SupOptField> _otherFields;
   bool _spnExpanded = false;
   bool _otherExpanded = false;
@@ -8133,7 +8266,6 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
   @override
   void initState() {
     super.initState();
-    _spnFields = _buildSpnFields();
     _otherFields = _buildOtherFields();
     _ocr();
   }
@@ -8142,7 +8274,7 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
   void dispose() {
     for (final c in [_nameCtrl,_addrCtrl,_cityCtrl,_phoneCtrl,_waCtrl,_emailCtrl,_codeCtrl,_newCompCtrl,_upiCtrl]) c.dispose();
     for (final c in _companies) c.dispose();
-    for (final f in [..._spnFields, ..._otherFields]) f.dispose();
+    for (final f in _otherFields) f.dispose();
     super.dispose();
   }
 
@@ -8273,10 +8405,11 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
       if (_emailCtrl.text.trim().isNotEmpty) rec['email'] = _emailCtrl.text.trim();
       if (_codeCtrl.text.trim().isNotEmpty) rec['supplier_code'] = _codeCtrl.text.trim();
       if (upiRaw.isNotEmpty) rec['payment_address'] = upiRaw;
-      for (final f in [..._spnFields, ..._otherFields]) {
+      for (final f in _otherFields) {
         final v = f.value;
         if (v.isNotEmpty) rec[f.column] = v;
       }
+      _applySpnValuesToRec(rec, _spnValues);
 
       final inserted = await client.from('supplier_profiles').insert(rec).select('id').single();
       final supplierId = inserted['id'] as String;
@@ -8375,7 +8508,7 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
     }
 
     // Review screen
-    RenderLog.write('c427_import_spn', 'margin=dd;cd=dd;behaviour=dd;payterm=dd');
+    RenderLog.write('c428_spn_import', 'margin,cd,behaviour,payterm=dyn+add');
     return Dialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
@@ -8440,7 +8573,17 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
               ),
               if (_spnExpanded) ...[
                 const SizedBox(height: 4),
-                ..._buildOptFieldWidgets(_spnFields, setState),
+                for (final col in _spnCols) ...[
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: _SpnDropdown(
+                      field: col.$2,
+                      formLabel: spnFieldDisplayLabel[col.$2],
+                      initialValue: _spnValues[col.$2],
+                      onPick: (f, v) => setState(() => _spnValues[f] = v),
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 4),
               ],
               const Divider(color: Color(0xFFE5E7EB)),
@@ -8642,7 +8785,7 @@ class _SupCardMultiImportDialogState extends State<_SupCardMultiImportDialog> {
 
   List<_ResolvedCompany> _companies = [];
 
-  late final List<_SupOptField> _spnFields;
+  final Map<String, SpnOption?> _spnValues = {for (final c in _spnCols) c.$2: null};
   late final List<_SupOptField> _otherFields;
   bool _spnExpanded = false;
   bool _otherExpanded = false;
@@ -8672,7 +8815,6 @@ class _SupCardMultiImportDialogState extends State<_SupCardMultiImportDialog> {
   @override
   void initState() {
     super.initState();
-    _spnFields = _buildSpnFields();
     _otherFields = _buildOtherFields();
     _processAll();
   }
@@ -8681,7 +8823,7 @@ class _SupCardMultiImportDialogState extends State<_SupCardMultiImportDialog> {
   void dispose() {
     for (final c in [_nameCtrl,_addrCtrl,_cityCtrl,_phoneCtrl,_waCtrl,_emailCtrl,_codeCtrl,_newCompCtrl,_upiCtrl]) c.dispose();
     for (final c in _companies) c.dispose();
-    for (final f in [..._spnFields, ..._otherFields]) f.dispose();
+    for (final f in _otherFields) f.dispose();
     super.dispose();
   }
 
@@ -8832,9 +8974,10 @@ class _SupCardMultiImportDialogState extends State<_SupCardMultiImportDialog> {
       if (_emailCtrl.text.trim().isNotEmpty) rec['email'] = _emailCtrl.text.trim();
       if (_codeCtrl.text.trim().isNotEmpty) rec['supplier_code'] = _codeCtrl.text.trim();
       if (upiRaw.isNotEmpty) rec['payment_address'] = upiRaw;
-      for (final f in [..._spnFields, ..._otherFields]) {
+      for (final f in _otherFields) {
         final v = f.value; if (v.isNotEmpty) rec[f.column] = v;
       }
+      _applySpnValuesToRec(rec, _spnValues);
       final inserted = await client.from('supplier_profiles').insert(rec).select('id').single();
       final supplierId = inserted['id'] as String;
       RenderLog.write('c67_new_supplier_id', supplierId);
@@ -8927,7 +9070,7 @@ class _SupCardMultiImportDialogState extends State<_SupCardMultiImportDialog> {
     }
 
     // Review form — same layout as single-image
-    RenderLog.write('c427_import_spn', 'margin=dd;cd=dd;behaviour=dd;payterm=dd');
+    RenderLog.write('c428_spn_import', 'margin,cd,behaviour,payterm=dyn+add');
     return Dialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
@@ -8988,7 +9131,17 @@ class _SupCardMultiImportDialogState extends State<_SupCardMultiImportDialog> {
               ),
               if (_spnExpanded) ...[
                 const SizedBox(height: 4),
-                ..._buildOptFieldWidgets(_spnFields, setState),
+                for (final col in _spnCols) ...[
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: _SpnDropdown(
+                      field: col.$2,
+                      formLabel: spnFieldDisplayLabel[col.$2],
+                      initialValue: _spnValues[col.$2],
+                      onPick: (f, v) => setState(() => _spnValues[f] = v),
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 4),
               ],
               const Divider(color: Color(0xFFE5E7EB)),

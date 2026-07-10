@@ -2216,6 +2216,15 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
   // ── Cart ───────────────────────────────────────────────────────────────────
 
   Future<void> _addMatchedToCart() async {
+    // CHANGE #420: the real-file path below awaits each row's cart write
+    // sequentially so cart_items.id order matches the preview's top-to-bottom
+    // order (#413) — but that guarantee only holds for ONE call at a time.
+    // The button wasn't disabled while this ran, so a second tap (e.g. an
+    // impatient double-tap on a slow connection) launched a second, OVERLAPPING
+    // call whose own sequential writes interleaved with the first call's,
+    // scrambling the final id order relative to the preview. Guard re-entry
+    // for both paths so at most one write sequence is ever in flight.
+    if (_addingToCart) return;
     final cart = AppState.of(context);
 
     if (!_isFromFile) {
@@ -2241,72 +2250,78 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     // ── Real-file re-sync (per-row ownership) ─────────────────────────────
     // Each row owns the product it added. Compare old ownership → new ownership
     // to know exactly which old product to remove when a row changes its match.
-    int addedCount = 0;
-    int removedCount = 0;
-    final newLineItemMap = <String, String>{};
+    setState(() => _addingToCart = true);
+    try {
+      int addedCount = 0;
+      int removedCount = 0;
+      final newLineItemMap = <String, String>{};
 
-    for (int i = 0; i < _rows.length; i++) {
-      final row = _rows[i];
-      final key = i.toString();
-      final oldProductId = _bulkLineItemMap[key];
-      // Hidden rows: excluded from cart; remove if previously added.
-      if (row.isHidden) {
-        if (oldProductId != null) {
+      for (int i = 0; i < _rows.length; i++) {
+        final row = _rows[i];
+        final key = i.toString();
+        final oldProductId = _bulkLineItemMap[key];
+        // Hidden rows: excluded from cart; remove if previously added.
+        if (row.isHidden) {
+          if (oldProductId != null) {
+            cart.removeById(oldProductId);
+            removedCount++;
+          }
+          continue;
+        }
+
+        final isMatched = (row.status == _MatchStatus.matched ||
+                row.status == _MatchStatus.manuallyMatched) &&
+            row.selectedProduct != null &&
+            row.selectedProduct!.isBuyable; // Part D: hard-exclude NA (buyable=false) from cart
+
+        if (isMatched) {
+          final product = row.selectedProduct!;
+          final newProductId = product.id;
+
+          // Row changed its product: remove the old one first.
+          if (oldProductId != null && oldProductId != newProductId) {
+            cart.removeById(oldProductId);
+            removedCount++;
+          }
+
+          // Always call setBulkQuantity for every matched row so the item is
+          // guaranteed in the cart regardless of any stale-reload or race.
+          // Count as "added" only when the product was genuinely absent (qty==0).
+          // Uses row index so bulk ordering is preserved on re-add.
+          // CHANGE #413: awaited so each row's write completes (and gets its
+          // cart_items.id assigned) before the next row starts — sequential,
+          // not parallel, so id order == bulk-upload list order. CHANGE #420:
+          // the _addingToCart guard above now keeps this the ONLY writer.
+          final priorQty = cart.quantityOf(newProductId);
+          await cart.setBulkQuantity(product, row.qty, i);
+          if (priorQty == 0) addedCount++;
+          newLineItemMap[key] = newProductId;
+
+        } else if (oldProductId != null) {
+          // Row was previously synced but is now unmatched/partial — remove it.
           cart.removeById(oldProductId);
           removedCount++;
         }
-        continue;
       }
 
-      final isMatched = (row.status == _MatchStatus.matched ||
-              row.status == _MatchStatus.manuallyMatched) &&
-          row.selectedProduct != null &&
-          row.selectedProduct!.isBuyable; // Part D: hard-exclude NA (buyable=false) from cart
+      setState(() => _bulkLineItemMap = newLineItemMap);
+      _saveSession();
 
-      if (isMatched) {
-        final product = row.selectedProduct!;
-        final newProductId = product.id;
-
-        // Row changed its product: remove the old one first.
-        if (oldProductId != null && oldProductId != newProductId) {
-          cart.removeById(oldProductId);
-          removedCount++;
+      if (mounted) {
+        final String msg;
+        if (addedCount > 0 && removedCount > 0) {
+          msg = '$addedCount added, $removedCount removed from cart';
+        } else if (addedCount > 0) {
+          msg = '$addedCount medicines added to cart';
+        } else if (removedCount > 0) {
+          msg = '$removedCount medicines removed from cart';
+        } else {
+          msg = 'Cart is already up to date';
         }
-
-        // Always call setBulkQuantity for every matched row so the item is
-        // guaranteed in the cart regardless of any stale-reload or race.
-        // Count as "added" only when the product was genuinely absent (qty==0).
-        // Uses row index so bulk ordering is preserved on re-add.
-        // CHANGE #413: awaited so each row's write completes (and gets its
-        // cart_items.id assigned) before the next row starts — sequential,
-        // not parallel, so id order == bulk-upload list order.
-        final priorQty = cart.quantityOf(newProductId);
-        await cart.setBulkQuantity(product, row.qty, i);
-        if (priorQty == 0) addedCount++;
-        newLineItemMap[key] = newProductId;
-
-      } else if (oldProductId != null) {
-        // Row was previously synced but is now unmatched/partial — remove it.
-        cart.removeById(oldProductId);
-        removedCount++;
+        showToast(context, msg);
       }
-    }
-
-    setState(() => _bulkLineItemMap = newLineItemMap);
-    _saveSession();
-
-    if (mounted) {
-      final String msg;
-      if (addedCount > 0 && removedCount > 0) {
-        msg = '$addedCount added, $removedCount removed from cart';
-      } else if (addedCount > 0) {
-        msg = '$addedCount medicines added to cart';
-      } else if (removedCount > 0) {
-        msg = '$removedCount medicines removed from cart';
-      } else {
-        msg = 'Cart is already up to date';
-      }
-      showToast(context, msg);
+    } finally {
+      if (mounted) setState(() => _addingToCart = false);
     }
   }
 

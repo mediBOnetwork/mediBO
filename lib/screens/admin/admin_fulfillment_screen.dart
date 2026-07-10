@@ -11601,6 +11601,13 @@ class _PackTabState extends State<_PackTab>
   // Drives the read-only "In dispute" chip so packers never chase a phantom line.
   Map<String, DisputeItem> _packDisputeIdx = {};
 
+  // CHANGE #438: order-aware per-item bag allocation, keyed by order_item_id.
+  // Populated from pack_item_bag_breakdown (replaces the shared-pool bag_no/bags
+  // fields from pack_get_queue for DISPLAY only — packing/undo/counts/navigation
+  // still read item['bag_no']/item['is_bagged'] as before). Absent key = not yet
+  // fetched (tile falls back to the old shared-pool chips until it resolves).
+  final Map<String, List<Map<String, dynamic>>> _itemBags = {};
+
   // #299→C353: per-order channels replaced by the single FulfillRealtime channel
 
   // CHANGE #299: voice counting
@@ -11779,6 +11786,7 @@ class _PackTabState extends State<_PackTab>
       // C354: refresh the dispute index alongside the queue so chips stay in sync.
       _loadDisputeIndex();
       if (_expandedOrderId == orderId) _refreshPackMentions(orderId);
+      _fetchItemBags(items);
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -11788,6 +11796,35 @@ class _PackTabState extends State<_PackTab>
         }
       });
     }
+  }
+
+  // CHANGE #438: fetch each item's OWN allocated bags (order-aware), replacing
+  // the shared-pool bag_no/bags chips with pack_item_bag_breakdown(order_item_id).
+  // Runs in parallel, in the background — does not block the queue paint; tiles
+  // fall back to the old shared-pool chips until their own fetch resolves.
+  Future<void> _fetchItemBags(List<Map<String, dynamic>> items) async {
+    final client = Supabase.instance.client;
+    final entries = await Future.wait(items.map((item) async {
+      final oid = item['order_item_id']?.toString() ?? '';
+      if (oid.isEmpty) return MapEntry(oid, const <Map<String, dynamic>>[]);
+      try {
+        final raw = await client.rpc('pack_item_bag_breakdown',
+            params: {'p_order_item_id': oid});
+        final list = raw is String ? (jsonDecode(raw) as List) : (raw as List? ?? const []);
+        final bags = list.whereType<Map>().map((b) => Map<String, dynamic>.from(b)).toList()
+          ..sort((a, b) => ((a['bag_no'] as num?)?.toInt() ?? 0)
+              .compareTo((b['bag_no'] as num?)?.toInt() ?? 0));
+        return MapEntry(oid, bags);
+      } catch (_) {
+        return MapEntry(oid, const <Map<String, dynamic>>[]);
+      }
+    }));
+    if (!mounted) return;
+    setState(() {
+      for (final e in entries) {
+        if (e.key.isNotEmpty) _itemBags[e.key] = e.value;
+      }
+    });
   }
 
   // #338: voice-vs-actual audit per product for the expanded pack order.
@@ -12792,17 +12829,21 @@ class _PackTabState extends State<_PackTab>
     // #368: an item can only be packed if it is mapped to a bag.
     final isBagged   = item['is_bagged'] == true;
 
-    // §2: bags[] array — stacked tags. Falls back to bag_no if bags not present.
-    final rawBags = item['bags'];
-    final bags = rawBags is List
-        ? rawBags.whereType<Map>().map((b) => Map<String, dynamic>.from(b)).toList()
-        : <Map<String, dynamic>>[];
-    final bagNums = bags.isNotEmpty
-        ? bags.map((b) => (b['bag_no'] as num?)?.toInt() ?? 0).where((n) => n > 0).toList()
-        : (() {
-            final fallback = (item['bag_no'] as num?)?.toInt();
-            return fallback != null && fallback > 0 ? [fallback] : <int>[];
-          })();
+    // CHANGE #438: order-aware bags for THIS item (from pack_item_bag_breakdown),
+    // keyed by order_item_id. Falls back to the old shared-pool bags[]/bag_no
+    // fields from pack_get_queue only until the per-item fetch resolves.
+    final oid = item['order_item_id']?.toString() ?? '';
+    final orderAwareBags = _itemBags[oid];
+    final List<Map<String, dynamic>> bags = orderAwareBags ??
+        (() {
+          final rawBags = item['bags'];
+          if (rawBags is List) {
+            return rawBags.whereType<Map>().map((b) => Map<String, dynamic>.from(b)).toList();
+          }
+          final fallback = (item['bag_no'] as num?)?.toInt();
+          return fallback != null && fallback > 0 ? [<String, dynamic>{'bag_no': fallback}] : <Map<String, dynamic>>[];
+        })();
+    final bagNums = bags.map((b) => (b['bag_no'] as num?)?.toInt() ?? 0).where((n) => n > 0).toList();
 
     try {
       if (bagNums.length >= 2) {
@@ -12812,21 +12853,27 @@ class _PackTabState extends State<_PackTab>
       }
       RenderLog.write('c346_item_card',
           'name=${name.substring(0, name.length.clamp(0, 20))};recv=$received/$ordered;packed=$packedQty/$ordered;counted=$ct/$ordered;bags=${bagNums.length}');
+      RenderLog.write('c438_pack_bags', 'src=order_aware_breakdown');
     } catch (_) {}
 
     // §3: mismatch chip removed — counted is server-clamped to received; chip was misleading.
 
-    Widget bagTag(int n) => Container(
-      margin: const EdgeInsets.only(top: 3),
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-      decoration: BoxDecoration(
-        color: const Color(0xFFEFF6FF),
-        borderRadius: BorderRadius.circular(4),
-        border: Border.all(color: const Color(0xFF3B82F6), width: 0.5),
-      ),
-      child: Text('Bag $n',
-          style: const TextStyle(fontSize: 10, color: Color(0xFF1E40AF), fontWeight: FontWeight.w600)),
-    );
+    Widget bagTag(Map<String, dynamic> b) {
+      final n = (b['bag_no'] as num?)?.toInt() ?? 0;
+      final q = (b['qty'] as num?);
+      final label = q != null ? 'Bag $n • x${q.toInt()}' : 'Bag $n';
+      return Container(
+        margin: const EdgeInsets.only(top: 3),
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(
+          color: const Color(0xFFEFF6FF),
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(color: const Color(0xFF3B82F6), width: 0.5),
+        ),
+        child: Text(label,
+            style: const TextStyle(fontSize: 10, color: Color(0xFF1E40AF), fontWeight: FontWeight.w600)),
+      );
+    }
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -12851,13 +12898,13 @@ class _PackTabState extends State<_PackTab>
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis),
                   ),
-                  if (bagNums.isNotEmpty) ...[
+                  if (bags.isNotEmpty) ...[
                     const SizedBox(width: 6),
                     // §2: stacked bag tags — one per bag, top-aligned Column
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.end,
                       mainAxisSize: MainAxisSize.min,
-                      children: bagNums.map(bagTag).toList(),
+                      children: bags.map(bagTag).toList(),
                     ),
                   ],
                 ]),

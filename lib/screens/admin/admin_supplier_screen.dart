@@ -6375,8 +6375,33 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
           .select('id, supplier_company, supplier_name, $colList')
           .eq('supplier_id', widget.supplierId)
           .order('supplier_company');
+      var ordered = (rows as List).map((r) => Map<String, dynamic>.from(r as Map)).toList();
+      // CHANGE #429: the plain column .order() above is case-sensitive (ASCII),
+      // which mis-sorts mixed-case raw names. get_supplier_companies() already
+      // orders case-insensitively (A→Z) server-side — reorder by that sc_id
+      // sequence instead of re-deriving/re-sorting anything client-side.
+      // Editing/Manual/AI/Save machinery still reads the SAME full rows
+      // (company_1..30 intact) — only the display order changes.
+      try {
+        final orderRows = await Supabase.instance.client.rpc(
+          'get_supplier_companies',
+          params: {'p_supplier_id': widget.supplierId},
+        ) as List;
+        final byId = {for (final r in ordered) r['id'] as String: r};
+        final reordered = <Map<String, dynamic>>[];
+        for (final row in orderRows) {
+          final id = (row as Map)['sc_id'] as String;
+          final r = byId.remove(id);
+          if (r != null) reordered.add(r);
+        }
+        reordered.addAll(byId.values); // any row the RPC didn't return — keep, appended
+        ordered = reordered;
+        RenderLog.write('c429_supplier_companies', 'src=rpc;order=az');
+      } catch (_) {
+        // RPC ordering failed — fall back to the plain-column order fetched above.
+      }
       if (mounted) setState(() {
-        _rows = (rows as List).map((r) => Map<String, dynamic>.from(r as Map)).toList();
+        _rows = ordered;
         _loading = false;
       });
     } catch (_) {

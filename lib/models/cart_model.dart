@@ -324,11 +324,20 @@ class CartModel extends ChangeNotifier {
             .lt('removed_at', cutoffUtc.toIso8601String());
       } catch (_) {}
 
-      final rows = await Supabase.instance.client
-          .from('cart_items')
-          .select()
-          .eq('user_id', uid)
-          .order('id', ascending: true);
+      // Authenticated customer reading their own cart: server-sorted RPC
+      // (get_my_cart() is SECURITY INVOKER, scoped to auth.uid()). Guests
+      // aren't authenticated — auth.uid() is null for them, so the RPC would
+      // return nothing — they keep the direct table read, unchanged.
+      final List rows;
+      if (overrideUid == null) {
+        rows = await Supabase.instance.client.rpc('get_my_cart') as List;
+      } else {
+        rows = await Supabase.instance.client
+            .from('cart_items')
+            .select()
+            .eq('user_id', uid)
+            .order('id', ascending: true);
+      }
       // #401: cart_items has no buyable column — re-fetch current buyability
       // by id so a snapshot line reflects the product's real availability.
       final buyableIds = rows.map((r) => r['product_id'] as String).toList();
@@ -682,27 +691,16 @@ class CartModel extends ChangeNotifier {
   // could race ahead of list order).
   static const kC412CartSortById = 'c411_cart_sort_by_id';
 
-  // CHANGE #413: single stable sort of ALL cart lines by cart_items id
-  // ascending — the only reliable "order added" signal (id is a bigint
-  // auto-increment PK; no stored bulk-list-position column exists). No
-  // more bulk/non-bulk grouping: with bulk-upload writes now inserted
-  // sequentially (see BulkUploadScreen._addMatchedToCart awaiting
-  // CartModel.setBulkQuantity), id order already equals bulk-upload list
-  // order, so a plain id-ascending sort reproduces it directly. Lines
-  // without an id yet (not round-tripped to Supabase) sort last, as the
-  // most recently added.
+  // CHANGE #413: (superseded below) used to do a single stable client-side
+  // sort of ALL cart lines by cart_items id ascending.
   static const kC413CartInsertionOrder = 'c413_cart_insertion_order';
 
+  // CHANGE: cart reads are now backend-sorted — get_my_cart() and
+  // admin_preview_customer_cart() both ORDER BY updated_at, id server-side —
+  // so no client-side re-sort. _lines (a LinkedHashMap) preserves the order
+  // rows arrived in from the server, which IS the correct display order.
   List<CartLine> get lines {
     final sorted = _lines.values.toList();
-    sorted.sort((a, b) {
-      final ai = a.cartItemId;
-      final bi = b.cartItemId;
-      if (ai == null && bi == null) return 0;
-      if (ai == null) return 1;
-      if (bi == null) return -1;
-      return ai.compareTo(bi);
-    });
     RenderLog.write(kC412CartSortById, 'lines:${sorted.length}');
     RenderLog.write(kC413CartInsertionOrder, 'lines:${sorted.length}');
     return sorted;

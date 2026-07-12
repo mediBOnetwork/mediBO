@@ -7573,14 +7573,21 @@ class _SLeadsTabState extends State<_SLeadsTab> {
   String _classFilter = 'all';
   bool _targetsOnly = true;
   bool _withPhone = false;
+  bool _openNowOnly = false;
+  bool _withEmailOnly = false;
   final TextEditingController _searchCtrl = TextEditingController();
   Timer? _searchDebounce;
   int _page = 0;
   static const int _pageSize = 100;
 
-  // ── Past runs ──────────────────────────────────────────────────────────
+  // ── CHANGE #443 (part 2) — row expand + get_lead_detail cache ──────────
+  final Set<int> _expandedIds = {};
+  final Map<int, Map<String, dynamic>> _leadDetailCache = {};
+  final Set<int> _detailLoading = {};
+
+  // ── Past runs / enrichment ───────────────────────────────────────────
   List<Map<String, dynamic>> _pastRuns = [];
-  bool _pastRunsExpanded = false;
+  Map<String, dynamic>? _enrichStatus;
 
   bool _initialLoading = true;
   String? _loadError;
@@ -7618,6 +7625,7 @@ class _SLeadsTabState extends State<_SLeadsTab> {
         client.rpc('lead_leads_summary', params: {'p_city': null}),
         client.rpc('lead_scrape_month_usage'),
         client.rpc('lead_scrape_runs_list', params: {'p_limit': 10}),
+        client.rpc('lead_enrich_status', params: {'p_run_id': null}),
       ]);
 
       final types = (results[0] as List)
@@ -7628,10 +7636,18 @@ class _SLeadsTabState extends State<_SLeadsTab> {
       final runs = (results[3] as List)
           .map((e) => Map<String, dynamic>.from(e as Map))
           .toList();
+      final enrichStatus = Map<String, dynamic>.from(results[4] as Map);
 
       RenderLog.write('c443_types_loaded', types.length);
       RenderLog.write('c443_summary_total', (summary['total'] as num?)?.toInt() ?? 0);
       RenderLog.write('c443_month_used', (usage['used'] as num?)?.toInt() ?? 0);
+      RenderLog.write('c443_enriched', (enrichStatus['enriched'] as num?)?.toInt() ?? 0);
+      RenderLog.write('c443_runs_rows', runs.length);
+      RenderLog.write(
+          'c443_runs_types',
+          runs.isNotEmpty
+              ? _labelsForUiTypes(runs.first['ui_types'], options: types).join(', ')
+              : '');
 
       if (!mounted) return;
       setState(() {
@@ -7639,6 +7655,7 @@ class _SLeadsTabState extends State<_SLeadsTab> {
         _summary = summary;
         _monthUsage = usage;
         _pastRuns = runs;
+        _enrichStatus = enrichStatus;
         _initialLoading = false;
       });
       widget.onTotalChanged((summary['total'] as num?)?.toInt() ?? 0);
@@ -7667,11 +7684,12 @@ class _SLeadsTabState extends State<_SLeadsTab> {
     }
   }
 
-  List<String> _labelsForUiTypes(dynamic uiTypes) {
+  List<String> _labelsForUiTypes(dynamic uiTypes, {List<_LeadTypeOption>? options}) {
     if (uiTypes is! List) return [];
+    final opts = options ?? _typeOptions;
     return uiTypes.map((t) {
       final key = t.toString();
-      final match = _typeOptions.where((o) => o.uiType == key);
+      final match = opts.where((o) => o.uiType == key);
       return match.isNotEmpty ? match.first.label : key;
     }).toList();
   }
@@ -7682,15 +7700,19 @@ class _SLeadsTabState extends State<_SLeadsTab> {
       final results = await Future.wait<dynamic>([
         client.rpc('lead_leads_summary', params: {'p_city': null}),
         client.rpc('lead_scrape_month_usage'),
+        client.rpc('lead_enrich_status', params: {'p_run_id': null}),
       ]);
       final summary = Map<String, dynamic>.from(results[0] as Map);
       final usage = Map<String, dynamic>.from(results[1] as Map);
+      final enrichStatus = Map<String, dynamic>.from(results[2] as Map);
       RenderLog.write('c443_summary_total', (summary['total'] as num?)?.toInt() ?? 0);
       RenderLog.write('c443_month_used', (usage['used'] as num?)?.toInt() ?? 0);
+      RenderLog.write('c443_enriched', (enrichStatus['enriched'] as num?)?.toInt() ?? 0);
       if (!mounted) return;
       setState(() {
         _summary = summary;
         _monthUsage = usage;
+        _enrichStatus = enrichStatus;
       });
       widget.onTotalChanged((summary['total'] as num?)?.toInt() ?? 0);
     } catch (_) {}
@@ -7700,9 +7722,13 @@ class _SLeadsTabState extends State<_SLeadsTab> {
     try {
       final res = await Supabase.instance.client
           .rpc('lead_scrape_runs_list', params: {'p_limit': 10}) as List;
+      final runs = res.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+      RenderLog.write('c443_runs_rows', runs.length);
+      RenderLog.write('c443_runs_types',
+          runs.isNotEmpty ? _labelsForUiTypes(runs.first['ui_types']).join(', ') : '');
       if (!mounted) return;
       setState(() {
-        _pastRuns = res.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+        _pastRuns = runs;
       });
     } catch (_) {}
   }
@@ -7728,6 +7754,8 @@ class _SLeadsTabState extends State<_SLeadsTab> {
         'p_with_phone': _withPhone,
         'p_search': search.isEmpty ? null : search,
         'p_status': null,
+        'p_open_now': _openNowOnly,
+        'p_with_email': _withEmailOnly,
         'p_limit': _pageSize,
         'p_offset': offset,
       }) as List;
@@ -7735,8 +7763,15 @@ class _SLeadsTabState extends State<_SLeadsTab> {
       final total = rows.isNotEmpty
           ? ((rows.first['total_count'] as num?)?.toInt() ?? 0)
           : 0;
+      final withPhoto = rows.where((r) => (r['photo_url'] as String?)?.isNotEmpty == true).length;
+      final withHours = rows.where((r) => (r['hours_text'] as List?)?.isNotEmpty == true).length;
+      final openNowTrue = rows.where((r) => r['open_now'] == true).length;
       RenderLog.write('c443_rows_rendered', rows.length);
       RenderLog.write('c443_total_count', total);
+      RenderLog.write('c443_rows', rows.length);
+      RenderLog.write('c443_with_photo', withPhoto);
+      RenderLog.write('c443_with_hours', withHours);
+      RenderLog.write('c443_open_now_true', openNowTrue);
       if (!mounted) return;
       setState(() {
         _rows = rows;
@@ -7757,6 +7792,8 @@ class _SLeadsTabState extends State<_SLeadsTab> {
     String? classKey,
     bool? targetsOnly,
     bool? withPhone,
+    bool? openNow,
+    bool? withEmail,
   }) {
     setState(() {
       if (cityIsAll) _cityFilter = null;
@@ -7764,6 +7801,8 @@ class _SLeadsTabState extends State<_SLeadsTab> {
       if (classKey != null) _classFilter = classKey;
       if (targetsOnly != null) _targetsOnly = targetsOnly;
       if (withPhone != null) _withPhone = withPhone;
+      if (openNow != null) _openNowOnly = openNow;
+      if (withEmail != null) _withEmailOnly = withEmail;
     });
     _loadRows(reset: true);
   }
@@ -8283,36 +8322,15 @@ class _SLeadsTabState extends State<_SLeadsTab> {
       onChanged: (v) => _changeFilters(city: v, cityIsAll: v == null),
     );
 
-    final targetsToggle = Row(mainAxisSize: MainAxisSize.min, children: [
-      Transform.scale(
-        scale: 0.75,
-        child: Switch(
-          value: _targetsOnly,
-          onChanged: (v) => _changeFilters(targetsOnly: v),
-          activeColor: const Color(0xFF1B7A43),
-          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-        ),
-      ),
-      const Text('Only B2B targets', style: TextStyle(fontSize: 12.5, color: Color(0xFF374151))),
-    ]);
-
-    final phoneToggle = Row(mainAxisSize: MainAxisSize.min, children: [
-      Transform.scale(
-        scale: 0.75,
-        child: Switch(
-          value: _withPhone,
-          onChanged: (v) => _changeFilters(withPhone: v),
-          activeColor: const Color(0xFF1B7A43),
-          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-        ),
-      ),
-      const Text('Only with phone', style: TextStyle(fontSize: 12.5, color: Color(0xFF374151))),
-    ]);
+    final targetsToggle = _filterToggle('Only B2B targets', _targetsOnly, (v) => _changeFilters(targetsOnly: v));
+    final phoneToggle = _filterToggle('Only with phone', _withPhone, (v) => _changeFilters(withPhone: v));
+    final openNowToggle = _filterToggle('Open now', _openNowOnly, (v) => _changeFilters(openNow: v));
+    final emailToggle = _filterToggle('Has email', _withEmailOnly, (v) => _changeFilters(withEmail: v));
 
     final searchBox = TextField(
       controller: _searchCtrl,
       decoration: InputDecoration(
-        hintText: 'Search name / phone / address',
+        hintText: 'Search name / phone / address / pincode / area',
         hintStyle: const TextStyle(fontSize: 12.5),
         prefixIcon: const Icon(Icons.search, size: 18),
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
@@ -8323,9 +8341,12 @@ class _SLeadsTabState extends State<_SLeadsTab> {
     );
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      widget.isDesktop
-          ? Row(children: [cityDropdown, const SizedBox(width: 16), targetsToggle, const SizedBox(width: 16), phoneToggle])
-          : Wrap(spacing: 12, runSpacing: 8, children: [cityDropdown, targetsToggle, phoneToggle]),
+      // CHANGE #443 (part 2) — always Wrap (never a plain Row) now that there
+      // are 5 items in this group; a fixed Row overflowed near the 900px
+      // desktop/mobile boundary once "Open now" + "Has email" were added.
+      Wrap(spacing: 16, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
+        cityDropdown, targetsToggle, phoneToggle, openNowToggle, emailToggle,
+      ]),
       const SizedBox(height: 10),
       widget.isDesktop
           ? Wrap(spacing: 6, runSpacing: 6, children: classChips)
@@ -8355,76 +8376,428 @@ class _SLeadsTabState extends State<_SLeadsTab> {
     );
   }
 
+  Widget _filterToggle(String label, bool value, ValueChanged<bool> onChanged) {
+    return Row(mainAxisSize: MainAxisSize.min, children: [
+      Transform.scale(
+        scale: 0.75,
+        child: Switch(
+          value: value,
+          onChanged: onChanged,
+          activeColor: const Color(0xFF1B7A43),
+          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        ),
+      ),
+      Text(label, style: const TextStyle(fontSize: 12.5, color: Color(0xFF374151))),
+    ]);
+  }
+
+  // ── CHANGE #443 (part 2) — rich lead card ───────────────────────────────
+
+  Future<void> _fetchLeadDetail(int id) async {
+    setState(() => _detailLoading.add(id));
+    try {
+      final res =
+          await Supabase.instance.client.rpc('get_lead_detail', params: {'p_lead_id': id});
+      if (mounted) {
+        setState(() {
+          _leadDetailCache[id] = Map<String, dynamic>.from(res as Map);
+          _detailLoading.remove(id);
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _detailLoading.remove(id));
+    }
+  }
+
+  static const List<String> _sLeadWeekdayNames = [
+    'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday',
+  ];
+
+  String _todayHoursLine(List<String> hours) {
+    if (hours.isEmpty) return '';
+    final todayName = _sLeadWeekdayNames[DateTime.now().weekday - 1];
+    final match = hours.firstWhere((h) => h.startsWith(todayName), orElse: () => '');
+    if (match.isEmpty) return '';
+    final idx = match.indexOf(':');
+    return idx == -1 ? match : match.substring(idx + 1).trim();
+  }
+
+  String _leadLocationLine(Map<String, dynamic> r) {
+    final area = r['area']?.toString().trim();
+    final locality = r['locality']?.toString().trim();
+    final pincode = r['pincode']?.toString().trim();
+    final parts = <String>[];
+    if (area != null && area.isNotEmpty) parts.add(area);
+    if (locality != null && locality.isNotEmpty && locality != area) parts.add(locality);
+    var line = parts.join(', ');
+    if (pincode != null && pincode.isNotEmpty) {
+      line = line.isEmpty ? pincode : '$line · $pincode';
+    }
+    if (line.isEmpty) {
+      line = r['short_address']?.toString() ?? r['address']?.toString() ?? '';
+    }
+    return line;
+  }
+
+  bool _isOldReview(String? age) {
+    if (age == null) return false;
+    final m = RegExp(r'(\d+)\s+years?\s+ago').firstMatch(age);
+    if (m == null) return false;
+    final n = int.tryParse(m.group(1) ?? '');
+    return n != null && n >= 5;
+  }
+
+  Widget _leadThumb(String? url, int photoCount, double size) {
+    return SizedBox(
+      width: size,
+      height: size,
+      child: Stack(children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: (url == null || url.isEmpty)
+              ? Container(
+                  color: const Color(0xFFF3F4F6),
+                  alignment: Alignment.center,
+                  child: Icon(Icons.storefront_outlined, size: size * 0.45, color: const Color(0xFFD1D5DB)),
+                )
+              : Image.network(
+                  url,
+                  width: size,
+                  height: size,
+                  fit: BoxFit.cover,
+                  gaplessPlayback: true,
+                  cacheWidth: (size * 2).toInt(),
+                  loadingBuilder: (_, child, prog) => prog == null
+                      ? child
+                      : Container(
+                          color: const Color(0xFFF3F4F6),
+                          alignment: Alignment.center,
+                          child: const SizedBox(
+                              width: 16, height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFD1D5DB))),
+                        ),
+                  errorBuilder: (_, __, ___) => Container(
+                    color: const Color(0xFFF3F4F6),
+                    alignment: Alignment.center,
+                    child: Icon(Icons.storefront_outlined, size: size * 0.45, color: const Color(0xFFD1D5DB)),
+                  ),
+                ),
+        ),
+        if (photoCount > 1)
+          Positioned(
+            right: 2, bottom: 2,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+              decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(6)),
+              child: Text('+${photoCount - 1}',
+                  style: const TextStyle(fontSize: 9, color: Colors.white, fontWeight: FontWeight.w700)),
+            ),
+          ),
+      ]),
+    );
+  }
+
+  Widget _actionLink(IconData icon, String label, Color color, VoidCallback onTap) {
+    return InkWell(
+      onTap: onTap,
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(icon, size: 13, color: color),
+        const SizedBox(width: 4),
+        Text(label, style: TextStyle(fontSize: 12, color: color, fontWeight: FontWeight.w600)),
+      ]),
+    );
+  }
+
   Widget _buildLeadRow(Map<String, dynamic> r) {
+    final id = (r['id'] as num?)?.toInt();
     final name = r['name']?.toString() ?? '';
     final phone = r['phone']?.toString();
-    final address = r['address']?.toString() ?? '';
+    final emails = (r['emails'] as List?) ?? [];
+    final email = emails.isNotEmpty ? emails.first.toString() : null;
+    final website = r['website']?.toString();
     final leadClass = r['lead_class']?.toString() ?? 'other';
+    final typeLabel = r['type_label']?.toString();
     final rating = (r['rating'] as num?)?.toDouble();
     final userRatings = (r['user_ratings'] as num?)?.toInt();
+    final openNow = r['open_now'] as bool?;
     final mapsUri = r['maps_uri']?.toString();
+    final directionsUri = (r['maps_directions_uri']?.toString().isNotEmpty ?? false)
+        ? r['maps_directions_uri'].toString()
+        : mapsUri;
     final businessStatus = r['business_status']?.toString();
     final isClosed = businessStatus != null && businessStatus != 'OPERATIONAL';
     final color = _sLeadClassColors[leadClass] ?? const Color(0xFF6B7280);
+    final photoUrl = r['photo_url']?.toString();
+    final photoCount = (r['photo_count'] as num?)?.toInt() ?? 0;
+    final hours = ((r['hours_text'] as List?) ?? []).map((e) => e.toString()).toList();
+    final todayHours = _todayHoursLine(hours);
+    final locationLine = _leadLocationLine(r);
+    final lastReviewAge = r['last_review_age']?.toString();
+    final oldReview = _isOldReview(lastReviewAge);
+    final thumbSize = widget.isDesktop ? 64.0 : 48.0;
+    final expanded = id != null && _expandedIds.contains(id);
 
     return Opacity(
       opacity: isClosed ? 0.5 : 1.0,
       child: Container(
         margin: const EdgeInsets.only(bottom: 8),
-        padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(10),
           border: Border.all(color: const Color(0xFFE5E7EB)),
         ),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Wrap(crossAxisAlignment: WrapCrossAlignment.center, spacing: 8, runSpacing: 4, children: [
-            Text(name,
-                style: TextStyle(
-                    fontSize: 13.5, fontWeight: FontWeight.w700, color: const Color(0xFF111827),
-                    decoration: isClosed ? TextDecoration.lineThrough : null)),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-              decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: color.withValues(alpha: 0.3)),
-              ),
-              child: Text(_sLeadClassLabels[leadClass] ?? leadClass,
-                  style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w600, color: color)),
-            ),
-            if (rating != null)
-              Text('★ $rating${userRatings != null ? ' ($userRatings)' : ''}',
-                  style: const TextStyle(fontSize: 11.5, color: Color(0xFFD97706))),
-          ]),
-          const SizedBox(height: 6),
-          if (address.isNotEmpty)
-            Text(address,
-                maxLines: 1, overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
-          const SizedBox(height: 6),
-          Wrap(spacing: 14, runSpacing: 4, children: [
-            if (phone != null && phone.isNotEmpty)
-              InkWell(
-                onTap: () => launchUrl(Uri.parse('tel:$phone')),
-                child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  const Icon(Icons.call_outlined, size: 13, color: Color(0xFF1B7A43)),
-                  const SizedBox(width: 4),
-                  Text(phone, style: const TextStyle(fontSize: 12, color: Color(0xFF1B7A43), fontWeight: FontWeight.w600)),
-                ]),
-              ),
-            if (mapsUri != null && mapsUri.isNotEmpty)
-              InkWell(
-                onTap: () => launchUrl(Uri.parse(mapsUri), mode: LaunchMode.externalApplication),
-                child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  const Icon(Icons.map_outlined, size: 13, color: Color(0xFF2563EB)),
-                  const SizedBox(width: 4),
-                  const Text('Map', style: TextStyle(fontSize: 12, color: Color(0xFF2563EB), fontWeight: FontWeight.w600)),
-                ]),
-              ),
-          ]),
-        ]),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: id == null
+              ? null
+              : () {
+                  setState(() {
+                    if (expanded) {
+                      _expandedIds.remove(id);
+                    } else {
+                      _expandedIds.add(id);
+                    }
+                  });
+                  if (!expanded && !_leadDetailCache.containsKey(id) && !_detailLoading.contains(id)) {
+                    _fetchLeadDetail(id);
+                  }
+                },
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                _leadThumb(photoUrl, photoCount, thumbSize),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Wrap(crossAxisAlignment: WrapCrossAlignment.center, spacing: 8, runSpacing: 4, children: [
+                      Text(name,
+                          style: TextStyle(
+                              fontSize: 13.5, fontWeight: FontWeight.w700, color: const Color(0xFF111827),
+                              decoration: isClosed ? TextDecoration.lineThrough : null)),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: color.withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(color: color.withValues(alpha: 0.3)),
+                        ),
+                        child: Text(_sLeadClassLabels[leadClass] ?? leadClass,
+                            style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w600, color: color)),
+                      ),
+                    ]),
+                    const SizedBox(height: 4),
+                    Wrap(crossAxisAlignment: WrapCrossAlignment.center, spacing: 8, runSpacing: 4, children: [
+                      if (rating != null)
+                        Text('★ $rating${userRatings != null ? ' ($userRatings)' : ''}',
+                            style: const TextStyle(fontSize: 11.5, color: Color(0xFFD97706))),
+                      if (typeLabel != null && typeLabel.isNotEmpty)
+                        Text(typeLabel, style: const TextStyle(fontSize: 11.5, color: Color(0xFF6B7280))),
+                      if (openNow != null)
+                        Row(mainAxisSize: MainAxisSize.min, children: [
+                          Container(
+                            width: 6, height: 6,
+                            decoration: BoxDecoration(
+                                color: openNow ? const Color(0xFF16A34A) : const Color(0xFF9CA3AF),
+                                shape: BoxShape.circle),
+                          ),
+                          const SizedBox(width: 4),
+                          Text(openNow ? 'Open now' : 'Closed',
+                              style: TextStyle(
+                                  fontSize: 11.5, fontWeight: FontWeight.w600,
+                                  color: openNow ? const Color(0xFF16A34A) : const Color(0xFF6B7280))),
+                        ]),
+                    ]),
+                    if (locationLine.isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Text(locationLine,
+                          maxLines: 1, overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+                    ],
+                    const SizedBox(height: 6),
+                    Wrap(spacing: 14, runSpacing: 4, children: [
+                      if (phone != null && phone.isNotEmpty)
+                        _actionLink(Icons.call_outlined, phone, const Color(0xFF1B7A43),
+                            () => launchUrl(Uri.parse('tel:$phone'))),
+                      if (email != null && email.isNotEmpty)
+                        _actionLink(Icons.email_outlined, 'Email', const Color(0xFF7C3AED),
+                            () => launchUrl(Uri.parse('mailto:$email'))),
+                      if (website != null && website.isNotEmpty)
+                        _actionLink(Icons.language, 'Website', const Color(0xFF2563EB),
+                            () => launchUrl(Uri.parse(website), mode: LaunchMode.externalApplication)),
+                      if (mapsUri != null && mapsUri.isNotEmpty)
+                        _actionLink(Icons.map_outlined, 'Map', const Color(0xFF2563EB),
+                            () => launchUrl(Uri.parse(mapsUri), mode: LaunchMode.externalApplication)),
+                      if (directionsUri != null && directionsUri.isNotEmpty)
+                        _actionLink(Icons.directions_outlined, 'Directions', const Color(0xFF2563EB),
+                            () => launchUrl(Uri.parse(directionsUri), mode: LaunchMode.externalApplication)),
+                    ]),
+                    if (todayHours.isNotEmpty || (lastReviewAge != null && lastReviewAge.isNotEmpty)) ...[
+                      const SizedBox(height: 6),
+                      Wrap(spacing: 14, runSpacing: 4, children: [
+                        if (todayHours.isNotEmpty)
+                          Row(mainAxisSize: MainAxisSize.min, children: [
+                            const Icon(Icons.access_time, size: 12, color: Color(0xFF6B7280)),
+                            const SizedBox(width: 4),
+                            Text(todayHours, style: const TextStyle(fontSize: 11.5, color: Color(0xFF6B7280))),
+                          ]),
+                        if (lastReviewAge != null && lastReviewAge.isNotEmpty)
+                          Text('Last review: $lastReviewAge',
+                              style: TextStyle(
+                                  fontSize: 11.5,
+                                  fontWeight: oldReview ? FontWeight.w600 : FontWeight.normal,
+                                  color: oldReview ? const Color(0xFFD97706) : const Color(0xFF9CA3AF))),
+                      ]),
+                    ],
+                  ]),
+                ),
+              ]),
+              if (expanded) _buildLeadExpandPanel(r, id),
+            ]),
+          ),
+        ),
       ),
+    );
+  }
+
+  Widget _miniChip(String label) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+        decoration: BoxDecoration(color: const Color(0xFFF3F4F6), borderRadius: BorderRadius.circular(10)),
+        child: Text(label, style: const TextStyle(fontSize: 10.5, color: Color(0xFF374151))),
+      );
+
+  List<Widget> _paymentChips(Map paymentOptions) {
+    bool truthy(dynamic v) => v == true;
+    final chips = <Widget>[];
+    if (truthy(paymentOptions['acceptsCreditCards']) || truthy(paymentOptions['acceptsDebitCards'])) {
+      chips.add(_miniChip('Card'));
+    }
+    if (truthy(paymentOptions['acceptsNfc'])) chips.add(_miniChip('NFC'));
+    if (truthy(paymentOptions['acceptsCashOnly'])) chips.add(_miniChip('Cash only'));
+    return chips;
+  }
+
+  Widget _buildLeadExpandPanel(Map<String, dynamic> r, int? id) {
+    final detail = id != null ? _leadDetailCache[id] : null;
+    dynamic f(String key) => detail?[key] ?? r[key];
+
+    final hours = ((f('hours_text') as List?) ?? []).map((e) => e.toString()).toList();
+    final lat = (f('lat') as num?)?.toDouble();
+    final lng = (f('lng') as num?)?.toDouble();
+    final plusCode = f('plus_code')?.toString();
+    final address = f('address')?.toString() ?? '';
+    final area = f('area')?.toString();
+    final locality = f('locality')?.toString();
+    final district = f('district')?.toString();
+    final state = f('state')?.toString();
+    final pincode = f('pincode')?.toString();
+    final paymentOptions = f('payment_options');
+    final allTypes = ((f('all_types') as List?) ?? []).map((e) => e.toString()).toList();
+    final reviewSnippets = ((f('review_snippets') as List?) ?? []).map((e) => e.toString()).toList();
+    final websitePhones = ((f('website_phones') as List?) ?? []).map((e) => e.toString()).toList();
+    final intlPhone = f('intl_phone')?.toString();
+    final editorialSummary = f('editorial_summary')?.toString();
+    final fullReviews = detail != null ? (detail['reviews'] as List?) : null;
+    final loading = id != null && _detailLoading.contains(id);
+
+    final addressParts = [address, area, locality, district, state, pincode]
+        .where((e) => e != null && e.toString().trim().isNotEmpty)
+        .join(', ');
+
+    return Container(
+      margin: const EdgeInsets.only(top: 10),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(color: const Color(0xFFF9FAFB), borderRadius: BorderRadius.circular(8)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if (hours.isNotEmpty) ...[
+          const Text('Hours', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF6B7280))),
+          const SizedBox(height: 4),
+          ...hours.map((h) => Padding(
+              padding: const EdgeInsets.only(bottom: 2),
+              child: Text(h, style: const TextStyle(fontSize: 12, color: Color(0xFF374151))))),
+          const SizedBox(height: 10),
+        ],
+        if (lat != null && lng != null) ...[
+          Row(children: [
+            Expanded(
+              child: Text(
+                  '${lat.toStringAsFixed(6)}, ${lng.toStringAsFixed(6)}'
+                  '${plusCode != null && plusCode.isNotEmpty ? ' · $plusCode' : ''}',
+                  style: const TextStyle(fontSize: 12, color: Color(0xFF374151))),
+            ),
+            InkWell(
+              onTap: () => Clipboard.setData(ClipboardData(text: '$lat, $lng')),
+              child: const Icon(Icons.copy, size: 14, color: Color(0xFF6B7280)),
+            ),
+          ]),
+          const SizedBox(height: 10),
+        ],
+        if (addressParts.isNotEmpty) ...[
+          Text(addressParts, style: const TextStyle(fontSize: 12, color: Color(0xFF374151))),
+          const SizedBox(height: 10),
+        ],
+        if (paymentOptions is Map && paymentOptions.isNotEmpty) ...[
+          Wrap(spacing: 6, runSpacing: 6, children: _paymentChips(paymentOptions)),
+          const SizedBox(height: 10),
+        ],
+        if (allTypes.isNotEmpty) ...[
+          Wrap(
+            spacing: 4, runSpacing: 4,
+            children: allTypes
+                .map((t) => Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(color: const Color(0xFFEFF6FF), borderRadius: BorderRadius.circular(10)),
+                      child: Text(t, style: const TextStyle(fontSize: 10, color: Color(0xFF2563EB))),
+                    ))
+                .toList(),
+          ),
+          const SizedBox(height: 10),
+        ],
+        if (fullReviews != null && fullReviews.isNotEmpty) ...[
+          const Text('Reviews', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF6B7280))),
+          const SizedBox(height: 4),
+          ...fullReviews.take(3).map((rv) {
+            final m = Map<String, dynamic>.from(rv as Map);
+            final author = (m['authorAttribution'] as Map?)?['displayName']?.toString() ?? '';
+            final rrating = m['rating']?.toString() ?? '';
+            final text = (m['text'] as Map?)?['text']?.toString() ?? '';
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Text('$author${rrating.isNotEmpty ? ' ($rrating★)' : ''}: $text',
+                  maxLines: 2, overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 11.5, fontStyle: FontStyle.italic, color: Color(0xFF4B5563))),
+            );
+          }),
+          const SizedBox(height: 4),
+        ] else if (reviewSnippets.isNotEmpty) ...[
+          const Text('Reviews', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF6B7280))),
+          const SizedBox(height: 4),
+          ...reviewSnippets.take(3).map((s) => Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Text(s,
+                  maxLines: 2, overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 11.5, fontStyle: FontStyle.italic, color: Color(0xFF4B5563))))),
+          const SizedBox(height: 4),
+        ],
+        if (websitePhones.isNotEmpty || (intlPhone != null && intlPhone.isNotEmpty)) ...[
+          Text(
+              'More numbers: '
+              '${[if (intlPhone != null && intlPhone.isNotEmpty) intlPhone, ...websitePhones].join(', ')}',
+              style: const TextStyle(fontSize: 12, color: Color(0xFF374151))),
+          const SizedBox(height: 10),
+        ],
+        if (editorialSummary != null && editorialSummary.isNotEmpty)
+          Text(editorialSummary,
+              style: const TextStyle(fontSize: 12, fontStyle: FontStyle.italic, color: Color(0xFF6B7280))),
+        if (loading) ...[
+          const SizedBox(height: 10),
+          const Row(children: [
+            SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2)),
+            SizedBox(width: 6),
+            Text('Loading full detail…', style: TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
+          ]),
+        ],
+      ]),
     );
   }
 
@@ -8445,65 +8818,146 @@ class _SLeadsTabState extends State<_SLeadsTab> {
 
   // ── B5: Past runs ──────────────────────────────────────────────────────
 
+  // ── C: Past runs — real table (web) / stacked cards (mobile) ────────────
+
   Widget _buildPastRunsSection() {
+    final enriched = (_enrichStatus?['enriched'] as num?)?.toInt() ?? 0;
+    final errors = (_enrichStatus?['errors'] as num?)?.toInt() ?? 0;
+    final withPhoto = (_enrichStatus?['with_photo'] as num?)?.toInt() ?? 0;
+    final withHours = (_enrichStatus?['with_hours'] as num?)?.toInt() ?? 0;
+    final withWebsite = (_enrichStatus?['with_website'] as num?)?.toInt() ?? 0;
+    final withEmail = (_enrichStatus?['with_email'] as num?)?.toInt() ?? 0;
+
     return Container(
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: const Color(0xFFE5E7EB)),
       ),
-      child: Column(children: [
-        InkWell(
-          onTap: () => setState(() => _pastRunsExpanded = !_pastRunsExpanded),
-          borderRadius: BorderRadius.circular(12),
-          child: Padding(
-            padding: const EdgeInsets.all(14),
-            child: Row(children: [
-              const Icon(Icons.history, size: 16, color: Color(0xFF6B7280)),
-              const SizedBox(width: 8),
-              Text('Past runs (${_pastRuns.length})',
-                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
-              const Spacer(),
-              Icon(_pastRunsExpanded ? Icons.expand_less : Icons.expand_more, size: 20, color: const Color(0xFF6B7280)),
-            ]),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          const Icon(Icons.history, size: 16, color: Color(0xFF6B7280)),
+          const SizedBox(width: 8),
+          Text('Past runs (${_pastRuns.length})',
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+        ]),
+        const SizedBox(height: 10),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(color: const Color(0xFFF9FAFB), borderRadius: BorderRadius.circular(8)),
+          child: Text(
+            'Enriched $enriched · $errors errors · $withPhoto photos · $withHours with hours · '
+            '$withWebsite websites · $withEmail emails',
+            style: const TextStyle(fontSize: 12, color: Color(0xFF4B5563)),
           ),
         ),
-        if (_pastRunsExpanded)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-            child: _pastRuns.isEmpty
-                ? const Text('No runs yet.', style: TextStyle(fontSize: 12.5, color: Color(0xFF9CA3AF)))
-                : Column(children: _pastRuns.map((r) => _buildRunRow(r)).toList()),
-          ),
+        const SizedBox(height: 14),
+        if (_pastRuns.isEmpty)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 20),
+            child: Text('No scrapes yet.', style: TextStyle(fontSize: 12.5, color: Color(0xFF9CA3AF))),
+          )
+        else if (widget.isDesktop)
+          _buildRunsTable()
+        else
+          Column(children: _pastRuns.map((r) => _buildRunCard(r)).toList()),
       ]),
     );
   }
 
-  Widget _buildRunRow(Map<String, dynamic> r) {
-    final city = r['city']?.toString() ?? '';
-    final level = r['level']?.toString() ?? '';
-    final types = (r['ui_types'] as List?)?.map((t) => t.toString()).join(', ') ?? '';
-    final status = r['status']?.toString() ?? '';
-    final leadsNew = (r['leads_new'] as num?)?.toInt() ?? 0;
-    final apiCalls = (r['api_calls'] as num?)?.toInt() ?? 0;
-    final maxCalls = (r['max_calls'] as num?)?.toInt() ?? 0;
-    final createdAt = r['created_at']?.toString() ?? '';
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: 6),
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF9FAFB),
-        borderRadius: BorderRadius.circular(8),
+  Widget _buildRunsTable() {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: DataTable(
+        headingRowColor: const WidgetStatePropertyAll(Color(0xFFF3F4F6)),
+        headingTextStyle: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: Color(0xFF374151)),
+        dataTextStyle: const TextStyle(fontSize: 12, color: Color(0xFF374151)),
+        columnSpacing: 24,
+        columns: const [
+          DataColumn(label: Text('CITY')),
+          DataColumn(label: Text('LEVEL')),
+          DataColumn(label: Text('TYPES')),
+          DataColumn(label: Text('STATUS')),
+          DataColumn(label: Text('CELLS')),
+          DataColumn(label: Text('CALLS')),
+          DataColumn(label: Text('LEADS')),
+          DataColumn(label: Text('DATE')),
+        ],
+        rows: _pastRuns.map((r) {
+          final types = _labelsForUiTypes(r['ui_types']).join(', ');
+          return DataRow(cells: [
+            DataCell(Text(r['city']?.toString() ?? '')),
+            DataCell(Text(r['level']?.toString() ?? '')),
+            DataCell(Text(types)),
+            DataCell(_runStatusChip(r['status']?.toString() ?? '')),
+            DataCell(Text(
+                '${(r['cells_done'] as num?)?.toInt() ?? 0}/${(r['cells_total'] as num?)?.toInt() ?? 0}')),
+            DataCell(Text(
+                '${(r['api_calls'] as num?)?.toInt() ?? 0}/${(r['max_calls'] as num?)?.toInt() ?? 0}')),
+            DataCell(Text('${(r['leads_new'] as num?)?.toInt() ?? 0}')),
+            DataCell(Text(_fmtRunDate(r['created_at']?.toString()))),
+          ]);
+        }).toList(),
       ),
-      child: Wrap(spacing: 12, runSpacing: 4, crossAxisAlignment: WrapCrossAlignment.center, children: [
-        Text('$city · $level · $types', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
-        Text(status, style: const TextStyle(fontSize: 11.5, color: Color(0xFF6B7280))),
-        Text('$leadsNew new leads', style: const TextStyle(fontSize: 11.5, color: Color(0xFF6B7280))),
-        Text('$apiCalls/$maxCalls calls', style: const TextStyle(fontSize: 11.5, color: Color(0xFF6B7280))),
-        Text(createdAt.length >= 10 ? createdAt.substring(0, 10) : createdAt,
-            style: const TextStyle(fontSize: 11.5, color: Color(0xFF9CA3AF))),
+    );
+  }
+
+  Widget _buildRunCard(Map<String, dynamic> r) {
+    final types = _labelsForUiTypes(r['ui_types']).join(', ');
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(color: const Color(0xFFF9FAFB), borderRadius: BorderRadius.circular(8)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Expanded(
+            child: Text('${r['city'] ?? ''} · ${r['level'] ?? ''} · $types',
+                style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
+          ),
+          _runStatusChip(r['status']?.toString() ?? ''),
+        ]),
+        const SizedBox(height: 6),
+        Wrap(spacing: 12, runSpacing: 4, children: [
+          Text('Cells: ${(r['cells_done'] as num?)?.toInt() ?? 0}/${(r['cells_total'] as num?)?.toInt() ?? 0}',
+              style: const TextStyle(fontSize: 11.5, color: Color(0xFF6B7280))),
+          Text('Calls: ${(r['api_calls'] as num?)?.toInt() ?? 0}/${(r['max_calls'] as num?)?.toInt() ?? 0}',
+              style: const TextStyle(fontSize: 11.5, color: Color(0xFF6B7280))),
+          Text('Leads: ${(r['leads_new'] as num?)?.toInt() ?? 0}',
+              style: const TextStyle(fontSize: 11.5, color: Color(0xFF6B7280))),
+          Text(_fmtRunDate(r['created_at']?.toString()), style: const TextStyle(fontSize: 11.5, color: Color(0xFF9CA3AF))),
+        ]),
       ]),
     );
+  }
+
+  Widget _runStatusChip(String status) {
+    Color color;
+    switch (status) {
+      case 'done': color = const Color(0xFF16A34A); break;
+      case 'running': color = const Color(0xFF2563EB); break;
+      case 'paused_budget': color = const Color(0xFFD97706); break;
+      case 'error': color = const Color(0xFFDC2626); break;
+      default: color = const Color(0xFF6B7280);
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withValues(alpha: 0.3)),
+      ),
+      child: Text(status, style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700, color: color)),
+    );
+  }
+
+  String _fmtRunDate(String? iso) {
+    if (iso == null || iso.length < 10) return '';
+    try {
+      final d = DateTime.parse(iso).toLocal();
+      return '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year}';
+    } catch (_) {
+      return iso.substring(0, 10);
+    }
   }
 }

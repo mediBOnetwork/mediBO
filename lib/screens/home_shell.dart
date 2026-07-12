@@ -1,6 +1,8 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../app_state.dart';
 import '../data/medicine_repository.dart';
@@ -53,6 +55,7 @@ class HomeShell extends StatefulWidget {
 class _HomeShellState extends State<HomeShell> {
   final MedicineRepository _repo = MedicineRepository();
   final TextEditingController _searchCtrl = TextEditingController();
+  final FocusNode _searchFocus = FocusNode();
 
   // GlobalKey keeps BulkUploadScreen's State alive when _MainLayout's LayoutBuilder
   // switches branches (mobile ↔ desktop at 900px). Without a key, Flutter destroys the
@@ -87,6 +90,9 @@ class _HomeShellState extends State<HomeShell> {
     BulkUploadScreen.navToBulkUpload = () { if (mounted) setState(() => _index = 2); };
     _initFromUrl();
     listenPopState(_applyPath);
+    // CHANGE #440: type-anywhere-to-search, desktop web only.
+    if (kIsWeb) HardwareKeyboard.instance.addHandler(_globalKeyHandler);
+    RenderLog.write('c440_typeanywhere', 'web=$kIsWeb min3=on');
     // Proof keys: single Continue button wired, mobile redirect + desktop GIS compiled in.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       RenderLog.write('single_continue_clickable', true);
@@ -331,8 +337,64 @@ class _HomeShellState extends State<HomeShell> {
   @override
   void dispose() {
     if (BulkUploadScreen.navToBulkUpload != null) BulkUploadScreen.navToBulkUpload = null;
+    if (kIsWeb) HardwareKeyboard.instance.removeHandler(_globalKeyHandler);
+    _searchFocus.dispose();
     _searchCtrl.dispose();
     super.dispose();
+  }
+
+  // CHANGE #440: pressing any letter/number key with no text field focused
+  // (desktop web, storefront tab only) focuses the search box and seeds it
+  // with that character, like Gmail/YouTube search-anywhere.
+  bool _globalKeyHandler(KeyEvent event) {
+    if (!kIsWeb) return false;
+    if (event is! KeyDownEvent) return false;
+    if (!mounted) return false;
+    // Search box only exists on the storefront tab, and only while no
+    // overlay (cart/login) with its own fields is open on top of it.
+    if (_index != 0 || _cartOpen || _loginOpen) return false;
+    // Desktop layout only — narrow/mobile web layout keeps click-to-search.
+    if (MediaQuery.sizeOf(context).width < 900) return false;
+
+    final primary = FocusManager.instance.primaryFocus;
+    if (primary != null && primary.context?.widget is EditableText) return false;
+    if (_searchFocus.hasFocus) return false;
+
+    final keys = HardwareKeyboard.instance.logicalKeysPressed;
+    final hasModifier = keys.contains(LogicalKeyboardKey.controlLeft) ||
+        keys.contains(LogicalKeyboardKey.controlRight) ||
+        keys.contains(LogicalKeyboardKey.metaLeft) ||
+        keys.contains(LogicalKeyboardKey.metaRight) ||
+        keys.contains(LogicalKeyboardKey.altLeft) ||
+        keys.contains(LogicalKeyboardKey.altRight);
+    if (hasModifier) return false;
+
+    final ch = event.character;
+    if (ch == null || ch.isEmpty) return false;
+    if (!RegExp(r'^[a-zA-Z0-9]$').hasMatch(ch)) return false;
+
+    _searchFocus.requestFocus();
+    _searchCtrl.text = _searchCtrl.text + ch;
+    _searchCtrl.selection =
+        TextSelection.fromPosition(TextPosition(offset: _searchCtrl.text.length));
+    _handleDesktopSearch(_searchCtrl.text);
+    return true;
+  }
+
+  // Desktop web search trigger — shared by _DesktopSearchRow's onChanged
+  // debounce and the type-anywhere global key handler above (CHANGE #440).
+  void _handleDesktopSearch(String v) {
+    setState(() {
+      final q = v.trim().replaceAll(RegExp(r'[^a-zA-Z0-9]'), '');
+      _category = 'All';
+      _index = 0;
+      if (q.length >= 3) {
+        _query = v;
+      } else {
+        _query = '';
+        _scrollToTopTrigger++;
+      }
+    });
   }
 
   void _selectCategory(String c) {
@@ -675,18 +737,9 @@ class _HomeShellState extends State<HomeShell> {
               if (_index == 0)
                 _DesktopSearchRow(
                   controller: _searchCtrl,
+                  focusNode: _searchFocus,
                   isLoading: _searchLoading,
-                  onSearch: (v) => setState(() {
-                    final q = v.trim();
-                    _category = 'All';
-                    _index = 0;
-                    if (q.length >= 2) {
-                      _query = v;
-                    } else {
-                      _query = '';
-                      _scrollToTopTrigger++;
-                    }
-                  }),
+                  onSearch: _handleDesktopSearch,
                   onScrollToResults: () => setState(() => _scrollTrigger++),
                 ),
               if (_index == 0)
@@ -3313,12 +3366,14 @@ class _DesktopHeader extends StatelessWidget {
 
 class _DesktopSearchRow extends StatefulWidget {
   final TextEditingController controller;
+  final FocusNode? focusNode;
   final bool isLoading;
   final ValueChanged<String> onSearch;
   final VoidCallback onScrollToResults;
 
   const _DesktopSearchRow({
     required this.controller,
+    this.focusNode,
     required this.isLoading,
     required this.onSearch,
     required this.onScrollToResults,
@@ -3394,6 +3449,7 @@ class _DesktopSearchRowState extends State<_DesktopSearchRow> {
             Expanded(
               child: TextField(
                 controller: widget.controller,
+                focusNode: widget.focusNode,
                 onChanged: _onChanged,
                 onSubmitted: (_) => _submitNow(),
                 textInputAction: TextInputAction.search,

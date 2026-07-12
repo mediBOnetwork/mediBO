@@ -7592,6 +7592,35 @@ class _SLeadsTabState extends State<_SLeadsTab> {
   bool _initialLoading = true;
   String? _loadError;
 
+  // ── CHANGE #447 — Warehouse (hub) card ────────────────────────────────
+  bool _hubExpanded = false;
+  bool _hubBusy = false;
+  String? _hubError;
+  String? _hubSuccessMsg;
+  Timer? _hubSuccessTimer;
+
+  final TextEditingController _hubNameCtrl = TextEditingController();
+  final TextEditingController _hubAddressCtrl = TextEditingController();
+  final TextEditingController _hubCoreCtrl = TextEditingController(text: '5');
+  final TextEditingController _hubExtCtrl = TextEditingController(text: '12');
+  final TextEditingController _hubMargCtrl = TextEditingController(text: '25');
+  final TextEditingController _hubCoordsCtrl = TextEditingController();
+
+  double? _hubLat;
+  double? _hubLng;
+  String? _hubMapsLink;
+  DateTime? _hubUpdatedAt;
+  Map<String, int> _hubCounts = {
+    'core': 0, 'extended': 0, 'marginal': 0, 'out_of_range': 0,
+  };
+
+  // "Use my current location" (path b) — captured GPS pending confirmation.
+  bool _hubLocating = false;
+  String? _hubLocError;
+  double? _hubGpsLat;
+  double? _hubGpsLng;
+  String? _hubGpsAddress;
+
   @override
   void initState() {
     super.initState();
@@ -7608,6 +7637,13 @@ class _SLeadsTabState extends State<_SLeadsTab> {
     _searchCtrl.dispose();
     _nameCtrl.dispose();
     _budgetCtrl.dispose();
+    _hubSuccessTimer?.cancel();
+    _hubNameCtrl.dispose();
+    _hubAddressCtrl.dispose();
+    _hubCoreCtrl.dispose();
+    _hubExtCtrl.dispose();
+    _hubMargCtrl.dispose();
+    _hubCoordsCtrl.dispose();
     super.dispose();
   }
 
@@ -7626,6 +7662,8 @@ class _SLeadsTabState extends State<_SLeadsTab> {
         client.rpc('lead_scrape_month_usage'),
         client.rpc('lead_scrape_runs_list', params: {'p_limit': 10}),
         client.rpc('lead_enrich_status', params: {'p_run_id': null}),
+        // CHANGE #447 — warehouse (hub) card
+        client.rpc('lead_get_hub'),
       ]);
 
       final types = (results[0] as List)
@@ -7637,6 +7675,7 @@ class _SLeadsTabState extends State<_SLeadsTab> {
           .map((e) => Map<String, dynamic>.from(e as Map))
           .toList();
       final enrichStatus = Map<String, dynamic>.from(results[4] as Map);
+      final hub = Map<String, dynamic>.from(results[5] as Map);
 
       RenderLog.write('c443_types_loaded', types.length);
       RenderLog.write('c443_summary_total', (summary['total'] as num?)?.toInt() ?? 0);
@@ -7657,8 +7696,15 @@ class _SLeadsTabState extends State<_SLeadsTab> {
         _pastRuns = runs;
         _enrichStatus = enrichStatus;
         _initialLoading = false;
+        _applyHubMap(hub);
       });
       widget.onTotalChanged((summary['total'] as num?)?.toInt() ?? 0);
+      RenderLog.write('c444_hub_name', _hubNameCtrl.text);
+      RenderLog.write('c444_hub_lat', '$_hubLat');
+      RenderLog.write('c444_hub_lng', '$_hubLng');
+      RenderLog.write('c444_core', _hubCounts['core']);
+      RenderLog.write('c444_extended', _hubCounts['extended']);
+      RenderLog.write('c444_card_open', 1);
 
       final active = runs.firstWhere(
         (r) => _sLeadActiveStatuses.contains(r['status']),
@@ -7681,6 +7727,319 @@ class _SLeadsTabState extends State<_SLeadsTab> {
           _initialLoading = false;
         });
       }
+    }
+  }
+
+  // ── CHANGE #447 — Warehouse (hub) card ──────────────────────────────────
+  // lead_get_hub() / lead_set_hub() both return the SAME shape — a flat map
+  // with name/address/lat/lng/core_km/ext_km/marg_km/updated_at/geocode_error/
+  // maps_link/counts{core,extended,marginal,out_of_range}. This just assigns
+  // fields (no setState of its own) so callers can nest it inside their own
+  // setState() (bootstrap) or wrap it themselves (_applyHubSuccess).
+  void _applyHubMap(Map<String, dynamic> h) {
+    _hubNameCtrl.text = h['name']?.toString() ?? '';
+    _hubAddressCtrl.text = h['address']?.toString() ?? '';
+    _hubLat = (h['lat'] as num?)?.toDouble();
+    _hubLng = (h['lng'] as num?)?.toDouble();
+    _hubMapsLink = h['maps_link']?.toString();
+    _hubUpdatedAt = DateTime.tryParse(h['updated_at']?.toString() ?? '');
+    final coreKm = h['core_km'];
+    final extKm = h['ext_km'];
+    final margKm = h['marg_km'];
+    if (coreKm != null) _hubCoreCtrl.text = _trimNum(coreKm);
+    if (extKm != null) _hubExtCtrl.text = _trimNum(extKm);
+    if (margKm != null) _hubMargCtrl.text = _trimNum(margKm);
+    final counts = h['counts'] is Map ? Map<String, dynamic>.from(h['counts'] as Map) : <String, dynamic>{};
+    _hubCounts = {
+      'core':         (counts['core'] as num?)?.toInt() ?? 0,
+      'extended':     (counts['extended'] as num?)?.toInt() ?? 0,
+      'marginal':     (counts['marginal'] as num?)?.toInt() ?? 0,
+      'out_of_range': (counts['out_of_range'] as num?)?.toInt() ?? 0,
+    };
+  }
+
+  String _trimNum(dynamic n) {
+    final d = (n is num) ? n.toDouble() : double.tryParse(n.toString()) ?? 0;
+    return d == d.roundToDouble() ? d.toInt().toString() : d.toString();
+  }
+
+  String _zoneLabel(String key) {
+    switch (key) {
+      case 'core': return 'Core';
+      case 'extended': return 'Extended';
+      case 'marginal': return 'Marginal';
+      default: return 'Out of range';
+    }
+  }
+
+  String _fmtUpdatedAt(DateTime? utc) {
+    if (utc == null) return '—';
+    final ist = utc.toUtc().add(const Duration(hours: 5, minutes: 30));
+    String p2(int v) => v.toString().padLeft(2, '0');
+    return '${p2(ist.day)}/${p2(ist.month)}/${ist.year} ${p2(ist.hour)}:${p2(ist.minute)}';
+  }
+
+  // Core < Extended < Marginal, all > 0. Buttons read this live via setState
+  // on the radii controllers so an invalid ladder can never be submitted.
+  bool get _radiiValid {
+    final core = double.tryParse(_hubCoreCtrl.text.trim());
+    final ext  = double.tryParse(_hubExtCtrl.text.trim());
+    final marg = double.tryParse(_hubMargCtrl.text.trim());
+    if (core == null || ext == null || marg == null) return false;
+    if (core <= 0 || ext <= 0 || marg <= 0) return false;
+    return core < ext && ext < marg;
+  }
+
+  String? get _radiiError {
+    if (_radiiValid) return null;
+    final core = double.tryParse(_hubCoreCtrl.text.trim());
+    final ext  = double.tryParse(_hubExtCtrl.text.trim());
+    final marg = double.tryParse(_hubMargCtrl.text.trim());
+    if (core == null || ext == null || marg == null || core <= 0 || ext <= 0 || marg <= 0) {
+      return 'Enter valid radii — Core, Extended and Marginal must all be greater than 0.';
+    }
+    return 'Radii must increase: Core km < Extended km < Marginal km.';
+  }
+
+  Future<bool> _confirmHubChange() async {
+    final total = _hubCounts.values.fold<int>(0, (s, v) => s + v);
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dCtx) => AlertDialog(
+        title: const Text('Update warehouse?'),
+        content: Text('This recalculates delivery zones and route start points '
+            'for all $total leads. Continue?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dCtx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43)),
+            onPressed: () => Navigator.pop(dCtx, true),
+            child: const Text('Update warehouse'),
+          ),
+        ],
+      ),
+    );
+    return ok == true;
+  }
+
+  // Shared success path for lead_set_hub() (paths b + c — synchronous) and the
+  // final polled lead_get_hub() row (path a — asynchronous geocode).
+  void _applyHubSuccess(Map<String, dynamic> h, Map<String, int> beforeCounts) {
+    setState(() {
+      _applyHubMap(h);
+      _hubBusy = false;
+      _hubExpanded = false;
+      _hubError = null;
+      _hubGpsLat = null;
+      _hubGpsLng = null;
+      _hubGpsAddress = null;
+      _hubCoordsCtrl.clear();
+      final parts = <String>[];
+      for (final k in ['core', 'extended', 'marginal', 'out_of_range']) {
+        final before = beforeCounts[k] ?? 0;
+        final after  = _hubCounts[k] ?? 0;
+        if (before != after) parts.add('${_zoneLabel(k)} $before → $after');
+      }
+      _hubSuccessMsg = parts.isEmpty
+          ? 'Warehouse updated.'
+          : 'Warehouse updated. ${parts.join(', ')}.';
+    });
+    RenderLog.write('c444_hub_name', _hubNameCtrl.text);
+    RenderLog.write('c444_hub_lat', '$_hubLat');
+    RenderLog.write('c444_hub_lng', '$_hubLng');
+    RenderLog.write('c444_core', _hubCounts['core']);
+    RenderLog.write('c444_extended', _hubCounts['extended']);
+    _hubSuccessTimer?.cancel();
+    _hubSuccessTimer = Timer(const Duration(seconds: 4), () {
+      if (mounted) setState(() => _hubSuccessMsg = null);
+    });
+    // B6.2 — every visible lead's distance_km/delivery_zone just changed.
+    _loadRows(reset: true);
+  }
+
+  // ── (a) Search by address — async geocode, must be polled ──────────────
+  Future<void> _searchAndSetHub() async {
+    if (_hubBusy || !_radiiValid) return;
+    final address = _hubAddressCtrl.text.trim();
+    if (address.isEmpty) {
+      setState(() => _hubError = 'Enter an address to search.');
+      return;
+    }
+    final ok = await _confirmHubChange();
+    if (!ok) return;
+    final beforeLat = _hubLat;
+    final beforeLng = _hubLng;
+    final beforeCounts = Map<String, int>.from(_hubCounts);
+    setState(() { _hubBusy = true; _hubError = null; });
+    try {
+      final client = Supabase.instance.client;
+      final coreKm = double.parse(_hubCoreCtrl.text.trim());
+      final extKm  = double.parse(_hubExtCtrl.text.trim());
+      final margKm = double.parse(_hubMargCtrl.text.trim());
+      await client.rpc('lead_set_hub_by_address', params: {
+        'p_name': _hubNameCtrl.text.trim(),
+        'p_address': address,
+        'p_core_km': coreKm,
+        'p_ext_km': extKm,
+        'p_marg_km': margKm,
+      });
+      Map<String, dynamic>? finalHub;
+      String? failMsg;
+      for (var i = 0; i < 10; i++) {
+        await Future.delayed(const Duration(milliseconds: 1000));
+        if (!mounted) return;
+        final raw = await client.rpc('lead_get_hub');
+        final h = Map<String, dynamic>.from(raw as Map);
+        final err = h['geocode_error'] as String?;
+        if (err == 'pending') continue;
+        if (err != null) { failMsg = err; break; }
+        final lat = (h['lat'] as num?)?.toDouble();
+        final lng = (h['lng'] as num?)?.toDouble();
+        if (lat != beforeLat || lng != beforeLng) { finalHub = h; break; }
+        // geocode_error cleared but coords unchanged (e.g. re-searched the
+        // same point) — keep polling per spec rather than guessing success.
+      }
+      if (!mounted) return;
+      if (finalHub != null) {
+        _applyHubSuccess(finalHub, beforeCounts);
+      } else if (failMsg != null) {
+        setState(() { _hubBusy = false; _hubError = failMsg; }); // shown verbatim
+      } else {
+        setState(() {
+          _hubBusy = false;
+          _hubError = 'Geocoding is taking longer than expected — reopen the card to check.';
+        });
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() { _hubBusy = false; _hubError = e.toString().replaceFirst('Exception: ', ''); });
+    }
+  }
+
+  // ── (b) Use my current location — reuses the app's existing GPS capture
+  // (same html.window.navigator.geolocation + reverse-geocode edge function
+  // pattern as CashPaymentSheet._requestLocation/_reverseGeocode). Capture is
+  // a separate step from save: the captured lat/lng is shown to Om before any
+  // write, per B4(b) step 2 and the B7 confirm.
+  Future<void> _useMyLocation() async {
+    setState(() {
+      _hubLocating = true;
+      _hubLocError = null;
+      _hubGpsLat = null;
+      _hubGpsLng = null;
+      _hubGpsAddress = null;
+    });
+    try {
+      final completer = Completer<html.Geoposition>();
+      html.window.navigator.geolocation
+          .getCurrentPosition(enableHighAccuracy: false, timeout: const Duration(seconds: 20))
+          .then((pos) { if (!completer.isCompleted) completer.complete(pos); })
+          .catchError((e) { if (!completer.isCompleted) completer.completeError(e); });
+      final pos = await completer.future.timeout(
+        const Duration(seconds: 25),
+        onTimeout: () => throw TimeoutException('Location timed out'),
+      );
+      final lat = pos.coords?.latitude?.toDouble();
+      final lng = pos.coords?.longitude?.toDouble();
+      if (lat == null || lng == null) throw Exception('No coordinates returned');
+      if (!mounted) return;
+      setState(() { _hubGpsLat = lat; _hubGpsLng = lng; _hubLocating = false; });
+      // Cosmetic only — the coordinates are what matter; proceed even if this fails.
+      try {
+        final res = await Supabase.instance.client.functions
+            .invoke('reverse-geocode', body: {'lat': lat, 'lng': lng})
+            .timeout(const Duration(seconds: 12));
+        final data = res.data;
+        final map = data is Map ? Map<String, dynamic>.from(data) : <String, dynamic>{};
+        final addr = (map['address'] as String? ?? '').trim();
+        if (mounted && addr.isNotEmpty) setState(() => _hubGpsAddress = addr);
+      } catch (_) {}
+    } on TimeoutException {
+      if (mounted) {
+        setState(() {
+          _hubLocating = false;
+          _hubLocError = "Couldn't get a GPS fix. Try again outdoors, or paste coordinates.";
+        });
+      }
+    } catch (e) {
+      if (!mounted) return;
+      final msg = e.toString().toLowerCase();
+      final denied = msg.contains('denied') || msg.contains('permission');
+      setState(() {
+        _hubLocating = false;
+        _hubLocError = denied
+            ? 'Location permission denied — enable it in the browser/site settings.'
+            : "Couldn't get a GPS fix. Try again outdoors, or paste coordinates.";
+      });
+    }
+  }
+
+  Future<void> _confirmAndSaveGps() async {
+    if (_hubBusy || !_radiiValid || _hubGpsLat == null || _hubGpsLng == null) return;
+    final ok = await _confirmHubChange();
+    if (!ok) return;
+    await _saveHubCoords(_hubGpsLat!, _hubGpsLng!, address: _hubGpsAddress);
+  }
+
+  // ── (c) Paste coordinates or a Maps link ────────────────────────────────
+  static final RegExp _coordPairRegex =
+      RegExp(r'(-?\d{1,3}\.\d+)\s*[,\s]\s*(-?\d{1,3}\.\d+)');
+
+  Future<void> _setFromCoordsText() async {
+    if (_hubBusy || !_radiiValid) return;
+    final raw = _hubCoordsCtrl.text.trim();
+    if (raw.isEmpty) {
+      setState(() => _hubError = 'Paste coordinates or a Google Maps link.');
+      return;
+    }
+    if (raw.contains('maps.app.goo.gl') || raw.contains('goo.gl/maps')) {
+      setState(() => _hubError =
+          "Short Maps links don't contain coordinates. In Google Maps, "
+          "long-press the spot → tap the coordinates to copy them → paste "
+          "here. Or use 'Search & Set' with the address.");
+      return;
+    }
+    final m = _coordPairRegex.firstMatch(raw);
+    final lat = m != null ? double.tryParse(m.group(1)!) : null;
+    final lng = m != null ? double.tryParse(m.group(2)!) : null;
+    if (lat == null || lng == null || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+      setState(() => _hubError =
+          'Could not find valid coordinates in that text. Paste "lat, lng" or '
+          'a Google Maps link containing them.');
+      return;
+    }
+    final ok = await _confirmHubChange();
+    if (!ok) return;
+    await _saveHubCoords(lat, lng);
+  }
+
+  // Shared write for paths (b) and (c) — lead_set_hub() is synchronous and
+  // returns the same shape as lead_get_hub(); no polling needed here.
+  Future<void> _saveHubCoords(double lat, double lng, {String? address}) async {
+    final beforeCounts = Map<String, int>.from(_hubCounts);
+    setState(() { _hubBusy = true; _hubError = null; });
+    try {
+      final coreKm = double.parse(_hubCoreCtrl.text.trim());
+      final extKm  = double.parse(_hubExtCtrl.text.trim());
+      final margKm = double.parse(_hubMargCtrl.text.trim());
+      final res = await Supabase.instance.client.rpc('lead_set_hub', params: {
+        'p_name': _hubNameCtrl.text.trim(),
+        'p_lat': lat,
+        'p_lng': lng,
+        'p_core_km': coreKm,
+        'p_ext_km': extKm,
+        'p_marg_km': margKm,
+        if (address != null && address.isNotEmpty) 'p_address': address,
+      });
+      if (!mounted) return;
+      final h = Map<String, dynamic>.from(res as Map);
+      _applyHubSuccess(h, beforeCounts);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() { _hubBusy = false; _hubError = e.toString().replaceFirst('Exception: ', ''); });
     }
   }
 
@@ -7974,6 +8333,8 @@ class _SLeadsTabState extends State<_SLeadsTab> {
                 style: const TextStyle(color: Color(0xFFDC2626), fontSize: 13)),
             const SizedBox(height: 12),
           ],
+          _buildWarehouseCard(),
+          const SizedBox(height: 20),
           _buildScrapeForm(),
           if (_activeRunId != null && _runStatus != null) ...[
             const SizedBox(height: 20),
@@ -7985,6 +8346,316 @@ class _SLeadsTabState extends State<_SLeadsTab> {
           _buildPastRunsSection(),
         ],
       ),
+    );
+  }
+
+  // ── CHANGE #447: Warehouse (hub) card ───────────────────────────────────
+
+  Widget _buildWarehouseCard() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        InkWell(
+          onTap: () => setState(() => _hubExpanded = !_hubExpanded),
+          borderRadius: BorderRadius.circular(8),
+          child: Row(children: [
+            const Text('🏠', style: TextStyle(fontSize: 16)),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Wrap(
+                crossAxisAlignment: WrapCrossAlignment.center,
+                spacing: 8,
+                runSpacing: 4,
+                children: [
+                  Text(
+                    'Warehouse: ${_hubNameCtrl.text.isNotEmpty ? _hubNameCtrl.text : "Not set"}',
+                    style: const TextStyle(
+                        fontSize: 13.5, fontWeight: FontWeight.w700, color: Color(0xFF111827)),
+                  ),
+                  Text(
+                    '·  ${_hubCounts['core']} core · ${_hubCounts['extended']} extended',
+                    style: const TextStyle(fontSize: 12.5, color: Color(0xFF6B7280)),
+                  ),
+                ],
+              ),
+            ),
+            TextButton(
+              onPressed: () => setState(() => _hubExpanded = !_hubExpanded),
+              child: Text(_hubExpanded ? 'Close' : 'Change'),
+            ),
+          ]),
+        ),
+        if (_hubExpanded) ...[
+          const SizedBox(height: 12),
+          const Divider(height: 1, color: Color(0xFFE5E7EB)),
+          const SizedBox(height: 14),
+          if (_hubError != null) ...[
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFEE2E2),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(_hubError!,
+                  style: const TextStyle(fontSize: 12.5, color: Color(0xFF991B1B))),
+            ),
+            const SizedBox(height: 12),
+          ],
+          if (_hubSuccessMsg != null) ...[
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFD1FAE5),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(_hubSuccessMsg!,
+                  style: const TextStyle(
+                      fontSize: 12.5, fontWeight: FontWeight.w600, color: Color(0xFF065F46))),
+            ),
+            const SizedBox(height: 12),
+          ],
+          // ── Name / Address ────────────────────────────────────────────
+          widget.isDesktop
+              ? Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Expanded(child: _hubNameField()),
+                  const SizedBox(width: 12),
+                  Expanded(flex: 2, child: _hubAddressField()),
+                ])
+              : Column(children: [
+                  _hubNameField(),
+                  const SizedBox(height: 10),
+                  _hubAddressField(),
+                ]),
+          const SizedBox(height: 10),
+          Wrap(crossAxisAlignment: WrapCrossAlignment.center, spacing: 10, runSpacing: 6, children: [
+            Text(
+              _hubLat != null && _hubLng != null
+                  ? '${_hubLat!.toStringAsFixed(6)}, ${_hubLng!.toStringAsFixed(6)}'
+                  : 'No coordinates set',
+              style: const TextStyle(fontSize: 12.5, color: Color(0xFF6B7280)),
+            ),
+            if (_hubMapsLink != null)
+              InkWell(
+                onTap: () => launchUrl(Uri.parse(_hubMapsLink!), mode: LaunchMode.externalApplication),
+                child: const Text('Map',
+                    style: TextStyle(
+                        fontSize: 12.5, color: Color(0xFF1B7A43), fontWeight: FontWeight.w600)),
+              ),
+          ]),
+          const SizedBox(height: 4),
+          Text('Last updated: ${_fmtUpdatedAt(_hubUpdatedAt)}',
+              style: const TextStyle(fontSize: 11.5, color: Color(0xFF9CA3AF))),
+          const SizedBox(height: 14),
+          // ── Radii ────────────────────────────────────────────────────
+          const Text('Delivery radii (km)',
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF6B7280))),
+          const SizedBox(height: 8),
+          Wrap(spacing: 10, runSpacing: 10, children: [
+            SizedBox(width: 110, child: _hubKmField(_hubCoreCtrl, 'Core')),
+            SizedBox(width: 110, child: _hubKmField(_hubExtCtrl, 'Extended')),
+            SizedBox(width: 110, child: _hubKmField(_hubMargCtrl, 'Marginal')),
+          ]),
+          if (_radiiError != null) ...[
+            const SizedBox(height: 8),
+            Text(_radiiError!, style: const TextStyle(fontSize: 12, color: Color(0xFFDC2626))),
+          ],
+          const SizedBox(height: 8),
+          Wrap(spacing: 8, runSpacing: 6, children: [
+            _zoneChip('Core', _hubCounts['core'] ?? 0, const Color(0xFFD1FAE5), const Color(0xFF065F46)),
+            _zoneChip('Extended', _hubCounts['extended'] ?? 0, const Color(0xFFEFF6FF), const Color(0xFF1E40AF)),
+            _zoneChip('Marginal', _hubCounts['marginal'] ?? 0, const Color(0xFFFEF3C7), const Color(0xFF92400E)),
+            _zoneChip('Out of range', _hubCounts['out_of_range'] ?? 0, const Color(0xFFF3F4F6), const Color(0xFF6B7280)),
+          ]),
+          const SizedBox(height: 18),
+          const Divider(height: 1, color: Color(0xFFE5E7EB)),
+          const SizedBox(height: 14),
+          // ── (a) Search by address ───────────────────────────────────
+          const Text('Search & set',
+              style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+          const SizedBox(height: 8),
+          SizedBox(
+            width: widget.isDesktop ? 220 : double.infinity,
+            child: ElevatedButton.icon(
+              onPressed: (_hubBusy || !_radiiValid) ? null : _searchAndSetHub,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF1B7A43),
+                foregroundColor: Colors.white,
+                disabledBackgroundColor: const Color(0xFFD1D5DB),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                padding: const EdgeInsets.symmetric(vertical: 12),
+              ),
+              icon: (_hubBusy)
+                  ? const SizedBox(width: 14, height: 14,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                  : const Icon(Icons.search, size: 16),
+              label: Text(_hubBusy ? 'Recomputing…' : 'Search & Set',
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+            ),
+          ),
+          if (_hubBusy)
+            const Padding(
+              padding: EdgeInsets.only(top: 6),
+              child: Text('Recomputing distances for all leads…',
+                  style: TextStyle(fontSize: 11.5, color: Color(0xFF6B7280))),
+            ),
+          const SizedBox(height: 18),
+          const Divider(height: 1, color: Color(0xFFE5E7EB)),
+          const SizedBox(height: 14),
+          // ── (b) Use my current location ─────────────────────────────
+          const Text('Use my current location',
+              style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+          const SizedBox(height: 8),
+          Wrap(spacing: 10, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
+            OutlinedButton.icon(
+              onPressed: (_hubBusy || _hubLocating) ? null : _useMyLocation,
+              style: OutlinedButton.styleFrom(
+                foregroundColor: const Color(0xFF1B7A43),
+                side: const BorderSide(color: Color(0xFF1B7A43)),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              icon: _hubLocating
+                  ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.my_location, size: 16),
+              label: Text(_hubLocating ? 'Locating…' : 'Use my location',
+                  style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
+            ),
+            if (_hubGpsLat != null && _hubGpsLng != null) ...[
+              Text('Captured: ${_hubGpsLat!.toStringAsFixed(6)}, ${_hubGpsLng!.toStringAsFixed(6)}'
+                      '${_hubGpsAddress != null ? " — $_hubGpsAddress" : ""}',
+                  style: const TextStyle(fontSize: 12, color: Color(0xFF374151))),
+              ElevatedButton(
+                onPressed: (_hubBusy || !_radiiValid) ? null : _confirmAndSaveGps,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF1B7A43),
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+                child: const Text('Confirm & Save', style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700)),
+              ),
+            ],
+          ]),
+          if (_hubLocError != null) ...[
+            const SizedBox(height: 6),
+            Text(_hubLocError!, style: const TextStyle(fontSize: 12, color: Color(0xFFDC2626))),
+          ],
+          const SizedBox(height: 18),
+          const Divider(height: 1, color: Color(0xFFE5E7EB)),
+          const SizedBox(height: 14),
+          // ── (c) Paste coordinates or a Maps link ─────────────────────
+          const Text('Paste coordinates or a Google Maps link',
+              style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+          const SizedBox(height: 8),
+          widget.isDesktop
+              ? Row(children: [
+                  Expanded(child: _hubCoordsField()),
+                  const SizedBox(width: 10),
+                  _hubCoordsSetButton(),
+                ])
+              : Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                  _hubCoordsField(),
+                  const SizedBox(height: 10),
+                  _hubCoordsSetButton(),
+                ]),
+        ],
+      ]),
+    );
+  }
+
+  Widget _hubNameField() {
+    return TextField(
+      controller: _hubNameCtrl,
+      onChanged: (_) => setState(() {}),
+      decoration: InputDecoration(
+        labelText: 'Name',
+        labelStyle: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        isDense: true,
+      ),
+      style: const TextStyle(fontSize: 13),
+    );
+  }
+
+  Widget _hubAddressField() {
+    return TextField(
+      controller: _hubAddressCtrl,
+      onChanged: (_) => setState(() {}),
+      decoration: InputDecoration(
+        labelText: 'Address',
+        hintText: 'Sai Mandir, Daganiya, Raipur',
+        labelStyle: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        isDense: true,
+      ),
+      style: const TextStyle(fontSize: 13),
+    );
+  }
+
+  Widget _hubKmField(TextEditingController ctrl, String label) {
+    return TextField(
+      controller: ctrl,
+      onChanged: (_) => setState(() {}),
+      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+      inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d*$'))],
+      decoration: InputDecoration(
+        labelText: '$label km',
+        labelStyle: const TextStyle(fontSize: 11.5, color: Color(0xFF6B7280)),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+        isDense: true,
+      ),
+      style: const TextStyle(fontSize: 13),
+    );
+  }
+
+  Widget _hubCoordsField() {
+    return TextField(
+      controller: _hubCoordsCtrl,
+      onChanged: (_) {
+        if (_hubError != null) setState(() => _hubError = null);
+      },
+      decoration: InputDecoration(
+        hintText: '21.238713, 81.6069852  or a Google Maps link',
+        hintStyle: const TextStyle(fontSize: 12.5, color: Color(0xFF9CA3AF)),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        isDense: true,
+      ),
+      style: const TextStyle(fontSize: 13),
+    );
+  }
+
+  Widget _hubCoordsSetButton() {
+    return SizedBox(
+      width: widget.isDesktop ? 100 : double.infinity,
+      child: ElevatedButton(
+        onPressed: (_hubBusy || !_radiiValid) ? null : _setFromCoordsText,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: const Color(0xFF1B7A43),
+          foregroundColor: Colors.white,
+          disabledBackgroundColor: const Color(0xFFD1D5DB),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          padding: const EdgeInsets.symmetric(vertical: 12),
+        ),
+        child: const Text('Set', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+      ),
+    );
+  }
+
+  Widget _zoneChip(String label, int count, Color bg, Color fg) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(20)),
+      child: Text('$count $label',
+          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: fg)),
     );
   }
 

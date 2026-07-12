@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:pharma_b2b/utils/toast.dart';
 
 import '../../config/api_keys.dart';
@@ -341,6 +342,7 @@ enum _CustFilter {
   cartNotOrdered,
   pendingRegistrations,
   leads,
+  sLeads,
 }
 
 // ── Screen ────────────────────────────────────────────────────────────────────
@@ -388,6 +390,10 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   // an order never refetches an id already resolved.
   final Map<int, Map<String, dynamic>> _medBriefs = {};
   final ScrollController _scrollCtrl = ScrollController();
+  // CHANGE #443 — "S Leads" tab badge count (lead_leads_summary(null).total).
+  // Fetched independently of _load() so it's populated before the tab is
+  // ever opened; kept in sync afterwards via _SLeadsTab.onTotalChanged.
+  int _sLeadsTotal = 0;
 
   final List<RealtimeChannel> _realtimeChannels = [];
   Timer? _debounce;
@@ -402,6 +408,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     super.initState();
     _load();
     _subscribeRealtime();
+    _loadSLeadsTotal();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         RenderLog.write('c322_build', 322);
@@ -419,7 +426,27 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     RenderLog.write('screen_autoload_on_focus', 'customers');
   }
 
+  // CHANGE #443 — lightweight, independent fetch for the "S Leads" tab badge.
+  void _loadSLeadsTotal() {
+    Supabase.instance.client
+        .rpc('lead_leads_summary', params: {'p_city': null})
+        .then((res) {
+      if (!mounted) return;
+      final total = (Map<String, dynamic>.from(res as Map)['total'] as num?)
+              ?.toInt() ??
+          0;
+      setState(() => _sLeadsTotal = total);
+      RenderLog.write('c443_summary_total', total);
+    }).catchError((_) {});
+  }
+
   void _autoLoad({required String key, bool force = false}) {
+    // CHANGE #443 — the "S Leads" tab owns and refreshes its own data
+    // (_SLeadsTab); skip the heavy shared _load() for it.
+    if (key == _CustFilter.sLeads.name) {
+      RenderLog.write('tab_autoload_on_open_$key', 'true');
+      return;
+    }
     if (_loadInFlight) return;
     final now = DateTime.now();
     if (!force &&
@@ -924,6 +951,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       case _CustFilter.pendingRegistrations:
       case _CustFilter.approvedCustomers:
       case _CustFilter.leads:
+      case _CustFilter.sLeads:
         return [];
     }
   }
@@ -931,6 +959,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   bool get _isRegView      => _filter == _CustFilter.pendingRegistrations;
   bool get _isApprovedView => _filter == _CustFilter.approvedCustomers;
   bool get _isLeadsView    => _filter == _CustFilter.leads;
+  bool get _isSLeadsView   => _filter == _CustFilter.sLeads;
 
   // ── Approve / Reject registrations ────────────────────────────────────────
 
@@ -1346,6 +1375,16 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   }
 
   Widget _buildScrollContent(bool isDesktop) {
+    // S Leads tab (CHANGE #443 — scraped lead-generation UI)
+    if (_isSLeadsView) {
+      RenderLog.write('c443_tab_present', 1);
+      return _SLeadsTab(
+        isDesktop: isDesktop,
+        onTotalChanged: (n) {
+          if (mounted) setState(() => _sLeadsTotal = n);
+        },
+      );
+    }
     // Leads tab
     if (_isLeadsView) return _buildLeadsContent(isDesktop);
     // Approved customers view
@@ -1483,6 +1522,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                 const SizedBox(width: 4),
                 _tab(_CustFilter.leads,
                     'Leads (${_loggedInLeads.length + _otherLeads.length})'),
+                const SizedBox(width: 4),
+                _tab(_CustFilter.sLeads, 'S Leads ($_sLeadsTotal)'),
               ]),
             ),
           ),
@@ -7399,6 +7440,1030 @@ class _LeadImageTileState extends State<_LeadImageTile> {
             ),
           ),
         ]),
+      ]),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CHANGE #443 — "S Leads" TAB (Google-Maps lead scraper UI)
+// Frontend only — backend (lead_type_map, lead_scrape_*, get_scraped_leads,
+// lead_leads_summary, lead_scrape_runs_list, lead_scrape_month_usage) is
+// already live. This widget owns all of its own data fetching/realtime so
+// it never touches the shared _AdminCustomerScreenState._load() pipeline.
+// ═══════════════════════════════════════════════════════════════════════════
+
+class _LeadTypeOption {
+  final String uiType;
+  final String label;
+  final int sortOrder;
+  const _LeadTypeOption(
+      {required this.uiType, required this.label, required this.sortOrder});
+
+  factory _LeadTypeOption.fromMap(Map<String, dynamic> m) => _LeadTypeOption(
+        uiType: m['ui_type'] as String? ?? '',
+        label: m['label'] as String? ?? '',
+        sortOrder: (m['sort_order'] as num?)?.toInt() ?? 0,
+      );
+}
+
+const Map<String, String> _sLeadClassLabels = {
+  'medical_store': 'Medical Store',
+  'wholesaler': 'Wholesaler',
+  'chain': 'Chain',
+  'clinic': 'Clinic',
+  'alt_med': 'Alt Med',
+  'other': 'Other',
+};
+
+const List<String> _sLeadClassOrder = [
+  'medical_store',
+  'chain',
+  'wholesaler',
+  'clinic',
+  'alt_med',
+  'other',
+];
+
+const Map<String, Color> _sLeadClassColors = {
+  'medical_store': Color(0xFF16A34A),
+  'wholesaler': Color(0xFF2563EB),
+  'chain': Color(0xFF6B7280),
+  'clinic': Color(0xFFD97706),
+  'alt_med': Color(0xFF7C3AED),
+  'other': Color(0xFF6B7280),
+};
+
+const List<String> _sLeadActiveStatuses = ['planning', 'running', 'paused_budget'];
+
+class _SLeadsTab extends StatefulWidget {
+  final bool isDesktop;
+  final ValueChanged<int> onTotalChanged;
+  const _SLeadsTab({required this.isDesktop, required this.onTotalChanged});
+
+  @override
+  State<_SLeadsTab> createState() => _SLeadsTabState();
+}
+
+class _SLeadsTabState extends State<_SLeadsTab> {
+  // ── Scrape form ────────────────────────────────────────────────────────
+  String _level = 'city';
+  final TextEditingController _nameCtrl = TextEditingController();
+  List<_LeadTypeOption> _typeOptions = [];
+  final Set<String> _selectedTypes = {'medical'};
+  final TextEditingController _budgetCtrl = TextEditingController(text: '800');
+  bool _starting = false;
+  String? _formError;
+  Map<String, dynamic>? _monthUsage;
+
+  // ── Active run / progress ─────────────────────────────────────────────
+  String? _activeRunId;
+  String? _activeRunLevel;
+  List<String> _activeRunTypeLabels = [];
+  Map<String, dynamic>? _runStatus;
+  RealtimeChannel? _runChannel;
+  Timer? _pollTimer;
+  bool _resuming = false;
+
+  // ── Results / filters ─────────────────────────────────────────────────
+  Map<String, dynamic>? _summary;
+  List<Map<String, dynamic>> _rows = [];
+  int _totalCount = 0;
+  bool _rowsLoading = false;
+  String? _cityFilter;
+  String _classFilter = 'all';
+  bool _targetsOnly = true;
+  bool _withPhone = false;
+  final TextEditingController _searchCtrl = TextEditingController();
+  Timer? _searchDebounce;
+  int _page = 0;
+  static const int _pageSize = 100;
+
+  // ── Past runs ──────────────────────────────────────────────────────────
+  List<Map<String, dynamic>> _pastRuns = [];
+  bool _pastRunsExpanded = false;
+
+  bool _initialLoading = true;
+  String? _loadError;
+
+  @override
+  void initState() {
+    super.initState();
+    _searchCtrl.addListener(_onSearchChanged);
+    _bootstrap();
+  }
+
+  @override
+  void dispose() {
+    _searchDebounce?.cancel();
+    _pollTimer?.cancel();
+    _runChannel?.unsubscribe();
+    _searchCtrl.removeListener(_onSearchChanged);
+    _searchCtrl.dispose();
+    _nameCtrl.dispose();
+    _budgetCtrl.dispose();
+    super.dispose();
+  }
+
+  // ── Bootstrap ──────────────────────────────────────────────────────────
+
+  Future<void> _bootstrap() async {
+    setState(() {
+      _initialLoading = true;
+      _loadError = null;
+    });
+    try {
+      final client = Supabase.instance.client;
+      final results = await Future.wait<dynamic>([
+        client.from('lead_type_map').select().eq('active', true).order('sort_order'),
+        client.rpc('lead_leads_summary', params: {'p_city': null}),
+        client.rpc('lead_scrape_month_usage'),
+        client.rpc('lead_scrape_runs_list', params: {'p_limit': 10}),
+      ]);
+
+      final types = (results[0] as List)
+          .map((e) => _LeadTypeOption.fromMap(Map<String, dynamic>.from(e as Map)))
+          .toList();
+      final summary = Map<String, dynamic>.from(results[1] as Map);
+      final usage = Map<String, dynamic>.from(results[2] as Map);
+      final runs = (results[3] as List)
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+
+      RenderLog.write('c443_types_loaded', types.length);
+      RenderLog.write('c443_summary_total', (summary['total'] as num?)?.toInt() ?? 0);
+      RenderLog.write('c443_month_used', (usage['used'] as num?)?.toInt() ?? 0);
+
+      if (!mounted) return;
+      setState(() {
+        _typeOptions = types;
+        _summary = summary;
+        _monthUsage = usage;
+        _pastRuns = runs;
+        _initialLoading = false;
+      });
+      widget.onTotalChanged((summary['total'] as num?)?.toInt() ?? 0);
+
+      final active = runs.firstWhere(
+        (r) => _sLeadActiveStatuses.contains(r['status']),
+        orElse: () => const {},
+      );
+      if (active.isNotEmpty) {
+        _activeRunId = active['run_id']?.toString();
+        _activeRunLevel = active['level'] as String?;
+        _activeRunTypeLabels = _labelsForUiTypes(active['ui_types']);
+        _refreshStatus();
+        _startPolling();
+        if (_activeRunId != null) _subscribeToRun(_activeRunId!);
+      }
+
+      await _loadRows(reset: true);
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _loadError = e.toString();
+          _initialLoading = false;
+        });
+      }
+    }
+  }
+
+  List<String> _labelsForUiTypes(dynamic uiTypes) {
+    if (uiTypes is! List) return [];
+    return uiTypes.map((t) {
+      final key = t.toString();
+      final match = _typeOptions.where((o) => o.uiType == key);
+      return match.isNotEmpty ? match.first.label : key;
+    }).toList();
+  }
+
+  Future<void> _refreshSummaryAndUsage() async {
+    try {
+      final client = Supabase.instance.client;
+      final results = await Future.wait<dynamic>([
+        client.rpc('lead_leads_summary', params: {'p_city': null}),
+        client.rpc('lead_scrape_month_usage'),
+      ]);
+      final summary = Map<String, dynamic>.from(results[0] as Map);
+      final usage = Map<String, dynamic>.from(results[1] as Map);
+      RenderLog.write('c443_summary_total', (summary['total'] as num?)?.toInt() ?? 0);
+      RenderLog.write('c443_month_used', (usage['used'] as num?)?.toInt() ?? 0);
+      if (!mounted) return;
+      setState(() {
+        _summary = summary;
+        _monthUsage = usage;
+      });
+      widget.onTotalChanged((summary['total'] as num?)?.toInt() ?? 0);
+    } catch (_) {}
+  }
+
+  Future<void> _loadPastRuns() async {
+    try {
+      final res = await Supabase.instance.client
+          .rpc('lead_scrape_runs_list', params: {'p_limit': 10}) as List;
+      if (!mounted) return;
+      setState(() {
+        _pastRuns = res.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+      });
+    } catch (_) {}
+  }
+
+  // ── Results ────────────────────────────────────────────────────────────
+
+  void _onSearchChanged() {
+    _searchDebounce?.cancel();
+    _searchDebounce =
+        Timer(const Duration(milliseconds: 400), () => _loadRows(reset: true));
+  }
+
+  Future<void> _loadRows({bool reset = false}) async {
+    if (reset) _page = 0;
+    setState(() => _rowsLoading = true);
+    try {
+      final offset = _page * _pageSize;
+      final search = _searchCtrl.text.trim();
+      final res = await Supabase.instance.client.rpc('get_scraped_leads', params: {
+        'p_city': _cityFilter,
+        'p_class': _classFilter == 'all' ? null : _classFilter,
+        'p_targets_only': _targetsOnly,
+        'p_with_phone': _withPhone,
+        'p_search': search.isEmpty ? null : search,
+        'p_status': null,
+        'p_limit': _pageSize,
+        'p_offset': offset,
+      }) as List;
+      final rows = res.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+      final total = rows.isNotEmpty
+          ? ((rows.first['total_count'] as num?)?.toInt() ?? 0)
+          : 0;
+      RenderLog.write('c443_rows_rendered', rows.length);
+      RenderLog.write('c443_total_count', total);
+      if (!mounted) return;
+      setState(() {
+        _rows = rows;
+        _totalCount = total;
+        _rowsLoading = false;
+      });
+    } catch (e) {
+      if (mounted) {
+        setState(() => _rowsLoading = false);
+        showToast(context, 'Failed to load leads: $e', isError: true);
+      }
+    }
+  }
+
+  void _changeFilters({
+    String? city,
+    bool cityIsAll = false,
+    String? classKey,
+    bool? targetsOnly,
+    bool? withPhone,
+  }) {
+    setState(() {
+      if (cityIsAll) _cityFilter = null;
+      if (city != null) _cityFilter = city;
+      if (classKey != null) _classFilter = classKey;
+      if (targetsOnly != null) _targetsOnly = targetsOnly;
+      if (withPhone != null) _withPhone = withPhone;
+    });
+    _loadRows(reset: true);
+  }
+
+  void _goToPage(int page) {
+    setState(() => _page = page);
+    _loadRows();
+  }
+
+  // ── Scrape control ────────────────────────────────────────────────────
+
+  bool get _canScrape =>
+      _selectedTypes.isNotEmpty &&
+      _nameCtrl.text.trim().isNotEmpty &&
+      (int.tryParse(_budgetCtrl.text.trim()) ?? 0) >= 1 &&
+      !_starting &&
+      _activeRunId == null;
+
+  String _friendlyError(String msg) {
+    if (msg.contains('a_scrape_is_already_running')) {
+      return 'A scrape is already running — wait for it to finish.';
+    }
+    if (msg.contains('name_required')) return 'Name is required.';
+    if (msg.contains('no_valid_store_type_selected')) {
+      return 'Select at least one store type.';
+    }
+    if (msg.contains('not_authorized')) return 'Not authorized.';
+    return msg;
+  }
+
+  Future<void> _startScrape() async {
+    final types = _selectedTypes.toList();
+    final name = _nameCtrl.text.trim();
+    final budget = int.tryParse(_budgetCtrl.text.trim()) ?? 800;
+    setState(() {
+      _starting = true;
+      _formError = null;
+    });
+    try {
+      final runId = await Supabase.instance.client.rpc('lead_scrape_start', params: {
+        'p_name': name,
+        'p_level': _level,
+        'p_ui_types': types,
+        'p_cell_km': null,
+        'p_max_calls': budget,
+      });
+      if (!mounted) return;
+      final id = runId?.toString();
+      setState(() {
+        _activeRunId = id;
+        _activeRunLevel = _level;
+        _activeRunTypeLabels =
+            _typeOptions.where((o) => types.contains(o.uiType)).map((o) => o.label).toList();
+        _starting = false;
+      });
+      if (id != null) {
+        _refreshStatus();
+        _startPolling();
+        _subscribeToRun(id);
+      }
+    } on PostgrestException catch (e) {
+      if (mounted) {
+        setState(() {
+          _starting = false;
+          _formError = _friendlyError(e.message);
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _starting = false;
+          _formError = e.toString();
+        });
+      }
+    }
+  }
+
+  Future<void> _resumeScrape() async {
+    if (_activeRunId == null) return;
+    setState(() => _resuming = true);
+    try {
+      await Supabase.instance.client.rpc('lead_scrape_resume',
+          params: {'p_run_id': _activeRunId, 'p_extra_calls': 500});
+      await _refreshStatus();
+    } catch (e) {
+      if (mounted) showToast(context, 'Resume failed: $e', isError: true);
+    } finally {
+      if (mounted) setState(() => _resuming = false);
+    }
+  }
+
+  void _subscribeToRun(String runId) {
+    _runChannel?.unsubscribe();
+    final ts = DateTime.now().millisecondsSinceEpoch;
+    _runChannel = Supabase.instance.client
+        .channel('s_leads_run_${runId}_$ts')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.update,
+          schema: 'public',
+          table: 'lead_scrape_runs',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'id',
+            value: runId,
+          ),
+          callback: (_) => _refreshStatus(),
+        )
+        .subscribe();
+  }
+
+  void _startPolling() {
+    _pollTimer?.cancel();
+    _pollTimer = Timer.periodic(const Duration(seconds: 3), (_) => _refreshStatus());
+  }
+
+  void _stopPolling() {
+    _pollTimer?.cancel();
+    _pollTimer = null;
+  }
+
+  Future<void> _refreshStatus() async {
+    if (_activeRunId == null) return;
+    try {
+      final res = await Supabase.instance.client
+          .rpc('lead_scrape_status', params: {'p_run_id': _activeRunId});
+      final status = Map<String, dynamic>.from(res as Map);
+      if (!mounted) return;
+      setState(() => _runStatus = status);
+      final s = status['status'] as String?;
+      if (s == 'done') {
+        _stopPolling();
+        _runChannel?.unsubscribe();
+        _runChannel = null;
+        final newLeads = (status['leads_new'] as num?)?.toInt() ?? 0;
+        showToast(context, 'Scrape complete — $newLeads new leads found.');
+        await Future.wait([_refreshSummaryAndUsage(), _loadRows(reset: true), _loadPastRuns()]);
+        if (mounted) setState(() => _activeRunId = null);
+      } else if (s == 'error') {
+        _stopPolling();
+        _runChannel?.unsubscribe();
+        _runChannel = null;
+        showToast(context, 'Scrape error: ${status['error'] ?? 'unknown'}', isError: true);
+        await _loadPastRuns();
+        if (mounted) setState(() => _activeRunId = null);
+      }
+    } catch (_) {}
+  }
+
+  // ── Build ──────────────────────────────────────────────────────────────
+
+  @override
+  Widget build(BuildContext context) {
+    if (_initialLoading) {
+      return const Padding(
+        padding: EdgeInsets.only(top: 80),
+        child: Center(
+          child: CircularProgressIndicator(color: Color(0xFF1B7A43), strokeWidth: 2),
+        ),
+      );
+    }
+    final pad = widget.isDesktop ? 28.0 : 16.0;
+    return Padding(
+      padding: EdgeInsets.fromLTRB(pad, 20, pad, 32),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (_loadError != null) ...[
+            Text('Failed to load: $_loadError',
+                style: const TextStyle(color: Color(0xFFDC2626), fontSize: 13)),
+            const SizedBox(height: 12),
+          ],
+          _buildScrapeForm(),
+          if (_activeRunId != null && _runStatus != null) ...[
+            const SizedBox(height: 20),
+            _buildProgressPanel(),
+          ],
+          const SizedBox(height: 28),
+          _buildResultsSection(),
+          const SizedBox(height: 28),
+          _buildPastRunsSection(),
+        ],
+      ),
+    );
+  }
+
+  // ── B2: Scrape form ────────────────────────────────────────────────────
+
+  Widget _buildScrapeForm() {
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Scrape new leads',
+              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+          const SizedBox(height: 14),
+          widget.isDesktop
+              ? Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  SizedBox(width: 220, child: _levelToggle()),
+                  const SizedBox(width: 12),
+                  Expanded(child: _nameField()),
+                  const SizedBox(width: 12),
+                  SizedBox(width: 180, child: _budgetField()),
+                ])
+              : Column(children: [
+                  _levelToggle(),
+                  const SizedBox(height: 10),
+                  _nameField(),
+                  const SizedBox(height: 10),
+                  _budgetField(),
+                ]),
+          const SizedBox(height: 14),
+          const Text('Store types',
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF6B7280))),
+          const SizedBox(height: 8),
+          _storeTypeChips(),
+          const SizedBox(height: 14),
+          _costStrip(),
+          if (_formError != null) ...[
+            const SizedBox(height: 10),
+            Text(_formError!, style: const TextStyle(color: Color(0xFFDC2626), fontSize: 12.5)),
+          ],
+          const SizedBox(height: 14),
+          SizedBox(
+            width: widget.isDesktop ? 180 : double.infinity,
+            child: ElevatedButton.icon(
+              onPressed: _canScrape ? _startScrape : null,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF1B7A43),
+                foregroundColor: Colors.white,
+                disabledBackgroundColor: const Color(0xFFD1D5DB),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                padding: const EdgeInsets.symmetric(vertical: 12),
+              ),
+              icon: _starting
+                  ? const SizedBox(
+                      width: 14, height: 14,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                  : const Icon(Icons.travel_explore, size: 17),
+              label: Text(_starting ? 'Starting…' : 'Scrap',
+                  style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _levelToggle() {
+    return Row(children: [
+      Expanded(child: _segBtn('City', _level == 'city', () => setState(() => _level = 'city'))),
+      const SizedBox(width: 8),
+      Expanded(child: _segBtn('District', _level == 'district', () => setState(() => _level = 'district'))),
+    ]);
+  }
+
+  Widget _segBtn(String label, bool active, VoidCallback onTap) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 11),
+        decoration: BoxDecoration(
+          color: active ? const Color(0xFF1B7A43) : const Color(0xFFF3F4F6),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        alignment: Alignment.center,
+        child: Text(label,
+            style: TextStyle(
+                fontSize: 13, fontWeight: FontWeight.w600,
+                color: active ? Colors.white : const Color(0xFF374151))),
+      ),
+    );
+  }
+
+  Widget _nameField() {
+    return TextField(
+      controller: _nameCtrl,
+      onChanged: (_) => setState(() {}),
+      decoration: InputDecoration(
+        labelText: 'Name',
+        hintText: 'Raipur',
+        labelStyle: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        isDense: true,
+      ),
+      style: const TextStyle(fontSize: 13),
+    );
+  }
+
+  Widget _budgetField() {
+    return TextField(
+      controller: _budgetCtrl,
+      onChanged: (_) => setState(() {}),
+      keyboardType: TextInputType.number,
+      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+      decoration: InputDecoration(
+        labelText: 'Max API calls',
+        labelStyle: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        isDense: true,
+      ),
+      style: const TextStyle(fontSize: 13),
+    );
+  }
+
+  Widget _storeTypeChips() {
+    final sorted = [..._typeOptions]..sort((a, b) => a.sortOrder.compareTo(b.sortOrder));
+    final chips = sorted.map((o) {
+      final sel = _selectedTypes.contains(o.uiType);
+      return FilterChip(
+        label: Text(o.label, style: const TextStyle(fontSize: 11)),
+        selected: sel,
+        onSelected: (v) {
+          setState(() {
+            if (v) {
+              _selectedTypes.add(o.uiType);
+            } else {
+              _selectedTypes.remove(o.uiType);
+            }
+          });
+        },
+        selectedColor: const Color(0xFFDCFCE7),
+        checkmarkColor: const Color(0xFF1B7A43),
+        backgroundColor: const Color(0xFFF3F4F6),
+        side: BorderSide(color: sel ? const Color(0xFF1B7A43) : const Color(0xFFD1D5DB)),
+        labelStyle: TextStyle(color: sel ? const Color(0xFF1B7A43) : const Color(0xFF374151)),
+      );
+    }).toList();
+    return Wrap(spacing: 6, runSpacing: 6, children: chips);
+  }
+
+  Widget _costStrip() {
+    final used = (_monthUsage?['used'] as num?)?.toInt() ?? 0;
+    final freeLimit = (_monthUsage?['free_limit'] as num?)?.toInt() ?? 1000;
+    final remaining = (_monthUsage?['remaining'] as num?)?.toInt() ?? 0;
+    final resetsOn = _monthUsage?['resets_on']?.toString() ?? '';
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: remaining <= 0 ? const Color(0xFFFEF2F2) : const Color(0xFFF9FAFB),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: remaining <= 0 ? const Color(0xFFFCA5A5) : const Color(0xFFE5E7EB)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(
+          'Google free calls: $used / $freeLimit used this month · $remaining left · resets $resetsOn',
+          style: const TextStyle(fontSize: 12, color: Color(0xFF4B5563)),
+        ),
+        if (remaining <= 0) ...[
+          const SizedBox(height: 4),
+          const Text('Past free tier — approx ₹3 per call.',
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFFDC2626))),
+        ],
+      ]),
+    );
+  }
+
+  // ── B3: Progress panel ─────────────────────────────────────────────────
+
+  Widget _buildProgressPanel() {
+    final status = _runStatus!;
+    final s = status['status'] as String?;
+    if (!_sLeadActiveStatuses.contains(s)) return const SizedBox.shrink();
+    final pct = ((status['pct'] as num?)?.toDouble() ?? 0) / 100.0;
+    final city = status['city']?.toString() ?? _nameCtrl.text;
+    final cellsTotal = (status['cells_total'] as num?)?.toInt() ?? 0;
+    final cellsDone = (status['cells_done'] as num?)?.toInt() ?? 0;
+    final apiCalls = (status['api_calls'] as num?)?.toInt() ?? 0;
+    final maxCalls = int.tryParse(_budgetCtrl.text.trim()) ?? 800;
+    final leadsNew = (status['leads_new'] as num?)?.toInt() ?? 0;
+
+    String label;
+    switch (s) {
+      case 'planning': label = 'Planning…'; break;
+      case 'running': label = 'Scraping…'; break;
+      case 'paused_budget': label = 'Paused (budget)'; break;
+      default: label = s ?? '';
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF0FDF4),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFBBF7D0)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Expanded(
+            child: Text('$city · ${_activeRunLevel ?? _level} · ${_activeRunTypeLabels.join(", ")}',
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1B7A43),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Text(label, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.white)),
+          ),
+        ]),
+        const SizedBox(height: 10),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(4),
+          child: LinearProgressIndicator(
+            value: pct.clamp(0.0, 1.0),
+            minHeight: 6,
+            color: const Color(0xFF1B7A43),
+            backgroundColor: const Color(0xFFE5E7EB),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          '$cellsDone / $cellsTotal cells · $apiCalls/$maxCalls calls · $leadsNew new leads',
+          style: const TextStyle(fontSize: 12, color: Color(0xFF4B5563)),
+        ),
+        if (s == 'paused_budget') ...[
+          const SizedBox(height: 10),
+          Text('Budget limit reached ($apiCalls calls).',
+              style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: Color(0xFFD97706))),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: _resuming ? null : _resumeScrape,
+            style: OutlinedButton.styleFrom(
+              foregroundColor: const Color(0xFF1B7A43),
+              side: const BorderSide(color: Color(0xFF1B7A43)),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            icon: _resuming
+                ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.play_arrow, size: 16),
+            label: const Text('Resume (+500 calls)', style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ]),
+    );
+  }
+
+  // ── B4: Results ────────────────────────────────────────────────────────
+
+  Widget _buildResultsSection() {
+    final byClass = (_summary?['by_class'] as List?)
+            ?.map((e) => Map<String, dynamic>.from(e as Map))
+            .toList() ??
+        [];
+    final cities = (_summary?['cities'] as List?)
+            ?.map((e) => Map<String, dynamic>.from(e as Map))
+            .toList() ??
+        [];
+    final total = (_summary?['total'] as num?)?.toInt() ?? 0;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text('Scraped leads',
+            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+        const SizedBox(height: 12),
+        _buildFilterBar(byClass, cities, total),
+        const SizedBox(height: 14),
+        if (_rowsLoading && _rows.isEmpty)
+          const Padding(
+            padding: EdgeInsets.only(top: 40),
+            child: Center(child: CircularProgressIndicator(color: Color(0xFF1B7A43), strokeWidth: 2)),
+          )
+        else if (_rows.isEmpty)
+          _ssvEmptyStateLocal('0 leads match these filters')
+        else ...[
+          ..._rows.map((r) => _buildLeadRow(r)),
+          const SizedBox(height: 12),
+          _buildPagination(),
+        ],
+      ],
+    );
+  }
+
+  Widget _ssvEmptyStateLocal(String message) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 40, bottom: 20),
+      child: Center(
+        child: Text(message,
+            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: Color(0xFF9CA3AF))),
+      ),
+    );
+  }
+
+  Widget _buildFilterBar(
+      List<Map<String, dynamic>> byClass, List<Map<String, dynamic>> cities, int total) {
+    final classCounts = <String, int>{
+      for (final c in byClass) (c['class']?.toString() ?? ''): (c['n'] as num?)?.toInt() ?? 0
+    };
+
+    final classChips = <Widget>[
+      _classChip('all', 'All ($total)', _classFilter == 'all'),
+      ..._sLeadClassOrder.map((k) =>
+          _classChip(k, '${_sLeadClassLabels[k]} (${classCounts[k] ?? 0})', _classFilter == k)),
+    ];
+
+    final cityDropdown = DropdownButton<String?>(
+      value: _cityFilter,
+      hint: const Text('All cities', style: TextStyle(fontSize: 12.5)),
+      underline: const SizedBox.shrink(),
+      items: [
+        const DropdownMenuItem<String?>(value: null, child: Text('All cities', style: TextStyle(fontSize: 12.5))),
+        ...cities.map((c) => DropdownMenuItem<String?>(
+              value: c['city']?.toString(),
+              child: Text('${c['city']} (${c['n']})', style: const TextStyle(fontSize: 12.5)),
+            )),
+      ],
+      onChanged: (v) => _changeFilters(city: v, cityIsAll: v == null),
+    );
+
+    final targetsToggle = Row(mainAxisSize: MainAxisSize.min, children: [
+      Transform.scale(
+        scale: 0.75,
+        child: Switch(
+          value: _targetsOnly,
+          onChanged: (v) => _changeFilters(targetsOnly: v),
+          activeColor: const Color(0xFF1B7A43),
+          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        ),
+      ),
+      const Text('Only B2B targets', style: TextStyle(fontSize: 12.5, color: Color(0xFF374151))),
+    ]);
+
+    final phoneToggle = Row(mainAxisSize: MainAxisSize.min, children: [
+      Transform.scale(
+        scale: 0.75,
+        child: Switch(
+          value: _withPhone,
+          onChanged: (v) => _changeFilters(withPhone: v),
+          activeColor: const Color(0xFF1B7A43),
+          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        ),
+      ),
+      const Text('Only with phone', style: TextStyle(fontSize: 12.5, color: Color(0xFF374151))),
+    ]);
+
+    final searchBox = TextField(
+      controller: _searchCtrl,
+      decoration: InputDecoration(
+        hintText: 'Search name / phone / address',
+        hintStyle: const TextStyle(fontSize: 12.5),
+        prefixIcon: const Icon(Icons.search, size: 18),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        isDense: true,
+      ),
+      style: const TextStyle(fontSize: 13),
+    );
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      widget.isDesktop
+          ? Row(children: [cityDropdown, const SizedBox(width: 16), targetsToggle, const SizedBox(width: 16), phoneToggle])
+          : Wrap(spacing: 12, runSpacing: 8, children: [cityDropdown, targetsToggle, phoneToggle]),
+      const SizedBox(height: 10),
+      widget.isDesktop
+          ? Wrap(spacing: 6, runSpacing: 6, children: classChips)
+          : SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(children: [
+                for (int i = 0; i < classChips.length; i++) ...[
+                  if (i > 0) const SizedBox(width: 6),
+                  classChips[i],
+                ],
+              ]),
+            ),
+      const SizedBox(height: 10),
+      SizedBox(width: widget.isDesktop ? 360 : double.infinity, child: searchBox),
+    ]);
+  }
+
+  Widget _classChip(String key, String label, bool selected) {
+    return ChoiceChip(
+      label: Text(label, style: const TextStyle(fontSize: 11)),
+      selected: selected,
+      onSelected: (_) => _changeFilters(classKey: key),
+      selectedColor: const Color(0xFFDCFCE7),
+      backgroundColor: const Color(0xFFF3F4F6),
+      side: BorderSide(color: selected ? const Color(0xFF1B7A43) : const Color(0xFFD1D5DB)),
+      labelStyle: TextStyle(color: selected ? const Color(0xFF1B7A43) : const Color(0xFF374151)),
+    );
+  }
+
+  Widget _buildLeadRow(Map<String, dynamic> r) {
+    final name = r['name']?.toString() ?? '';
+    final phone = r['phone']?.toString();
+    final address = r['address']?.toString() ?? '';
+    final leadClass = r['lead_class']?.toString() ?? 'other';
+    final rating = (r['rating'] as num?)?.toDouble();
+    final userRatings = (r['user_ratings'] as num?)?.toInt();
+    final mapsUri = r['maps_uri']?.toString();
+    final businessStatus = r['business_status']?.toString();
+    final isClosed = businessStatus != null && businessStatus != 'OPERATIONAL';
+    final color = _sLeadClassColors[leadClass] ?? const Color(0xFF6B7280);
+
+    return Opacity(
+      opacity: isClosed ? 0.5 : 1.0,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 8),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: const Color(0xFFE5E7EB)),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Wrap(crossAxisAlignment: WrapCrossAlignment.center, spacing: 8, runSpacing: 4, children: [
+            Text(name,
+                style: TextStyle(
+                    fontSize: 13.5, fontWeight: FontWeight.w700, color: const Color(0xFF111827),
+                    decoration: isClosed ? TextDecoration.lineThrough : null)),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: color.withValues(alpha: 0.3)),
+              ),
+              child: Text(_sLeadClassLabels[leadClass] ?? leadClass,
+                  style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w600, color: color)),
+            ),
+            if (rating != null)
+              Text('★ $rating${userRatings != null ? ' ($userRatings)' : ''}',
+                  style: const TextStyle(fontSize: 11.5, color: Color(0xFFD97706))),
+          ]),
+          const SizedBox(height: 6),
+          if (address.isNotEmpty)
+            Text(address,
+                maxLines: 1, overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+          const SizedBox(height: 6),
+          Wrap(spacing: 14, runSpacing: 4, children: [
+            if (phone != null && phone.isNotEmpty)
+              InkWell(
+                onTap: () => launchUrl(Uri.parse('tel:$phone')),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  const Icon(Icons.call_outlined, size: 13, color: Color(0xFF1B7A43)),
+                  const SizedBox(width: 4),
+                  Text(phone, style: const TextStyle(fontSize: 12, color: Color(0xFF1B7A43), fontWeight: FontWeight.w600)),
+                ]),
+              ),
+            if (mapsUri != null && mapsUri.isNotEmpty)
+              InkWell(
+                onTap: () => launchUrl(Uri.parse(mapsUri), mode: LaunchMode.externalApplication),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  const Icon(Icons.map_outlined, size: 13, color: Color(0xFF2563EB)),
+                  const SizedBox(width: 4),
+                  const Text('Map', style: TextStyle(fontSize: 12, color: Color(0xFF2563EB), fontWeight: FontWeight.w600)),
+                ]),
+              ),
+          ]),
+        ]),
+      ),
+    );
+  }
+
+  Widget _buildPagination() {
+    final totalPages = _totalCount == 0 ? 1 : ((_totalCount + _pageSize - 1) ~/ _pageSize);
+    return Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+      IconButton(
+        onPressed: _page > 0 ? () => _goToPage(_page - 1) : null,
+        icon: const Icon(Icons.chevron_left, size: 20),
+      ),
+      Text('Page ${_page + 1} of $totalPages', style: const TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
+      IconButton(
+        onPressed: (_page + 1) * _pageSize < _totalCount ? () => _goToPage(_page + 1) : null,
+        icon: const Icon(Icons.chevron_right, size: 20),
+      ),
+    ]);
+  }
+
+  // ── B5: Past runs ──────────────────────────────────────────────────────
+
+  Widget _buildPastRunsSection() {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+      ),
+      child: Column(children: [
+        InkWell(
+          onTap: () => setState(() => _pastRunsExpanded = !_pastRunsExpanded),
+          borderRadius: BorderRadius.circular(12),
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Row(children: [
+              const Icon(Icons.history, size: 16, color: Color(0xFF6B7280)),
+              const SizedBox(width: 8),
+              Text('Past runs (${_pastRuns.length})',
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+              const Spacer(),
+              Icon(_pastRunsExpanded ? Icons.expand_less : Icons.expand_more, size: 20, color: const Color(0xFF6B7280)),
+            ]),
+          ),
+        ),
+        if (_pastRunsExpanded)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+            child: _pastRuns.isEmpty
+                ? const Text('No runs yet.', style: TextStyle(fontSize: 12.5, color: Color(0xFF9CA3AF)))
+                : Column(children: _pastRuns.map((r) => _buildRunRow(r)).toList()),
+          ),
+      ]),
+    );
+  }
+
+  Widget _buildRunRow(Map<String, dynamic> r) {
+    final city = r['city']?.toString() ?? '';
+    final level = r['level']?.toString() ?? '';
+    final types = (r['ui_types'] as List?)?.map((t) => t.toString()).join(', ') ?? '';
+    final status = r['status']?.toString() ?? '';
+    final leadsNew = (r['leads_new'] as num?)?.toInt() ?? 0;
+    final apiCalls = (r['api_calls'] as num?)?.toInt() ?? 0;
+    final maxCalls = (r['max_calls'] as num?)?.toInt() ?? 0;
+    final createdAt = r['created_at']?.toString() ?? '';
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF9FAFB),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Wrap(spacing: 12, runSpacing: 4, crossAxisAlignment: WrapCrossAlignment.center, children: [
+        Text('$city · $level · $types', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
+        Text(status, style: const TextStyle(fontSize: 11.5, color: Color(0xFF6B7280))),
+        Text('$leadsNew new leads', style: const TextStyle(fontSize: 11.5, color: Color(0xFF6B7280))),
+        Text('$apiCalls/$maxCalls calls', style: const TextStyle(fontSize: 11.5, color: Color(0xFF6B7280))),
+        Text(createdAt.length >= 10 ? createdAt.substring(0, 10) : createdAt,
+            style: const TextStyle(fontSize: 11.5, color: Color(0xFF9CA3AF))),
       ]),
     );
   }

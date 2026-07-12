@@ -15,6 +15,7 @@ import '../view_as_state.dart';
 import '../utils/render_log.dart';
 import '../utils/responsive.dart';
 import '../widgets/animations.dart';
+import '../widgets/order_hours_banner.dart';
 import 'admin/admin_add_medicine_screen.dart';
 import 'admin/admin_manage_admins_screen.dart';
 import 'admin/admin_customer_screen.dart';
@@ -632,6 +633,7 @@ class _HomeShellState extends State<HomeShell> {
                   onAdminNav: isAdmin ? _handleAdminNav : null,
                   isSuperAdmin: isAdmin ? _amISuper : false,
                 ),
+                if (!isAdmin) const OrderHoursBanner(),
                 // Search + chips: storefront only (index 0)
                 if (_index == 0)
                   _MobileSearchBar(
@@ -733,6 +735,7 @@ class _HomeShellState extends State<HomeShell> {
                   index: _index,
                   cartOpen: _cartOpen,
                 ),
+              if (!isAdmin) const OrderHoursBanner(),
               // ── Search + chips: storefront only (index 0) ─────────────────
               if (_index == 0)
                 _DesktopSearchRow(

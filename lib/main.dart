@@ -10,11 +10,13 @@ import 'package:flutter_web_plugins/url_strategy.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'app_state.dart';
+import 'order_hours_state.dart';
 import 'url_sync_web.dart' show captureInitialPath;
 import 'services/version_watcher.dart';
 import 'utils/render_log.dart';
 import 'view_as_state.dart';
 import 'models/cart_model.dart';
+import 'models/order_hours_model.dart';
 import 'screens/auth/login_screen.dart';
 import 'screens/home_shell.dart';
 import 'screens/public/inquiry_form_screen.dart';
@@ -200,6 +202,7 @@ class _PharmaB2BAppState extends State<PharmaB2BApp> {
   final CartModel _cart = CartModel();
   final AuthNotifier _auth = AuthNotifier();
   final ViewAsNotifier _viewAs = ViewAsNotifier();
+  final OrderHoursModel _orderHours = OrderHoursModel();
   bool _viewAsRestored = false;
 
   @override
@@ -312,6 +315,7 @@ class _PharmaB2BAppState extends State<PharmaB2BApp> {
     _cart.dispose();
     _auth.dispose();
     _viewAs.dispose();
+    _orderHours.dispose();
     super.dispose();
   }
 
@@ -323,7 +327,9 @@ class _PharmaB2BAppState extends State<PharmaB2BApp> {
         notifier: _auth,
         child: AppState(
           cart: _cart,
-          child: MaterialApp(
+          child: OrderHoursState(
+            orderHours: _orderHours,
+            child: MaterialApp(
             title: 'mediBO',
             debugShowCheckedModeBanner: false,
             scaffoldMessengerKey: VersionWatcher.instance.messengerKey,
@@ -407,6 +413,7 @@ class _PharmaB2BAppState extends State<PharmaB2BApp> {
               '/shipping':     (_) => const ShippingScreen(),
               '/cancellation': (_) => const CancellationScreen(),
             },
+          ),
           ),
         ),
       ),

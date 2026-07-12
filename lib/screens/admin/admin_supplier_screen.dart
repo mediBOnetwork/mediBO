@@ -16,6 +16,8 @@ import 'package:xml/xml.dart' as xmlp;
 
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../models/order_hours_model.dart';
+import '../../order_hours_state.dart';
 import '../../services/match_status_service.dart';
 import '../../services/spn_options.dart';
 import '../../utils/render_log.dart';
@@ -167,6 +169,158 @@ class AdminSupplierScreen extends StatefulWidget {
   State<AdminSupplierScreen> createState() => _AdminSupplierScreenState();
 }
 
+// ── CHANGE #446: readiness check row ────────────────────────────────────────
+
+class _ReadinessCheckRow extends StatelessWidget {
+  final Map<String, dynamic> check;
+  const _ReadinessCheckRow({required this.check});
+
+  @override
+  Widget build(BuildContext context) {
+    final ok = check['ok'] == true;
+    final label = check['label'] as String? ?? '';
+    final detail = check['detail'] as String?;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Icon(ok ? Icons.check_circle : Icons.cancel,
+            size: 15, color: ok ? const Color(0xFF1B7A43) : const Color(0xFFDC2626)),
+        const SizedBox(width: 8),
+        Expanded(
+          child: RichText(
+            text: TextSpan(
+              style: const TextStyle(fontSize: 12.5, color: Color(0xFF111827)),
+              children: [
+                TextSpan(text: label, style: const TextStyle(fontWeight: FontWeight.w600)),
+                if (detail != null && detail.isNotEmpty)
+                  TextSpan(
+                    text: '  —  $detail',
+                    style: const TextStyle(color: Color(0xFF6B7280), fontWeight: FontWeight.w400),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ]),
+    );
+  }
+}
+
+// ── CHANGE #446: slide-to-confirm master send control ──────────────────────
+
+class _SlideToSend extends StatefulWidget {
+  final bool enabled;
+  final bool sending;
+  final String? disabledLabel;
+  final Future<void> Function() onConfirmed;
+
+  const _SlideToSend({
+    required this.enabled,
+    required this.sending,
+    required this.onConfirmed,
+    this.disabledLabel,
+  });
+
+  @override
+  State<_SlideToSend> createState() => _SlideToSendState();
+}
+
+class _SlideToSendState extends State<_SlideToSend> {
+  double _dragX = 0;
+  bool _dragging = false;
+
+  static const double _thumbSize = 44;
+  static const double _trackHeight = 48;
+
+  Future<void> _handleRelease(double maxDrag) async {
+    if (maxDrag <= 0) {
+      setState(() => _dragX = 0);
+      return;
+    }
+    final progress = _dragX / maxDrag;
+    setState(() => _dragging = false);
+    if (progress >= 0.82) {
+      setState(() => _dragX = maxDrag);
+      await widget.onConfirmed();
+      if (mounted) setState(() => _dragX = 0);
+    } else {
+      setState(() => _dragX = 0);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = widget.enabled && !widget.sending;
+    return LayoutBuilder(builder: (context, box) {
+      final maxDrag = (box.maxWidth - _thumbSize).clamp(0.0, double.infinity);
+      final trackColor = enabled ? const Color(0xFFECFDF5) : const Color(0xFFF3F4F6);
+      final borderColor = enabled ? const Color(0xFF1B7A43) : const Color(0xFFE5E7EB);
+      final thumbColor = enabled ? const Color(0xFF1B7A43) : const Color(0xFF9CA3AF);
+      final label = widget.sending
+          ? 'Sending…'
+          : (enabled ? 'Slide to send inquiry' : (widget.disabledLabel ?? 'Blocked'));
+
+      return Container(
+        height: _trackHeight,
+        decoration: BoxDecoration(
+          color: trackColor,
+          borderRadius: BorderRadius.circular(_trackHeight / 2),
+          border: Border.all(color: borderColor),
+        ),
+        child: Stack(alignment: Alignment.centerLeft, children: [
+          Center(
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                color: enabled ? const Color(0xFF065F46) : const Color(0xFF6B7280),
+              ),
+            ),
+          ),
+          AnimatedPositioned(
+            duration: _dragging ? Duration.zero : const Duration(milliseconds: 200),
+            curve: Curves.easeOut,
+            left: 2 + _dragX,
+            top: 2,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onHorizontalDragStart: enabled ? (_) => setState(() => _dragging = true) : null,
+              onHorizontalDragUpdate: enabled
+                  ? (details) {
+                      setState(() {
+                        _dragX = (_dragX + details.delta.dx).clamp(0.0, maxDrag);
+                      });
+                    }
+                  : null,
+              onHorizontalDragEnd: enabled ? (_) => _handleRelease(maxDrag) : null,
+              child: Container(
+                width: _thumbSize - 4,
+                height: _thumbSize - 4,
+                decoration: BoxDecoration(
+                  color: thumbColor,
+                  shape: BoxShape.circle,
+                  boxShadow: const [BoxShadow(color: Color(0x33000000), blurRadius: 4, offset: Offset(0, 1))],
+                ),
+                child: widget.sending
+                    ? const Padding(
+                        padding: EdgeInsets.all(11),
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                      )
+                    : Icon(
+                        enabled ? Icons.arrow_forward : Icons.lock_outline,
+                        color: Colors.white,
+                        size: 18,
+                      ),
+              ),
+            ),
+          ),
+        ]),
+      );
+    });
+  }
+}
+
 class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   // CHANGE #444 — Supplier Orders date scope. Own chip, default today, no pill.
   DateTime _ordersDate = todayIst();
@@ -212,6 +366,12 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   // supplier_name → {token, status, expires_at}
   final Map<String, Map<String, dynamic>> _inquiryLinks = {};
   bool _inquiryLoading = false;
+
+  // ── CHANGE #446: send-all readiness (inquiry_send_readiness()) ───────────
+  Map<String, dynamic>? _inquiryReadiness;
+  bool _readinessLoading = false;
+  bool _sendingInquiry = false;
+  OrderHoursModel? _orderHoursModel;
 
   // ── Inquiry tab state ────────────────────────────────────────────────────
   List<Map<String, dynamic>> _inquiryOverview = [];
@@ -298,12 +458,20 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     _load();
     _loadAllocationMode();
     _subscribeRealtime();
+    // CHANGE #446: re-check send-all readiness whenever order hours change.
+    _orderHoursModel = OrderHoursState.read(context);
+    _orderHoursModel!.addListener(_onOrderHoursChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         RenderLog.write('screen_autoload_on_focus', 'suppliers_initial');
         RenderLog.write('tab_autoload_on_open_suppliers', 'initial');
       }
     });
+  }
+
+  void _onOrderHoursChanged() {
+    if (!mounted) return;
+    if (_filter == _SupFilter.inquiry) _fetchInquiryReadiness(silent: true);
   }
 
   void _onScreenFocus() {
@@ -330,6 +498,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       _matchService.statuses.removeListener(_matchServiceListener!);
     }
     _matchService.dispose();
+    _orderHoursModel?.removeListener(_onOrderHoursChanged);
     _debounce?.cancel();
     _inquiryPollTimer?.cancel();
     _inquiryRtChannel?.unsubscribe(); // CHANGE #309
@@ -1275,27 +1444,84 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   // INQUIRY LINK ACTIONS
   // ═══════════════════════════════════════════════════════════════════════════
 
+  // CHANGE #446: master "slide to send" — consolidated qty to ALL suppliers.
+  // p_force is intentionally never passed here (super_admin-only escape hatch;
+  // not exposed anywhere in this UI).
   Future<void> _sendAllInquiry() async {
-    setState(() => _inquiryLoading = true);
+    if (_sendingInquiry) return;
+    setState(() => _sendingInquiry = true);
     try {
-      final rows = await Supabase.instance.client
-          .rpc('start_inquiry_for_suppliers') as List;
+      final rows = await Supabase.instance.client.rpc(
+        'start_inquiry_for_suppliers',
+        params: {'p_supplier_names': null},
+      ) as List;
       if (mounted) {
         setState(() {
           for (final r in rows) {
             final m = Map<String, dynamic>.from(r as Map);
             _inquiryLinks[m['supplier_name'] as String] = m;
           }
-          _inquiryLoading = false;
+          _sendingInquiry = false;
         });
         RenderLog.write('inquiry_send_all', rows.length);
+        showToast(context, 'Inquiry sent to ${rows.length} supplier(s)');
+        _fetchInquiryOverview(silent: true);
+      }
+    } on PostgrestException catch (e) {
+      if (mounted) setState(() => _sendingInquiry = false);
+      final isBlocked = e.message.contains('inquiry_send_blocked') ||
+          (e.code ?? '').contains('inquiry_send_blocked');
+      if (isBlocked) {
+        _showReadinessBlockedDialog(e.hint);
+        _fetchInquiryReadiness(silent: true);
+      } else if (mounted) {
+        showToast(context, 'Failed to send inquiry: ${e.message}', isError: true);
       }
     } catch (e) {
       if (mounted) {
-        setState(() => _inquiryLoading = false);
-        showToast(context, 'Failed to generate links: $e', isError: true);
+        setState(() => _sendingInquiry = false);
+        showToast(context, 'Failed to send inquiry: $e', isError: true);
       }
     }
+  }
+
+  // CHANGE #446: parse the readiness JSON out of the RPC's exception HINT and
+  // render the failing checks — never show a raw Postgres error to the admin.
+  void _showReadinessBlockedDialog(String? hintJson) {
+    if (!mounted) return;
+    List<Map<String, dynamic>> checks = const [];
+    try {
+      if (hintJson != null && hintJson.trim().isNotEmpty) {
+        final parsed = jsonDecode(hintJson);
+        final rawChecks = (parsed as Map)['checks'] as List?;
+        checks = rawChecks
+                ?.map((c) => Map<String, dynamic>.from(c as Map))
+                .toList() ??
+            const [];
+      }
+    } catch (_) {}
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Cannot send inquiry yet',
+            style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+        content: SizedBox(
+          width: 360,
+          child: checks.isEmpty
+              ? const Text('One or more readiness checks are failing.',
+                  style: TextStyle(fontSize: 13, color: Color(0xFF374151)))
+              : Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: checks.map((c) => _ReadinessCheckRow(check: c)).toList(),
+                ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK')),
+        ],
+      ),
+    );
   }
 
   Future<void> _loadAutoMeta() async {
@@ -1886,6 +2112,33 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         if (!silent) showToast(context, 'Failed to load inquiry overview: $e', isError: true);
       }
     }
+    // CHANGE #446: refresh send-all readiness alongside the overview — this
+    // piggybacks on every existing refresh site (tab open, poll timer, realtime,
+    // and every accept/verify action that already calls _fetchInquiryOverview).
+    _fetchInquiryReadiness(silent: true);
+  }
+
+  Future<void> _fetchInquiryReadiness({bool silent = false}) async {
+    if (!silent && mounted) setState(() => _readinessLoading = true);
+    try {
+      final res = await Supabase.instance.client.rpc('inquiry_send_readiness');
+      if (mounted) {
+        setState(() {
+          _inquiryReadiness = Map<String, dynamic>.from(res as Map);
+          _readinessLoading = false;
+        });
+        final canSend = _inquiryReadiness?['can_send'] as bool? ?? false;
+        final checks = (_inquiryReadiness?['checks'] as List?) ?? const [];
+        final failing = checks.where((c) => (c as Map)['ok'] != true).length;
+        RenderLog.write('c444_can_send', canSend.toString());
+        RenderLog.write('c444_checks_failing', failing.toString());
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _readinessLoading = false);
+        if (!silent) showToast(context, 'Failed to load send readiness: $e', isError: true);
+      }
+    }
   }
 
   Future<void> _fetchUnassignedItems({bool silent = false}) async {
@@ -2185,9 +2438,71 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
 
   // ── Inquiry tab: top-level view ───────────────────────────────────────────
 
+  // CHANGE #446: readiness checklist + slide-to-send master control.
+  Widget _buildReadinessAndSlider(double pad) {
+    final readiness = _inquiryReadiness;
+    final checks = (readiness?['checks'] as List?)
+            ?.map((c) => Map<String, dynamic>.from(c as Map))
+            .toList() ??
+        const <Map<String, dynamic>>[];
+    final canSend = readiness?['can_send'] as bool? ?? false;
+    final items = readiness?['items'];
+    final suppliers = readiness?['suppliers'];
+    Map<String, dynamic>? firstFailing;
+    for (final c in checks) {
+      if (c['ok'] != true) { firstFailing = c; break; }
+    }
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(pad, 12, pad, 4),
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: const Color(0xFFE5E7EB)),
+          boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.03), blurRadius: 4)],
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('SEND-ALL READINESS',
+              style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700,
+                  letterSpacing: 0.6, color: Color(0xFF6B7280))),
+          const SizedBox(height: 10),
+          if (_readinessLoading && readiness == null)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 8),
+              child: SizedBox(width: 18, height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF1B7A43))),
+            )
+          else if (readiness == null)
+            const Text('Readiness unavailable — tap refresh to retry.',
+                style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)))
+          else ...[
+            ...checks.map((c) => _ReadinessCheckRow(check: c)),
+            const SizedBox(height: 8),
+            if (items != null && suppliers != null)
+              Text('$items items → $suppliers suppliers',
+                  style: const TextStyle(
+                      fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
+            const SizedBox(height: 12),
+            _SlideToSend(
+              enabled: canSend,
+              sending: _sendingInquiry,
+              disabledLabel: canSend
+                  ? null
+                  : 'Blocked — ${firstFailing?['label'] as String? ?? 'readiness check failing'}',
+              onConfirmed: _sendAllInquiry,
+            ),
+          ],
+        ]),
+      ),
+    );
+  }
+
   Widget _buildInquiryView(bool isDesktop) {
     final pad = isDesktop ? 28.0 : 16.0;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      _buildReadinessAndSlider(pad),
       if (_inquiryOverviewLoading && _inquiryOverview.isEmpty)
         const Padding(
           padding: EdgeInsets.all(40),

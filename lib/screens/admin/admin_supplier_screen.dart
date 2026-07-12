@@ -206,118 +206,58 @@ class _ReadinessCheckRow extends StatelessWidget {
   }
 }
 
-// ── CHANGE #446: slide-to-confirm master send control ──────────────────────
+// ── CHANGE #456: inquiry lock switch — turning it ON blocks new orders for
+// everyone via set_inquiry_lock(true). Replaces the old #446 slide-to-send
+// action control (which triggered start_inquiry_for_suppliers directly).
 
-class _SlideToSend extends StatefulWidget {
-  final bool enabled;
-  final bool sending;
+class _InquiryLockSwitch extends StatelessWidget {
+  final bool enabled; // == readiness['can_send']
+  final bool locked; // == readiness['locked']
+  final bool toggling;
   final String? disabledLabel;
-  final Future<void> Function() onConfirmed;
+  final Future<void> Function(bool turnOn) onToggle;
 
-  const _SlideToSend({
+  const _InquiryLockSwitch({
     required this.enabled,
-    required this.sending,
-    required this.onConfirmed,
+    required this.locked,
+    required this.toggling,
+    required this.onToggle,
     this.disabledLabel,
   });
 
   @override
-  State<_SlideToSend> createState() => _SlideToSendState();
-}
-
-class _SlideToSendState extends State<_SlideToSend> {
-  double _dragX = 0;
-  bool _dragging = false;
-
-  static const double _thumbSize = 44;
-  static const double _trackHeight = 48;
-
-  Future<void> _handleRelease(double maxDrag) async {
-    if (maxDrag <= 0) {
-      setState(() => _dragX = 0);
-      return;
-    }
-    final progress = _dragX / maxDrag;
-    setState(() => _dragging = false);
-    if (progress >= 0.82) {
-      setState(() => _dragX = maxDrag);
-      await widget.onConfirmed();
-      if (mounted) setState(() => _dragX = 0);
-    } else {
-      setState(() => _dragX = 0);
-    }
-  }
-
-  @override
   Widget build(BuildContext context) {
-    final enabled = widget.enabled && !widget.sending;
-    return LayoutBuilder(builder: (context, box) {
-      final maxDrag = (box.maxWidth - _thumbSize).clamp(0.0, double.infinity);
-      final trackColor = enabled ? const Color(0xFFECFDF5) : const Color(0xFFF3F4F6);
-      final borderColor = enabled ? const Color(0xFF1B7A43) : const Color(0xFFE5E7EB);
-      final thumbColor = enabled ? const Color(0xFF1B7A43) : const Color(0xFF9CA3AF);
-      final label = widget.sending
-          ? 'Sending…'
-          : (enabled ? 'Slide to send inquiry' : (widget.disabledLabel ?? 'Blocked'));
-
-      return Container(
-        height: _trackHeight,
-        decoration: BoxDecoration(
-          color: trackColor,
-          borderRadius: BorderRadius.circular(_trackHeight / 2),
-          border: Border.all(color: borderColor),
+    final canInteract = enabled && !toggling;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(children: [
+        Expanded(
+          child: Text(locked ? 'Inquiry running' : 'Start inquiry',
+              style: const TextStyle(
+                  fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
         ),
-        child: Stack(alignment: Alignment.centerLeft, children: [
-          Center(
-            child: Text(
-              label,
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w700,
-                color: enabled ? const Color(0xFF065F46) : const Color(0xFF6B7280),
-              ),
-            ),
+        if (toggling)
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 10),
+            child: SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF1B7A43))),
+          )
+        else
+          Switch(
+            value: locked,
+            activeColor: const Color(0xFF1B7A43),
+            onChanged: canInteract ? (v) => onToggle(v) : null,
           ),
-          AnimatedPositioned(
-            duration: _dragging ? Duration.zero : const Duration(milliseconds: 200),
-            curve: Curves.easeOut,
-            left: 2 + _dragX,
-            top: 2,
-            child: GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onHorizontalDragStart: enabled ? (_) => setState(() => _dragging = true) : null,
-              onHorizontalDragUpdate: enabled
-                  ? (details) {
-                      setState(() {
-                        _dragX = (_dragX + details.delta.dx).clamp(0.0, maxDrag);
-                      });
-                    }
-                  : null,
-              onHorizontalDragEnd: enabled ? (_) => _handleRelease(maxDrag) : null,
-              child: Container(
-                width: _thumbSize - 4,
-                height: _thumbSize - 4,
-                decoration: BoxDecoration(
-                  color: thumbColor,
-                  shape: BoxShape.circle,
-                  boxShadow: const [BoxShadow(color: Color(0x33000000), blurRadius: 4, offset: Offset(0, 1))],
-                ),
-                child: widget.sending
-                    ? const Padding(
-                        padding: EdgeInsets.all(11),
-                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                      )
-                    : Icon(
-                        enabled ? Icons.arrow_forward : Icons.lock_outline,
-                        color: Colors.white,
-                        size: 18,
-                      ),
-              ),
-            ),
-          ),
-        ]),
-      );
-    });
+      ]),
+      if (disabledLabel != null)
+        Padding(
+          padding: const EdgeInsets.only(top: 2),
+          child: Text(disabledLabel!,
+              style: const TextStyle(
+                  fontSize: 12, color: Color(0xFFDC2626), fontWeight: FontWeight.w600)),
+        ),
+    ]);
   }
 }
 
@@ -367,10 +307,11 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   final Map<String, Map<String, dynamic>> _inquiryLinks = {};
   bool _inquiryLoading = false;
 
-  // ── CHANGE #446: send-all readiness (inquiry_send_readiness()) ───────────
+  // ── CHANGE #456: send-all readiness (inquiry_send_readiness()) + lock ────
   Map<String, dynamic>? _inquiryReadiness;
   bool _readinessLoading = false;
-  bool _sendingInquiry = false;
+  bool _lockToggling = false;
+  Timer? _readinessPollTimer;
   OrderHoursModel? _orderHoursModel;
 
   // ── Inquiry tab state ────────────────────────────────────────────────────
@@ -501,6 +442,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     _orderHoursModel?.removeListener(_onOrderHoursChanged);
     _debounce?.cancel();
     _inquiryPollTimer?.cancel();
+    _readinessPollTimer?.cancel(); // CHANGE #456 C5
     _inquiryRtChannel?.unsubscribe(); // CHANGE #309
     _inquiryRtChannel = null;
     for (final ch in _channels) ch.unsubscribe();
@@ -1444,84 +1386,62 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   // INQUIRY LINK ACTIONS
   // ═══════════════════════════════════════════════════════════════════════════
 
-  // CHANGE #446: master "slide to send" — consolidated qty to ALL suppliers.
-  // p_force is intentionally never passed here (super_admin-only escape hatch;
-  // not exposed anywhere in this UI).
-  Future<void> _sendAllInquiry() async {
-    if (_sendingInquiry) return;
-    setState(() => _sendingInquiry = true);
+  // CHANGE #456 C2/C3 — inquiry lock toggle. Turning ON is a big lever (blocks
+  // new orders for EVERYONE, no admin exemption) so it is confirmed first.
+  // Turning OFF is immediate. The server re-checks readiness on every ON
+  // attempt regardless of what the UI thinks — never retried automatically.
+  Future<void> _handleLockToggle(bool turnOn) async {
+    if (_lockToggling) return;
+    if (turnOn) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Text('Start inquiry?',
+              style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+          content: const Text(
+            'New orders will be BLOCKED for everyone — customers, admin, and '
+            'admin acting as a customer — until you turn this off.',
+            style: TextStyle(fontSize: 13, color: Color(0xFF374151)),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Cancel')),
+            FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43)),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Start inquiry'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+    }
+    setState(() => _lockToggling = true);
     try {
-      final rows = await Supabase.instance.client.rpc(
-        'start_inquiry_for_suppliers',
-        params: {'p_supplier_names': null},
-      ) as List;
+      final res = await Supabase.instance.client
+          .rpc('set_inquiry_lock', params: {'p_on': turnOn});
+      final data = Map<String, dynamic>.from(res as Map);
+      final ok = data['ok'] == true;
+      final message = data['message'] as String?;
+      final returnedReadiness = data['readiness'];
       if (mounted) {
         setState(() {
-          for (final r in rows) {
-            final m = Map<String, dynamic>.from(r as Map);
-            _inquiryLinks[m['supplier_name'] as String] = m;
+          _lockToggling = false;
+          if (returnedReadiness != null) {
+            _inquiryReadiness = Map<String, dynamic>.from(returnedReadiness as Map);
           }
-          _sendingInquiry = false;
         });
-        RenderLog.write('inquiry_send_all', rows.length);
-        showToast(context, 'Inquiry sent to ${rows.length} supplier(s)');
-        _fetchInquiryOverview(silent: true);
-      }
-    } on PostgrestException catch (e) {
-      if (mounted) setState(() => _sendingInquiry = false);
-      final isBlocked = e.message.contains('inquiry_send_blocked') ||
-          (e.code ?? '').contains('inquiry_send_blocked');
-      if (isBlocked) {
-        _showReadinessBlockedDialog(e.hint);
+        if (message != null) showToast(context, message, isError: !ok);
         _fetchInquiryReadiness(silent: true);
-      } else if (mounted) {
-        showToast(context, 'Failed to send inquiry: ${e.message}', isError: true);
       }
     } catch (e) {
       if (mounted) {
-        setState(() => _sendingInquiry = false);
-        showToast(context, 'Failed to send inquiry: $e', isError: true);
+        setState(() => _lockToggling = false);
+        showToast(context, 'Failed to update inquiry lock: $e', isError: true);
       }
     }
-  }
-
-  // CHANGE #446: parse the readiness JSON out of the RPC's exception HINT and
-  // render the failing checks — never show a raw Postgres error to the admin.
-  void _showReadinessBlockedDialog(String? hintJson) {
-    if (!mounted) return;
-    List<Map<String, dynamic>> checks = const [];
-    try {
-      if (hintJson != null && hintJson.trim().isNotEmpty) {
-        final parsed = jsonDecode(hintJson);
-        final rawChecks = (parsed as Map)['checks'] as List?;
-        checks = rawChecks
-                ?.map((c) => Map<String, dynamic>.from(c as Map))
-                .toList() ??
-            const [];
-      }
-    } catch (_) {}
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('Cannot send inquiry yet',
-            style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
-        content: SizedBox(
-          width: 360,
-          child: checks.isEmpty
-              ? const Text('One or more readiness checks are failing.',
-                  style: TextStyle(fontSize: 13, color: Color(0xFF374151)))
-              : Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: checks.map((c) => _ReadinessCheckRow(check: c)).toList(),
-                ),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK')),
-        ],
-      ),
-    );
   }
 
   Future<void> _loadAutoMeta() async {
@@ -2045,6 +1965,8 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       _inquiryPollTimer = null;
       _inquiryRtChannel?.unsubscribe(); // CHANGE #309: stop listening when leaving tab
       _inquiryRtChannel = null;
+      _readinessPollTimer?.cancel(); // CHANGE #456 C5
+      _readinessPollTimer = null;
     }
     setState(() {
       _filter = f;
@@ -2061,6 +1983,14 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         if (mounted && _filter == _SupFilter.inquiry) {
           _fetchInquiryOverview(silent: true);
           _fetchUnassignedItems(silent: true);
+        }
+      });
+      // CHANGE #456 C5 — leads/claims/orders change under the admin while this
+      // tab is open; poll readiness faster than the general overview refresh.
+      _readinessPollTimer?.cancel();
+      _readinessPollTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+        if (mounted && _filter == _SupFilter.inquiry) {
+          _fetchInquiryReadiness(silent: true);
         }
       });
       _subscribeInquiryRt(); // CHANGE #309: live realtime on inquiry table
@@ -2127,10 +2057,10 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           _inquiryReadiness = Map<String, dynamic>.from(res as Map);
           _readinessLoading = false;
         });
-        final canSend = _inquiryReadiness?['can_send'] as bool? ?? false;
+        final sendAllowed = _inquiryReadiness?['can_send'] as bool? ?? false;
         final checks = (_inquiryReadiness?['checks'] as List?) ?? const [];
         final failing = checks.where((c) => (c as Map)['ok'] != true).length;
-        RenderLog.write('c444_can_send', canSend.toString());
+        RenderLog.write('c444_can_send', sendAllowed.toString());
         RenderLog.write('c444_checks_failing', failing.toString());
       }
     } catch (e) {
@@ -2438,14 +2368,17 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
 
   // ── Inquiry tab: top-level view ───────────────────────────────────────────
 
-  // CHANGE #446: readiness checklist + slide-to-send master control.
+  // CHANGE #456: readiness checklist + inquiry lock switch.
   Widget _buildReadinessAndSlider(double pad) {
     final readiness = _inquiryReadiness;
     final checks = (readiness?['checks'] as List?)
             ?.map((c) => Map<String, dynamic>.from(c as Map))
             .toList() ??
         const <Map<String, dynamic>>[];
-    final canSend = readiness?['can_send'] as bool? ?? false;
+    final sendAllowed = readiness?['can_send'] as bool? ?? false;
+    final locked = readiness?['locked'] as bool? ?? false;
+    final lockLabel = readiness?['lock_label'] as String?;
+    final dateLabel = readiness?['date_label'] as String?;
     final items = readiness?['items'];
     final suppliers = readiness?['suppliers'];
     Map<String, dynamic>? firstFailing;
@@ -2453,49 +2386,91 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       if (c['ok'] != true) { firstFailing = c; break; }
     }
 
+    if (readiness != null) {
+      RenderLog.write('c456_checks', checks.length.toString());
+      RenderLog.write('c456_can_send', sendAllowed.toString());
+      RenderLog.write('c456_locked', locked.toString());
+      RenderLog.write('c456_first_fail', firstFailing?['label'] as String? ?? '');
+      RenderLog.write('c456_date', dateLabel ?? '');
+      RenderLog.write('c456_slider_wired', '1');
+    }
+
     return Padding(
       padding: EdgeInsets.fromLTRB(pad, 12, pad, 4),
-      child: Container(
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: const Color(0xFFE5E7EB)),
-          boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.03), blurRadius: 4)],
-        ),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Text('SEND-ALL READINESS',
-              style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700,
-                  letterSpacing: 0.6, color: Color(0xFF6B7280))),
-          const SizedBox(height: 10),
-          if (_readinessLoading && readiness == null)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 8),
-              child: SizedBox(width: 18, height: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF1B7A43))),
-            )
-          else if (readiness == null)
-            const Text('Readiness unavailable — tap refresh to retry.',
-                style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)))
-          else ...[
-            ...checks.map((c) => _ReadinessCheckRow(check: c)),
-            const SizedBox(height: 8),
-            if (items != null && suppliers != null)
-              Text('$items items → $suppliers suppliers',
-                  style: const TextStyle(
-                      fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
-            const SizedBox(height: 12),
-            _SlideToSend(
-              enabled: canSend,
-              sending: _sendingInquiry,
-              disabledLabel: canSend
-                  ? null
-                  : 'Blocked — ${firstFailing?['label'] as String? ?? 'readiness check failing'}',
-              onConfirmed: _sendAllInquiry,
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // C4 — while locked, a prominent banner above the readiness card. This
+        // one banner is warranted (live operational state); never elsewhere.
+        if (locked && lockLabel != null)
+          Container(
+            width: double.infinity,
+            margin: const EdgeInsets.only(bottom: 10),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFEF3C7),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: const Color(0xFFF59E0B)),
             ),
-          ],
-        ]),
-      ),
+            child: Row(children: [
+              const Icon(Icons.lock_outline, size: 16, color: Color(0xFF92400E)),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(lockLabel,
+                    style: const TextStyle(
+                        fontSize: 12.5, fontWeight: FontWeight.w700, color: Color(0xFF92400E))),
+              ),
+            ]),
+          ),
+        Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: const Color(0xFFE5E7EB)),
+            boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.03), blurRadius: 4)],
+          ),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              const Text('SEND-ALL READINESS',
+                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700,
+                      letterSpacing: 0.6, color: Color(0xFF6B7280))),
+              if (dateLabel != null) ...[
+                const SizedBox(width: 6),
+                Text(dateLabel,
+                    style: const TextStyle(
+                        fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF9CA3AF))),
+              ],
+            ]),
+            const SizedBox(height: 10),
+            if (_readinessLoading && readiness == null)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 8),
+                child: SizedBox(width: 18, height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF1B7A43))),
+              )
+            else if (readiness == null)
+              const Text('Readiness unavailable — tap refresh to retry.',
+                  style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)))
+            else ...[
+              ...checks.map((c) => _ReadinessCheckRow(check: c)),
+              const SizedBox(height: 8),
+              if (items != null && suppliers != null)
+                Text('$items items → $suppliers suppliers',
+                    style: const TextStyle(
+                        fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
+              const SizedBox(height: 12),
+              _InquiryLockSwitch(
+                enabled: sendAllowed,
+                locked: locked,
+                toggling: _lockToggling,
+                disabledLabel: sendAllowed
+                    ? null
+                    : 'Blocked — ${firstFailing?['label'] as String? ?? 'readiness check failing'}',
+                onToggle: _handleLockToggle,
+              ),
+            ],
+          ]),
+        ),
+      ]),
     );
   }
 

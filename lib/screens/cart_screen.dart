@@ -4,6 +4,7 @@ import 'package:pharma_b2b/utils/toast.dart';
 
 import '../app_state.dart';
 import '../order_hours_state.dart';
+import '../inquiry_lock_state.dart';
 import '../utils/order_code.dart';
 import 'bulk_upload_screen.dart';
 import '../utils/render_log.dart';
@@ -37,6 +38,9 @@ class _CartScreenState extends State<CartScreen> {
     // hook in OrderHoursModel. A dropped socket must never leave a customer
     // stuck on a stale message here specifically.
     OrderHoursState.read(context).refresh();
+    // CHANGE #456 D1 — call inquiry_lock_state() alongside order_hours_state()
+    // on the cart/checkout screen.
+    InquiryLockState.read(context).refresh();
   }
 
   // CHANGE #324/#435: ViewAs checkbox state — admin-added items checked, customer
@@ -83,6 +87,20 @@ class _CartScreenState extends State<CartScreen> {
 
   Future<void> _placeOrder() async {
     if (_orderInProgress) return;
+
+    // CHANGE #456 D1 — inquiry lock has NO admin/ViewAs exemption (deliberately
+    // different from order_hours_state()'s admin exemption below). Check first,
+    // before branching into the ViewAs vs normal flow.
+    final inquiryLock = InquiryLockState.read(context);
+    if (inquiryLock.locked) {
+      RenderLog.write('c456_cust_blocked', 'true');
+      _showOrderGate(
+        title: 'Ordering paused',
+        message: inquiryLock.message ??
+            'Inquiry in progress — new orders are paused until it completes.',
+      );
+      return;
+    }
 
     final cart = AppState.of(context);
     final viewAs = ViewAsState.of(context);
@@ -217,6 +235,19 @@ class _CartScreenState extends State<CartScreen> {
             showToast(context,
                 'Only a super admin can place orders on behalf of a customer',
                 isError: true);
+          } else if (msg.contains('inquiry_in_progress')) {
+            // CHANGE #456 D — no admin/ViewAs exemption; the trigger rejects
+            // admin-as-customer orders too. Re-fetch and show the gate.
+            RenderLog.write('c456_cust_blocked', 'true');
+            final il = InquiryLockState.read(context);
+            await il.refresh();
+            if (mounted) {
+              _showOrderGate(
+                title: 'Ordering paused',
+                message: il.message ??
+                    'Inquiry in progress — new orders are paused until it completes.',
+              );
+            }
           } else {
             showToast(context, 'Could not place order: $e', isError: true);
           }
@@ -357,6 +388,10 @@ class _CartScreenState extends State<CartScreen> {
       // refresh() the model's own fields are already current.
       final isOrderHoursClosed =
           e.message.contains('order_hours_closed') || (e.code ?? '').contains('order_hours_closed');
+      // CHANGE #456 D2 belt-and-braces: the DB trigger rejects the order
+      // regardless of what the UI's cached lock state thinks. Re-fetch and
+      // show `message` VERBATIM, same as the pre-check.
+      final isInquiryLocked = e.message.contains('inquiry_in_progress');
       if (isOrderHoursClosed) {
         RenderLog.write('c444_cust_blocked', 'true');
         final oh = OrderHoursState.read(context);
@@ -366,6 +401,16 @@ class _CartScreenState extends State<CartScreen> {
           title: oh.popupTitle ?? '',
           message: oh.popupMessage ?? '',
           secondLine: oh.reopenHint,
+        );
+      } else if (isInquiryLocked) {
+        RenderLog.write('c456_cust_blocked', 'true');
+        final il = InquiryLockState.read(context);
+        await il.refresh();
+        if (!mounted) return;
+        _showOrderGate(
+          title: 'Ordering paused',
+          message: il.message ??
+              'Inquiry in progress — new orders are paused until it completes.',
         );
       } else {
         showToast(context, 'Could not place order. Please try again.', isError: true);
@@ -1587,8 +1632,11 @@ class _CheckoutBar extends StatelessWidget {
                   if (!cart.isViewAs) {
                     RenderLog.write('c444_cust_blocked', orderHoursClosed.toString());
                   }
+                  // CHANGE #456 D1 — inquiry lock has NO ViewAs/admin exemption.
+                  final inquiryLocked = InquiryLockState.of(ctx).locked;
                   final gateMsg = _orderGateMessage(
                       auth, viewAsNotifier, orderHoursClosed ? orderHours.buttonLabel : null);
+                  final blocked = gateMsg != null || inquiryLocked;
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
@@ -1621,7 +1669,7 @@ class _CheckoutBar extends StatelessWidget {
                                 padding:
                                     const EdgeInsets.symmetric(vertical: 15),
                                 decoration: BoxDecoration(
-                                  color: gateMsg != null
+                                  color: blocked
                                       ? const Color(0xFF9CA3AF)
                                       : const Color(0xFF1B5E20),
                                   borderRadius: BorderRadius.circular(12),
@@ -1634,11 +1682,13 @@ class _CheckoutBar extends StatelessWidget {
                                         color: Colors.white, size: 18),
                                     const SizedBox(width: 8),
                                     Text(
-                                      orderHoursClosed
-                                          ? (orderHours.buttonLabel ?? '')
-                                          : (auth.isAuthenticated
-                                              ? 'Place Order'
-                                              : 'Login to Order'),
+                                      inquiryLocked
+                                          ? 'Ordering paused'
+                                          : (orderHoursClosed
+                                              ? (orderHours.buttonLabel ?? '')
+                                              : (auth.isAuthenticated
+                                                  ? 'Place Order'
+                                                  : 'Login to Order')),
                                       style: const TextStyle(
                                         color: Colors.white,
                                         fontSize: 14,
@@ -2395,8 +2445,11 @@ class _OrderSummaryPanel extends StatelessWidget {
             final auth = UserState.of(ctx);
             final orderHours = OrderHoursState.of(ctx);
             final orderHoursClosed = !cart.isViewAs && !orderHours.canOrder;
+            // CHANGE #456 D1 — inquiry lock has NO ViewAs/admin exemption.
+            final inquiryLocked = InquiryLockState.of(ctx).locked;
             final gateMsg = _orderGateMessage(
                 auth, ViewAsState.of(ctx), orderHoursClosed ? orderHours.buttonLabel : null);
+            final blocked = gateMsg != null || inquiryLocked;
             return Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -2405,7 +2458,7 @@ class _OrderSummaryPanel extends StatelessWidget {
                   child: Container(
                     padding: const EdgeInsets.symmetric(vertical: 15),
                     decoration: BoxDecoration(
-                      color: gateMsg != null
+                      color: blocked
                           ? const Color(0xFF9CA3AF)
                           : const Color(0xFF1B5E20),
                       borderRadius: BorderRadius.circular(12),
@@ -2417,11 +2470,13 @@ class _OrderSummaryPanel extends StatelessWidget {
                             color: Colors.white, size: 18),
                         const SizedBox(width: 8),
                         Text(
-                          orderHoursClosed
-                              ? (orderHours.buttonLabel ?? '')
-                              : (auth.isAuthenticated
-                                  ? 'Place Order'
-                                  : 'Login to Order'),
+                          inquiryLocked
+                              ? 'Ordering paused'
+                              : (orderHoursClosed
+                                  ? (orderHours.buttonLabel ?? '')
+                                  : (auth.isAuthenticated
+                                      ? 'Place Order'
+                                      : 'Login to Order')),
                           style: const TextStyle(
                             color: Colors.white,
                             fontSize: 14,

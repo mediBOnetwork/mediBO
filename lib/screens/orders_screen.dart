@@ -1,14 +1,17 @@
+import 'dart:convert';
 import 'dart:math';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
 import 'package:pharma_b2b/utils/toast.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../util.dart';
+import '../utils/download_bytes.dart';
 import '../utils/order_code.dart';
 import '../utils/render_log.dart';
 import '../widgets/animations.dart';
@@ -372,7 +375,8 @@ class _OrderCardState extends State<_OrderCard> {
         ),
         const SizedBox(height: 12),
         if (_tab == 0) _ItemsTab(items: items),
-        if (_tab == 1) _BillTab(bill: bill),
+        if (_tab == 1)
+          _BillTab(bill: bill, orderId: (header['order_id'] ?? widget.order.id).toString()),
         if (_tab == 2)
           _PaymentTab(
             orderId: (header['order_id'] ?? widget.order.id).toString(),
@@ -537,54 +541,332 @@ class _ItemsTab extends StatelessWidget {
 
 // ─── Bill tab ───────────────────────────────────────────────────────────────
 
+// CHANGE #451 — schema-driven GST invoice table. Every string on screen comes
+// straight from cust_order_panel().bill; nothing is formatted or computed here.
 class _BillTab extends StatelessWidget {
   final Map<String, dynamic> bill;
-  const _BillTab({required this.bill});
+  final String orderId;
+  const _BillTab({required this.bill, required this.orderId});
 
   @override
   Widget build(BuildContext context) {
     final ready = bill['ready'] == true;
+    RenderLog.write('c451_bill_ready', ready);
+
     if (!ready) {
-      final reasonLabel = bill['reason_label']?.toString() ?? '';
-      final billed = (bill['suppliers_billed'] as num?)?.toInt() ?? 0;
-      final total = (bill['suppliers_total'] as num?)?.toInt() ?? 0;
+      final message = bill['message']?.toString() ?? '';
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 24),
         child: Column(children: [
           const Icon(Icons.receipt_long_outlined, size: 48, color: Color(0xFFD1D5DB)),
           const SizedBox(height: 12),
-          Text(reasonLabel,
+          Text(message,
               textAlign: TextAlign.center,
               style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
-          const SizedBox(height: 12),
+        ]),
+      );
+    }
+
+    final invoice = Map<String, dynamic>.from(bill['invoice'] as Map? ?? {});
+    final columns = ((bill['columns'] as List?) ?? [])
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
+    final lines = ((bill['lines'] as List?) ?? [])
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
+    final totals = Map<String, dynamic>.from(bill['totals'] as Map? ?? {});
+    final gstSummary = ((bill['gst_summary'] as List?) ?? [])
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
+    final seller = Map<String, dynamic>.from(invoice['seller'] as Map? ?? {});
+    final buyer = Map<String, dynamic>.from(invoice['buyer'] as Map? ?? {});
+    final sellerWarning = seller['warning']?.toString();
+
+    RenderLog.write('c451_cols', columns.length);
+    RenderLog.write('c451_rows', lines.length);
+    RenderLog.write('c451_net', totals['net_payable_label']?.toString() ?? '');
+    RenderLog.write('c451_remaining', totals['remaining_label']?.toString() ?? '');
+    RenderLog.write('c451_seller_warning', (sellerWarning != null && sellerWarning.isNotEmpty) ? 1 : 0);
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      _invoiceHeader(invoice, seller, buyer, sellerWarning),
+      const SizedBox(height: 14),
+      _invoiceTable(columns, lines),
+      const SizedBox(height: 16),
+      _totalsBlock(totals),
+      if (gstSummary.isNotEmpty) ...[
+        const SizedBox(height: 16),
+        _gstSummaryTable(gstSummary),
+      ],
+      const SizedBox(height: 16),
+      _DownloadBillButton(orderId: orderId, invoiceNumber: invoice['number']?.toString()),
+    ]);
+  }
+
+  // ── B2: invoice header ──────────────────────────────────────────────────
+
+  Widget _invoiceHeader(
+    Map<String, dynamic> invoice,
+    Map<String, dynamic> seller,
+    Map<String, dynamic> buyer,
+    String? sellerWarning,
+  ) {
+    final sellerLine = [seller['address'], seller['state']]
+        .where((e) => e != null && e.toString().isNotEmpty)
+        .toList();
+    final sellerMeta = <String>[
+      if (seller['gstin'] != null && seller['gstin'].toString().isNotEmpty) 'GSTIN: ${seller['gstin']}',
+      if (seller['dl'] != null && seller['dl'].toString().isNotEmpty) 'DL: ${seller['dl']}',
+    ];
+    final buyerLine = [buyer['address'], buyer['phone']]
+        .where((e) => e != null && e.toString().isNotEmpty)
+        .toList();
+    final buyerMeta = <String>[
+      if (buyer['gstin'] != null && buyer['gstin'].toString().isNotEmpty) 'GSTIN: ${buyer['gstin']}',
+      if (buyer['dl'] != null && buyer['dl'].toString().isNotEmpty) 'DL: ${buyer['dl']}',
+    ];
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(color: const Color(0xFFF9FAFB), borderRadius: BorderRadius.circular(10)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          const Expanded(
+            child: Text('TAX INVOICE', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+          ),
+          if (invoice['number'] != null)
+            Text(invoice['number'].toString(), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
+        ]),
+        const SizedBox(height: 6),
+        Row(children: [
+          Expanded(
+            child: Text(seller['name']?.toString() ?? '',
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
+          ),
+          if (invoice['date'] != null)
+            Text('Date: ${invoice['date']}', style: const TextStyle(fontSize: 11.5, color: Color(0xFF6B7280))),
+        ]),
+        if (sellerLine.isNotEmpty || sellerMeta.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Text([...sellerLine, ...sellerMeta].join(' | '),
+                style: const TextStyle(fontSize: 11.5, color: Color(0xFF6B7280))),
+          ),
+        if (sellerWarning != null && sellerWarning.isNotEmpty) ...[
+          const SizedBox(height: 8),
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            decoration: BoxDecoration(color: const Color(0xFFF3F4F6), borderRadius: BorderRadius.circular(20)),
-            child: Text('$billed of $total supplier bills received',
-                style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(color: const Color(0xFFFEF2F2), borderRadius: BorderRadius.circular(8), border: Border.all(color: const Color(0xFFFCA5A5))),
+            child: Text(sellerWarning, style: const TextStyle(fontSize: 11.5, color: Color(0xFFB91C1C), fontWeight: FontWeight.w600)),
+          ),
+        ],
+        const SizedBox(height: 10),
+        if (buyer['name'] != null)
+          Text('Billed to: ${buyer['name']}', style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
+        if (buyerLine.isNotEmpty || buyerMeta.isNotEmpty)
+          Text([...buyerLine, ...buyerMeta].join(' | '), style: const TextStyle(fontSize: 11.5, color: Color(0xFF6B7280))),
+      ]),
+    );
+  }
+
+  // ── B3: the table ────────────────────────────────────────────────────────
+
+  Widget _invoiceTable(List<Map<String, dynamic>> columns, List<Map<String, dynamic>> lines) {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: DataTable(
+        border: TableBorder.all(color: const Color(0xFFE5E7EB), width: 0.5),
+        headingRowColor: const WidgetStatePropertyAll(Color(0xFFF3F4F6)),
+        headingTextStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF374151)),
+        dataTextStyle: const TextStyle(fontSize: 11.5, color: Color(0xFF374151)),
+        columnSpacing: 18,
+        horizontalMargin: 10,
+        columns: columns
+            .map((c) => DataColumn(
+                  label: Text(c['label']?.toString() ?? ''),
+                  numeric: c['align'] == 'right',
+                ))
+            .toList(),
+        rows: List<DataRow>.generate(lines.length, (i) {
+          final line = lines[i];
+          return DataRow(
+            color: WidgetStatePropertyAll(i.isOdd ? const Color(0xFFFAFAFA) : Colors.white),
+            cells: columns.map((c) {
+              final key = c['key']?.toString() ?? '';
+              final value = line[key]?.toString() ?? '';
+              if (key == 'product') {
+                final company = line['company']?.toString();
+                return DataCell(Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(value),
+                    if (company != null && company.isNotEmpty)
+                      Text(company, style: const TextStyle(fontSize: 10, color: Color(0xFF9CA3AF))),
+                  ],
+                ));
+              }
+              return DataCell(Text(value));
+            }).toList(),
+          );
+        }),
+      ),
+    );
+  }
+
+  // ── B4: totals block ────────────────────────────────────────────────────
+
+  Widget _totalsBlock(Map<String, dynamic> totals) {
+    Widget row(String label, dynamic value, {bool bold = false, double size = 12.5}) {
+      if (value == null) return const SizedBox.shrink();
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2),
+        child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+          Text(label, style: TextStyle(fontSize: size, fontWeight: bold ? FontWeight.w700 : FontWeight.normal, color: const Color(0xFF6B7280))),
+          const SizedBox(width: 16),
+          SizedBox(
+            width: 130,
+            child: Text(value.toString(),
+                textAlign: TextAlign.right,
+                style: TextStyle(fontSize: size, fontWeight: bold ? FontWeight.w700 : FontWeight.w600, color: const Color(0xFF111827))),
           ),
         ]),
       );
     }
-    // D2 — future state: bill.lines shape is not yet defined server-side.
-    // Render generically so this swaps in cleanly once the pipeline lands.
-    final lines = ((bill['lines'] as List?) ?? [])
-        .map((e) => Map<String, dynamic>.from(e as Map))
-        .toList();
-    if (lines.isEmpty) {
-      return const Padding(
-        padding: EdgeInsets.symmetric(vertical: 16),
-        child: Text('No bill lines.', style: TextStyle(color: Color(0xFF9CA3AF))),
-      );
+
+    final youSaveLabel = totals['you_save_label']?.toString();
+    final inWords = totals['in_words']?.toString();
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+      row('PTR Total', totals['ptr_total_label']),
+      row(totals['discount_label']?.toString() ?? 'Discount', totals['discount_amount_label']),
+      row('Net Taxable', totals['taxable_label'], bold: true),
+      row('CGST', totals['cgst_label']),
+      row('SGST', totals['sgst_label']),
+      row('Round Off', totals['round_off_label']),
+      const Padding(padding: EdgeInsets.symmetric(vertical: 6), child: Divider(height: 1)),
+      row('NET PAYABLE', totals['net_payable_label'], bold: true, size: 15),
+      row('Less: Advance paid', totals['paid_label']),
+      row('BALANCE DUE', totals['remaining_label'], bold: true, size: 15),
+      if (inWords != null && inWords.isNotEmpty) ...[
+        const SizedBox(height: 8),
+        Text('Amount in words: $inWords',
+            textAlign: TextAlign.right,
+            style: const TextStyle(fontSize: 11, fontStyle: FontStyle.italic, color: Color(0xFF6B7280))),
+      ],
+      if (youSaveLabel != null && youSaveLabel.isNotEmpty) ...[
+        const SizedBox(height: 4),
+        Text(youSaveLabel, style: const TextStyle(fontSize: 11.5, color: Color(0xFF16A34A), fontWeight: FontWeight.w600)),
+      ],
+    ]);
+  }
+
+  // ── B5: GST summary ─────────────────────────────────────────────────────
+
+  Widget _gstSummaryTable(List<Map<String, dynamic>> gstSummary) {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: DataTable(
+        border: TableBorder.all(color: const Color(0xFFE5E7EB), width: 0.5),
+        headingRowColor: const WidgetStatePropertyAll(Color(0xFFF3F4F6)),
+        headingTextStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF374151)),
+        dataTextStyle: const TextStyle(fontSize: 11.5, color: Color(0xFF374151)),
+        columnSpacing: 18,
+        horizontalMargin: 10,
+        columns: const [
+          DataColumn(label: Text('Rate')),
+          DataColumn(label: Text('Taxable'), numeric: true),
+          DataColumn(label: Text('CGST'), numeric: true),
+          DataColumn(label: Text('SGST'), numeric: true),
+          DataColumn(label: Text('Total'), numeric: true),
+        ],
+        rows: gstSummary
+            .map((g) => DataRow(cells: [
+                  DataCell(Text(g['rate']?.toString() ?? '')),
+                  DataCell(Text(g['taxable']?.toString() ?? '')),
+                  DataCell(Text(g['cgst']?.toString() ?? '')),
+                  DataCell(Text(g['sgst']?.toString() ?? '')),
+                  DataCell(Text(g['total']?.toString() ?? '')),
+                ]))
+            .toList(),
+      ),
+    );
+  }
+}
+
+// ── B6: Download Bill (PDF) ──────────────────────────────────────────────────
+
+class _DownloadBillButton extends StatefulWidget {
+  final String orderId;
+  final String? invoiceNumber;
+  const _DownloadBillButton({required this.orderId, required this.invoiceNumber});
+
+  @override
+  State<_DownloadBillButton> createState() => _DownloadBillButtonState();
+}
+
+class _DownloadBillButtonState extends State<_DownloadBillButton> {
+  bool _downloading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    RenderLog.write('c451_pdf_wired', 1);
+  }
+
+  String _filenameFrom(http.Response resp) {
+    final cd = resp.headers['content-disposition'];
+    if (cd != null) {
+      final m = RegExp(r'filename="?([^";]+)"?').firstMatch(cd);
+      if (m != null) return m.group(1)!;
     }
-    return Column(
-      children: lines.map((l) {
-        final text = l.values.map((v) => v?.toString() ?? '').where((s) => s.isNotEmpty).join('  ·  ');
-        return Padding(
-          padding: const EdgeInsets.symmetric(vertical: 4),
-          child: Text(text, style: const TextStyle(fontSize: 13)),
-        );
-      }).toList(),
+    return 'Invoice-${widget.invoiceNumber ?? widget.orderId}.pdf';
+  }
+
+  Future<void> _download() async {
+    if (_downloading) return;
+    setState(() => _downloading = true);
+    try {
+      final token = Supabase.instance.client.auth.currentSession?.accessToken ?? '';
+      final resp = await http.post(
+        Uri.parse('https://swojhmarmaijkshsbeih.supabase.co/functions/v1/bill-pdf'),
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({'order_id': widget.orderId}),
+      );
+      if (!mounted) return;
+      if (resp.statusCode == 200) {
+        downloadBytes(resp.bodyBytes, _filenameFrom(resp), 'application/pdf');
+      } else {
+        String message = 'Could not download the bill.';
+        try {
+          final decoded = jsonDecode(resp.body);
+          if (decoded is Map) {
+            message = decoded['message']?.toString() ?? decoded['error']?.toString() ?? message;
+          }
+        } catch (_) {}
+        showToast(context, message, isError: true);
+      }
+    } catch (_) {
+      if (mounted) showToast(context, 'Could not download the bill.', isError: true);
+    } finally {
+      if (mounted) setState(() => _downloading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: double.infinity,
+      child: OutlinedButton.icon(
+        onPressed: _downloading ? null : _download,
+        icon: _downloading
+            ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+            : const Icon(Icons.download_outlined, size: 16),
+        label: Text(_downloading ? 'Downloading…' : 'Download Bill (PDF)'),
+      ),
     );
   }
 }

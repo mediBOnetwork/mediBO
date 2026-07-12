@@ -14,7 +14,6 @@ import '../user_state.dart';
 import '../util.dart';
 import '../view_as_state.dart';
 import '../widgets/animations.dart';
-import '../widgets/order_hours_banner.dart';
 import 'auth/login_screen.dart';
 import 'profile_screen.dart';
 
@@ -29,6 +28,16 @@ class CartScreen extends StatefulWidget {
 
 class _CartScreenState extends State<CartScreen> {
   bool _orderInProgress = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // CHANGE #455 D2 — belt-and-braces: re-fetch the moment the cart/checkout
+    // screen opens, alongside the realtime subscription and the app-resume
+    // hook in OrderHoursModel. A dropped socket must never leave a customer
+    // stuck on a stale message here specifically.
+    OrderHoursState.read(context).refresh();
+  }
 
   // CHANGE #324/#435: ViewAs checkbox state — admin-added items checked, customer
   // items unchecked, by default. Re-applied on EVERY build (not just once) so rows
@@ -250,15 +259,19 @@ class _CartScreenState extends State<CartScreen> {
     }
     RenderLog.write('order_approval_passed', 'approved:true');
 
-    // CHANGE #446: block placing an order while order hours are closed.
+    // CHANGE #446/455: block placing an order while order hours are closed.
     // Belt-and-braces primary gate — the DB also enforces this (order_hours_closed).
+    // C2 — popup_title/popup_message/reopen_hint printed VERBATIM, exactly as
+    // order_hours_state() sends them. Never composed/prefixed in Dart.
     final orderHours = OrderHoursState.read(context);
-    if (!orderHours.isOpen) {
+    if (!orderHours.canOrder) {
       RenderLog.write('c444_cust_blocked', 'true');
       if (mounted) {
-        showToast(context,
-            'Order hours are closed. ${orderHours.closedMessage ?? ''}'.trim(),
-            isError: true);
+        _showOrderGate(
+          title: orderHours.popupTitle ?? '',
+          message: orderHours.popupMessage ?? '',
+          secondLine: orderHours.reopenHint,
+        );
       }
       return;
     }
@@ -336,29 +349,23 @@ class _CartScreenState extends State<CartScreen> {
       );
     } on PostgrestException catch (e) {
       if (!mounted) return;
-      // CHANGE #446 belt-and-braces: a stale tab can still hit the DB gate even
-      // with the button disabled. The DB raises 'order_hours_closed' and puts
-      // the admin's configured closed_message in the exception HINT.
+      // CHANGE #446/455 belt-and-braces: a stale tab can still hit the DB gate
+      // even with the button disabled. Re-fetch order_hours_state() (the
+      // realtime subscription may simply not have delivered yet) and show the
+      // SAME popup as the pre-check — popup_title/popup_message/reopen_hint,
+      // VERBATIM. The DB exception's HINT field is no longer read: after
+      // refresh() the model's own fields are already current.
       final isOrderHoursClosed =
           e.message.contains('order_hours_closed') || (e.code ?? '').contains('order_hours_closed');
       if (isOrderHoursClosed) {
         RenderLog.write('c444_cust_blocked', 'true');
-        OrderHoursState.read(context).refresh();
-        final hint = (e.hint ?? '').trim();
-        showDialog<void>(
-          context: context,
-          builder: (ctx) => AlertDialog(
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-            title: const Text('Order hours closed',
-                style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
-            content: Text(
-              hint.isNotEmpty ? hint : 'Order hours are closed. Please try again later.',
-              style: const TextStyle(fontSize: 14, color: Color(0xFF374151)),
-            ),
-            actions: [
-              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK')),
-            ],
-          ),
+        final oh = OrderHoursState.read(context);
+        await oh.refresh();
+        if (!mounted) return;
+        _showOrderGate(
+          title: oh.popupTitle ?? '',
+          message: oh.popupMessage ?? '',
+          secondLine: oh.reopenHint,
         );
       } else {
         showToast(context, 'Could not place order. Please try again.', isError: true);
@@ -383,6 +390,9 @@ class _CartScreenState extends State<CartScreen> {
   void _showOrderGate({
     required String title,
     required String message,
+    // CHANGE #455 C2 — reopen_hint, printed VERBATIM as a second line when
+    // the server sends one. Never composed into `message`.
+    String? secondLine,
     String? actionLabel,
     VoidCallback? onAction,
   }) {
@@ -392,8 +402,20 @@ class _CartScreenState extends State<CartScreen> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: Text(title,
             style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
-        content: Text(message,
-            style: const TextStyle(fontSize: 14, color: Color(0xFF374151))),
+        content: secondLine == null
+            ? Text(message,
+                style: const TextStyle(fontSize: 14, color: Color(0xFF374151)))
+            : Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(message,
+                      style: const TextStyle(fontSize: 14, color: Color(0xFF374151))),
+                  const SizedBox(height: 8),
+                  Text(secondLine,
+                      style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+                ],
+              ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
@@ -454,7 +476,6 @@ class _CartScreenState extends State<CartScreen> {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              if (!cart.isViewAs) const OrderHoursBanner(),
               if (banner != null) banner,
               Expanded(
                 child: Center(
@@ -496,7 +517,6 @@ class _CartScreenState extends State<CartScreen> {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            if (!cart.isViewAs) const OrderHoursBanner(),
             if (banner != null) banner,
             Expanded(
               child: _ItemList(
@@ -1483,14 +1503,16 @@ class _BillingBreakdownSection extends StatelessWidget {
 
 // Returns a short gate message when the user cannot place orders, null when they can.
 // Pass viewAs when inside a ViewAs session to gate on the impersonated customer's approval.
-// orderHoursClosed does NOT apply to ViewAs orders — admin-placed orders are never blocked.
-String? _orderGateMessage(AuthNotifier auth, [ViewAsNotifier? viewAs, bool orderHoursClosed = false]) {
+// orderHoursClosedLabel does NOT apply to ViewAs orders — admin-placed orders
+// are never blocked. CHANGE #455 — this is order_hours_state()'s button_label,
+// printed VERBATIM, not a hardcoded 'Order hours closed' string.
+String? _orderGateMessage(AuthNotifier auth, [ViewAsNotifier? viewAs, String? orderHoursClosedLabel]) {
   if (viewAs != null && viewAs.isActive && viewAs.role == ViewAsRole.customer) {
     return (viewAs.identity?.isApproved ?? false)
         ? null
         : "This customer's account is pending approval";
   }
-  if (orderHoursClosed) return 'Order hours closed';
+  if (orderHoursClosedLabel != null) return orderHoursClosedLabel;
   if (!auth.isAuthenticated) return 'Login and register to place orders';
   if (!auth.isRegistered) return 'Complete registration to place orders';
   if (auth.profile?.status == 'suspended') {
@@ -1560,12 +1582,13 @@ class _CheckoutBar extends StatelessWidget {
                 Builder(builder: (ctx) {
                   final auth = UserState.of(ctx);
                   final viewAsNotifier = ViewAsState.of(ctx);
-                  final orderHoursClosed = !cart.isViewAs &&
-                      !OrderHoursState.of(ctx).isOpen;
+                  final orderHours = OrderHoursState.of(ctx);
+                  final orderHoursClosed = !cart.isViewAs && !orderHours.canOrder;
                   if (!cart.isViewAs) {
                     RenderLog.write('c444_cust_blocked', orderHoursClosed.toString());
                   }
-                  final gateMsg = _orderGateMessage(auth, viewAsNotifier, orderHoursClosed);
+                  final gateMsg = _orderGateMessage(
+                      auth, viewAsNotifier, orderHoursClosed ? orderHours.buttonLabel : null);
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
@@ -1612,7 +1635,7 @@ class _CheckoutBar extends StatelessWidget {
                                     const SizedBox(width: 8),
                                     Text(
                                       orderHoursClosed
-                                          ? 'Order hours closed'
+                                          ? (orderHours.buttonLabel ?? '')
                                           : (auth.isAuthenticated
                                               ? 'Place Order'
                                               : 'Login to Order'),
@@ -2370,8 +2393,10 @@ class _OrderSummaryPanel extends StatelessWidget {
           const SizedBox(height: 14),
           Builder(builder: (ctx) {
             final auth = UserState.of(ctx);
-            final orderHoursClosed = !cart.isViewAs && !OrderHoursState.of(ctx).isOpen;
-            final gateMsg = _orderGateMessage(auth, ViewAsState.of(ctx), orderHoursClosed);
+            final orderHours = OrderHoursState.of(ctx);
+            final orderHoursClosed = !cart.isViewAs && !orderHours.canOrder;
+            final gateMsg = _orderGateMessage(
+                auth, ViewAsState.of(ctx), orderHoursClosed ? orderHours.buttonLabel : null);
             return Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -2393,7 +2418,7 @@ class _OrderSummaryPanel extends StatelessWidget {
                         const SizedBox(width: 8),
                         Text(
                           orderHoursClosed
-                              ? 'Order hours closed'
+                              ? (orderHours.buttonLabel ?? '')
                               : (auth.isAuthenticated
                                   ? 'Place Order'
                                   : 'Login to Order'),

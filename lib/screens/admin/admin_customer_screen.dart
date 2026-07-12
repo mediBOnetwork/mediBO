@@ -345,6 +345,7 @@ enum _CustFilter {
   pendingRegistrations,
   leads,
   sLeads,
+  routes,
 }
 
 // ── Screen ────────────────────────────────────────────────────────────────────
@@ -404,6 +405,11 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   // Fetched independently of _load() so it's populated before the tab is
   // ever opened; kept in sync afterwards via _SLeadsTab.onTotalChanged.
   int _sLeadsTotal = 0;
+  // CHANGE #445 — "Routes" tab badge count (zones.length from
+  // lead_routes_screen). Kept in sync via _RoutesTab.onZonesChanged; only
+  // populated once the tab has been opened (no independent bootstrap fetch,
+  // unlike S Leads — zones list is heavier and city-scoped).
+  int _routesZones = 0;
 
   final List<RealtimeChannel> _realtimeChannels = [];
   Timer? _debounce;
@@ -974,6 +980,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       case _CustFilter.approvedCustomers:
       case _CustFilter.leads:
       case _CustFilter.sLeads:
+      case _CustFilter.routes:
         return [];
     }
   }
@@ -982,6 +989,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   bool get _isApprovedView => _filter == _CustFilter.approvedCustomers;
   bool get _isLeadsView    => _filter == _CustFilter.leads;
   bool get _isSLeadsView   => _filter == _CustFilter.sLeads;
+  bool get _isRoutesView   => _filter == _CustFilter.routes;
 
   // ── Approve / Reject registrations ────────────────────────────────────────
 
@@ -1407,6 +1415,17 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         },
       );
     }
+    // Routes tab (CHANGE #445 — zones -> ordered visiting route)
+    if (_isRoutesView) {
+      RenderLog.write('c445_tab_present', 1);
+      return _RoutesTab(
+        isDesktop: isDesktop,
+        onZonesChanged: (n) {
+          if (mounted) setState(() => _routesZones = n);
+        },
+        onOpenWarehouseCard: () => setState(() => _filter = _CustFilter.sLeads),
+      );
+    }
     // Leads tab
     if (_isLeadsView) return _buildLeadsContent(isDesktop);
     // Approved customers view
@@ -1546,6 +1565,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                     'Leads (${_loggedInLeads.length + _otherLeads.length})'),
                 const SizedBox(width: 4),
                 _tab(_CustFilter.sLeads, 'S Leads ($_sLeadsTotal)'),
+                const SizedBox(width: 4),
+                _tab(_CustFilter.routes, 'Routes ($_routesZones)'),
               ]),
             ),
           ),
@@ -9630,5 +9651,723 @@ class _SLeadsTabState extends State<_SLeadsTab> {
     } catch (_) {
       return iso.substring(0, 10);
     }
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+// CHANGE #445 — "Routes" tab: zones -> ordered visiting route -> hand to a rep
+//
+// DUMB FRONTEND. Every string below is printed VERBATIM from lead_routes_screen
+// / lead_plan_route. No client-side sorting, distance maths, score banding, or
+// tel:/wa.me/maps URL construction — those fields (call_link, wa_link, nav_link,
+// maps_link, km_label, leg_label, cum_label, band, ...) already arrive complete.
+// ═════════════════════════════════════════════════════════════════════════
+
+class _RoutesTab extends StatefulWidget {
+  final bool isDesktop;
+  final ValueChanged<int> onZonesChanged;
+  final VoidCallback onOpenWarehouseCard;
+  const _RoutesTab({
+    required this.isDesktop,
+    required this.onZonesChanged,
+    required this.onOpenWarehouseCard,
+  });
+
+  @override
+  State<_RoutesTab> createState() => _RoutesTabState();
+}
+
+class _RoutesTabState extends State<_RoutesTab> {
+  bool _loading = true;
+  String? _loadError;
+  Map<String, dynamic> _hub = {};
+  Map<String, dynamic> _summary = {};
+  List<Map<String, dynamic>> _zones = [];
+
+  // ── Selected zone / route view ──────────────────────────────────────────
+  Map<String, dynamic>? _selectedZone;
+  Map<String, dynamic>? _route;
+  bool _routeLoading = false;
+  String? _routeError;
+
+  // ── Route controls (the ONLY inputs — B4) ───────────────────────────────
+  int _topN = 30;
+  int _minScore = 30;
+  bool _startFromMyLocation = false;
+  double? _myLat;
+  double? _myLng;
+  bool _locating = false;
+  String? _locError;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadScreen();
+  }
+
+  Future<void> _loadScreen() async {
+    setState(() { _loading = true; _loadError = null; });
+    try {
+      final res = await Supabase.instance.client
+          .rpc('lead_routes_screen', params: {'p_city': 'Raipur'});
+      final data = Map<String, dynamic>.from(res as Map);
+      final hub = Map<String, dynamic>.from(data['hub'] as Map? ?? {});
+      final summary = Map<String, dynamic>.from(data['summary'] as Map? ?? {});
+      final zones = ((data['zones'] as List?) ?? [])
+          .map((z) => Map<String, dynamic>.from(z as Map))
+          .toList();
+      if (!mounted) return;
+      setState(() {
+        _hub = hub;
+        _summary = summary;
+        _zones = zones;
+        _loading = false;
+      });
+      widget.onZonesChanged(zones.length);
+      RenderLog.write('c445_zones', zones.length);
+      RenderLog.write('c445_hub', hub['name']?.toString() ?? '');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() { _loadError = e.toString(); _loading = false; });
+    }
+  }
+
+  void _openZone(Map<String, dynamic> zone) {
+    setState(() {
+      _selectedZone = zone;
+      _route = null;
+      _routeError = null;
+      _topN = 30;
+      _minScore = 30;
+      _startFromMyLocation = false;
+      _myLat = null;
+      _myLng = null;
+      _locError = null;
+    });
+    _fetchRoute();
+  }
+
+  void _closeZone() {
+    setState(() {
+      _selectedZone = null;
+      _route = null;
+      _routeError = null;
+    });
+  }
+
+  Future<void> _fetchRoute() async {
+    final zone = _selectedZone;
+    if (zone == null) return;
+    setState(() { _routeLoading = true; _routeError = null; });
+    try {
+      final params = <String, dynamic>{
+        'p_zone_id': zone['zone_id'],
+        'p_top_n': _topN,
+        'p_min_score': _minScore,
+      };
+      if (_startFromMyLocation && _myLat != null && _myLng != null) {
+        params['p_start_lat'] = _myLat;
+        params['p_start_lng'] = _myLng;
+      }
+      final res = await Supabase.instance.client.rpc('lead_plan_route', params: params);
+      final data = Map<String, dynamic>.from(res as Map);
+      if (!mounted) return;
+      setState(() { _route = data; _routeLoading = false; });
+      final route = (data['route'] as List?) ?? [];
+      RenderLog.write('c445_route_stops', data['stops']);
+      RenderLog.write('c445_route_total', data['total_label']?.toString() ?? '');
+      RenderLog.write('c445_first_stop', route.isNotEmpty
+          ? (Map<String, dynamic>.from(route.first as Map))['name']?.toString() ?? ''
+          : '');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() { _routeError = e.toString(); _routeLoading = false; });
+    }
+  }
+
+  // ── "Start from: My location" — SAME GPS capture pattern as
+  // CashPaymentSheet._requestLocation and #444's Warehouse-card GPS path
+  // (html.window.navigator.geolocation.getCurrentPosition). ─────────────────
+  Future<void> _useMyLocationForStart() async {
+    setState(() { _locating = true; _locError = null; });
+    try {
+      final completer = Completer<html.Geoposition>();
+      html.window.navigator.geolocation
+          .getCurrentPosition(enableHighAccuracy: false, timeout: const Duration(seconds: 20))
+          .then((pos) { if (!completer.isCompleted) completer.complete(pos); })
+          .catchError((e) { if (!completer.isCompleted) completer.completeError(e); });
+      final pos = await completer.future.timeout(
+        const Duration(seconds: 25),
+        onTimeout: () => throw TimeoutException('Location timed out'),
+      );
+      final lat = pos.coords?.latitude?.toDouble();
+      final lng = pos.coords?.longitude?.toDouble();
+      if (lat == null || lng == null) throw Exception('No coordinates returned');
+      if (!mounted) return;
+      setState(() { _myLat = lat; _myLng = lng; _locating = false; _startFromMyLocation = true; });
+      _fetchRoute();
+    } catch (e) {
+      if (!mounted) return;
+      final msg = e.toString().toLowerCase();
+      final denied = msg.contains('denied') || msg.contains('permission');
+      setState(() {
+        _locating = false;
+        _startFromMyLocation = false; // fall back to the warehouse, plainly
+        _locError = denied
+            ? 'Location permission denied — enable it in the browser/site settings. Using the warehouse instead.'
+            : "Couldn't get a GPS fix — using the warehouse instead.";
+      });
+      _fetchRoute();
+    }
+  }
+
+  void _setStartWarehouse() {
+    setState(() { _startFromMyLocation = false; _myLat = null; _myLng = null; _locError = null; });
+    _fetchRoute();
+  }
+
+  // ── B5: Convert to customer ──────────────────────────────────────────────
+  Future<void> _convert(Map<String, dynamic> stop) async {
+    final nameCtrl = TextEditingController();
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (dCtx) => AlertDialog(
+        title: const Text('Add as customer'),
+        content: TextField(
+          controller: nameCtrl,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: 'Owner name (optional)',
+            border: OutlineInputBorder(),
+            isDense: true,
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dCtx, false), child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43)),
+            onPressed: () => Navigator.pop(dCtx, true),
+            child: const Text('Add'),
+          ),
+        ],
+      ),
+    );
+    if (go != true) { nameCtrl.dispose(); return; }
+    final ownerName = nameCtrl.text.trim();
+    nameCtrl.dispose();
+    if (!mounted) return;
+    try {
+      final res = await Supabase.instance.client.rpc('lead_convert_to_customer', params: {
+        'p_lead_id': stop['lead_id'],
+        if (ownerName.isNotEmpty) 'p_owner_name': ownerName,
+      });
+      final data = Map<String, dynamic>.from(res as Map);
+      if (!mounted) return;
+      if (data['ok'] == true) {
+        final code = data['customer_code']?.toString() ?? '';
+        final note = data['note']?.toString() ?? '';
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Added as customer $code. $note'),
+          backgroundColor: const Color(0xFF1B7A43),
+        ));
+        await _fetchRoute(); // B5 — re-fetch; never splice the list in Dart
+      } else {
+        final err = data['error']?.toString() ?? 'Unknown error';
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(err == 'already_a_customer' ? 'Already a customer.' : err)),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) {
+      return const Padding(
+        padding: EdgeInsets.only(top: 80),
+        child: Center(child: CircularProgressIndicator(color: Color(0xFF1B7A43), strokeWidth: 2)),
+      );
+    }
+    if (_loadError != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            const Icon(Icons.wifi_off_rounded, size: 40, color: Color(0xFF6B7280)),
+            const SizedBox(height: 12),
+            Text('Failed to load: $_loadError',
+                style: const TextStyle(fontSize: 13, color: Color(0xFFDC2626)),
+                textAlign: TextAlign.center),
+            const SizedBox(height: 12),
+            OutlinedButton(onPressed: _loadScreen, child: const Text('Retry')),
+          ]),
+        ),
+      );
+    }
+    final pad = widget.isDesktop ? 28.0 : 16.0;
+    return Padding(
+      padding: EdgeInsets.fromLTRB(pad, 20, pad, 32),
+      child: _selectedZone == null ? _buildZoneList() : _buildRouteView(),
+    );
+  }
+
+  // ── B2 header + B3 zone list ──────────────────────────────────────────────
+
+  Widget _buildZoneList() {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: const Color(0xFFE5E7EB)),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            const Text('🏠', style: TextStyle(fontSize: 16)),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(_hub['label']?.toString() ?? '',
+                  style: const TextStyle(
+                      fontSize: 13.5, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+            ),
+            TextButton(onPressed: widget.onOpenWarehouseCard, child: const Text('Change')),
+          ]),
+          const SizedBox(height: 6),
+          Wrap(spacing: 6, runSpacing: 4, children: [
+            Text(_summary['zones_label']?.toString() ?? '',
+                style: const TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
+            const Text('·', style: TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
+            Text(_summary['workable_label']?.toString() ?? '',
+                style: const TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
+            const Text('·', style: TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
+            Text(_summary['hot_label']?.toString() ?? '',
+                style: const TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
+          ]),
+        ]),
+      ),
+      const SizedBox(height: 16),
+      ..._zones.map((z) => Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: _zoneCard(z),
+          )),
+    ]);
+  }
+
+  Widget _zoneCard(Map<String, dynamic> z) {
+    return InkWell(
+      onTap: () => _openZone(z),
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: const Color(0xFFE5E7EB)),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Expanded(
+              child: Text(z['title']?.toString() ?? '',
+                  style: const TextStyle(
+                      fontSize: 14.5, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+            ),
+            _bandChip(z['band']?.toString()),
+          ]),
+          const SizedBox(height: 4),
+          Text(z['subtitle']?.toString() ?? '',
+              style: const TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
+          const SizedBox(height: 8),
+          Wrap(spacing: 12, runSpacing: 4, children: [
+            Text(z['km_label']?.toString() ?? '',
+                style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF))),
+            Text(z['workable_label']?.toString() ?? '',
+                style: const TextStyle(
+                    fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF1B7A43))),
+          ]),
+        ]),
+      ),
+    );
+  }
+
+  Widget _bandChip(String? band) {
+    Color bg, fg;
+    switch (band) {
+      case 'hot':  bg = const Color(0xFFFEE2E2); fg = const Color(0xFF991B1B); break;
+      case 'warm': bg = const Color(0xFFFEF3C7); fg = const Color(0xFF92400E); break;
+      default:     bg = const Color(0xFFF3F4F6); fg = const Color(0xFF6B7280);
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(20)),
+      child: Text(band ?? '', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: fg)),
+    );
+  }
+
+  // ── B4: route view ───────────────────────────────────────────────────────
+
+  Widget _buildRouteView() {
+    final zone = _selectedZone!;
+    final route = _route;
+    final stops = (route?['route'] as List?)
+            ?.map((s) => Map<String, dynamic>.from(s as Map))
+            .toList() ??
+        [];
+    final mapsLinks = (route?['maps_links'] as List?)
+            ?.map((m) => Map<String, dynamic>.from(m as Map))
+            .toList() ??
+        [];
+    final emptyLabel = route?['empty_label']?.toString();
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(children: [
+        IconButton(onPressed: _closeZone, icon: const Icon(Icons.arrow_back, size: 20)),
+        Expanded(
+          child: Text(zone['title']?.toString() ?? '',
+              style: const TextStyle(
+                  fontSize: 17, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+        ),
+      ]),
+      const SizedBox(height: 8),
+      _buildRouteControls(),
+      const SizedBox(height: 14),
+      if (_routeError != null) ...[
+        Text(_routeError!, style: const TextStyle(fontSize: 12.5, color: Color(0xFFDC2626))),
+        const SizedBox(height: 10),
+      ],
+      if (_locError != null) ...[
+        Text(_locError!, style: const TextStyle(fontSize: 12, color: Color(0xFFD97706))),
+        const SizedBox(height: 10),
+      ],
+      if (_routeLoading)
+        const Padding(
+          padding: EdgeInsets.only(top: 24),
+          child: Center(child: CircularProgressIndicator(color: Color(0xFF1B7A43), strokeWidth: 2)),
+        )
+      else if (route != null) ...[
+        _buildRouteSummaryBar(route, mapsLinks),
+        const SizedBox(height: 14),
+        if (emptyLabel != null)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 24),
+            child: Center(
+              child: Text(emptyLabel,
+                  style: const TextStyle(fontSize: 13.5, color: Color(0xFF6B7280)),
+                  textAlign: TextAlign.center),
+            ),
+          )
+        else
+          ...stops.map((s) => Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: _stopCard(s),
+              )),
+      ],
+    ]);
+  }
+
+  Widget _buildRouteControls() {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+      ),
+      child: widget.isDesktop
+          ? Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Expanded(child: _stopsControl()),
+              const SizedBox(width: 16),
+              Expanded(child: _minScoreControl()),
+              const SizedBox(width: 16),
+              Expanded(child: _startFromControl()),
+            ])
+          : Column(children: [
+              _stopsControl(),
+              const SizedBox(height: 12),
+              _minScoreControl(),
+              const SizedBox(height: 12),
+              _startFromControl(),
+            ]),
+    );
+  }
+
+  Widget _stopsControl() {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text('Stops: $_topN',
+          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF6B7280))),
+      Slider(
+        value: _topN.toDouble(),
+        min: 5, max: 100, divisions: 19,
+        activeColor: const Color(0xFF1B7A43),
+        label: '$_topN',
+        onChanged: (v) => setState(() => _topN = v.round()),
+        onChangeEnd: (_) => _fetchRoute(),
+      ),
+    ]);
+  }
+
+  Widget _minScoreControl() {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text('Min score: $_minScore',
+          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF6B7280))),
+      Slider(
+        value: _minScore.toDouble(),
+        min: 0, max: 100, divisions: 20,
+        activeColor: const Color(0xFF1B7A43),
+        label: '$_minScore',
+        onChanged: (v) => setState(() => _minScore = v.round()),
+        onChangeEnd: (_) => _fetchRoute(),
+      ),
+    ]);
+  }
+
+  Widget _startFromControl() {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      const Text('Start from',
+          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF6B7280))),
+      const SizedBox(height: 8),
+      Row(children: [
+        Expanded(child: _segBtn('Warehouse', !_startFromMyLocation, _setStartWarehouse)),
+        const SizedBox(width: 8),
+        Expanded(
+          child: _locating
+              ? const Center(
+                  child: SizedBox(width: 16, height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2)))
+              : _segBtn('My location', _startFromMyLocation, _useMyLocationForStart),
+        ),
+      ]),
+    ]);
+  }
+
+  Widget _segBtn(String label, bool active, VoidCallback onTap) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 11),
+        decoration: BoxDecoration(
+          color: active ? const Color(0xFF1B7A43) : const Color(0xFFF3F4F6),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        alignment: Alignment.center,
+        child: Text(label,
+            style: TextStyle(
+                fontSize: 12.5, fontWeight: FontWeight.w600,
+                color: active ? Colors.white : const Color(0xFF374151))),
+      ),
+    );
+  }
+
+  Widget _buildRouteSummaryBar(Map<String, dynamic> route, List<Map<String, dynamic>> mapsLinks) {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Wrap(spacing: 8, runSpacing: 4, children: [
+        Text(route['start_label']?.toString() ?? '',
+            style: const TextStyle(fontSize: 12.5, color: Color(0xFF374151))),
+        const Text('·', style: TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
+        Text(route['stops_label']?.toString() ?? '',
+            style: const TextStyle(
+                fontSize: 12.5, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
+        const Text('·', style: TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
+        Text(route['total_label']?.toString() ?? '',
+            style: const TextStyle(
+                fontSize: 12.5, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
+      ]),
+      if (mapsLinks.isNotEmpty) ...[
+        const SizedBox(height: 10),
+        Wrap(
+          spacing: 8, runSpacing: 8,
+          children: mapsLinks.map((m) {
+            return OutlinedButton.icon(
+              onPressed: () =>
+                  launchUrl(Uri.parse(m['url'].toString()), mode: LaunchMode.externalApplication),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: const Color(0xFF1B7A43),
+                side: const BorderSide(color: Color(0xFF1B7A43)),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              icon: const Icon(Icons.map_outlined, size: 15),
+              label: Text(m['label']?.toString() ?? 'Open in Maps', style: const TextStyle(fontSize: 12)),
+            );
+          }).toList(),
+        ),
+      ],
+    ]);
+  }
+
+  // ── Stop card ────────────────────────────────────────────────────────────
+
+  Widget _stopCard(Map<String, dynamic> s) {
+    final photoUrl = s['photo_url']?.toString();
+    final size = widget.isDesktop ? 56.0 : 44.0;
+    final openLabel = s['open_label']?.toString();
+    final todayHours = s['today_hours']?.toString();
+    final branchLabel = s['branch_label']?.toString();
+    final staleLabel = s['stale_label']?.toString();
+    final callLink = s['call_link']?.toString();
+    final waLink = s['wa_link']?.toString();
+    final navLink = s['nav_link']?.toString();
+    final addressPincode = [s['address_line'], s['pincode']]
+        .where((v) => v != null && v.toString().isNotEmpty)
+        .join(' · ');
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+      ),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        SizedBox(
+          width: 22,
+          child: Text('${s['seq'] ?? ''}',
+              style: const TextStyle(
+                  fontSize: 15, fontWeight: FontWeight.w800, color: Color(0xFF9CA3AF))),
+        ),
+        const SizedBox(width: 6),
+        _routePhoto(photoUrl, size),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Wrap(crossAxisAlignment: WrapCrossAlignment.center, spacing: 8, runSpacing: 4, children: [
+              Text(s['name']?.toString() ?? '',
+                  style: const TextStyle(
+                      fontSize: 14.5, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+              if (s['score_label'] != null)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                      color: const Color(0xFFF3F4F6), borderRadius: BorderRadius.circular(4)),
+                  child: Text(s['score_label'].toString(),
+                      style: const TextStyle(
+                          fontSize: 10.5, fontWeight: FontWeight.w700, color: Color(0xFF374151))),
+                ),
+              _bandChip(s['band']?.toString()),
+            ]),
+            if (addressPincode.isNotEmpty) ...[
+              const SizedBox(height: 3),
+              Text(addressPincode, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+            ],
+            if (openLabel != null || todayHours != null) ...[
+              const SizedBox(height: 3),
+              Wrap(crossAxisAlignment: WrapCrossAlignment.center, spacing: 6, runSpacing: 2, children: [
+                if (openLabel != null) ...[
+                  Container(
+                    width: 7, height: 7,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: openLabel == 'Open now' ? const Color(0xFF16A34A) : const Color(0xFF9CA3AF),
+                    ),
+                  ),
+                  const SizedBox(width: 3),
+                  Text(openLabel, style: const TextStyle(fontSize: 11.5, color: Color(0xFF374151))),
+                ],
+                if (todayHours != null)
+                  Text(todayHours, style: const TextStyle(fontSize: 11.5, color: Color(0xFF6B7280))),
+              ]),
+            ],
+            if (branchLabel != null) ...[
+              const SizedBox(height: 5),
+              _infoChip(branchLabel, const Color(0xFFEFF6FF), const Color(0xFF1E40AF)),
+            ],
+            if (staleLabel != null) ...[
+              const SizedBox(height: 5),
+              _infoChip('⚠ $staleLabel', const Color(0xFFFEF3C7), const Color(0xFF92400E)),
+            ],
+            const SizedBox(height: 8),
+            Wrap(spacing: 8, runSpacing: 8, children: [
+              if (callLink != null)
+                _stopActionBtn(Icons.call, 'Call', () => launchUrl(Uri.parse(callLink))),
+              if (waLink != null)
+                _stopActionBtn(Icons.chat, 'WhatsApp',
+                    () => launchUrl(Uri.parse(waLink), mode: LaunchMode.externalApplication)),
+              if (navLink != null)
+                _stopActionBtn(Icons.navigation_outlined, 'Navigate',
+                    () => launchUrl(Uri.parse(navLink), mode: LaunchMode.externalApplication)),
+              _stopActionBtn(Icons.person_add_alt_1, 'Convert', () => _convert(s), filled: true),
+            ]),
+            if (s['leg_label'] != null || s['cum_label'] != null) ...[
+              const SizedBox(height: 6),
+              Text(
+                [
+                  s['leg_label'] != null ? '${s['leg_label']} from last stop' : null,
+                  s['cum_label'],
+                ].where((v) => v != null).join(' · '),
+                style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF)),
+              ),
+            ],
+          ]),
+        ),
+      ]),
+    );
+  }
+
+  Widget _infoChip(String label, Color bg, Color fg) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(20)),
+      child: Text(label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: fg)),
+    );
+  }
+
+  Widget _stopActionBtn(IconData icon, String label, VoidCallback onTap, {bool filled = false}) {
+    return OutlinedButton.icon(
+      onPressed: onTap,
+      style: OutlinedButton.styleFrom(
+        foregroundColor: filled ? Colors.white : const Color(0xFF1B7A43),
+        backgroundColor: filled ? const Color(0xFF1B7A43) : null,
+        side: const BorderSide(color: Color(0xFF1B7A43)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        minimumSize: Size.zero,
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
+      icon: Icon(icon, size: 14),
+      label: Text(label, style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600)),
+    );
+  }
+
+  // Same Image.network+loadingBuilder+errorBuilder pattern as
+  // _SLeadsTabState._leadThumb (A3) — duplicated rather than shared because
+  // it is a private method on a different State class and S Leads must not
+  // be touched; the placeholder/loading visuals are identical.
+  Widget _routePhoto(String? url, double size) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(8),
+      child: (url == null || url.isEmpty)
+          ? Container(
+              width: size, height: size,
+              color: const Color(0xFFF3F4F6),
+              alignment: Alignment.center,
+              child: Icon(Icons.storefront_outlined, size: size * 0.45, color: const Color(0xFFD1D5DB)),
+            )
+          : Image.network(
+              url,
+              width: size, height: size,
+              fit: BoxFit.cover,
+              gaplessPlayback: true,
+              cacheWidth: (size * 2).toInt(),
+              loadingBuilder: (_, child, prog) => prog == null
+                  ? child
+                  : Container(
+                      width: size, height: size,
+                      color: const Color(0xFFF3F4F6),
+                      alignment: Alignment.center,
+                      child: const SizedBox(width: 14, height: 14,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFD1D5DB))),
+                    ),
+              errorBuilder: (_, __, ___) => Container(
+                width: size, height: size,
+                color: const Color(0xFFF3F4F6),
+                alignment: Alignment.center,
+                child: Icon(Icons.storefront_outlined, size: size * 0.45, color: const Color(0xFFD1D5DB)),
+              ),
+            ),
+    );
   }
 }

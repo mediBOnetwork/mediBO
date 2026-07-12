@@ -121,6 +121,26 @@ class MedicineRepository {
     return CatalogMeta(categories, total);
   }
 
+  /// CHANGE #441: every category's buyable count in one call, via
+  /// `get_all_storefront_counts` — powers an instant, no-loading-state
+  /// "Showing X of N" label on category switch. Keys are uppercased
+  /// category names plus 'ALL'.
+  Future<Map<String, int>> fetchAllCategoryCounts() async {
+    final res = await _client.rpc('get_all_storefront_counts');
+    if (res == null) return {};
+    return (res as Map).map(
+      (k, v) => MapEntry(k.toString().toUpperCase(), (v as num).toInt()),
+    );
+  }
+
+  /// Single-category buyable count, via `get_storefront_count`. Used only
+  /// as a cache-miss fallback (e.g. before [fetchAllCategoryCounts] resolves).
+  Future<int?> fetchCategoryCount(String category) async {
+    final res = await _client
+        .rpc('get_storefront_count', params: {'category_filter': category});
+    return (res as num?)?.toInt();
+  }
+
   /// Loads one page of medicines, optionally filtered by [category] and [query].
   ///
   /// Search path (query non-empty): `search_medicines_priority` RPC applies
@@ -190,24 +210,19 @@ class MedicineRepository {
 
     // ── Browse path: get_storefront_feed (precomputed, image-only, fast) ────────
     // Used for BOTH home "Best Sellers" (All) and category pages.
-    // get_storefront_count runs in parallel for the "Showing X of N" label.
+    // CHANGE #441: the "Showing X of N" label reads from the all-categories
+    // count cache (fetchAllCategoryCounts) instead of a per-switch RPC.
     if (onlyBuyable) {
       try {
-        final results = await Future.wait<dynamic>([
-          _client.rpc('get_storefront_feed', params: {
-            'category_filter': category,
-            'page_offset': offset,
-            'page_limit': limit,
-          }),
-          _client.rpc('get_storefront_count', params: {
-            'category_filter': category,
-          }),
-        ]);
-        final items = (results[0] as List)
+        final rows = await _client.rpc('get_storefront_feed', params: {
+          'category_filter': category,
+          'page_offset': offset,
+          'page_limit': limit,
+        });
+        final items = (rows as List)
             .map((r) => Product.fromMap(r as Map<String, dynamic>))
             .toList(growable: false);
-        final count = (results[1] as num?)?.toInt();
-        final result = (items: items, exactCount: count);
+        final result = (items: items, exactCount: null);
         _cacheSet(_resultCache, cacheKey, result);
         return result;
       } catch (e) {

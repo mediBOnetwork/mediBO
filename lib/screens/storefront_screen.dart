@@ -105,6 +105,12 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
   // Buyable-only category total from get_storefront_count (real total, not capped at 200).
   int? _buyableCategoryTotal;
 
+  // CHANGE #441: every category's buyable count, fetched once at storefront
+  // load via get_all_storefront_counts and read on every category switch —
+  // keys are uppercased category names plus 'ALL'.
+  Map<String, int> _categoryCounts = {};
+  final Set<String> _countFallbackInFlight = {};
+
   // Browse feed cap: true once loadedCount>=200 or a page returned <20 rows.
   bool _feedEnded = false;
 
@@ -112,8 +118,42 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
   void initState() {
     super.initState();
     _loadMeta();
+    _loadAllCounts();
     _resetAndLoad();
     _injectScrollbarCss();
+  }
+
+  Future<void> _loadAllCounts() async {
+    try {
+      final counts = await widget.repo.fetchAllCategoryCounts();
+      if (!mounted) return;
+      setState(() => _categoryCounts = counts);
+      RenderLog.write('c441_counts', 'cached=${_categoryCounts.length}');
+    } catch (_) {
+      // Leave the cache empty — _countFor() falls back to a live per-category
+      // fetch below rather than ever showing a wrong or blank count.
+    }
+  }
+
+  /// Instant count for [cat] from the bulk cache. Falls back to a one-off
+  /// live fetch only while the bulk cache hasn't loaded yet (e.g. cold start
+  /// before [_loadAllCounts] resolves) — never shows a loading state.
+  int _countFor(String cat) {
+    final key = cat.toUpperCase();
+    final cached = _categoryCounts[key] ?? _categoryCounts['ALL'];
+    if (cached != null) return cached;
+    _ensureCountFallback(cat);
+    return _buyableCategoryTotal ?? 0;
+  }
+
+  void _ensureCountFallback(String cat) {
+    if (_categoryCounts.isNotEmpty) return; // bulk cache now populated
+    if (!_countFallbackInFlight.add(cat)) return;
+    widget.repo.fetchCategoryCount(cat).then((n) {
+      _countFallbackInFlight.remove(cat);
+      if (!mounted || n == null) return;
+      setState(() => _buyableCategoryTotal = n);
+    }).catchError((_) { _countFallbackInFlight.remove(cat); });
   }
 
   void _injectScrollbarCss() {
@@ -456,9 +496,9 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
   int _categoryTotal() {
     final meta = _meta;
     if (_onlyBuyable) {
-      // N = browse_medicines_count result (image-only subset), set for both
-      // All and specific categories. Fall back to catalog estimate if not yet loaded.
-      return _buyableCategoryTotal ?? meta?.total ?? _items.length;
+      // CHANGE #441: instant cached count (falls back to a live per-category
+      // fetch only while the bulk cache hasn't loaded yet).
+      return _countFor(widget.category);
     }
     // Search mode: use meta totals.
     if (meta == null) return _items.length;
@@ -519,7 +559,7 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
                 loadingMore: _loadingMore,
                 reachedEnd: _reachedEnd,
                 feedEnded: _feedEnded,
-                totalN: _buyableCategoryTotal ?? 0,
+                totalN: _countFor(widget.category),
                 error: _pageError,
                 isNetworkError: _pageNetworkError,
                 suggestions: _suggestions,
@@ -1143,7 +1183,7 @@ class _ProductsSection extends StatelessWidget {
     if (q.isEmpty) {
       final catSuffix =
           category != 'All' ? ' in ${prettyCategory(category)}' : '';
-      // totalN is the real get_storefront_count value — never capped at 200.
+      // totalN is the cached category count (CHANGE #441) — never capped at 200.
       final n = totalN > 0 ? totalN : categoryTotal;
       RenderLog.write('c112_count_label',
           'category=$category;X=${items.length};N=$n');

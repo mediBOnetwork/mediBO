@@ -3,6 +3,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:html' as html;
 import 'dart:js_interop';
+import 'dart:math';
+import 'dart:typed_data';
 import 'dart:ui_web' as ui_web;
 
 import 'package:flutter/material.dart';
@@ -9655,13 +9657,26 @@ class _SLeadsTabState extends State<_SLeadsTab> {
 }
 
 // ═════════════════════════════════════════════════════════════════════════
-// CHANGE #445 — "Routes" tab: zones -> ordered visiting route -> hand to a rep
+// CHANGE #445 (v2) — "Routes" tab: zones -> ordered route -> REP CHECK-IN
 //
 // DUMB FRONTEND. Every string below is printed VERBATIM from lead_routes_screen
-// / lead_plan_route. No client-side sorting, distance maths, score banding, or
-// tel:/wa.me/maps URL construction — those fields (call_link, wa_link, nav_link,
-// maps_link, km_label, leg_label, cum_label, band, ...) already arrive complete.
+// / lead_plan_route / my_route / record_visit / lead_visits_report. No client-side
+// sorting, distance maths, score banding, or tel:/wa.me/maps URL construction —
+// those fields (call_link, wa_link, nav_link, maps_link, km_label, leg_label,
+// cum_label, band, verify_label, message, ...) already arrive complete.
 // ═════════════════════════════════════════════════════════════════════════
+
+/// C1 status radios — the 8 values record_visit accepts, in mockup order.
+const _kVisitStatuses = <(String, String)>[
+  ('interested', 'Interested'),
+  ('not_interested', 'Not interested'),
+  ('revisit', 'Revisit later'),
+  ('closed_today', 'Closed today'),
+  ('permanently_closed', 'Permanently closed'),
+  ('moved', 'Shop has moved'),
+  ('not_found', 'Not found here'),
+  ('visited', 'Just visited'),
+];
 
 class _RoutesTab extends StatefulWidget {
   final bool isDesktop;
@@ -9684,13 +9699,18 @@ class _RoutesTabState extends State<_RoutesTab> {
   Map<String, dynamic> _summary = {};
   List<Map<String, dynamic>> _zones = [];
 
-  // ── Selected zone / route view ──────────────────────────────────────────
+  // ── D: top-level view — 'zones' (admin) or 'myRoute' (rep) ──────────────
+  String _topMode = 'zones';
+  Map<String, dynamic>? _myRoute; // my_route() response, refetched after check-in
+  bool _myRouteLoading = false;
+
+  // ── Selected zone / route view (admin ad-hoc route) ──────────────────────
   Map<String, dynamic>? _selectedZone;
   Map<String, dynamic>? _route;
   bool _routeLoading = false;
   String? _routeError;
 
-  // ── Route controls (the ONLY inputs — B4) ───────────────────────────────
+  // ── Route controls (the ONLY inputs — B5) ────────────────────────────────
   int _topN = 30;
   int _minScore = 30;
   bool _startFromMyLocation = false;
@@ -9698,6 +9718,11 @@ class _RoutesTabState extends State<_RoutesTab> {
   double? _myLng;
   bool _locating = false;
   String? _locError;
+
+  // ── D3: Today's Visits (admin, collapsible, lazy-loaded) ─────────────────
+  bool _visitsExpanded = false;
+  bool _visitsLoading = false;
+  Map<String, dynamic>? _visitsReport;
 
   @override
   void initState() {
@@ -9708,9 +9733,12 @@ class _RoutesTabState extends State<_RoutesTab> {
   Future<void> _loadScreen() async {
     setState(() { _loading = true; _loadError = null; });
     try {
-      final res = await Supabase.instance.client
-          .rpc('lead_routes_screen', params: {'p_city': 'Raipur'});
-      final data = Map<String, dynamic>.from(res as Map);
+      final results = await Future.wait<dynamic>([
+        Supabase.instance.client.rpc('lead_routes_screen', params: {'p_city': 'Raipur'}),
+        Supabase.instance.client.rpc('my_route'),
+      ]);
+      final data = Map<String, dynamic>.from(results[0] as Map);
+      final myRoute = Map<String, dynamic>.from(results[1] as Map);
       final hub = Map<String, dynamic>.from(data['hub'] as Map? ?? {});
       final summary = Map<String, dynamic>.from(data['summary'] as Map? ?? {});
       final zones = ((data['zones'] as List?) ?? [])
@@ -9721,14 +9749,43 @@ class _RoutesTabState extends State<_RoutesTab> {
         _hub = hub;
         _summary = summary;
         _zones = zones;
+        _myRoute = myRoute;
+        // B2 — a worker with an assignment today lands on the rep view; an
+        // admin with none (or not a worker at all) lands on the zone list.
+        _topMode = myRoute['status'] == 'assigned' ? 'myRoute' : 'zones';
         _loading = false;
       });
       widget.onZonesChanged(zones.length);
       RenderLog.write('c445_zones', zones.length);
       RenderLog.write('c445_hub', hub['name']?.toString() ?? '');
+      final myStops = (myRoute['route'] as List?) ?? [];
+      if (_topMode == 'myRoute') {
+        RenderLog.write('c445_route_stops', myRoute['stops']);
+        RenderLog.write('c445_first_stop', myStops.isNotEmpty
+            ? (Map<String, dynamic>.from(myStops.first as Map))['name']?.toString() ?? ''
+            : '');
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() { _loadError = e.toString(); _loading = false; });
+    }
+  }
+
+  Future<void> _refreshMyRoute() async {
+    setState(() => _myRouteLoading = true);
+    try {
+      final res = await Supabase.instance.client.rpc('my_route');
+      final data = Map<String, dynamic>.from(res as Map);
+      if (!mounted) return;
+      setState(() { _myRoute = data; _myRouteLoading = false; });
+      final stops = (data['route'] as List?) ?? [];
+      RenderLog.write('c445_route_stops', data['stops']);
+      RenderLog.write('c445_first_stop', stops.isNotEmpty
+          ? (Map<String, dynamic>.from(stops.first as Map))['name']?.toString() ?? ''
+          : '');
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _myRouteLoading = false);
     }
   }
 
@@ -9826,8 +9883,8 @@ class _RoutesTabState extends State<_RoutesTab> {
     _fetchRoute();
   }
 
-  // ── B5: Convert to customer ──────────────────────────────────────────────
-  Future<void> _convert(Map<String, dynamic> stop) async {
+  // ── B5 (stop-card action): Convert to customer ───────────────────────────
+  Future<void> _convert(Map<String, dynamic> stop, {required VoidCallback onRefresh}) async {
     final nameCtrl = TextEditingController();
     final go = await showDialog<bool>(
       context: context,
@@ -9837,7 +9894,7 @@ class _RoutesTabState extends State<_RoutesTab> {
           controller: nameCtrl,
           autofocus: true,
           decoration: const InputDecoration(
-            labelText: 'Owner name (optional)',
+            labelText: 'Owner name (Google doesn\'t have it)',
             border: OutlineInputBorder(),
             isDense: true,
           ),
@@ -9870,7 +9927,7 @@ class _RoutesTabState extends State<_RoutesTab> {
           content: Text('Added as customer $code. $note'),
           backgroundColor: const Color(0xFF1B7A43),
         ));
-        await _fetchRoute(); // B5 — re-fetch; never splice the list in Dart
+        onRefresh(); // never splice the list in Dart — re-call the route RPC
       } else {
         final err = data['error']?.toString() ?? 'Unknown error';
         ScaffoldMessenger.of(context).showSnackBar(
@@ -9880,6 +9937,61 @@ class _RoutesTabState extends State<_RoutesTab> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
+    }
+  }
+
+  // ── C: Check-in bottom sheet ──────────────────────────────────────────────
+  void _openCheckIn(Map<String, dynamic> stop, {String? assignmentId, required VoidCallback onRefresh}) {
+    RenderLog.write('c445_checkin_wired', 1);
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (_) => _CheckInSheet(
+        stop: stop,
+        assignmentId: assignmentId,
+        onDone: onRefresh,
+      ),
+    );
+  }
+
+  // ── D2: Admin — assign a zone to a worker ────────────────────────────────
+  Future<void> _openAssignSheet(Map<String, dynamic> zone) async {
+    List<Map<String, dynamic>> workers;
+    try {
+      final res = await Supabase.instance.client.rpc('lead_workers_list');
+      workers = ((res as List?) ?? []).map((w) => Map<String, dynamic>.from(w as Map)).toList();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
+      return;
+    }
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (_) => _AssignZoneDialog(zone: zone, initialWorkers: workers),
+    );
+  }
+
+  // ── D3: Today's Visits ────────────────────────────────────────────────────
+  Future<void> _toggleVisitsReport() async {
+    final expanding = !_visitsExpanded;
+    setState(() => _visitsExpanded = expanding);
+    if (expanding && _visitsReport == null) {
+      setState(() => _visitsLoading = true);
+      try {
+        final res = await Supabase.instance.client.rpc('lead_visits_report');
+        final data = Map<String, dynamic>.from(res as Map);
+        if (!mounted) return;
+        setState(() { _visitsReport = data; _visitsLoading = false; });
+      } catch (e) {
+        if (!mounted) return;
+        setState(() => _visitsLoading = false);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
+      }
     }
   }
 
@@ -9910,11 +10022,96 @@ class _RoutesTabState extends State<_RoutesTab> {
     final pad = widget.isDesktop ? 28.0 : 16.0;
     return Padding(
       padding: EdgeInsets.fromLTRB(pad, 20, pad, 32),
-      child: _selectedZone == null ? _buildZoneList() : _buildRouteView(),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        _buildTopModeToggle(),
+        const SizedBox(height: 14),
+        if (_topMode == 'myRoute')
+          _buildMyRouteView()
+        else if (_selectedZone == null)
+          _buildZoneList()
+        else
+          _buildRouteView(),
+      ]),
     );
   }
 
-  // ── B2 header + B3 zone list ──────────────────────────────────────────────
+  Widget _buildTopModeToggle() {
+    return Row(children: [
+      Expanded(
+        child: _segBtn('My route', _topMode == 'myRoute', () {
+          setState(() => _topMode = 'myRoute');
+          if (_myRoute == null) _refreshMyRoute();
+        }),
+      ),
+      const SizedBox(width: 8),
+      Expanded(child: _segBtn('Zones', _topMode == 'zones', () => setState(() => _topMode = 'zones'))),
+    ]);
+  }
+
+  // ── D1: Rep view — "My route today" ──────────────────────────────────────
+
+  Widget _buildMyRouteView() {
+    if (_myRouteLoading) {
+      return const Padding(
+        padding: EdgeInsets.only(top: 40),
+        child: Center(child: CircularProgressIndicator(color: Color(0xFF1B7A43), strokeWidth: 2)),
+      );
+    }
+    final route = _myRoute;
+    if (route == null || route['status'] == 'none') {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.only(top: 40),
+          child: Text(route?['empty_label']?.toString() ?? 'No route assigned to you today.',
+              style: const TextStyle(fontSize: 14, color: Color(0xFF6B7280))),
+        ),
+      );
+    }
+    final assignmentId = route['assignment_id']?.toString();
+    final stops = (route['route'] as List?)
+            ?.map((s) => Map<String, dynamic>.from(s as Map))
+            .toList() ??
+        [];
+    final mapsLinks = (route['maps_links'] as List?)
+            ?.map((m) => Map<String, dynamic>.from(m as Map))
+            .toList() ??
+        [];
+    final emptyLabel = route['empty_label']?.toString();
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      if (route['progress_label'] != null)
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color: const Color(0xFFEFF6FF),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Text(route['progress_label'].toString(),
+              style: const TextStyle(
+                  fontSize: 13.5, fontWeight: FontWeight.w700, color: Color(0xFF1E40AF))),
+        ),
+      const SizedBox(height: 12),
+      _buildRouteSummaryBar(route, mapsLinks),
+      const SizedBox(height: 14),
+      if (emptyLabel != null)
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 24),
+          child: Center(
+            child: Text(emptyLabel,
+                style: const TextStyle(fontSize: 13.5, color: Color(0xFF6B7280)),
+                textAlign: TextAlign.center),
+          ),
+        )
+      else
+        ...stops.map((s) => Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: _stopCard(s, assignmentId: assignmentId, onRefresh: _refreshMyRoute),
+            )),
+    ]);
+  }
+
+  // ── B3 header + B4 zone list ──────────────────────────────────────────────
 
   Widget _buildZoneList() {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -9950,7 +10147,9 @@ class _RoutesTabState extends State<_RoutesTab> {
           ]),
         ]),
       ),
-      const SizedBox(height: 16),
+      const SizedBox(height: 12),
+      _buildVisitsReportPanel(),
+      const SizedBox(height: 12),
       ..._zones.map((z) => Padding(
             padding: const EdgeInsets.only(bottom: 10),
             child: _zoneCard(z),
@@ -9958,39 +10157,188 @@ class _RoutesTabState extends State<_RoutesTab> {
     ]);
   }
 
-  Widget _zoneCard(Map<String, dynamic> z) {
-    return InkWell(
-      onTap: () => _openZone(z),
-      borderRadius: BorderRadius.circular(12),
-      child: Container(
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: const Color(0xFFE5E7EB)),
-        ),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Row(children: [
-            Expanded(
-              child: Text(z['title']?.toString() ?? '',
-                  style: const TextStyle(
-                      fontSize: 14.5, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
-            ),
-            _bandChip(z['band']?.toString()),
-          ]),
-          const SizedBox(height: 4),
-          Text(z['subtitle']?.toString() ?? '',
-              style: const TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
-          const SizedBox(height: 8),
-          Wrap(spacing: 12, runSpacing: 4, children: [
-            Text(z['km_label']?.toString() ?? '',
-                style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF))),
-            Text(z['workable_label']?.toString() ?? '',
-                style: const TextStyle(
-                    fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF1B7A43))),
-          ]),
-        ]),
+  // ── D3: Today's Visits collapsible panel ─────────────────────────────────
+
+  Widget _buildVisitsReportPanel() {
+    final report = _visitsReport;
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
       ),
+      child: Column(children: [
+        InkWell(
+          onTap: _toggleVisitsReport,
+          borderRadius: BorderRadius.circular(12),
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Row(children: [
+              const Icon(Icons.checklist_rtl, size: 18, color: Color(0xFF6B7280)),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text("Today's visits",
+                    style: TextStyle(
+                        fontSize: 13.5, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+              ),
+              Icon(_visitsExpanded ? Icons.expand_less : Icons.expand_more,
+                  size: 20, color: const Color(0xFF6B7280)),
+            ]),
+          ),
+        ),
+        if (_visitsExpanded) ...[
+          const Divider(height: 1, color: Color(0xFFE5E7EB)),
+          Padding(
+            padding: const EdgeInsets.all(14),
+            child: _visitsLoading
+                ? const Center(
+                    child: Padding(
+                      padding: EdgeInsets.all(16),
+                      child: CircularProgressIndicator(color: Color(0xFF1B7A43), strokeWidth: 2),
+                    ),
+                  )
+                : report == null
+                    ? const Text('Could not load.', style: TextStyle(color: Color(0xFF6B7280)))
+                    : _buildVisitsReportBody(report),
+          ),
+        ],
+      ]),
+    );
+  }
+
+  Widget _buildVisitsReportBody(Map<String, dynamic> report) {
+    final totals = Map<String, dynamic>.from(report['totals'] as Map? ?? {});
+    final corrections = Map<String, dynamic>.from(report['corrections'] as Map? ?? {});
+    final visits = ((report['visits'] as List?) ?? [])
+        .map((v) => Map<String, dynamic>.from(v as Map))
+        .toList();
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Wrap(spacing: 16, runSpacing: 8, children: [
+        _statPill('Visits', totals['visits']),
+        _statPill('Verified', totals['verified']),
+        _statPill('Suspicious', totals['suspicious']),
+        _statPill('Interested', totals['interested']),
+      ]),
+      if (corrections['label'] != null) ...[
+        const SizedBox(height: 10),
+        Text(corrections['label'].toString(),
+            style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: Color(0xFF1B7A43))),
+      ],
+      const SizedBox(height: 12),
+      if (visits.isEmpty)
+        const Text('No visits yet today.', style: TextStyle(fontSize: 12.5, color: Color(0xFF6B7280)))
+      else
+        ...visits.map((v) => _visitRow(v)),
+    ]);
+  }
+
+  Widget _statPill(String label, dynamic value) {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text('${value ?? 0}',
+          style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: Color(0xFF111827))),
+      Text(label, style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
+    ]);
+  }
+
+  Widget _visitRow(Map<String, dynamic> v) {
+    final suspicious = v['suspicious'] == true;
+    final photoUrl = v['photo_url']?.toString();
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: suspicious ? const Color(0xFFFFFBEB) : const Color(0xFFF9FAFB),
+        borderRadius: BorderRadius.circular(8),
+        border: suspicious ? Border.all(color: const Color(0xFFFDE68A)) : null,
+      ),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if (photoUrl != null && photoUrl.isNotEmpty) ...[
+          GestureDetector(
+            onTap: () => openFullscreenImage(context, photoUrl),
+            child: _routePhoto(photoUrl, 40),
+          ),
+          const SizedBox(width: 10),
+        ],
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Wrap(crossAxisAlignment: WrapCrossAlignment.center, spacing: 8, runSpacing: 2, children: [
+              Text(v['time_label']?.toString() ?? '',
+                  style: const TextStyle(fontSize: 11.5, color: Color(0xFF9CA3AF))),
+              Text(v['shop']?.toString() ?? '',
+                  style: const TextStyle(
+                      fontSize: 12.5, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+              Text(v['worker']?.toString() ?? '',
+                  style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+            ]),
+            const SizedBox(height: 3),
+            Wrap(spacing: 8, runSpacing: 2, children: [
+              Text(v['status']?.toString() ?? '',
+                  style: const TextStyle(fontSize: 12, color: Color(0xFF374151))),
+              Text(v['verify_label']?.toString() ?? '',
+                  style: TextStyle(
+                      fontSize: 12, fontWeight: FontWeight.w600,
+                      color: suspicious ? const Color(0xFF92400E) : const Color(0xFF065F46))),
+            ]),
+            if (v['note'] != null && v['note'].toString().isNotEmpty) ...[
+              const SizedBox(height: 3),
+              Text(v['note'].toString(), style: const TextStyle(fontSize: 11.5, color: Color(0xFF6B7280))),
+            ],
+          ]),
+        ),
+      ]),
+    );
+  }
+
+  Widget _zoneCard(Map<String, dynamic> z) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+      ),
+      child: Column(children: [
+        InkWell(
+          onTap: () => _openZone(z),
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                Expanded(
+                  child: Text(z['title']?.toString() ?? '',
+                      style: const TextStyle(
+                          fontSize: 14.5, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+                ),
+                _bandChip(z['band']?.toString()),
+              ]),
+              const SizedBox(height: 4),
+              Text(z['subtitle']?.toString() ?? '',
+                  style: const TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
+              const SizedBox(height: 8),
+              Wrap(spacing: 12, runSpacing: 4, children: [
+                Text(z['km_label']?.toString() ?? '',
+                    style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF))),
+                Text(z['workable_label']?.toString() ?? '',
+                    style: const TextStyle(
+                        fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF1B7A43))),
+              ]),
+            ]),
+          ),
+        ),
+        const Divider(height: 1, color: Color(0xFFE5E7EB)),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+          child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+            TextButton.icon(
+              onPressed: () => _openAssignSheet(z),
+              icon: const Icon(Icons.person_add_alt_1, size: 15),
+              label: const Text('Assign', style: TextStyle(fontSize: 12.5)),
+              style: TextButton.styleFrom(foregroundColor: const Color(0xFF1B7A43)),
+            ),
+          ]),
+        ),
+      ]),
     );
   }
 
@@ -10008,7 +10356,7 @@ class _RoutesTabState extends State<_RoutesTab> {
     );
   }
 
-  // ── B4: route view ───────────────────────────────────────────────────────
+  // ── B5: admin ad-hoc route view ───────────────────────────────────────────
 
   Widget _buildRouteView() {
     final zone = _selectedZone!;
@@ -10063,7 +10411,7 @@ class _RoutesTabState extends State<_RoutesTab> {
         else
           ...stops.map((s) => Padding(
                 padding: const EdgeInsets.only(bottom: 10),
-                child: _stopCard(s),
+                child: _stopCard(s, onRefresh: _fetchRoute),
               )),
       ],
     ]);
@@ -10199,15 +10547,17 @@ class _RoutesTabState extends State<_RoutesTab> {
     ]);
   }
 
-  // ── Stop card ────────────────────────────────────────────────────────────
+  // ── B6 + C: stop card, now with pin_label / visit_label / CHECK IN ───────
 
-  Widget _stopCard(Map<String, dynamic> s) {
+  Widget _stopCard(Map<String, dynamic> s, {String? assignmentId, required VoidCallback onRefresh}) {
     final photoUrl = s['photo_url']?.toString();
     final size = widget.isDesktop ? 56.0 : 44.0;
     final openLabel = s['open_label']?.toString();
     final todayHours = s['today_hours']?.toString();
     final branchLabel = s['branch_label']?.toString();
     final staleLabel = s['stale_label']?.toString();
+    final pinLabel = s['pin_label']?.toString();
+    final visitLabel = s['visit_label']?.toString();
     final callLink = s['call_link']?.toString();
     final waLink = s['wa_link']?.toString();
     final navLink = s['nav_link']?.toString();
@@ -10279,6 +10629,14 @@ class _RoutesTabState extends State<_RoutesTab> {
               const SizedBox(height: 5),
               _infoChip('⚠ $staleLabel', const Color(0xFFFEF3C7), const Color(0xFF92400E)),
             ],
+            if (pinLabel != null) ...[
+              const SizedBox(height: 5),
+              _infoChip('📍 $pinLabel', const Color(0xFFEFF6FF), const Color(0xFF1E40AF)),
+            ],
+            if (visitLabel != null) ...[
+              const SizedBox(height: 4),
+              Text(visitLabel, style: const TextStyle(fontSize: 11.5, color: Color(0xFF6B7280))),
+            ],
             const SizedBox(height: 8),
             Wrap(spacing: 8, runSpacing: 8, children: [
               if (callLink != null)
@@ -10289,7 +10647,10 @@ class _RoutesTabState extends State<_RoutesTab> {
               if (navLink != null)
                 _stopActionBtn(Icons.navigation_outlined, 'Navigate',
                     () => launchUrl(Uri.parse(navLink), mode: LaunchMode.externalApplication)),
-              _stopActionBtn(Icons.person_add_alt_1, 'Convert', () => _convert(s), filled: true),
+              _stopActionBtn(Icons.person_add_alt_1, 'Convert', () => _convert(s, onRefresh: onRefresh)),
+              _stopActionBtn(Icons.check_circle, 'CHECK IN',
+                  () => _openCheckIn(s, assignmentId: assignmentId, onRefresh: onRefresh),
+                  filled: true),
             ]),
             if (s['leg_label'] != null || s['cum_label'] != null) ...[
               const SizedBox(height: 6),
@@ -10323,17 +10684,17 @@ class _RoutesTabState extends State<_RoutesTab> {
         backgroundColor: filled ? const Color(0xFF1B7A43) : null,
         side: const BorderSide(color: Color(0xFF1B7A43)),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-        minimumSize: Size.zero,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+        minimumSize: const Size(44, 40), // big tap targets — D1, used one-handed
         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
       ),
-      icon: Icon(icon, size: 14),
-      label: Text(label, style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600)),
+      icon: Icon(icon, size: 15),
+      label: Text(label, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
     );
   }
 
   // Same Image.network+loadingBuilder+errorBuilder pattern as
-  // _SLeadsTabState._leadThumb (A3) — duplicated rather than shared because
+  // _SLeadsTabState._leadThumb (A4) — duplicated rather than shared because
   // it is a private method on a different State class and S Leads must not
   // be touched; the placeholder/loading visuals are identical.
   Widget _routePhoto(String? url, double size) {
@@ -10368,6 +10729,568 @@ class _RoutesTabState extends State<_RoutesTab> {
                 child: Icon(Icons.storefront_outlined, size: size * 0.45, color: const Color(0xFFD1D5DB)),
               ),
             ),
+    );
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+// C: Check-in bottom sheet — the correction engine. GPS is REQUIRED (Submit
+// stays disabled without a fix); photo is optional. record_visit does every
+// check server-side (100m verified / 500m blocked, moved+not_found exempt) —
+// this widget only captures GPS + photo + status and shows the response.
+// ═════════════════════════════════════════════════════════════════════════
+
+class _CheckInSheet extends StatefulWidget {
+  final Map<String, dynamic> stop;
+  final String? assignmentId;
+  final VoidCallback onDone;
+  const _CheckInSheet({required this.stop, this.assignmentId, required this.onDone});
+
+  @override
+  State<_CheckInSheet> createState() => _CheckInSheetState();
+}
+
+class _CheckInSheetState extends State<_CheckInSheet> {
+  bool _locating = true;
+  String? _locError;
+  double? _lat;
+  double? _lng;
+
+  Uint8List? _photoBytes;
+  String? _photoMime;
+
+  String? _status;
+  final _noteCtrl = TextEditingController();
+
+  bool _submitting = false;
+  String? _submitError; // too_far / other error — shown inline, sheet stays open
+
+  @override
+  void initState() {
+    super.initState();
+    _captureGps();
+  }
+
+  @override
+  void dispose() {
+    _noteCtrl.dispose();
+    super.dispose();
+  }
+
+  // Same GPS pattern as CashPaymentSheet._requestLocation / the Warehouse
+  // card / the "Start from: My location" route control — A3.
+  Future<void> _captureGps() async {
+    setState(() { _locating = true; _locError = null; });
+    try {
+      final completer = Completer<html.Geoposition>();
+      html.window.navigator.geolocation
+          .getCurrentPosition(enableHighAccuracy: false, timeout: const Duration(seconds: 20))
+          .then((pos) { if (!completer.isCompleted) completer.complete(pos); })
+          .catchError((e) { if (!completer.isCompleted) completer.completeError(e); });
+      final pos = await completer.future.timeout(
+        const Duration(seconds: 25),
+        onTimeout: () => throw TimeoutException('Location timed out'),
+      );
+      final lat = pos.coords?.latitude?.toDouble();
+      final lng = pos.coords?.longitude?.toDouble();
+      if (lat == null || lng == null) throw Exception('No coordinates returned');
+      if (!mounted) return;
+      setState(() { _lat = lat; _lng = lng; _locating = false; });
+      RenderLog.write('c445_gps_ok', 1);
+    } catch (e) {
+      if (!mounted) return;
+      final msg = e.toString().toLowerCase();
+      final denied = msg.contains('denied') || msg.contains('permission');
+      setState(() {
+        _locating = false;
+        _locError = denied
+            ? 'Location permission is required to check in.'
+            : "Couldn't get a GPS fix. Move outdoors and retry.";
+      });
+    }
+  }
+
+  // Same html.FileUploadInputElement + FileReader.readAsDataUrl capture
+  // pattern as CashPaymentSheet._pickFile — A3. 'capture=environment' opens
+  // the rear camera directly on mobile instead of the gallery picker.
+  void _takePhoto() {
+    final input = html.FileUploadInputElement();
+    input.accept = 'image/*';
+    input.setAttribute('capture', 'environment');
+    input.click();
+    input.onChange.listen((_) async {
+      final files = input.files;
+      if (files == null || files.isEmpty) return;
+      final file = files.first;
+      final mime = file.type.isNotEmpty ? file.type : 'image/jpeg';
+      if (!mime.startsWith('image/')) return;
+      final reader = html.FileReader();
+      reader.readAsDataUrl(file);
+      await reader.onLoad.first;
+      final dataUrl = reader.result as String;
+      final comma = dataUrl.indexOf(',');
+      final bytes = base64Decode(dataUrl.substring(comma + 1));
+      if (!mounted) return;
+      setState(() { _photoBytes = bytes; _photoMime = mime; });
+    });
+  }
+
+  bool get _canSubmit =>
+      !_submitting && !_locating && _locError == null && _lat != null && _lng != null && _status != null;
+
+  Future<void> _submit() async {
+    if (!_canSubmit) return;
+    setState(() { _submitting = true; _submitError = null; });
+
+    String? photoPath;
+    if (_photoBytes != null) {
+      try {
+        final leadId = widget.stop['lead_id'];
+        final ts = DateTime.now().millisecondsSinceEpoch;
+        final rand = Random().nextInt(999999);
+        final ext = (_photoMime ?? '').contains('png') ? 'png' : 'jpg';
+        final path = '$leadId/${ts}_$rand.$ext';
+        await Supabase.instance.client.storage.from('lead-visit-photos').uploadBinary(
+          path, _photoBytes!,
+          fileOptions: FileOptions(contentType: _photoMime ?? 'image/jpeg', upsert: true),
+        );
+        photoPath = path;
+      } catch (_) {
+        photoPath = null; // never lose the check-in over a failed photo upload
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Photo upload failed — visit still recorded.')));
+        }
+      }
+    }
+
+    try {
+      final res = await Supabase.instance.client.rpc('record_visit', params: {
+        'p_lead_id': widget.stop['lead_id'],
+        'p_lat': _lat,
+        'p_lng': _lng,
+        'p_status': _status,
+        if (photoPath != null) 'p_photo_path': photoPath,
+        if (_noteCtrl.text.trim().isNotEmpty) 'p_note': _noteCtrl.text.trim(),
+        if (widget.assignmentId != null) 'p_assignment_id': widget.assignmentId,
+      });
+      final data = Map<String, dynamic>.from(res as Map);
+      if (!mounted) return;
+      if (data['ok'] == true) {
+        final verifyLabel = data['verify_label']?.toString() ?? '';
+        final message = data['message']?.toString() ?? '';
+        Navigator.of(context).pop();
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text([verifyLabel, message].where((v) => v.isNotEmpty).join(' — ')),
+          backgroundColor: const Color(0xFF1B7A43),
+        ));
+        widget.onDone(); // re-call the route RPC; the shop may now be gone — correct
+      } else {
+        // { error: "too_far", message: "..." } or any other error — shown
+        // verbatim, sheet stays open, chosen status kept. No retry, no
+        // fallback GPS.
+        setState(() {
+          _submitting = false;
+          _submitError = data['message']?.toString() ?? data['error']?.toString() ?? 'Could not record visit.';
+        });
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() { _submitting = false; _submitError = e.toString(); });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final tooFar = _submitError != null; // highlight the two allowed escapes
+    return Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      child: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(20),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+            Center(
+              child: Container(
+                width: 36, height: 4,
+                margin: const EdgeInsets.only(bottom: 14),
+                decoration: BoxDecoration(color: const Color(0xFFE5E7EB), borderRadius: BorderRadius.circular(2)),
+              ),
+            ),
+            Text(widget.stop['name']?.toString() ?? '',
+                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+            const SizedBox(height: 14),
+            const Divider(height: 1, color: Color(0xFFE5E7EB)),
+            const SizedBox(height: 14),
+
+            // ── GPS ──────────────────────────────────────────────────────
+            Row(children: [
+              const Icon(Icons.location_on, size: 18, color: Color(0xFF6B7280)),
+              const SizedBox(width: 8),
+              if (_locating)
+                const Row(children: [
+                  SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
+                  SizedBox(width: 8),
+                  Text('Getting your location…', style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+                ])
+              else if (_locError != null)
+                Expanded(
+                  child: Text(_locError!, style: const TextStyle(fontSize: 13, color: Color(0xFFDC2626))),
+                )
+              else
+                const Text('GPS captured ✅',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF065F46))),
+              if (_locError != null) ...[
+                const Spacer(),
+                TextButton(onPressed: _captureGps, child: const Text('Retry')),
+              ],
+            ]),
+            const SizedBox(height: 14),
+
+            // ── Photo ────────────────────────────────────────────────────
+            const Text('Photo proof helps verify the visit.',
+                style: TextStyle(fontSize: 11.5, color: Color(0xFF9CA3AF))),
+            const SizedBox(height: 6),
+            Row(children: [
+              OutlinedButton.icon(
+                onPressed: _takePhoto,
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFF1B7A43),
+                  side: const BorderSide(color: Color(0xFF1B7A43)),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+                icon: const Icon(Icons.camera_alt_outlined, size: 16),
+                label: Text(_photoBytes == null ? 'Take photo of the shop' : 'Retake photo',
+                    style: const TextStyle(fontSize: 12.5)),
+              ),
+              if (_photoBytes != null) ...[
+                const SizedBox(width: 10),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: Image.memory(_photoBytes!, width: 44, height: 44, fit: BoxFit.cover),
+                ),
+              ],
+            ]),
+            const SizedBox(height: 18),
+
+            // ── Status ───────────────────────────────────────────────────
+            const Text('What happened?',
+                style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+            const SizedBox(height: 6),
+            ..._kVisitStatuses.map((entry) => _statusRadio(entry.$1, entry.$2, highlight: tooFar)),
+            const SizedBox(height: 10),
+
+            // ── Note ─────────────────────────────────────────────────────
+            TextField(
+              controller: _noteCtrl,
+              decoration: InputDecoration(
+                labelText: 'Note (optional)',
+                labelStyle: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                isDense: true,
+              ),
+              style: const TextStyle(fontSize: 13),
+              maxLines: 2,
+            ),
+
+            if (_submitError != null) ...[
+              const SizedBox(height: 12),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFEE2E2),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(_submitError!,
+                    style: const TextStyle(fontSize: 12.5, color: Color(0xFF991B1B))),
+              ),
+            ],
+
+            const SizedBox(height: 18),
+            Row(children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: _submitting ? null : () => Navigator.of(context).pop(),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 13),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  child: const Text('Cancel'),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: ElevatedButton(
+                  onPressed: _canSubmit ? _submit : null,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF1B7A43),
+                    foregroundColor: Colors.white,
+                    disabledBackgroundColor: const Color(0xFFD1D5DB),
+                    padding: const EdgeInsets.symmetric(vertical: 13),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  child: _submitting
+                      ? const SizedBox(width: 16, height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                      : const Text('Submit', style: TextStyle(fontWeight: FontWeight.w700)),
+                ),
+              ),
+            ]),
+          ]),
+        ),
+      ),
+    );
+  }
+
+  Widget _statusRadio(String value, String label, {required bool highlight}) {
+    final isEscape = value == 'moved' || value == 'not_found'; // C3 — allowed at any GPS reading
+    final selected = _status == value;
+    return Column(children: [
+      InkWell(
+        onTap: () => setState(() => _status = value),
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          margin: const EdgeInsets.only(bottom: 4),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12), // big tap target
+          decoration: BoxDecoration(
+            color: selected ? const Color(0xFFEFF6FF) : Colors.transparent,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: highlight && isEscape
+                  ? const Color(0xFF1B7A43)
+                  : selected ? const Color(0xFF1E40AF) : const Color(0xFFE5E7EB),
+              width: highlight && isEscape ? 1.5 : 1,
+            ),
+          ),
+          child: Row(children: [
+            Icon(selected ? Icons.radio_button_checked : Icons.radio_button_unchecked,
+                size: 18, color: selected ? const Color(0xFF1B7A43) : const Color(0xFF9CA3AF)),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(label, style: const TextStyle(fontSize: 13.5, color: Color(0xFF111827))),
+            ),
+          ]),
+        ),
+      ),
+      // C4 — pin-correction warning, only for "Shop has moved".
+      if (value == 'moved' && selected)
+        Padding(
+          padding: const EdgeInsets.only(left: 10, bottom: 8),
+          child: Text('Your current GPS will replace this shop\'s location.',
+              style: const TextStyle(fontSize: 11.5, color: Color(0xFFD97706))),
+        ),
+    ]);
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+// D2: Admin — assign a zone to a worker
+// ═════════════════════════════════════════════════════════════════════════
+
+class _AssignZoneDialog extends StatefulWidget {
+  final Map<String, dynamic> zone;
+  final List<Map<String, dynamic>> initialWorkers;
+  const _AssignZoneDialog({required this.zone, required this.initialWorkers});
+
+  @override
+  State<_AssignZoneDialog> createState() => _AssignZoneDialogState();
+}
+
+class _AssignZoneDialogState extends State<_AssignZoneDialog> {
+  late List<Map<String, dynamic>> _workers;
+  String? _workerId;
+  final _stopsCtrl = TextEditingController(text: '30');
+  final _minScoreCtrl = TextEditingController(text: '30');
+  DateTime _forDate = DateTime.now();
+  bool _submitting = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _workers = widget.initialWorkers;
+  }
+
+  @override
+  void dispose() {
+    _stopsCtrl.dispose();
+    _minScoreCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _addWorker() async {
+    final nameCtrl = TextEditingController();
+    final phoneCtrl = TextEditingController();
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (dCtx) => AlertDialog(
+        title: const Text('Add worker'),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          TextField(
+            controller: nameCtrl,
+            autofocus: true,
+            decoration: const InputDecoration(labelText: 'Name', border: OutlineInputBorder(), isDense: true),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: phoneCtrl,
+            decoration: const InputDecoration(labelText: 'Phone', border: OutlineInputBorder(), isDense: true),
+          ),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dCtx, false), child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43)),
+            onPressed: () => Navigator.pop(dCtx, true),
+            child: const Text('Add'),
+          ),
+        ],
+      ),
+    );
+    final name = nameCtrl.text.trim();
+    final phone = phoneCtrl.text.trim();
+    nameCtrl.dispose();
+    phoneCtrl.dispose();
+    if (go != true || name.isEmpty) return;
+    try {
+      await Supabase.instance.client.rpc('lead_worker_upsert', params: {
+        'p_name': name,
+        if (phone.isNotEmpty) 'p_phone': phone,
+      });
+      final res = await Supabase.instance.client.rpc('lead_workers_list');
+      final workers = ((res as List?) ?? []).map((w) => Map<String, dynamic>.from(w as Map)).toList();
+      if (!mounted) return;
+      setState(() => _workers = workers);
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Worker added.')));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
+    }
+  }
+
+  Future<void> _pickDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _forDate,
+      firstDate: DateTime.now().subtract(const Duration(days: 1)),
+      lastDate: DateTime.now().add(const Duration(days: 60)),
+      builder: (context, child) => Theme(
+        data: Theme.of(context).copyWith(
+          colorScheme: const ColorScheme.light(primary: Color(0xFF1B7A43)),
+        ),
+        child: child!,
+      ),
+    );
+    if (picked != null) setState(() => _forDate = picked);
+  }
+
+  Future<void> _submit() async {
+    final stops = int.tryParse(_stopsCtrl.text.trim());
+    final minScore = int.tryParse(_minScoreCtrl.text.trim());
+    if (_workerId == null) { setState(() => _error = 'Pick a worker.'); return; }
+    if (stops == null || stops <= 0) { setState(() => _error = 'Enter a valid stop count.'); return; }
+    if (minScore == null || minScore < 0) { setState(() => _error = 'Enter a valid min score.'); return; }
+    setState(() { _submitting = true; _error = null; });
+    try {
+      final res = await Supabase.instance.client.rpc('lead_assign_zone', params: {
+        'p_zone_id': widget.zone['zone_id'],
+        'p_worker_id': _workerId,
+        'p_target_stops': stops,
+        'p_min_score': minScore,
+        'p_for_date':
+            '${_forDate.year.toString().padLeft(4, '0')}-${_forDate.month.toString().padLeft(2, '0')}-${_forDate.day.toString().padLeft(2, '0')}',
+      });
+      final data = Map<String, dynamic>.from(res as Map);
+      if (!mounted) return;
+      if (data['ok'] == true) {
+        Navigator.of(context).pop();
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(data['message']?.toString() ?? 'Assigned.'),
+          backgroundColor: const Color(0xFF1B7A43),
+        ));
+      } else {
+        setState(() { _submitting = false; _error = data['message']?.toString() ?? data['error']?.toString(); });
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() { _submitting = false; _error = e.toString(); });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text('Assign ${widget.zone['title'] ?? ''}'),
+      content: SizedBox(
+        width: 360,
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Expanded(
+              child: DropdownButtonFormField<String>(
+                initialValue: _workerId,
+                isExpanded: true,
+                decoration: const InputDecoration(labelText: 'Worker', border: OutlineInputBorder(), isDense: true),
+                items: _workers.map((w) {
+                  final id = w['worker_id']?.toString() ?? '';
+                  final label = '${w['name'] ?? ''} — ${w['subtitle'] ?? ''}';
+                  return DropdownMenuItem(value: id, child: Text(label, overflow: TextOverflow.ellipsis));
+                }).toList(),
+                onChanged: (v) => setState(() => _workerId = v),
+              ),
+            ),
+            IconButton(
+              onPressed: _addWorker,
+              icon: const Icon(Icons.person_add_alt_1, size: 20),
+              tooltip: 'Add worker',
+            ),
+          ]),
+          const SizedBox(height: 12),
+          Row(children: [
+            Expanded(
+              child: TextField(
+                controller: _stopsCtrl,
+                keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                decoration: const InputDecoration(labelText: 'Stops', border: OutlineInputBorder(), isDense: true),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: TextField(
+                controller: _minScoreCtrl,
+                keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                decoration: const InputDecoration(labelText: 'Min score', border: OutlineInputBorder(), isDense: true),
+              ),
+            ),
+          ]),
+          const SizedBox(height: 12),
+          InkWell(
+            onTap: _pickDate,
+            child: InputDecorator(
+              decoration: const InputDecoration(labelText: 'Date', border: OutlineInputBorder(), isDense: true),
+              child: Text(
+                  '${_forDate.day.toString().padLeft(2, '0')}/${_forDate.month.toString().padLeft(2, '0')}/${_forDate.year}'),
+            ),
+          ),
+          if (_error != null) ...[
+            const SizedBox(height: 10),
+            Text(_error!, style: const TextStyle(fontSize: 12.5, color: Color(0xFFDC2626))),
+          ],
+        ]),
+      ),
+      actions: [
+        TextButton(onPressed: _submitting ? null : () => Navigator.pop(context), child: const Text('Cancel')),
+        FilledButton(
+          style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43)),
+          onPressed: _submitting ? null : _submit,
+          child: _submitting
+              ? const SizedBox(width: 16, height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+              : const Text('Assign'),
+        ),
+      ],
     );
   }
 }

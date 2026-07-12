@@ -1,12 +1,12 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:pharma_b2b/utils/toast.dart';
 
 import '../models/order_hours_model.dart';
 import '../order_hours_state.dart';
 
-/// CHANGE #446 — admin dashboard card: view + control order hours.
+/// CHANGE #456 B — admin dashboard card: view + control order hours. Every
+/// string on this card is printed VERBATIM from order_hours_state() — no
+/// client-side time formatting, no countdown maths, no ISO timestamps.
 class OrderHoursCard extends StatefulWidget {
   const OrderHoursCard({super.key});
 
@@ -15,38 +15,7 @@ class OrderHoursCard extends StatefulWidget {
 }
 
 class _OrderHoursCardState extends State<OrderHoursCard> {
-  Timer? _tickTimer;
   bool _switchBusy = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _tickTimer = Timer.periodic(const Duration(minutes: 1), (_) {
-      if (mounted) setState(() {});
-    });
-  }
-
-  @override
-  void dispose() {
-    _tickTimer?.cancel();
-    super.dispose();
-  }
-
-  int? _liveClosesInMin(OrderHoursModel m) {
-    if (m.closesInMin == null) return null;
-    final elapsed = m.fetchedAt == null
-        ? 0
-        : DateTime.now().difference(m.fetchedAt!).inMinutes;
-    final remaining = m.closesInMin! - elapsed;
-    return remaining < 0 ? 0 : remaining;
-  }
-
-  String _fmtMin(int mins) {
-    final h = mins ~/ 60;
-    final m = mins % 60;
-    if (h > 0) return '${h}h ${m}m';
-    return '${m}m';
-  }
 
   Future<void> _toggle(OrderHoursModel model) async {
     final target = !model.isOpen;
@@ -63,36 +32,6 @@ class _OrderHoursCardState extends State<OrderHoursCard> {
       }
     } finally {
       if (mounted) setState(() => _switchBusy = false);
-    }
-  }
-
-  Future<void> _pickAutoClose(OrderHoursModel model) async {
-    final current = _parseTime(model.autoCloseTime) ?? const TimeOfDay(hour: 18, minute: 0);
-    final picked = await showTimePicker(context: context, initialTime: current);
-    if (picked == null) return;
-    try {
-      await model.setOrderHours(autoCloseTime: _fmtTime(picked));
-    } catch (e) {
-      if (mounted) showToast(context, 'Could not update auto-close time: $e', isError: true);
-    }
-  }
-
-  Future<void> _pickAutoOpen(OrderHoursModel model) async {
-    final current = _parseTime(model.autoOpenTime) ?? const TimeOfDay(hour: 9, minute: 0);
-    final picked = await showTimePicker(context: context, initialTime: current);
-    if (picked == null) return;
-    try {
-      await model.setOrderHours(autoOpenTime: _fmtTime(picked));
-    } catch (e) {
-      if (mounted) showToast(context, 'Could not update auto-open time: $e', isError: true);
-    }
-  }
-
-  Future<void> _clearAutoOpen(OrderHoursModel model) async {
-    try {
-      await model.setOrderHours(clearAutoOpen: true);
-    } catch (e) {
-      if (mounted) showToast(context, 'Could not clear auto-open time: $e', isError: true);
     }
   }
 
@@ -141,6 +80,87 @@ class _OrderHoursCardState extends State<OrderHoursCard> {
   static String _fmtTime(TimeOfDay t) =>
       '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
 
+  // CHANGE #456 B3 — combined schedule sheet: both times together, 12-hour
+  // pickers (forced via the MediaQuery override below), Clear auto-open.
+  Future<void> _editSchedule(OrderHoursModel model) async {
+    TimeOfDay? openTime = _parseTime(model.autoOpenTime);
+    TimeOfDay? closeTime = _parseTime(model.autoCloseTime) ?? const TimeOfDay(hour: 18, minute: 0);
+    bool clearOpen = false;
+
+    final save = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheet) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Text('Order hours schedule',
+              style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _ScheduleTimeRow(
+                label: 'Opens at',
+                time: clearOpen ? null : openTime,
+                placeholder: 'Reopen manually',
+                onTap: () async {
+                  final picked = await showTimePicker(
+                    context: ctx,
+                    initialTime: openTime ?? const TimeOfDay(hour: 9, minute: 0),
+                    builder: (c, child) => MediaQuery(
+                      data: MediaQuery.of(c).copyWith(alwaysUse24HourFormat: false),
+                      child: child!,
+                    ),
+                  );
+                  if (picked != null) setSheet(() { openTime = picked; clearOpen = false; });
+                },
+              ),
+              const SizedBox(height: 10),
+              _ScheduleTimeRow(
+                label: 'Closes at',
+                time: closeTime,
+                onTap: () async {
+                  final picked = await showTimePicker(
+                    context: ctx,
+                    initialTime: closeTime ?? const TimeOfDay(hour: 18, minute: 0),
+                    builder: (c, child) => MediaQuery(
+                      data: MediaQuery.of(c).copyWith(alwaysUse24HourFormat: false),
+                      child: child!,
+                    ),
+                  );
+                  if (picked != null) setSheet(() => closeTime = picked);
+                },
+              ),
+              const SizedBox(height: 4),
+              TextButton(
+                onPressed: () => setSheet(() { clearOpen = true; openTime = null; }),
+                child: const Text('Clear auto-open',
+                    style: TextStyle(fontSize: 12.5, color: Color(0xFFDC2626))),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B5E20)),
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (save != true) return;
+    try {
+      await model.setOrderHours(
+        autoCloseTime: closeTime != null ? _fmtTime(closeTime!) : null,
+        autoOpenTime: clearOpen ? null : (openTime != null ? _fmtTime(openTime!) : null),
+        clearAutoOpen: clearOpen,
+      );
+    } catch (e) {
+      if (mounted) showToast(context, 'Could not update schedule: $e', isError: true);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final model = OrderHoursState.of(context);
@@ -154,11 +174,10 @@ class _OrderHoursCardState extends State<OrderHoursCard> {
         final bg = isOpen ? const Color(0xFFECFDF5) : const Color(0xFFFEF2F2);
         final border = isOpen ? const Color(0xFFA7F3D0) : const Color(0xFFFECACA);
         final accent = isOpen ? const Color(0xFF1B7A43) : const Color(0xFFDC2626);
-        final remaining = _liveClosesInMin(model);
 
         return Container(
           margin: const EdgeInsets.only(bottom: 20),
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
           decoration: BoxDecoration(
             color: bg,
             borderRadius: BorderRadius.circular(12),
@@ -170,18 +189,25 @@ class _OrderHoursCardState extends State<OrderHoursCard> {
               Row(
                 children: [
                   Icon(isOpen ? Icons.storefront_outlined : Icons.storefront,
-                      size: 18, color: accent),
-                  const SizedBox(width: 8),
+                      size: 16, color: accent),
+                  const SizedBox(width: 7),
                   const Text('ORDER HOURS',
                       style: TextStyle(
-                          fontSize: 12,
+                          fontSize: 11.5,
                           fontWeight: FontWeight.w700,
                           letterSpacing: 0.6,
                           color: Color(0xFF374151))),
                   const Spacer(),
-                  Text(isOpen ? 'OPEN' : 'CLOSED',
-                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: accent)),
-                  const SizedBox(width: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: accent.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(model.statusLabel ?? (isOpen ? 'OPEN' : 'CLOSED'),
+                        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: accent)),
+                  ),
+                  const SizedBox(width: 8),
                   _switchBusy
                       ? const SizedBox(
                           width: 34, height: 20,
@@ -196,40 +222,44 @@ class _OrderHoursCardState extends State<OrderHoursCard> {
                         ),
                 ],
               ),
-              const SizedBox(height: 4),
-              Text(
-                isOpen
-                    ? 'Closes automatically at ${model.autoCloseTime ?? '--:--'}'
-                        '${remaining != null ? '  (${_fmtMin(remaining)} left)' : ''}'
-                    : 'CLOSED — customers cannot place orders.'
-                        '${model.lastClosedAt != null ? ' Since ${model.lastClosedAt}.' : ''}',
-                style: const TextStyle(fontSize: 13, color: Color(0xFF374151)),
+              if (model.statusSince != null) ...[
+                const SizedBox(height: 2),
+                Text(model.statusSince!,
+                    style: const TextStyle(fontSize: 12.5, color: Color(0xFF374151))),
+              ],
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 10),
+                child: Divider(height: 1, color: Color(0xFFE5E7EB)),
               ),
-              const SizedBox(height: 14),
-              Wrap(
-                spacing: 24,
-                runSpacing: 10,
-                children: [
-                  _TimeField(
-                    label: 'Auto-close',
-                    value: model.autoCloseTime ?? '--:--',
-                    onTap: () => _pickAutoClose(model),
-                  ),
-                  _TimeField(
-                    label: 'Auto-open',
-                    value: model.autoOpenTime ?? '--:--',
-                    helper: model.autoOpenTime == null ? 'reopen manually' : null,
-                    onTap: () => _pickAutoOpen(model),
-                    onClear: model.autoOpenTime != null ? () => _clearAutoOpen(model) : null,
-                  ),
-                ],
+              GestureDetector(
+                onTap: () => _editSchedule(model),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(model.scheduleLabel ?? '',
+                          style: const TextStyle(
+                              fontSize: 12.5, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
+                    ),
+                    const SizedBox(width: 8),
+                    const Text('Edit',
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFF1B7A43))),
+                  ],
+                ),
               ),
-              const SizedBox(height: 10),
+              if (model.nextChangeLabel != null) ...[
+                const SizedBox(height: 3),
+                Text(model.nextChangeLabel!,
+                    style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+              ],
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 10),
+                child: Divider(height: 1, color: Color(0xFFE5E7EB)),
+              ),
               GestureDetector(
                 onTap: () => _editClosedMessage(model),
                 child: Row(
                   children: [
-                    const Icon(Icons.edit_outlined, size: 14, color: Color(0xFF6B7280)),
+                    const Icon(Icons.edit_outlined, size: 13, color: Color(0xFF6B7280)),
                     const SizedBox(width: 6),
                     Flexible(
                       child: Text(
@@ -250,57 +280,42 @@ class _OrderHoursCardState extends State<OrderHoursCard> {
   }
 }
 
-class _TimeField extends StatelessWidget {
+class _ScheduleTimeRow extends StatelessWidget {
   final String label;
-  final String value;
-  final String? helper;
+  final TimeOfDay? time;
+  final String placeholder;
   final VoidCallback onTap;
-  final VoidCallback? onClear;
 
-  const _TimeField({
+  const _ScheduleTimeRow({
     required this.label,
-    required this.value,
+    required this.time,
     required this.onTap,
-    this.helper,
-    this.onClear,
+    this.placeholder = '--:--',
   });
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
+    return Row(
       children: [
-        Text(label,
-            style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280), fontWeight: FontWeight.w600)),
-        const SizedBox(height: 3),
+        SizedBox(
+          width: 80,
+          child: Text(label, style: const TextStyle(fontSize: 13, color: Color(0xFF374151))),
+        ),
         GestureDetector(
           onTap: onTap,
           child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: const Color(0xFFF5F6F8),
               borderRadius: BorderRadius.circular(8),
               border: Border.all(color: const Color(0xFFE5E7EB)),
             ),
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
-              Text(value,
-                  style: const TextStyle(
-                      fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
-              if (onClear != null) ...[
-                const SizedBox(width: 6),
-                GestureDetector(
-                  onTap: onClear,
-                  child: const Icon(Icons.close, size: 13, color: Color(0xFF9CA3AF)),
-                ),
-              ],
-            ]),
+            child: Text(
+              time?.format(context) ?? placeholder,
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF111827)),
+            ),
           ),
         ),
-        if (helper != null) ...[
-          const SizedBox(height: 2),
-          Text(helper!, style: const TextStyle(fontSize: 10, color: Color(0xFF9CA3AF))),
-        ],
       ],
     );
   }

@@ -30,6 +30,17 @@ class OrderHoursModel extends ChangeNotifier with WidgetsBindingObserver {
   String? popupMessage;
   String? reopenHint;
 
+  // CHANGE #456 B — dashboard card fields. ALL finished strings, printed
+  // VERBATIM. No DateFormat, no HH:mm, no countdown maths, no ISO timestamps
+  // in Dart — the server has already done every bit of that work.
+  String? statusLabel; // "OPEN" | "CLOSED"
+  String? statusSince; // "Closed since 12:24 AM" | "Open since ..."
+  String? scheduleLabel; // "Opens 6:00 AM  ·  Closes 6:00 PM"
+  String? nextChangeLabel; // "Auto-opens in 5h 30m" | null
+  String? autoOpenLabel; // "6:00 AM" — 12-hour, ready to print
+  String? autoCloseLabel; // "6:00 PM" — 12-hour, ready to print
+  String? nowLabel; // "12:30 AM"
+
   RealtimeChannel? _channel;
   Timer? _debounce;
 
@@ -70,6 +81,14 @@ class OrderHoursModel extends ChangeNotifier with WidgetsBindingObserver {
       popupTitle = map['popup_title'] as String?;
       popupMessage = map['popup_message'] as String?;
       reopenHint = map['reopen_hint'] as String?;
+      // CHANGE #456 B — dashboard card fields, verbatim from the RPC.
+      statusLabel = map['status_label'] as String?;
+      statusSince = map['status_since'] as String?;
+      scheduleLabel = map['schedule_label'] as String?;
+      nextChangeLabel = map['next_change_label'] as String?;
+      autoOpenLabel = map['auto_open_label'] as String?;
+      autoCloseLabel = map['auto_close_label'] as String?;
+      nowLabel = map['now_label'] as String?;
       loaded = true;
       fetchedAt = DateTime.now();
       RenderLog.write('c444_is_open', isOpen.toString());
@@ -77,6 +96,10 @@ class OrderHoursModel extends ChangeNotifier with WidgetsBindingObserver {
       RenderLog.write('c455_can_order', canOrder.toString());
       RenderLog.write('c455_button_label', buttonLabel ?? '');
       RenderLog.write('c455_popup_msg', popupMessage ?? '');
+      RenderLog.write('c456_status', statusLabel ?? '');
+      RenderLog.write('c456_open_label', autoOpenLabel ?? '');
+      RenderLog.write('c456_close_label', autoCloseLabel ?? '');
+      RenderLog.write('c456_schedule', scheduleLabel ?? '');
       notifyListeners();
     } catch (_) {
       // D3 FAIL OPEN on the fetch — never invent a "closed" message on a

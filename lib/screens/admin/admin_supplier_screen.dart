@@ -1386,10 +1386,11 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   // INQUIRY LINK ACTIONS
   // ═══════════════════════════════════════════════════════════════════════════
 
-  // CHANGE #456 C2/C3 — inquiry lock toggle. Turning ON is a big lever (blocks
-  // new orders for EVERYONE, no admin exemption) so it is confirmed first.
-  // Turning OFF is immediate. The server re-checks readiness on every ON
-  // attempt regardless of what the UI thinks — never retried automatically.
+  // CHANGE #456 C4/C5 — inquiry lock toggle. This pauses ADMIN ordering only
+  // (including acting-as-customer) — customers are unaffected, they are
+  // governed by Order Hours. Turning ON is confirmed first; turning OFF is
+  // immediate. The server re-checks readiness on every ON attempt regardless
+  // of what the UI thinks — never retried automatically.
   Future<void> _handleLockToggle(bool turnOn) async {
     if (_lockToggling) return;
     if (turnOn) {
@@ -1397,11 +1398,12 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         context: context,
         builder: (ctx) => AlertDialog(
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: const Text('Start inquiry?',
+          title: const Text('Pause admin ordering?',
               style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
           content: const Text(
-            'New orders will be BLOCKED for everyone — customers, admin, and '
-            'admin acting as a customer — until you turn this off.',
+            'While the inquiry runs, YOU cannot place orders — including when '
+            'acting as a customer. Customers are unaffected; they are governed '
+            'by Order Hours.',
             style: TextStyle(fontSize: 13, color: Color(0xFF374151)),
           ),
           actions: [

@@ -88,26 +88,26 @@ class _CartScreenState extends State<CartScreen> {
   Future<void> _placeOrder() async {
     if (_orderInProgress) return;
 
-    // CHANGE #456 D1 — inquiry lock has NO admin/ViewAs exemption (deliberately
-    // different from order_hours_state()'s admin exemption below). Check first,
-    // before branching into the ViewAs vs normal flow.
-    final inquiryLock = InquiryLockState.read(context);
-    if (inquiryLock.locked) {
-      RenderLog.write('c456_cust_blocked', 'true');
-      _showOrderGate(
-        title: 'Ordering paused',
-        message: inquiryLock.message ??
-            'Inquiry in progress — new orders are paused until it completes.',
-      );
-      return;
-    }
-
     final cart = AppState.of(context);
     final viewAs = ViewAsState.of(context);
 
     // ── ViewAs: place a real order for the impersonated customer ────────────
     if (cart.isViewAs && viewAs.isActive && viewAs.role == ViewAsRole.customer) {
       if (cart.lines.isEmpty) return;
+
+      // CHANGE #456 C8 — inquiry lock gates ADMIN ordering only (this
+      // includes acting-as-customer). Customers are never gated by it — they
+      // are governed by Order Hours only. Do NOT check this outside ViewAs.
+      final inquiryLock = InquiryLockState.read(context);
+      if (inquiryLock.locked) {
+        RenderLog.write('c456_viewas_blocked', 'true');
+        _showOrderGate(
+          title: 'Ordering paused',
+          message: inquiryLock.message ??
+              'Inquiry running — admin ordering is paused until it completes.',
+        );
+        return;
+      }
 
       // Approval gate: mirrors the real customer path — unapproved accounts cannot order.
       if (viewAs.identity?.isApproved != true) {
@@ -236,16 +236,17 @@ class _CartScreenState extends State<CartScreen> {
                 'Only a super admin can place orders on behalf of a customer',
                 isError: true);
           } else if (msg.contains('inquiry_in_progress')) {
-            // CHANGE #456 D — no admin/ViewAs exemption; the trigger rejects
-            // admin-as-customer orders too. Re-fetch and show the gate.
-            RenderLog.write('c456_cust_blocked', 'true');
+            // CHANGE #456 C8 belt-and-braces — the trigger gates admin-as-
+            // customer orders (placed_by_admin=true) even if the UI's cached
+            // lock state is stale. Re-fetch and show the gate.
+            RenderLog.write('c456_viewas_blocked', 'true');
             final il = InquiryLockState.read(context);
             await il.refresh();
             if (mounted) {
               _showOrderGate(
                 title: 'Ordering paused',
                 message: il.message ??
-                    'Inquiry in progress — new orders are paused until it completes.',
+                    'Inquiry running — admin ordering is paused until it completes.',
               );
             }
           } else {
@@ -386,12 +387,11 @@ class _CartScreenState extends State<CartScreen> {
       // SAME popup as the pre-check — popup_title/popup_message/reopen_hint,
       // VERBATIM. The DB exception's HINT field is no longer read: after
       // refresh() the model's own fields are already current.
+      // CHANGE #456 — the inquiry lock does NOT gate real customer orders
+      // (trg_orders_inquiry_lock_gate exempts placed_by_admin=false rows), so
+      // this normal-flow catch only ever needs to handle order_hours_closed.
       final isOrderHoursClosed =
           e.message.contains('order_hours_closed') || (e.code ?? '').contains('order_hours_closed');
-      // CHANGE #456 D2 belt-and-braces: the DB trigger rejects the order
-      // regardless of what the UI's cached lock state thinks. Re-fetch and
-      // show `message` VERBATIM, same as the pre-check.
-      final isInquiryLocked = e.message.contains('inquiry_in_progress');
       if (isOrderHoursClosed) {
         RenderLog.write('c444_cust_blocked', 'true');
         final oh = OrderHoursState.read(context);
@@ -401,16 +401,6 @@ class _CartScreenState extends State<CartScreen> {
           title: oh.popupTitle ?? '',
           message: oh.popupMessage ?? '',
           secondLine: oh.reopenHint,
-        );
-      } else if (isInquiryLocked) {
-        RenderLog.write('c456_cust_blocked', 'true');
-        final il = InquiryLockState.read(context);
-        await il.refresh();
-        if (!mounted) return;
-        _showOrderGate(
-          title: 'Ordering paused',
-          message: il.message ??
-              'Inquiry in progress — new orders are paused until it completes.',
         );
       } else {
         showToast(context, 'Could not place order. Please try again.', isError: true);
@@ -1632,8 +1622,9 @@ class _CheckoutBar extends StatelessWidget {
                   if (!cart.isViewAs) {
                     RenderLog.write('c444_cust_blocked', orderHoursClosed.toString());
                   }
-                  // CHANGE #456 D1 — inquiry lock has NO ViewAs/admin exemption.
-                  final inquiryLocked = InquiryLockState.of(ctx).locked;
+                  // CHANGE #456 C8 — inquiry lock gates ADMIN ordering only
+                  // (acting-as-customer). Real customers are never gated by it.
+                  final inquiryLocked = cart.isViewAs && InquiryLockState.of(ctx).locked;
                   final gateMsg = _orderGateMessage(
                       auth, viewAsNotifier, orderHoursClosed ? orderHours.buttonLabel : null);
                   final blocked = gateMsg != null || inquiryLocked;
@@ -2445,8 +2436,9 @@ class _OrderSummaryPanel extends StatelessWidget {
             final auth = UserState.of(ctx);
             final orderHours = OrderHoursState.of(ctx);
             final orderHoursClosed = !cart.isViewAs && !orderHours.canOrder;
-            // CHANGE #456 D1 — inquiry lock has NO ViewAs/admin exemption.
-            final inquiryLocked = InquiryLockState.of(ctx).locked;
+            // CHANGE #456 C8 — inquiry lock gates ADMIN ordering only
+            // (acting-as-customer). Real customers are never gated by it.
+            final inquiryLocked = cart.isViewAs && InquiryLockState.of(ctx).locked;
             final gateMsg = _orderGateMessage(
                 auth, ViewAsState.of(ctx), orderHoursClosed ? orderHours.buttonLabel : null);
             final blocked = gateMsg != null || inquiryLocked;

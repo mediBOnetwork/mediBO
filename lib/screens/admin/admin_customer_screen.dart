@@ -16,6 +16,8 @@ import '../../config/api_keys.dart';
 import '../../util.dart';
 import '../../utils/order_code.dart';
 import '../../utils/render_log.dart';
+import '../../utils/ist_date.dart'; // CHANGE #444
+import '../../widgets/date_scope_chip.dart'; // CHANGE #444
 import '../bulk_upload_screen.dart';
 import '../../services/payment_claims_service.dart';
 import '../../view_as_state.dart';
@@ -361,6 +363,14 @@ class AdminCustomerScreen extends StatefulWidget {
 }
 
 class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
+  // CHANGE #444 — Customer Orders date scope. Own chip, default today, no
+  // "older open" pill (an order list is a record of a day, not a work queue).
+  DateTime _ordersDate = todayIst();
+  void _onOrdersDateChanged(DateTime d) {
+    setState(() => _ordersDate = d);
+    _load(showSpinner: false);
+  }
+
   List<_CustRow>     _orderRows    = [];
   List<_CustRow>     _cartRows     = [];
   List<_RegRow>      _regRows      = [];
@@ -506,11 +516,22 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     if (showSpinner) setState(() => _loading = true);
     try {
       final client = Supabase.instance.client;
+      // CHANGE #444 — Customer Orders is date-scoped to when the order was
+      // PLACED (orders.created_at in Asia/Kolkata). ist_day_bounds does the
+      // IST-aware UTC conversion server-side — never hand-roll this in Dart,
+      // IST is UTC+5:30 and naive local-day math flips the day near midnight.
+      final bounds =
+          await client.rpc('ist_day_bounds', params: {'p_date': ymd(_ordersDate)}) as Map;
+      final ordersStartUtc = bounds['start_utc'] as String;
+      final ordersEndUtc   = bounds['end_utc'] as String;
       final results = await Future.wait<dynamic>([
         client.from('user_profiles').select(),
         // Part A-2: always filter out deleted profiles from active list
         client.from('pharmacy_profiles').select().or('is_deleted.is.null,is_deleted.eq.false'),
-        client.from('orders').select().order('created_at', ascending: false),
+        client.from('orders').select()
+            .gte('created_at', ordersStartUtc)
+            .lt('created_at', ordersEndUtc)
+            .order('created_at', ascending: false),
         client.from('cart_items').select().order('id', ascending: true),
         client.rpc('get_unregistered_users').catchError((_) => <dynamic>[]),
         // Fetch deleted profiles for "Recently Deleted" section
@@ -695,6 +716,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
           _leads        = leads;
           _loading      = false;
         });
+        RenderLog.write('c444_cust_orders', '${orders.length}');
         // CHANGE #369 — "Delete order" button removed from real orders (they're
         // permanent); this key now records that removal instead of the old
         // button-present claim.
@@ -1527,6 +1549,23 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
               ]),
             ),
           ),
+          // CHANGE #444 — Customer Orders' own date-scope chip, no pill.
+          if (_filter == _CustFilter.customerOrders) ...[
+            const SizedBox(width: 8),
+            Builder(builder: (context) {
+              // Distinct key from the Fulfill screen's c444_chip_label — both
+              // screens can be mounted in the same render-log session.
+              RenderLog.write('c444_cust_chip_label',
+                  isSameDay(_ordersDate, todayIst())
+                      ? 'Today · ${dmy(_ordersDate)}'
+                      : dmy(_ordersDate));
+              return DateScopeChip(
+                selected: _ordersDate,
+                isToday: isSameDay(_ordersDate, todayIst()),
+                onChanged: _onOrdersDateChanged,
+              );
+            }),
+          ],
         ]);
       }),
     );

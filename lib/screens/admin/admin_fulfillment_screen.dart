@@ -24,6 +24,9 @@ import '../../utils/tts.dart';
 import '../../user_state.dart';
 import '../../services/voice_receive_service.dart';
 import '../../services/fulfill_realtime.dart'; // C353: single realtime channel
+import '../../services/fulfill_date_scope.dart'; // C444: shared date+includeOlder scope
+import '../../widgets/date_scope_chip.dart'; // C444: shared DateScopeChip + OlderOpenPill
+import '../../utils/ist_date.dart'; // C444: IST date helpers
 import '../../supabase_config.dart' show SupabaseConfig;
 import 'voice_receive.dart';
 import '../../widgets/pinned_footer_list.dart';
@@ -1346,9 +1349,17 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   // ── Lifecycle ───────────────────────────────────────────────────────────────
 
+  // CHANGE #444 — older_open returned by the last fw_list_arrivals call, for
+  // this tab's own OlderOpenPill (Shop and Warehouse are separate State
+  // instances, each calling the RPC with the same shared date scope).
+  int _olderOpen = 0;
+
+  void _onDateScopeChanged() => _loadSuppliers();
+
   @override
   void initState() {
     super.initState();
+    FulfillDateScope.instance.addListener(_onDateScopeChanged);
     _loadSettings();
     _loadSuppliers();
     _initVoice();
@@ -1368,6 +1379,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   @override
   void dispose() {
+    FulfillDateScope.instance.removeListener(_onDateScopeChanged);
     _listScrollCtrl.dispose();
     _agentBubbleEntry?.remove();
     _agentBubbleEntry = null;
@@ -1535,8 +1547,15 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       // place when the new data arrives, so the tab never flashes/reloads.
       if (!_loadingSuppliers && _suppliers.isEmpty) setState(() => _loadingSuppliers = true);
       try {
-        final res = await Supabase.instance.client.rpc('fw_list_arrivals') as Map;
+        final scope = FulfillDateScope.instance;
+        final res = await Supabase.instance.client.rpc('fw_list_arrivals', params: {
+          'p_date': ymd(scope.date),
+          'p_include_older': scope.includeOlder,
+        }) as Map;
         if (!mounted) return;
+        _olderOpen = (res['older_open'] as num?)?.toInt() ?? 0;
+        RenderLog.write('c444_older_open', '$_olderOpen');
+        RenderLog.write('c444_include_older', '${scope.includeOlder}');
         final rawList = (res['suppliers'] as List? ?? []);
         final dotMap = <String, String>{};
         final modeMap = <String, String?>{};
@@ -1625,20 +1644,30 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     }
     RenderLog.write('78_collect_dropdown_query_sent', 'true');
     try {
-      final res = await Supabase.instance.client
-          .from('supplier_orders')
-          .select('supplier_name')
-          .inFilter('status', ['pending', 'sent'])
-          .order('created_at', ascending: false) as List;
+      // CHANGE #444 — Shop now shares fw_list_arrivals with Warehouse (per the
+      // backend contract: "feeds BOTH Supplier Shop AND Warehouse"), scoped to
+      // the shared Fulfill date, instead of an undated direct supplier_orders
+      // query. This is what makes Shop show 0 suppliers on a date with no open
+      // work instead of every pending/sent supplier regardless of when placed.
+      final scope = FulfillDateScope.instance;
+      final res = await Supabase.instance.client.rpc('fw_list_arrivals', params: {
+        'p_date': ymd(scope.date),
+        'p_include_older': scope.includeOlder,
+      }) as Map;
       if (!mounted) return;
+      _olderOpen = (res['older_open'] as num?)?.toInt() ?? 0;
+      RenderLog.write('c444_older_open', '$_olderOpen');
+      RenderLog.write('c444_include_older', '${scope.includeOlder}');
+      final rawList = (res['suppliers'] as List? ?? []);
       final seen = <String>{};
       final names = <String>[];
-      for (final r in res) {
-        final s = (r as Map)['supplier_name']?.toString();
+      for (final r in rawList) {
+        final s = ((r as Map)['supplier'] ?? r['supplier_name'])?.toString();
         if (s != null && s.isNotEmpty && seen.add(s)) names.add(s);
       }
       names.sort();
       RenderLog.write('78_collect_suppliers_count', '${names.length}');
+      RenderLog.write('c444_shop_suppliers', '${names.length}');
       setState(() { _suppliers = names; _loadingSuppliers = false; });
       _loadSupplierDots(); // #142: populate status dots
       _loadCollectModes(); // #120: populate C/CR badge map
@@ -4240,9 +4269,28 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       }
     });
 
+    // CHANGE #444 — shared date-scope pill, same shape on both Shop and Warehouse.
+    final olderPill = OlderOpenPill(
+      olderOpen: _olderOpen,
+      includeOlder: FulfillDateScope.instance.includeOlder,
+      onTap: () => FulfillDateScope.instance.toggleIncludeOlder(),
+    );
+
     if (_suppliers.isEmpty) {
-      return const Center(child: Text('No supplier orders to collect yet',
-          style: TextStyle(color: _kSub, fontSize: 15)));
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Text('No orders placed on ${dmy(FulfillDateScope.instance.date)}.',
+                style: const TextStyle(color: _kSub, fontSize: 15),
+                textAlign: TextAlign.center),
+            if (_olderOpen > 0) ...[
+              const SizedBox(height: 10),
+              olderPill,
+            ],
+          ]),
+        ),
+      );
     }
 
     RenderLog.write('c149_web_untouched', 'wide_layout=unchanged');
@@ -4261,8 +4309,19 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           child: ListView.builder(
             controller: _listScrollCtrl,
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-            itemCount: displayList.length,
-            itemBuilder: (_, i) => _buildSupplierAccordionRow(displayList[i], isAdmin),
+            itemCount: displayList.length + (_olderOpen > 0 ? 1 : 0),
+            itemBuilder: (_, i) {
+              if (_olderOpen > 0) {
+                if (i == 0) {
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: olderPill,
+                  );
+                }
+                return _buildSupplierAccordionRow(displayList[i - 1], isAdmin);
+              }
+              return _buildSupplierAccordionRow(displayList[i], isAdmin);
+            },
           ),
         ),
       );
@@ -10568,10 +10627,19 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
   }
   final _arrivalsKey = GlobalKey<_ArrivalsScreenState>();
 
+  // CHANGE #444 — shared date-scope chip: rebuild the header (for the "Today ·"
+  // label and isToday styling) whenever the shared scope changes. Each of the
+  // 5 tab widgets listens to FulfillDateScope independently for its own
+  // refetch, so this listener only needs to repaint the chip itself.
+  void _onDateScopeChanged() {
+    if (mounted) setState(() {});
+  }
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    FulfillDateScope.instance.addListener(_onDateScopeChanged);
     _subscribeRealtime();
     // C358 B1: the Fulfill area subscribes to realtime ONLY (event-driven). There is
     // NO periodic/interval refetch timer scheduled here or in any tab — refetches fire
@@ -10604,6 +10672,10 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
         _scheduleDisputeReload();
         _arrivalsKey.currentState?.refresh();
       }
+      // CHANGE #444 B5 — midnight rollover: if the user was viewing "today"
+      // and the real day has moved on since, advance the selection and
+      // refetch (recomputeToday() notifies all 5 tabs; no-op otherwise).
+      FulfillDateScope.instance.recomputeToday();
     }
   }
 
@@ -10613,6 +10685,7 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
     _collectDebounce?.cancel();
     _disputeDebounce?.cancel();
     FulfillRealtime.instance.removeListener(_onRealtimeChange);
+    FulfillDateScope.instance.removeListener(_onDateScopeChanged);
     super.dispose();
   }
 
@@ -10644,6 +10717,24 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
         color: _kCard,
         padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          // CHANGE #444 — shared date-scope chip, above the tab bar, right-aligned.
+          // One date/includeOlder pair for the whole Fulfill screen (all 5 tabs).
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              Builder(builder: (context) {
+                final scope = FulfillDateScope.instance;
+                RenderLog.write('c444_chip_label',
+                    scope.isToday ? 'Today · ${dmy(scope.date)}' : dmy(scope.date));
+                return DateScopeChip(
+                  selected: scope.date,
+                  isToday: scope.isToday,
+                  onChanged: (d) => FulfillDateScope.instance.setDate(d),
+                );
+              }),
+            ],
+          ),
+          const SizedBox(height: 8),
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: Row(children: [
@@ -10756,6 +10847,10 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
   // C353: realtime via the single FulfillRealtime channel (parent routes here)
   bool _allStatesLogged = false;
 
+  // CHANGE #444 — shared date scope
+  int _olderOpen = 0;
+  void _onDateScopeChanged() => _load();
+
   @override
   bool get wantKeepAlive => true;
 
@@ -10766,11 +10861,13 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
     RenderLog.write('c285_bag_no_chip', 'rendered=false');
     RenderLog.write('c286_no_inner_strip', 'strip=removed');
     RenderLog.write('c286_no_received_footer', 'footer=removed');
+    FulfillDateScope.instance.addListener(_onDateScopeChanged);
     _load();
   }
 
   @override
   void dispose() {
+    FulfillDateScope.instance.removeListener(_onDateScopeChanged);
     _scroll.dispose();
     _searchCtrl.dispose();
     _searchDebounce?.cancel();
@@ -10781,11 +10878,17 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
     if (!mounted) return;
     if (!silent) setState(() { _loading = true; _error = null; });
     try {
-      final data = await Supabase.instance.client.rpc('fw_list_bags') as Map;
+      final scope = FulfillDateScope.instance;
+      final data = await Supabase.instance.client.rpc('fw_list_bags', params: {
+        'p_date': ymd(scope.date),
+        'p_include_older': scope.includeOlder,
+      }) as Map;
       if (!mounted) return;
       final bags = (data['bags'] as List? ?? [])
           .map((r) => Map<String, dynamic>.from(r as Map))
           .toList();
+      _olderOpen = (data['older_open'] as num?)?.toInt() ?? 0;
+      RenderLog.write('c444_bags', '${bags.length}');
       setState(() {
         _bags = bags;
         if (!silent) _loading = false;
@@ -10967,15 +11070,39 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
         ),
       ]));
     }
+    // CHANGE #444 — shared date-scope pill.
+    final olderPill = OlderOpenPill(
+      olderOpen: _olderOpen,
+      includeOlder: FulfillDateScope.instance.includeOlder,
+      onTap: () => FulfillDateScope.instance.toggleIncludeOlder(),
+    );
+
     if (_bags.isEmpty) {
-      return const Center(child: Text('No bags with active items',
-          style: TextStyle(color: _kSub, fontSize: 15)));
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Text('No orders placed on ${dmy(FulfillDateScope.instance.date)}.',
+                style: const TextStyle(color: _kSub, fontSize: 15),
+                textAlign: TextAlign.center),
+            if (_olderOpen > 0) ...[const SizedBox(height: 10), olderPill],
+          ]),
+        ),
+      );
     }
     return ListView.builder(
       controller: _scroll,
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-      itemCount: _bags.length,
-      itemBuilder: (_, i) => _buildBagCard(_bags[i]),
+      itemCount: _bags.length + (_olderOpen > 0 ? 1 : 0),
+      itemBuilder: (_, i) {
+        if (_olderOpen > 0) {
+          if (i == 0) {
+            return Padding(padding: const EdgeInsets.only(bottom: 10), child: olderPill);
+          }
+          return _buildBagCard(_bags[i - 1]);
+        }
+        return _buildBagCard(_bags[i]);
+      },
     );
   }
 
@@ -11638,6 +11765,10 @@ class _PackTabState extends State<_PackTab>
   @override
   bool get wantKeepAlive => true;
 
+  // CHANGE #444 — shared date scope
+  int _olderOpen = 0;
+  void _onDateScopeChanged() => _load();
+
   @override
   void initState() {
     super.initState();
@@ -11647,6 +11778,7 @@ class _PackTabState extends State<_PackTab>
     );
     RenderLog.write('c278_pack_tab_mounted', 1);
     RenderLog.write('c354_ready', 'tab=pack');
+    FulfillDateScope.instance.addListener(_onDateScopeChanged);
     _load();
     _loadDisputeIndex();
   }
@@ -11673,6 +11805,7 @@ class _PackTabState extends State<_PackTab>
 
   @override
   void dispose() {
+    FulfillDateScope.instance.removeListener(_onDateScopeChanged);
     _scroll.dispose();
     _dispatchHoldTimer?.cancel();
     _dispatchHoldCtrl.dispose();
@@ -11692,10 +11825,28 @@ class _PackTabState extends State<_PackTab>
     if (!mounted) return;
     setState(() { _loading = true; _error = null; });
     try {
-      final data = await Supabase.instance.client.rpc('get_customer_pack_status') as List;
+      // CHANGE #444 — Pack's customer list now comes from fw_pack_orders(p_date,
+      // p_include_older) instead of the undated get_customer_pack_status(). The
+      // per-order expand (pack_get_queue / pack_item_bag_breakdown) is untouched —
+      // only this top-level list gains date scoping. items_total is normalized
+      // to the old total_items key since _buildExpandedBody() falls back to it
+      // before pack_get_queue's own rollup loads; bag_no and the old per-status
+      // breakdown fields were never read by this tab (verified unused) so their
+      // absence from the new RPC's shape is not a regression.
+      final scope = FulfillDateScope.instance;
+      final res = await Supabase.instance.client.rpc('fw_pack_orders', params: {
+        'p_date': ymd(scope.date),
+        'p_include_older': scope.includeOlder,
+      }) as Map;
       if (!mounted) return;
+      final orders = (res['orders'] as List? ?? [])
+          .map((r) => Map<String, dynamic>.from(r as Map))
+          .map((m) => {...m, 'total_items': m['items_total']})
+          .toList();
+      _olderOpen = (res['older_open'] as num?)?.toInt() ?? 0;
+      RenderLog.write('c444_pack_orders', '${orders.length}');
       setState(() {
-        _customers = data.map((r) => Map<String, dynamic>.from(r as Map)).toList();
+        _customers = orders;
         _loading = false;
       });
       for (final c in _customers) {
@@ -12391,10 +12542,25 @@ class _PackTabState extends State<_PackTab>
         ),
       ]));
     }
+    // CHANGE #444 — shared date-scope pill.
+    final olderPill = OlderOpenPill(
+      olderOpen: _olderOpen,
+      includeOlder: FulfillDateScope.instance.includeOlder,
+      onTap: () => FulfillDateScope.instance.toggleIncludeOlder(),
+    );
+
     if (_customers.isEmpty) {
-      return const Center(
-          child: Text('No accepted orders to pack',
-              style: TextStyle(color: _kSub, fontSize: 15)));
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Text('No orders placed on ${dmy(FulfillDateScope.instance.date)}.',
+                style: const TextStyle(color: _kSub, fontSize: 15),
+                textAlign: TextAlign.center),
+            if (_olderOpen > 0) ...[const SizedBox(height: 10), olderPill],
+          ]),
+        ),
+      );
     }
     return LayoutBuilder(builder: (_, constraints) {
       final maxW = constraints.maxWidth >= 900 ? 700.0 : double.infinity;
@@ -12405,8 +12571,16 @@ class _PackTabState extends State<_PackTab>
           child: ListView.builder(
             controller: _scroll,
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-            itemCount: _customers.length,
-            itemBuilder: (_, i) => _buildCustomerRow(_customers[i]),
+            itemCount: _customers.length + (_olderOpen > 0 ? 1 : 0),
+            itemBuilder: (_, i) {
+              if (_olderOpen > 0) {
+                if (i == 0) {
+                  return Padding(padding: const EdgeInsets.only(bottom: 10), child: olderPill);
+                }
+                return _buildCustomerRow(_customers[i - 1]);
+              }
+              return _buildCustomerRow(_customers[i]);
+            },
           ),
         ),
       );
@@ -15339,16 +15513,22 @@ class _DisputesScreenState extends State<_DisputesScreen> {
   final Map<String, GlobalKey> _sendLinkKeys = {};
   bool _unfillableExpanded = false;
 
+  // CHANGE #444 — shared date scope
+  int _olderOpen = 0;
+  void _onDateScopeChanged() => _load();
+
   @override
   void initState() {
     super.initState();
     RenderLog.write('c188_realtime_subscribed', 'disputes_tab_init');
     RenderLog.write('c354_ready', 'tab=disputes');
+    FulfillDateScope.instance.addListener(_onDateScopeChanged);
     _load();
   }
 
   @override
   void dispose() {
+    FulfillDateScope.instance.removeListener(_onDateScopeChanged);
     _DisputeContactPopover._entry?.remove();
     _DisputeContactPopover._entry = null;
     super.dispose();
@@ -15364,8 +15544,13 @@ class _DisputesScreenState extends State<_DisputesScreen> {
       setState(() => _error = null);
     }
     try {
-      final res = await Supabase.instance.client.rpc('fw_get_disputes') as Map;
+      final scope = FulfillDateScope.instance;
+      final res = await Supabase.instance.client.rpc('fw_get_disputes', params: {
+        'p_date': ymd(scope.date),
+        'p_include_older': scope.includeOlder,
+      }) as Map;
       if (!mounted) return;
+      _olderOpen = (res['older_open'] as num?)?.toInt() ?? 0;
       final items = DisputeItem.listFromResponse(res);
       RenderLog.write('c354_live', 'tab=disputes,src=load');
       // C358 B3: Disputes list rendered after a (realtime-driven) refetch — includes
@@ -15752,13 +15937,21 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     // C359: disputes raised at confirm land here (Disputes tab) after the realtime refresh.
     if (_disputes.isNotEmpty) RenderLog.write('c359_moved_disp', '${_disputes.length}');
 
+    // CHANGE #444 — shared date-scope pill.
+    final olderPill = OlderOpenPill(
+      olderOpen: _olderOpen,
+      includeOlder: FulfillDateScope.instance.includeOlder,
+      onTap: () => FulfillDateScope.instance.toggleIncludeOlder(),
+    );
+
     if (_disputes.isEmpty) {
-      return const Center(
+      return Center(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Icon(Icons.check_circle_outline_rounded, size: 48, color: _kGreen),
-          SizedBox(height: 12),
-          Text('No disputes right now.',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _kSub)),
+          const Icon(Icons.check_circle_outline_rounded, size: 48, color: _kGreen),
+          const SizedBox(height: 12),
+          Text('No orders placed on ${dmy(FulfillDateScope.instance.date)}.',
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _kSub)),
+          if (_olderOpen > 0) ...[const SizedBox(height: 10), olderPill],
         ]),
       );
     }
@@ -15775,6 +15968,8 @@ class _DisputesScreenState extends State<_DisputesScreen> {
             child: ListView(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
               children: [
+                if (_olderOpen > 0)
+                  Padding(padding: const EdgeInsets.only(bottom: 10), child: olderPill),
                 if (_unfillable.isNotEmpty) _buildUnfillableBanner(),
                 // C362 point-7: NO Active/Closed sections — one card per supplier (name
                 // header + dispute link), item-wise rows underneath (each row an

@@ -20,6 +20,8 @@ import '../../services/match_status_service.dart';
 import '../../services/spn_options.dart';
 import '../../utils/render_log.dart';
 import '../../utils/safe_parse.dart';
+import '../../utils/ist_date.dart'; // CHANGE #444
+import '../../widgets/date_scope_chip.dart'; // CHANGE #444
 import '../../widgets/code_field.dart';
 import '../../widgets/fullscreen_image.dart';
 import '../../widgets/inquiry_v12.dart';
@@ -166,6 +168,13 @@ class AdminSupplierScreen extends StatefulWidget {
 }
 
 class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
+  // CHANGE #444 — Supplier Orders date scope. Own chip, default today, no pill.
+  DateTime _ordersDate = todayIst();
+  void _onOrdersDateChanged(DateTime d) {
+    setState(() => _ordersDate = d);
+    _load(showSpinner: false);
+  }
+
   List<_SupRow>              _suppliers    = [];
   List<_PendingRow>          _pending      = [];
   // Supplier staging (submitted companies + medicines awaiting admin approval)
@@ -485,10 +494,20 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     if (showSpinner) setState(() => _loading = true);
     try {
       final client = Supabase.instance.client;
+      // CHANGE #444 — Supplier Orders is date-scoped to when the order was
+      // PLACED (supplier_orders.created_at in Asia/Kolkata). ist_day_bounds
+      // does the IST-aware UTC conversion server-side.
+      final bounds =
+          await client.rpc('ist_day_bounds', params: {'p_date': ymd(_ordersDate)}) as Map;
+      final ordersStartUtc = bounds['start_utc'] as String;
+      final ordersEndUtc   = bounds['end_utc'] as String;
       final results = await Future.wait<dynamic>([
         client.from('supplier_profiles').select().or('is_deleted.is.null,is_deleted.eq.false')
             .order('supplier_name').catchError((_) => <dynamic>[]),
-        client.from('supplier_orders').select().order('created_at', ascending: false)
+        client.from('supplier_orders').select()
+            .gte('created_at', ordersStartUtc)
+            .lt('created_at', ordersEndUtc)
+            .order('created_at', ascending: false)
             .catchError((_) => <dynamic>[]),
         client.from('supplier_leads').select().order('created_at', ascending: false)
             .catchError((_) => <dynamic>[]),
@@ -590,6 +609,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         RenderLog.write('supplier_sort_default', 'spn_desc');
         RenderLog.write('dashboard_counts_refreshed', 'true');
         RenderLog.write('inquiry_tab_count_${inquiryOverview.length}', 'true');
+        RenderLog.write('c444_sup_orders', '${_orders.length}');
       }
       _fetchUnassignedItems(silent: true);
       _fetchStaging();
@@ -944,6 +964,19 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                   ),
                 );
               }),
+            ] else if (_filter == _SupFilter.orders) ...[
+              const SizedBox(width: 8),
+              Builder(builder: (context) {
+                RenderLog.write('c444_sup_chip_label',
+                    isSameDay(_ordersDate, todayIst())
+                        ? 'Today · ${dmy(_ordersDate)}'
+                        : dmy(_ordersDate));
+                return DateScopeChip(
+                  selected: _ordersDate,
+                  isToday: isSameDay(_ordersDate, todayIst()),
+                  onChanged: _onOrdersDateChanged,
+                );
+              }),
             ] else if (_filter == _SupFilter.inquiry) ...[
               const SizedBox(width: 4),
               // Meta toggle
@@ -1121,6 +1154,21 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
             ),
           ));
           items.add(const PopupMenuDivider());
+          // CHANGE #444 — date scope, mobile overflow-menu path.
+          items.add(PopupMenuItem<String>(
+            value: 'pick_order_date',
+            child: Row(children: [
+              const Icon(Icons.calendar_today_outlined, size: 16, color: Color(0xFF6B7280)),
+              const SizedBox(width: 10),
+              Text(
+                isSameDay(_ordersDate, todayIst())
+                    ? 'Today · ${dmy(_ordersDate)}'
+                    : dmy(_ordersDate),
+                style: const TextStyle(fontSize: 14),
+              ),
+            ]),
+          ));
+          items.add(const PopupMenuDivider());
         } else if (_filter == _SupFilter.suppliers) {
           // CHANGE #252: sort options only; Refresh removed (realtime handles sync)
           for (final entry in [
@@ -1165,6 +1213,21 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         } else if (v == 'map_companies') {
           Navigator.of(context).push(
               MaterialPageRoute(builder: (_) => const UnmappedCompaniesScreen()));
+        } else if (v == 'pick_order_date') {
+          showDatePicker(
+            context: context,
+            initialDate: _ordersDate,
+            firstDate: DateTime(2024),
+            lastDate: todayIst(),
+            builder: (context, child) => Theme(
+              data: Theme.of(context).copyWith(
+                colorScheme: const ColorScheme.light(primary: Color(0xFF1B7A43)),
+              ),
+              child: child!,
+            ),
+          ).then((picked) {
+            if (picked != null) _onOrdersDateChanged(DateTime(picked.year, picked.month, picked.day));
+          });
         }
       },
     );
@@ -1975,8 +2038,18 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   Future<void> _refetchOrders() async {
     try {
       final client = Supabase.instance.client;
+      // CHANGE #444 — keep this targeted reloader on the same date scope as
+      // _load(), else it would silently reset Supplier Orders to unfiltered
+      // (all-time) data after any inquiry-answer action.
+      final bounds =
+          await client.rpc('ist_day_bounds', params: {'p_date': ymd(_ordersDate)}) as Map;
+      final ordersStartUtc = bounds['start_utc'] as String;
+      final ordersEndUtc   = bounds['end_utc'] as String;
       final results = await Future.wait<dynamic>([
-        client.from('supplier_orders').select().order('created_at', ascending: false)
+        client.from('supplier_orders').select()
+            .gte('created_at', ordersStartUtc)
+            .lt('created_at', ordersEndUtc)
+            .order('created_at', ascending: false)
             .catchError((_) => <dynamic>[]),
         // CHANGE #277: refresh live keys alongside orders
         client.from('order_items')

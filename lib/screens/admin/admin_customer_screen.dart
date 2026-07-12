@@ -9695,34 +9695,53 @@ class _RoutesTab extends StatefulWidget {
 class _RoutesTabState extends State<_RoutesTab> {
   bool _loading = true;
   String? _loadError;
-  Map<String, dynamic> _hub = {};
-  Map<String, dynamic> _summary = {};
-  List<Map<String, dynamic>> _zones = [];
 
-  // ── D: top-level view — 'zones' (admin) or 'myRoute' (rep) ──────────────
-  String _topMode = 'zones';
+  // ── D: top-level view — 'builder' (admin) or 'myRoute' (rep) ────────────
+  String _topMode = 'builder';
   Map<String, dynamic>? _myRoute; // my_route() response, refetched after check-in
   bool _myRouteLoading = false;
 
-  // ── Selected zone / route view (admin ad-hoc route) ──────────────────────
-  Map<String, dynamic>? _selectedZone;
-  Map<String, dynamic>? _route;
-  bool _routeLoading = false;
-  String? _routeError;
+  // ── B1: filter bar — the ONLY inputs that drive the count + build ────────
+  String _city = 'Raipur';
+  Set<String> _classes = {'medical_store'};
+  Set<String> _visitFilter = {'fresh'};
+  int? _dow; // null = today
+  int _startMin = 600; // 10:00
 
-  // ── Route controls (the ONLY inputs — B5) ────────────────────────────────
-  int _topN = 30;
-  int _minScore = 30;
-  bool _startFromMyLocation = false;
-  double? _myLat;
-  double? _myLng;
-  bool _locating = false;
-  String? _locError;
+  // ── B2: live count, debounced 300ms on any filter change ─────────────────
+  Map<String, dynamic>? _leadCount;
+  bool _countLoading = false;
+  Timer? _countDebounce;
 
-  // ── D3: Today's Visits (admin, collapsible, lazy-loaded) ─────────────────
+  // ── B3/B4: the built plan ─────────────────────────────────────────────────
+  String? _planId;
+  Map<String, dynamic>? _plan;
+  bool _buildingPlan = false;
+  String? _planError;
+  Set<String> _expandedRouteIds = {};
+
+  // ── C5: past plans, collapsible, lazy-loaded ──────────────────────────────
+  bool _pastPlansExpanded = false;
+  List<Map<String, dynamic>>? _pastPlans;
+
+  // ── D3: Today's Visits (admin, collapsible, lazy-loaded) — unchanged from #446
   bool _visitsExpanded = false;
   bool _visitsLoading = false;
   Map<String, dynamic>? _visitsReport;
+
+  static const List<(String, String)> _classOptions = [
+    ('medical_store', 'Pharmacy'),
+    ('hospital', 'Hospital'),
+    ('clinic', 'Clinic'),
+    ('lab', 'Diagnostic Lab'),
+    ('chain', 'Chain'),
+    ('wholesaler', 'Wholesaler'),
+  ];
+  static const List<(int?, String)> _dowOptions = [
+    (null, 'Today'), (0, 'Sunday'), (1, 'Monday'), (2, 'Tuesday'),
+    (3, 'Wednesday'), (4, 'Thursday'), (5, 'Friday'), (6, 'Saturday'),
+  ];
+  static const List<int> _kOptions = [5, 10, 15, 20, 25, 30, 40, 50, 75, 100];
 
   @override
   void initState() {
@@ -9730,34 +9749,26 @@ class _RoutesTabState extends State<_RoutesTab> {
     _loadScreen();
   }
 
+  @override
+  void dispose() {
+    _countDebounce?.cancel();
+    super.dispose();
+  }
+
   Future<void> _loadScreen() async {
     setState(() { _loading = true; _loadError = null; });
     try {
-      final results = await Future.wait<dynamic>([
-        Supabase.instance.client.rpc('lead_routes_screen', params: {'p_city': 'Raipur'}),
-        Supabase.instance.client.rpc('my_route'),
-      ]);
-      final data = Map<String, dynamic>.from(results[0] as Map);
-      final myRoute = Map<String, dynamic>.from(results[1] as Map);
-      final hub = Map<String, dynamic>.from(data['hub'] as Map? ?? {});
-      final summary = Map<String, dynamic>.from(data['summary'] as Map? ?? {});
-      final zones = ((data['zones'] as List?) ?? [])
-          .map((z) => Map<String, dynamic>.from(z as Map))
-          .toList();
+      final myRoute = Map<String, dynamic>.from(
+          await Supabase.instance.client.rpc('my_route') as Map);
       if (!mounted) return;
       setState(() {
-        _hub = hub;
-        _summary = summary;
-        _zones = zones;
         _myRoute = myRoute;
-        // B2 — a worker with an assignment today lands on the rep view; an
-        // admin with none (or not a worker at all) lands on the zone list.
-        _topMode = myRoute['status'] == 'assigned' ? 'myRoute' : 'zones';
+        // B2 (#446) — a worker with an assignment today lands on the rep
+        // view; an admin with none (or not a worker at all) lands on the
+        // route builder.
+        _topMode = myRoute['status'] == 'assigned' ? 'myRoute' : 'builder';
         _loading = false;
       });
-      widget.onZonesChanged(zones.length);
-      RenderLog.write('c445_zones', zones.length);
-      RenderLog.write('c445_hub', hub['name']?.toString() ?? '');
       final myStops = (myRoute['route'] as List?) ?? [];
       if (_topMode == 'myRoute') {
         RenderLog.write('c445_route_stops', myRoute['stops']);
@@ -9765,6 +9776,7 @@ class _RoutesTabState extends State<_RoutesTab> {
             ? (Map<String, dynamic>.from(myStops.first as Map))['name']?.toString() ?? ''
             : '');
       }
+      _fetchLeadCount(); // populates c452_count / c452_suggested_k on first load
     } catch (e) {
       if (!mounted) return;
       setState(() { _loadError = e.toString(); _loading = false; });
@@ -9789,101 +9801,268 @@ class _RoutesTabState extends State<_RoutesTab> {
     }
   }
 
-  void _openZone(Map<String, dynamic> zone) {
-    setState(() {
-      _selectedZone = zone;
-      _route = null;
-      _routeError = null;
-      _topN = 30;
-      _minScore = 30;
-      _startFromMyLocation = false;
-      _myLat = null;
-      _myLng = null;
-      _locError = null;
-    });
-    _fetchRoute();
+  // ── B2: live count — debounced 300ms on any filter change ────────────────
+  void _onFilterChanged() {
+    _countDebounce?.cancel();
+    _countDebounce = Timer(const Duration(milliseconds: 300), _fetchLeadCount);
   }
 
-  void _closeZone() {
-    setState(() {
-      _selectedZone = null;
-      _route = null;
-      _routeError = null;
-    });
-  }
-
-  Future<void> _fetchRoute() async {
-    final zone = _selectedZone;
-    if (zone == null) return;
-    setState(() { _routeLoading = true; _routeError = null; });
+  Future<void> _fetchLeadCount() async {
+    setState(() => _countLoading = true);
     try {
-      final params = <String, dynamic>{
-        'p_zone_id': zone['zone_id'],
-        'p_top_n': _topN,
-        'p_min_score': _minScore,
-      };
-      if (_startFromMyLocation && _myLat != null && _myLng != null) {
-        params['p_start_lat'] = _myLat;
-        params['p_start_lng'] = _myLng;
-      }
-      final res = await Supabase.instance.client.rpc('lead_plan_route', params: params);
+      final res = await Supabase.instance.client.rpc('route_lead_count', params: {
+        'p_city': _city,
+        'p_classes': _classes.toList(),
+        'p_visit': _visitFilter.toList(),
+        'p_min_score': 1,
+      });
       final data = Map<String, dynamic>.from(res as Map);
       if (!mounted) return;
-      setState(() { _route = data; _routeLoading = false; });
-      final route = (data['route'] as List?) ?? [];
-      RenderLog.write('c445_route_stops', data['stops']);
-      RenderLog.write('c445_route_total', data['total_label']?.toString() ?? '');
-      RenderLog.write('c445_first_stop', route.isNotEmpty
-          ? (Map<String, dynamic>.from(route.first as Map))['name']?.toString() ?? ''
-          : '');
+      setState(() { _leadCount = data; _countLoading = false; });
+      RenderLog.write('c452_count', data['leads']);
+      RenderLog.write('c452_suggested_k', data['suggested_k']);
     } catch (e) {
       if (!mounted) return;
-      setState(() { _routeError = e.toString(); _routeLoading = false; });
+      setState(() => _countLoading = false);
     }
   }
 
-  // ── "Start from: My location" — SAME GPS capture pattern as
-  // CashPaymentSheet._requestLocation and #444's Warehouse-card GPS path
-  // (html.window.navigator.geolocation.getCurrentPosition). ─────────────────
-  Future<void> _useMyLocationForStart() async {
-    setState(() { _locating = true; _locError = null; });
+  // ── B3: the K picker ───────────────────────────────────────────────────────
+  void _openKPicker() {
+    final leads = (_leadCount?['leads'] as num?)?.toInt() ?? 0;
+    final suggestedK = (_leadCount?['suggested_k'] as num?)?.toInt();
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (sheetCtx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('How many routes?',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 4),
+              Text(_leadCount?['label']?.toString() ?? '',
+                  style: const TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
+              const SizedBox(height: 14),
+              ..._kOptions.map((k) {
+                // B3 — the ONE permitted division: leads ÷ K is a pure stop
+                // count, not money or geometry. Everything else on this row
+                // (the 8-hour framing) is static copy triggered by that count.
+                final stopsPerRoute = leads > 0 ? (leads / k).round() : 0;
+                final isRecommended = suggestedK != null && k == suggestedK;
+                final isHeavy = stopsPerRoute > 60;
+                return InkWell(
+                  onTap: () {
+                    Navigator.of(sheetCtx).pop();
+                    _buildPlan(k);
+                  },
+                  borderRadius: BorderRadius.circular(10),
+                  child: Container(
+                    margin: const EdgeInsets.only(bottom: 8),
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                    decoration: BoxDecoration(
+                      color: isRecommended ? const Color(0xFFD1FAE5) : const Color(0xFFF9FAFB),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                          color: isRecommended ? const Color(0xFF16A34A) : const Color(0xFFE5E7EB)),
+                    ),
+                    child: Row(children: [
+                      SizedBox(
+                        width: 48,
+                        child: Text('${k}R',
+                            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800)),
+                      ),
+                      Expanded(
+                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Text(
+                            '~$stopsPerRoute stops each${isRecommended ? '  ·  Recommended' : ''}',
+                            style: TextStyle(
+                              fontSize: 13, fontWeight: FontWeight.w700,
+                              color: isHeavy
+                                  ? const Color(0xFFDC2626)
+                                  : isRecommended
+                                      ? const Color(0xFF065F46)
+                                      : const Color(0xFF374151),
+                            ),
+                          ),
+                          if (isHeavy)
+                            const Text("That's a 20+ hour day. Pick more routes.",
+                                style: TextStyle(fontSize: 11.5, color: Color(0xFFDC2626))),
+                        ]),
+                      ),
+                    ]),
+                  ),
+                );
+              }),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _buildPlan(int k) async {
+    setState(() { _buildingPlan = true; _planError = null; });
     try {
-      final completer = Completer<html.Geoposition>();
-      html.window.navigator.geolocation
-          .getCurrentPosition(enableHighAccuracy: false, timeout: const Duration(seconds: 20))
-          .then((pos) { if (!completer.isCompleted) completer.complete(pos); })
-          .catchError((e) { if (!completer.isCompleted) completer.completeError(e); });
-      final pos = await completer.future.timeout(
-        const Duration(seconds: 25),
-        onTimeout: () => throw TimeoutException('Location timed out'),
-      );
-      final lat = pos.coords?.latitude?.toDouble();
-      final lng = pos.coords?.longitude?.toDouble();
-      if (lat == null || lng == null) throw Exception('No coordinates returned');
-      if (!mounted) return;
-      setState(() { _myLat = lat; _myLng = lng; _locating = false; _startFromMyLocation = true; });
-      _fetchRoute();
+      final planId = await Supabase.instance.client.rpc('route_plan_build', params: {
+        'p_city': _city,
+        'p_classes': _classes.toList(),
+        'p_visit': _visitFilter.toList(),
+        'p_k': k,
+        'p_min_score': 1,
+        if (_dow != null) 'p_dow': _dow,
+        'p_start_min': _startMin,
+      });
+      await _loadPlan(planId.toString(), isNewBuild: true);
     } catch (e) {
       if (!mounted) return;
-      final msg = e.toString().toLowerCase();
-      final denied = msg.contains('denied') || msg.contains('permission');
-      setState(() {
-        _locating = false;
-        _startFromMyLocation = false; // fall back to the warehouse, plainly
-        _locError = denied
-            ? 'Location permission denied — enable it in the browser/site settings. Using the warehouse instead.'
-            : "Couldn't get a GPS fix — using the warehouse instead.";
-      });
-      _fetchRoute();
+      setState(() { _buildingPlan = false; _planError = e.toString(); });
     }
   }
 
-  void _setStartWarehouse() {
-    setState(() { _startFromMyLocation = false; _myLat = null; _myLng = null; _locError = null; });
-    _fetchRoute();
+  // Re-called after EVERY write (toggle/rebalance) per the "never patch state
+  // in Dart" rule — the plan is always re-fetched, never spliced locally.
+  Future<void> _loadPlan(String planId, {bool isNewBuild = false}) async {
+    try {
+      final res = await Supabase.instance.client.rpc('route_plan_get', params: {'p_plan_id': planId});
+      final data = Map<String, dynamic>.from(res as Map);
+      if (!mounted) return;
+      final routes = ((data['routes'] as List?) ?? [])
+          .map((r) => Map<String, dynamic>.from(r as Map))
+          .toList();
+      final validIds = routes.map((r) => r['route_id'].toString()).toSet();
+      setState(() {
+        _planId = planId;
+        _plan = data;
+        _buildingPlan = false;
+        _planError = null;
+        _expandedRouteIds = isNewBuild
+            ? (routes.isNotEmpty ? {routes.first['route_id'].toString()} : <String>{})
+            : _expandedRouteIds.intersection(validIds);
+      });
+      widget.onZonesChanged(routes.length);
+      RenderLog.write('c452_routes', routes.length);
+      final summary = Map<String, dynamic>.from(data['summary'] as Map? ?? {});
+      RenderLog.write('c452_warning', summary['warning'] != null ? 1 : 0);
+      final expanded = routes.where((r) => _expandedRouteIds.contains(r['route_id'].toString()));
+      final firstExpandedStops = expanded.isNotEmpty
+          ? ((expanded.first['stops'] as List?) ?? []).length
+          : 0;
+      RenderLog.write('c452_stops', firstExpandedStops);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() { _buildingPlan = false; _planError = e.toString(); });
+    }
   }
 
-  // ── B5 (stop-card action): Convert to customer ───────────────────────────
+  void _rebuild() {
+    setState(() { _plan = null; _planId = null; _planError = null; });
+  }
+
+  Future<void> _toggleRouteIncluded(String routeId, bool included) async {
+    try {
+      await Supabase.instance.client.rpc('route_plan_toggle_route', params: {
+        'p_route_id': routeId, 'p_included': included,
+      });
+      if (_planId != null) await _loadPlan(_planId!);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
+    }
+  }
+
+  Future<void> _toggleStopIncluded(String stopId, bool included) async {
+    try {
+      await Supabase.instance.client.rpc('route_plan_toggle_stop', params: {
+        'p_stop_id': stopId, 'p_included': included,
+      });
+      if (_planId != null) await _loadPlan(_planId!);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
+    }
+  }
+
+  // ── C3: Rebalance — unchecked leads move into the remaining routes ───────
+  Future<void> _rebalance() async {
+    final planId = _planId;
+    if (planId == null) return;
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (dCtx) => AlertDialog(
+        title: const Text('Rebalance routes?'),
+        content: const Text('Unchecked leads will be moved into the remaining '
+            'routes and every route re-optimised. Continue?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dCtx, false), child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43)),
+            onPressed: () => Navigator.pop(dCtx, true),
+            child: const Text('Rebalance'),
+          ),
+        ],
+      ),
+    );
+    if (go != true) return;
+    setState(() => _buildingPlan = true);
+    try {
+      final res = await Supabase.instance.client
+          .rpc('route_plan_rebalance', params: {'p_plan_id': planId});
+      final data = Map<String, dynamic>.from(res as Map);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(data['message']?.toString() ?? 'Rebalanced.'),
+        backgroundColor: const Color(0xFF1B7A43),
+      ));
+      await _loadPlan(planId); // re-call route_plan_get; never patch in Dart
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _buildingPlan = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
+    }
+  }
+
+  // ── C4: Assign a route to a worker ────────────────────────────────────────
+  Future<void> _openAssignRouteSheet(Map<String, dynamic> route) async {
+    List<Map<String, dynamic>> workers;
+    try {
+      final res = await Supabase.instance.client.rpc('lead_workers_list');
+      workers = ((res as List?) ?? []).map((w) => Map<String, dynamic>.from(w as Map)).toList();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
+      return;
+    }
+    if (!mounted) return;
+    final assigned = await showDialog<bool>(
+      context: context,
+      builder: (_) => _AssignRouteDialog(route: route, initialWorkers: workers),
+    );
+    if (assigned == true && _planId != null) await _loadPlan(_planId!);
+  }
+
+  // ── C5: Past plans ─────────────────────────────────────────────────────────
+  Future<void> _togglePastPlans() async {
+    final expanding = !_pastPlansExpanded;
+    setState(() => _pastPlansExpanded = expanding);
+    if (expanding && _pastPlans == null) {
+      try {
+        final res = await Supabase.instance.client.rpc('route_plan_list', params: {'p_limit': 10});
+        final list = ((res as List?) ?? []).map((p) => Map<String, dynamic>.from(p as Map)).toList();
+        if (!mounted) return;
+        setState(() => _pastPlans = list);
+      } catch (_) {}
+    }
+  }
+
+  // ── B5 (stop-card action): Convert to customer — unchanged from #446 ─────
   Future<void> _convert(Map<String, dynamic> stop, {required VoidCallback onRefresh}) async {
     final nameCtrl = TextEditingController();
     final go = await showDialog<bool>(
@@ -9958,24 +10137,6 @@ class _RoutesTabState extends State<_RoutesTab> {
     );
   }
 
-  // ── D2: Admin — assign a zone to a worker ────────────────────────────────
-  Future<void> _openAssignSheet(Map<String, dynamic> zone) async {
-    List<Map<String, dynamic>> workers;
-    try {
-      final res = await Supabase.instance.client.rpc('lead_workers_list');
-      workers = ((res as List?) ?? []).map((w) => Map<String, dynamic>.from(w as Map)).toList();
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
-      return;
-    }
-    if (!mounted) return;
-    await showDialog<void>(
-      context: context,
-      builder: (_) => _AssignZoneDialog(zone: zone, initialWorkers: workers),
-    );
-  }
-
   // ── D3: Today's Visits ────────────────────────────────────────────────────
   Future<void> _toggleVisitsReport() async {
     final expanding = !_visitsExpanded;
@@ -10025,12 +10186,7 @@ class _RoutesTabState extends State<_RoutesTab> {
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         _buildTopModeToggle(),
         const SizedBox(height: 14),
-        if (_topMode == 'myRoute')
-          _buildMyRouteView()
-        else if (_selectedZone == null)
-          _buildZoneList()
-        else
-          _buildRouteView(),
+        if (_topMode == 'myRoute') _buildMyRouteView() else _buildBuilder(),
       ]),
     );
   }
@@ -10044,7 +10200,7 @@ class _RoutesTabState extends State<_RoutesTab> {
         }),
       ),
       const SizedBox(width: 8),
-      Expanded(child: _segBtn('Zones', _topMode == 'zones', () => setState(() => _topMode = 'zones'))),
+      Expanded(child: _segBtn('Builder', _topMode == 'builder', () => setState(() => _topMode = 'builder'))),
     ]);
   }
 
@@ -10111,9 +10267,264 @@ class _RoutesTabState extends State<_RoutesTab> {
     ]);
   }
 
-  // ── B3 header + B4 zone list ──────────────────────────────────────────────
+  // ── CHANGE #452 — Route Builder: filter bar -> live count -> K picker ────
+  // -> plan (routes + stops, check/uncheck) -> rebalance / assign. Replaces
+  // the #445 zone list. The rep check-in flow (#446) is untouched below.
 
-  Widget _buildZoneList() {
+  Widget _buildBuilder() {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      _buildFilterBar(),
+      const SizedBox(height: 12),
+      _buildVisitsReportPanel(),
+      const SizedBox(height: 12),
+      _buildPastPlansPanel(),
+      const SizedBox(height: 12),
+      if (_planError != null) ...[
+        Text(_planError!, style: const TextStyle(fontSize: 12.5, color: Color(0xFFDC2626))),
+        const SizedBox(height: 10),
+      ],
+      if (_buildingPlan)
+        const Padding(
+          padding: EdgeInsets.only(top: 24),
+          child: Center(child: Column(children: [
+            CircularProgressIndicator(color: Color(0xFF1B7A43), strokeWidth: 2),
+            SizedBox(height: 10),
+            Text('Building routes — this can take a few seconds for 1,000+ leads…',
+                style: TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
+          ])),
+        )
+      else if (_plan != null)
+        _buildPlanView(),
+    ]);
+  }
+
+  // ── B1: filter bar — the ONLY inputs ──────────────────────────────────────
+
+  Widget _buildFilterBar() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          const Text('🏠', style: TextStyle(fontSize: 16)),
+          const SizedBox(width: 8),
+          const Expanded(
+            child: Text('Build routes',
+                style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+          ),
+          TextButton(onPressed: widget.onOpenWarehouseCard, child: const Text('Warehouse')),
+        ]),
+        const SizedBox(height: 12),
+        Wrap(spacing: 12, runSpacing: 12, children: [
+          SizedBox(
+            width: 160,
+            child: DropdownButtonFormField<String>(
+              initialValue: _city,
+              decoration: const InputDecoration(labelText: 'City', border: OutlineInputBorder(), isDense: true),
+              items: const [DropdownMenuItem(value: 'Raipur', child: Text('Raipur'))],
+              onChanged: (v) {
+                if (v == null) return;
+                setState(() => _city = v);
+                _onFilterChanged();
+              },
+            ),
+          ),
+          SizedBox(
+            width: 200,
+            child: DropdownButtonFormField<int?>(
+              initialValue: _dow,
+              decoration: const InputDecoration(labelText: 'Day', border: OutlineInputBorder(), isDense: true),
+              items: _dowOptions
+                  .map((o) => DropdownMenuItem(value: o.$1, child: Text(o.$2)))
+                  .toList(),
+              onChanged: (v) {
+                setState(() => _dow = v);
+                _onFilterChanged();
+              },
+            ),
+          ),
+          InkWell(
+            onTap: () async {
+              final picked = await showTimePicker(
+                context: context,
+                initialTime: TimeOfDay(hour: _startMin ~/ 60, minute: _startMin % 60),
+              );
+              // Marshals the picked wall-clock time into minutes-since-midnight
+              // for p_start_min — input encoding, not business math.
+              if (picked != null) {
+                setState(() => _startMin = picked.hour * 60 + picked.minute);
+                _onFilterChanged();
+              }
+            },
+            child: InputDecorator(
+              decoration: const InputDecoration(labelText: 'Start time', border: OutlineInputBorder(), isDense: true),
+              child: Text(TimeOfDay(hour: _startMin ~/ 60, minute: _startMin % 60).format(context)),
+            ),
+          ),
+        ]),
+        const SizedBox(height: 14),
+        const Text('Store type',
+            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF6B7280))),
+        const SizedBox(height: 8),
+        Wrap(spacing: 6, runSpacing: 6, children: _classOptions.map((o) {
+          final sel = _classes.contains(o.$1);
+          return FilterChip(
+            label: Text(o.$2, style: const TextStyle(fontSize: 11.5)),
+            selected: sel,
+            onSelected: (v) {
+              setState(() {
+                if (v) { _classes.add(o.$1); } else { _classes.remove(o.$1); }
+              });
+              _onFilterChanged();
+            },
+            selectedColor: const Color(0xFFDCFCE7),
+            checkmarkColor: const Color(0xFF1B7A43),
+            backgroundColor: const Color(0xFFF3F4F6),
+            side: BorderSide(color: sel ? const Color(0xFF1B7A43) : const Color(0xFFD1D5DB)),
+            labelStyle: TextStyle(color: sel ? const Color(0xFF1B7A43) : const Color(0xFF374151)),
+          );
+        }).toList()),
+        const SizedBox(height: 12),
+        const Text('Visit filter',
+            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF6B7280))),
+        const SizedBox(height: 8),
+        Wrap(spacing: 6, runSpacing: 6, children: [('fresh', 'Fresh'), ('visited', 'Visited')].map((o) {
+          final sel = _visitFilter.contains(o.$1);
+          return FilterChip(
+            label: Text(o.$2, style: const TextStyle(fontSize: 11.5)),
+            selected: sel,
+            onSelected: (v) {
+              setState(() {
+                if (v) { _visitFilter.add(o.$1); } else { _visitFilter.remove(o.$1); }
+              });
+              _onFilterChanged();
+            },
+            selectedColor: const Color(0xFFDCFCE7),
+            checkmarkColor: const Color(0xFF1B7A43),
+            backgroundColor: const Color(0xFFF3F4F6),
+            side: BorderSide(color: sel ? const Color(0xFF1B7A43) : const Color(0xFFD1D5DB)),
+            labelStyle: TextStyle(color: sel ? const Color(0xFF1B7A43) : const Color(0xFF374151)),
+          );
+        }).toList()),
+        const SizedBox(height: 14),
+        // ── B2: live count — verbatim ────────────────────────────────────
+        Row(children: [
+          if (_countLoading)
+            const SizedBox(width: 14, height: 14,
+                child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF1B7A43)))
+          else
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(_leadCount?['label']?.toString() ?? '—',
+                    style: const TextStyle(
+                        fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+                if (_leadCount?['hours_note'] != null)
+                  Text(_leadCount!['hours_note'].toString(),
+                      style: const TextStyle(fontSize: 11.5, color: Color(0xFF9CA3AF))),
+              ]),
+            ),
+        ]),
+        const SizedBox(height: 12),
+        SizedBox(
+          width: widget.isDesktop ? 200 : double.infinity,
+          child: ElevatedButton.icon(
+            onPressed: (_leadCount == null || (_leadCount!['leads'] as num? ?? 0) == 0)
+                ? null
+                : _openKPicker,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF1B7A43),
+              foregroundColor: Colors.white,
+              disabledBackgroundColor: const Color(0xFFD1D5DB),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              padding: const EdgeInsets.symmetric(vertical: 12),
+            ),
+            icon: const Icon(Icons.route, size: 17),
+            label: const Text('Add', style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700)),
+          ),
+        ),
+      ]),
+    );
+  }
+
+  // ── C5: Past plans ─────────────────────────────────────────────────────────
+
+  Widget _buildPastPlansPanel() {
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+      ),
+      child: Column(children: [
+        InkWell(
+          onTap: _togglePastPlans,
+          borderRadius: BorderRadius.circular(12),
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Row(children: [
+              const Icon(Icons.history, size: 18, color: Color(0xFF6B7280)),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text('Past plans',
+                    style: TextStyle(
+                        fontSize: 13.5, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+              ),
+              Icon(_pastPlansExpanded ? Icons.expand_less : Icons.expand_more,
+                  size: 20, color: const Color(0xFF6B7280)),
+            ]),
+          ),
+        ),
+        if (_pastPlansExpanded) ...[
+          const Divider(height: 1, color: Color(0xFFE5E7EB)),
+          if (_pastPlans == null)
+            const Padding(
+              padding: EdgeInsets.all(16),
+              child: Center(child: CircularProgressIndicator(color: Color(0xFF1B7A43), strokeWidth: 2)),
+            )
+          else if (_pastPlans!.isEmpty)
+            const Padding(
+              padding: EdgeInsets.all(14),
+              child: Text('No past plans.', style: TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
+            )
+          else
+            ..._pastPlans!.map((p) => InkWell(
+                  onTap: () => _loadPlan(p['plan_id'].toString(), isNewBuild: true),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text(p['title']?.toString() ?? '',
+                          style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
+                      Text(
+                          [p['types'], p['when_label'], p['status']]
+                              .where((v) => v != null && v.toString().isNotEmpty)
+                              .join(' · '),
+                          style: const TextStyle(fontSize: 11.5, color: Color(0xFF6B7280))),
+                    ]),
+                  ),
+                )),
+        ],
+      ]),
+    );
+  }
+
+  // ── B4: plan summary + C1: route cards ───────────────────────────────────
+
+  Widget _buildPlanView() {
+    final plan = _plan!;
+    final header = Map<String, dynamic>.from(plan['header'] as Map? ?? {});
+    final summary = Map<String, dynamic>.from(plan['summary'] as Map? ?? {});
+    final routes = ((plan['routes'] as List?) ?? [])
+        .map((r) => Map<String, dynamic>.from(r as Map))
+        .toList();
+    final warning = summary['warning']?.toString();
+    RenderLog.write('c452_rebalance_wired', 1); // Rebalance button is built below
+
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Container(
         width: double.infinity,
@@ -10124,37 +10535,168 @@ class _RoutesTabState extends State<_RoutesTab> {
           border: Border.all(color: const Color(0xFFE5E7EB)),
         ),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Row(children: [
-            const Text('🏠', style: TextStyle(fontSize: 16)),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(_hub['label']?.toString() ?? '',
-                  style: const TextStyle(
-                      fontSize: 13.5, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
-            ),
-            TextButton(onPressed: widget.onOpenWarehouseCard, child: const Text('Change')),
+          Text(header['title']?.toString() ?? '',
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+          const SizedBox(height: 4),
+          Wrap(spacing: 8, runSpacing: 4, children: [
+            if (header['types_label'] != null)
+              Text(header['types_label'].toString(),
+                  style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+            if (header['filter_label'] != null)
+              Text(header['filter_label'].toString(),
+                  style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+            if (header['day_label'] != null)
+              Text(header['day_label'].toString(),
+                  style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
           ]),
-          const SizedBox(height: 6),
-          Wrap(spacing: 6, runSpacing: 4, children: [
-            Text(_summary['zones_label']?.toString() ?? '',
-                style: const TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
-            const Text('·', style: TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
-            Text(_summary['workable_label']?.toString() ?? '',
-                style: const TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
-            const Text('·', style: TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
-            Text(_summary['hot_label']?.toString() ?? '',
-                style: const TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
+          if (header['start_label'] != null) ...[
+            const SizedBox(height: 4),
+            Text(header['start_label'].toString(),
+                style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF))),
+          ],
+          const SizedBox(height: 10),
+          Wrap(spacing: 8, runSpacing: 4, children: [
+            Text('${summary['routes'] ?? 0} routes',
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+            const Text('·', style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+            Text('${summary['stops'] ?? 0} stops',
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+            const Text('·', style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+            Text(summary['total_km_label']?.toString() ?? '',
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+          ]),
+          if (warning != null) ...[
+            const SizedBox(height: 10),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFEF3C7),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(warning,
+                  style: const TextStyle(
+                      fontSize: 12.5, fontWeight: FontWeight.w600, color: Color(0xFF92400E))),
+            ),
+          ],
+          const SizedBox(height: 12),
+          Wrap(spacing: 8, runSpacing: 8, children: [
+            OutlinedButton.icon(
+              onPressed: _rebalance,
+              style: OutlinedButton.styleFrom(
+                foregroundColor: const Color(0xFF1B7A43),
+                side: const BorderSide(color: Color(0xFF1B7A43)),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              icon: const Icon(Icons.balance, size: 15),
+              label: const Text('Rebalance', style: TextStyle(fontSize: 12.5)),
+            ),
+            OutlinedButton.icon(
+              onPressed: _rebuild,
+              style: OutlinedButton.styleFrom(
+                foregroundColor: const Color(0xFF6B7280),
+                side: const BorderSide(color: Color(0xFFD1D5DB)),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              icon: const Icon(Icons.refresh, size: 15),
+              label: const Text('Rebuild', style: TextStyle(fontSize: 12.5)),
+            ),
           ]),
         ]),
       ),
       const SizedBox(height: 12),
-      _buildVisitsReportPanel(),
-      const SizedBox(height: 12),
-      ..._zones.map((z) => Padding(
+      ...routes.map((r) => Padding(
             padding: const EdgeInsets.only(bottom: 10),
-            child: _zoneCard(z),
+            child: _routeCard(r),
           )),
     ]);
+  }
+
+  Widget _routeCard(Map<String, dynamic> r) {
+    final routeId = r['route_id'].toString();
+    final expanded = _expandedRouteIds.contains(routeId);
+    final included = r['included'] == true;
+    final fitsDay = r['fits_day'] == true;
+    final dayWarning = r['day_warning']?.toString();
+    final closedLabel = r['closed_label']?.toString();
+    final assigned = r['assigned'] == true;
+    final worker = r['worker']?.toString();
+    final stops = ((r['stops'] as List?) ?? [])
+        .map((s) => Map<String, dynamic>.from(s as Map))
+        .toList();
+
+    return Container(
+      decoration: BoxDecoration(
+        color: fitsDay ? Colors.white : const Color(0xFFFFFBEB),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: fitsDay ? const Color(0xFFE5E7EB) : const Color(0xFFFDE68A)),
+      ),
+      child: Column(children: [
+        Padding(
+          padding: const EdgeInsets.all(12),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Checkbox(
+              value: included,
+              onChanged: assigned ? null : (v) => _toggleRouteIncluded(routeId, v == true),
+              activeColor: const Color(0xFF1B7A43),
+            ),
+            Expanded(
+              child: InkWell(
+                onTap: () => setState(() {
+                  if (expanded) { _expandedRouteIds.remove(routeId); } else { _expandedRouteIds.add(routeId); }
+                }),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Row(children: [
+                    Expanded(
+                      child: Text(r['title']?.toString() ?? '',
+                          style: const TextStyle(
+                              fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+                    ),
+                    if (assigned)
+                      _infoChip(worker ?? 'Assigned', const Color(0xFFEFF6FF), const Color(0xFF1E40AF))
+                    else
+                      TextButton.icon(
+                        onPressed: () => _openAssignRouteSheet(r),
+                        icon: const Icon(Icons.person_add_alt_1, size: 14),
+                        label: const Text('Assign', style: TextStyle(fontSize: 11.5)),
+                        style: TextButton.styleFrom(
+                            foregroundColor: const Color(0xFF1B7A43),
+                            padding: const EdgeInsets.symmetric(horizontal: 6),
+                            minimumSize: Size.zero,
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+                      ),
+                    Icon(expanded ? Icons.expand_less : Icons.expand_more,
+                        size: 20, color: const Color(0xFF6B7280)),
+                  ]),
+                  const SizedBox(height: 2),
+                  Text(r['subtitle']?.toString() ?? '',
+                      style: const TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
+                  if (dayWarning != null) ...[
+                    const SizedBox(height: 4),
+                    Text('⚠ $dayWarning',
+                        style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: Color(0xFFD97706))),
+                  ],
+                  if (closedLabel != null) ...[
+                    const SizedBox(height: 2),
+                    Text(closedLabel, style: const TextStyle(fontSize: 11.5, color: Color(0xFF9CA3AF))),
+                  ],
+                ]),
+              ),
+            ),
+          ]),
+        ),
+        if (expanded) ...[
+          const Divider(height: 1, color: Color(0xFFE5E7EB)),
+          Padding(
+            padding: const EdgeInsets.all(10),
+            child: Column(children: stops.map((s) => Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: _builderStopRow(s),
+                )).toList()),
+          ),
+        ],
+      ]),
+    );
   }
 
   // ── D3: Today's Visits collapsible panel ─────────────────────────────────
@@ -10290,58 +10832,6 @@ class _RoutesTabState extends State<_RoutesTab> {
     );
   }
 
-  Widget _zoneCard(Map<String, dynamic> z) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
-      ),
-      child: Column(children: [
-        InkWell(
-          onTap: () => _openZone(z),
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
-          child: Padding(
-            padding: const EdgeInsets.all(14),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Row(children: [
-                Expanded(
-                  child: Text(z['title']?.toString() ?? '',
-                      style: const TextStyle(
-                          fontSize: 14.5, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
-                ),
-                _bandChip(z['band']?.toString()),
-              ]),
-              const SizedBox(height: 4),
-              Text(z['subtitle']?.toString() ?? '',
-                  style: const TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
-              const SizedBox(height: 8),
-              Wrap(spacing: 12, runSpacing: 4, children: [
-                Text(z['km_label']?.toString() ?? '',
-                    style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF))),
-                Text(z['workable_label']?.toString() ?? '',
-                    style: const TextStyle(
-                        fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF1B7A43))),
-              ]),
-            ]),
-          ),
-        ),
-        const Divider(height: 1, color: Color(0xFFE5E7EB)),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-          child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
-            TextButton.icon(
-              onPressed: () => _openAssignSheet(z),
-              icon: const Icon(Icons.person_add_alt_1, size: 15),
-              label: const Text('Assign', style: TextStyle(fontSize: 12.5)),
-              style: TextButton.styleFrom(foregroundColor: const Color(0xFF1B7A43)),
-            ),
-          ]),
-        ),
-      ]),
-    );
-  }
-
   Widget _bandChip(String? band) {
     Color bg, fg;
     switch (band) {
@@ -10354,142 +10844,6 @@ class _RoutesTabState extends State<_RoutesTab> {
       decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(20)),
       child: Text(band ?? '', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: fg)),
     );
-  }
-
-  // ── B5: admin ad-hoc route view ───────────────────────────────────────────
-
-  Widget _buildRouteView() {
-    final zone = _selectedZone!;
-    final route = _route;
-    final stops = (route?['route'] as List?)
-            ?.map((s) => Map<String, dynamic>.from(s as Map))
-            .toList() ??
-        [];
-    final mapsLinks = (route?['maps_links'] as List?)
-            ?.map((m) => Map<String, dynamic>.from(m as Map))
-            .toList() ??
-        [];
-    final emptyLabel = route?['empty_label']?.toString();
-
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Row(children: [
-        IconButton(onPressed: _closeZone, icon: const Icon(Icons.arrow_back, size: 20)),
-        Expanded(
-          child: Text(zone['title']?.toString() ?? '',
-              style: const TextStyle(
-                  fontSize: 17, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
-        ),
-      ]),
-      const SizedBox(height: 8),
-      _buildRouteControls(),
-      const SizedBox(height: 14),
-      if (_routeError != null) ...[
-        Text(_routeError!, style: const TextStyle(fontSize: 12.5, color: Color(0xFFDC2626))),
-        const SizedBox(height: 10),
-      ],
-      if (_locError != null) ...[
-        Text(_locError!, style: const TextStyle(fontSize: 12, color: Color(0xFFD97706))),
-        const SizedBox(height: 10),
-      ],
-      if (_routeLoading)
-        const Padding(
-          padding: EdgeInsets.only(top: 24),
-          child: Center(child: CircularProgressIndicator(color: Color(0xFF1B7A43), strokeWidth: 2)),
-        )
-      else if (route != null) ...[
-        _buildRouteSummaryBar(route, mapsLinks),
-        const SizedBox(height: 14),
-        if (emptyLabel != null)
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 24),
-            child: Center(
-              child: Text(emptyLabel,
-                  style: const TextStyle(fontSize: 13.5, color: Color(0xFF6B7280)),
-                  textAlign: TextAlign.center),
-            ),
-          )
-        else
-          ...stops.map((s) => Padding(
-                padding: const EdgeInsets.only(bottom: 10),
-                child: _stopCard(s, onRefresh: _fetchRoute),
-              )),
-      ],
-    ]);
-  }
-
-  Widget _buildRouteControls() {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
-      ),
-      child: widget.isDesktop
-          ? Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Expanded(child: _stopsControl()),
-              const SizedBox(width: 16),
-              Expanded(child: _minScoreControl()),
-              const SizedBox(width: 16),
-              Expanded(child: _startFromControl()),
-            ])
-          : Column(children: [
-              _stopsControl(),
-              const SizedBox(height: 12),
-              _minScoreControl(),
-              const SizedBox(height: 12),
-              _startFromControl(),
-            ]),
-    );
-  }
-
-  Widget _stopsControl() {
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Text('Stops: $_topN',
-          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF6B7280))),
-      Slider(
-        value: _topN.toDouble(),
-        min: 5, max: 100, divisions: 19,
-        activeColor: const Color(0xFF1B7A43),
-        label: '$_topN',
-        onChanged: (v) => setState(() => _topN = v.round()),
-        onChangeEnd: (_) => _fetchRoute(),
-      ),
-    ]);
-  }
-
-  Widget _minScoreControl() {
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Text('Min score: $_minScore',
-          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF6B7280))),
-      Slider(
-        value: _minScore.toDouble(),
-        min: 0, max: 100, divisions: 20,
-        activeColor: const Color(0xFF1B7A43),
-        label: '$_minScore',
-        onChanged: (v) => setState(() => _minScore = v.round()),
-        onChangeEnd: (_) => _fetchRoute(),
-      ),
-    ]);
-  }
-
-  Widget _startFromControl() {
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      const Text('Start from',
-          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF6B7280))),
-      const SizedBox(height: 8),
-      Row(children: [
-        Expanded(child: _segBtn('Warehouse', !_startFromMyLocation, _setStartWarehouse)),
-        const SizedBox(width: 8),
-        Expanded(
-          child: _locating
-              ? const Center(
-                  child: SizedBox(width: 16, height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2)))
-              : _segBtn('My location', _startFromMyLocation, _useMyLocationForStart),
-        ),
-      ]),
-    ]);
   }
 
   Widget _segBtn(String label, bool active, VoidCallback onTap) {
@@ -10547,7 +10901,123 @@ class _RoutesTabState extends State<_RoutesTab> {
     ]);
   }
 
-  // ── B6 + C: stop card, now with pin_label / visit_label / CHECK IN ───────
+  // ── CHANGE #452 C2: builder stop row — check/uncheck + eta/wait/open_ok ──
+  // NEW shape from route_plan_get (area, eta_label, wait_label, open_ok,
+  // included) — distinct from the #445 my_route() stop shape below (which
+  // has branch_label/stale_label/pin_label/visit_label instead). Reuses
+  // _openCheckIn / the SAME #446 check-in sheet — record_visit only needs
+  // lead_id, which both shapes carry.
+  Widget _builderStopRow(Map<String, dynamic> s) {
+    final stopId = s['stop_id'].toString();
+    final included = s['included'] == true;
+    final photoUrl = s['photo_url']?.toString();
+    final size = widget.isDesktop ? 56.0 : 44.0;
+    final openLabel = s['open_label']?.toString();
+    final openOk = s['open_ok'] != false; // only false is a real SHUT; unknown/true are not
+    final waitLabel = s['wait_label']?.toString();
+    final callLink = s['call_link']?.toString();
+    final waLink = s['wa_link']?.toString();
+    final navLink = s['nav_link']?.toString();
+    final shut = openLabel == 'SHUT on arrival';
+    RenderLog.write('c452_checkin_wired', 1); // Check-in button is built below
+
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: shut ? const Color(0xFFFEF2F2) : const Color(0xFFF9FAFB),
+        borderRadius: BorderRadius.circular(10),
+        border: shut ? Border.all(color: const Color(0xFFFECACA)) : null,
+      ),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Checkbox(
+          value: included,
+          onChanged: (v) => _toggleStopIncluded(stopId, v == true),
+          activeColor: const Color(0xFF1B7A43),
+        ),
+        SizedBox(
+          width: 20,
+          child: Text('${s['seq'] ?? ''}',
+              style: const TextStyle(
+                  fontSize: 13.5, fontWeight: FontWeight.w800, color: Color(0xFF9CA3AF))),
+        ),
+        const SizedBox(width: 6),
+        _routePhoto(photoUrl, size),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Wrap(crossAxisAlignment: WrapCrossAlignment.center, spacing: 8, runSpacing: 4, children: [
+              Text(s['name']?.toString() ?? '',
+                  style: const TextStyle(
+                      fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+              if (s['score_label'] != null)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                      color: const Color(0xFFF3F4F6), borderRadius: BorderRadius.circular(4)),
+                  child: Text(s['score_label'].toString(),
+                      style: const TextStyle(
+                          fontSize: 10.5, fontWeight: FontWeight.w700, color: Color(0xFF374151))),
+                ),
+              _bandChip(s['band']?.toString()),
+            ]),
+            if (s['area'] != null && s['area'].toString().isNotEmpty) ...[
+              const SizedBox(height: 3),
+              Text(s['area'].toString(), style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+            ],
+            if (s['eta_label'] != null || openLabel != null) ...[
+              const SizedBox(height: 3),
+              Wrap(crossAxisAlignment: WrapCrossAlignment.center, spacing: 6, runSpacing: 2, children: [
+                if (s['eta_label'] != null) ...[
+                  const Icon(Icons.schedule, size: 12, color: Color(0xFF9CA3AF)),
+                  const SizedBox(width: 2),
+                  Text(s['eta_label'].toString(),
+                      style: const TextStyle(fontSize: 11.5, color: Color(0xFF374151))),
+                ],
+                if (openLabel != null)
+                  Text(openLabel,
+                      style: TextStyle(
+                          fontSize: 11.5, fontWeight: FontWeight.w600,
+                          // Unknown is grey, never red — unknown is not closed.
+                          color: !openOk
+                              ? const Color(0xFFDC2626)
+                              : openLabel == 'Open on arrival'
+                                  ? const Color(0xFF065F46)
+                                  : const Color(0xFF9CA3AF))),
+              ]),
+            ],
+            if (waitLabel != null) ...[
+              const SizedBox(height: 2),
+              Text(waitLabel, style: const TextStyle(fontSize: 11.5, color: Color(0xFFD97706))),
+            ],
+            const SizedBox(height: 8),
+            Wrap(spacing: 8, runSpacing: 8, children: [
+              if (callLink != null)
+                _stopActionBtn(Icons.call, 'Call', () => launchUrl(Uri.parse(callLink))),
+              if (waLink != null)
+                _stopActionBtn(Icons.chat, 'WhatsApp',
+                    () => launchUrl(Uri.parse(waLink), mode: LaunchMode.externalApplication)),
+              if (navLink != null)
+                _stopActionBtn(Icons.navigation_outlined, 'Navigate',
+                    () => launchUrl(Uri.parse(navLink), mode: LaunchMode.externalApplication)),
+              _stopActionBtn(Icons.check_circle, 'Check in',
+                  () => _openCheckIn(s, onRefresh: () { if (_planId != null) _loadPlan(_planId!); }),
+                  filled: true),
+            ]),
+            if (s['leg_label'] != null || s['cum_label'] != null) ...[
+              const SizedBox(height: 6),
+              Text(
+                [s['leg_label'], s['cum_label']].where((v) => v != null).join(' · '),
+                style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF)),
+              ),
+            ],
+          ]),
+        ),
+      ]),
+    );
+  }
+
+  // ── B6 + C: stop card (#445/#446 my_route() shape) — unchanged, used by
+  // the rep view only. ──────────────────────────────────────────────────────
 
   Widget _stopCard(Map<String, dynamic> s, {String? assignmentId, required VoidCallback onRefresh}) {
     final photoUrl = s['photo_url']?.toString();
@@ -11088,20 +11558,21 @@ class _CheckInSheetState extends State<_CheckInSheet> {
 // D2: Admin — assign a zone to a worker
 // ═════════════════════════════════════════════════════════════════════════
 
-class _AssignZoneDialog extends StatefulWidget {
-  final Map<String, dynamic> zone;
+// ── CHANGE #452 C4: assign a ROUTE (route_plan_assign) — replaces the old
+// zone-based _AssignZoneDialog (lead_assign_zone). Pops `true` on success so
+// the caller knows to re-call route_plan_get.
+class _AssignRouteDialog extends StatefulWidget {
+  final Map<String, dynamic> route;
   final List<Map<String, dynamic>> initialWorkers;
-  const _AssignZoneDialog({required this.zone, required this.initialWorkers});
+  const _AssignRouteDialog({required this.route, required this.initialWorkers});
 
   @override
-  State<_AssignZoneDialog> createState() => _AssignZoneDialogState();
+  State<_AssignRouteDialog> createState() => _AssignRouteDialogState();
 }
 
-class _AssignZoneDialogState extends State<_AssignZoneDialog> {
+class _AssignRouteDialogState extends State<_AssignRouteDialog> {
   late List<Map<String, dynamic>> _workers;
   String? _workerId;
-  final _stopsCtrl = TextEditingController(text: '30');
-  final _minScoreCtrl = TextEditingController(text: '30');
   DateTime _forDate = DateTime.now();
   bool _submitting = false;
   String? _error;
@@ -11110,13 +11581,6 @@ class _AssignZoneDialogState extends State<_AssignZoneDialog> {
   void initState() {
     super.initState();
     _workers = widget.initialWorkers;
-  }
-
-  @override
-  void dispose() {
-    _stopsCtrl.dispose();
-    _minScoreCtrl.dispose();
-    super.dispose();
   }
 
   Future<void> _addWorker() async {
@@ -11186,25 +11650,19 @@ class _AssignZoneDialogState extends State<_AssignZoneDialog> {
   }
 
   Future<void> _submit() async {
-    final stops = int.tryParse(_stopsCtrl.text.trim());
-    final minScore = int.tryParse(_minScoreCtrl.text.trim());
     if (_workerId == null) { setState(() => _error = 'Pick a worker.'); return; }
-    if (stops == null || stops <= 0) { setState(() => _error = 'Enter a valid stop count.'); return; }
-    if (minScore == null || minScore < 0) { setState(() => _error = 'Enter a valid min score.'); return; }
     setState(() { _submitting = true; _error = null; });
     try {
-      final res = await Supabase.instance.client.rpc('lead_assign_zone', params: {
-        'p_zone_id': widget.zone['zone_id'],
+      final res = await Supabase.instance.client.rpc('route_plan_assign', params: {
+        'p_route_id': widget.route['route_id'],
         'p_worker_id': _workerId,
-        'p_target_stops': stops,
-        'p_min_score': minScore,
         'p_for_date':
             '${_forDate.year.toString().padLeft(4, '0')}-${_forDate.month.toString().padLeft(2, '0')}-${_forDate.day.toString().padLeft(2, '0')}',
       });
       final data = Map<String, dynamic>.from(res as Map);
       if (!mounted) return;
       if (data['ok'] == true) {
-        Navigator.of(context).pop();
+        Navigator.of(context).pop(true);
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(data['message']?.toString() ?? 'Assigned.'),
           backgroundColor: const Color(0xFF1B7A43),
@@ -11221,7 +11679,7 @@ class _AssignZoneDialogState extends State<_AssignZoneDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: Text('Assign ${widget.zone['title'] ?? ''}'),
+      title: Text('Assign ${widget.route['title'] ?? ''}'),
       content: SizedBox(
         width: 360,
         child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -11243,26 +11701,6 @@ class _AssignZoneDialogState extends State<_AssignZoneDialog> {
               onPressed: _addWorker,
               icon: const Icon(Icons.person_add_alt_1, size: 20),
               tooltip: 'Add worker',
-            ),
-          ]),
-          const SizedBox(height: 12),
-          Row(children: [
-            Expanded(
-              child: TextField(
-                controller: _stopsCtrl,
-                keyboardType: TextInputType.number,
-                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                decoration: const InputDecoration(labelText: 'Stops', border: OutlineInputBorder(), isDense: true),
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: TextField(
-                controller: _minScoreCtrl,
-                keyboardType: TextInputType.number,
-                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                decoration: const InputDecoration(labelText: 'Min score', border: OutlineInputBorder(), isDense: true),
-              ),
             ),
           ]),
           const SizedBox(height: 12),

@@ -10,6 +10,7 @@ import 'package:flutter/services.dart'
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
+import '../app_state.dart'; // CHANGE #454
 import '../data/medicine_repository.dart';
 import '../models/product.dart';
 import '../theme.dart';
@@ -1208,9 +1209,38 @@ class _ProductsSection extends StatelessWidget {
     final searching = query.trim().isNotEmpty;
     final title = searching ? 'Search Results' : (category == 'All' ? 'Best Sellers' : prettyCategory(category));
 
+    // CHANGE #454 D — chip/cart counts, aggregated here (once per grid build)
+    // rather than per-card, since RenderLog.write overwrites: a per-card write
+    // would only ever report the LAST card, not a true count. cart.showCart is
+    // the one flag every card in this list shares; buyable already governs
+    // both the old "Unavailable" state and the new chip/cart split identically.
+    final cart = AppState.of(context);
+    if (items.isNotEmpty) {
+      final buyableCount = items.where((p) => p.isBuyable).length;
+      RenderLog.write('c454_carts', cart.showCart ? buyableCount : 0);
+      RenderLog.write('c454_chips', cart.showCart ? 0 : buyableCount);
+      RenderLog.write('c454_sample_label', items.first.supplierLabel ?? '');
+    }
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        if (cart.cartModeBanner != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: const Color(0xFFEFF6FF),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                cart.cartModeBanner!,
+                style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: Color(0xFF1E40AF)),
+              ),
+            ),
+          ),
         _SectionHeader(title: title, subtitle: _buildSubtitle()),
         const SizedBox(height: 20),
         // Cross-fade the grid on category change OR on each new search query.

@@ -78,6 +78,35 @@ class CartModel extends ChangeNotifier {
   // When set, CartModel shows the impersonated customer's cart (read-only).
   String? _viewAsUserId;
   bool get isViewAs => _viewAsUserId != null;
+  // CHANGE #454 A3 — the EXACT uuid already passed as p_user_id to every
+  // write-as cart RPC (see enterViewAs/admin_writeas_cart_upsert below). This
+  // is `actingAs`: non-null while impersonating, null otherwise.
+  String? get viewAsUserId => _viewAsUserId;
+
+  // ── CHANGE #454 — cart_mode(): the single source of truth for whether the
+  // product-card action button is a real cart control or a read-only chip.
+  // Fails OPEN (defaults true) so a stray cart button is the worst case, never
+  // a missing one — a missing cart control would stop Om taking orders.
+  bool showCart = true;
+  String? cartModeBanner;
+
+  Future<void> refreshCartMode() async {
+    try {
+      final res = await Supabase.instance.client.rpc('cart_mode', params: {
+        'p_acting_as': _viewAsUserId,
+      });
+      final m = Map<String, dynamic>.from(res as Map);
+      showCart = m['show_cart'] == true;
+      cartModeBanner = m['banner']?.toString();
+      RenderLog.write('c454_show_cart', showCart);
+      RenderLog.write('c454_acting_as', _viewAsUserId != null ? 1 : 0);
+      notifyListeners();
+    } catch (_) {
+      // FAIL OPEN — never default to false.
+      showCart = true;
+      notifyListeners();
+    }
+  }
 
   // c410_impersonation_persist: generation counter so an in-flight
   // _loadFromSupabase() call (e.g. the admin's own cart, kicked off at boot
@@ -96,6 +125,7 @@ class CartModel extends ChangeNotifier {
     _cartChannel?.unsubscribe();
     _cartChannel = null;
     RenderLog.write('view_as_cart', 'enter:$userId');
+    refreshCartMode(); // CHANGE #454 — re-ask cart_mode with the new actingAs
     await _loadFromSupabase();
   }
 
@@ -106,6 +136,7 @@ class CartModel extends ChangeNotifier {
     _recomputeTotals();
     notifyListeners();
     RenderLog.write('view_as_cart', 'exit');
+    refreshCartMode(); // CHANGE #454 — actingAs is now null
     await _loadFromSupabase();
   }
 
@@ -216,6 +247,9 @@ class CartModel extends ChangeNotifier {
         _loadFromLocalStorage();
       }
     }
+    // CHANGE #454 B1 — once per app/storefront boot (CartModel is the shared
+    // singleton behind AppState, so this covers every screen).
+    refreshCartMode();
   }
 
   Future<void> _onAuthState(AuthState state) async {
@@ -226,6 +260,7 @@ class CartModel extends ChangeNotifier {
       await _loadFromSupabase();
       final uid = Supabase.instance.client.auth.currentUser?.id;
       if (uid != null) _subscribeToCartRealtime(uid);
+      refreshCartMode(); // CHANGE #454 — role may have just changed (e.g. admin login)
     } else if (event == AuthChangeEvent.signedOut) {
       _isLoggedIn = false;
       _cartChannel?.unsubscribe();

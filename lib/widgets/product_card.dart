@@ -271,6 +271,18 @@ class _CartControlState extends State<_CartControl>
     RenderLog.write('change_103_no_dim', '1');
     if (!widget.product.isBuyable) RenderLog.write('change_102_unavailable_ui', '1');
 
+    // CHANGE #454 B1/B2 — cart.showCart comes from CartModel.refreshCartMode()
+    // (cart_mode() RPC), fetched once and re-fetched on View-As enter/exit.
+    // FAIL OPEN: showCart defaults true, so this card never loses its cart
+    // control just because the RPC hasn't answered yet.
+    if (!cart.showCart) {
+      return SizedBox(
+        width: double.infinity,
+        height: 48,
+        child: _CartModeChip(product: widget.product),
+      );
+    }
+
     return SizedBox(
       width: double.infinity,
       height: 48,
@@ -342,6 +354,70 @@ class _CartControlState extends State<_CartControl>
                         ),
                       ),
               ),
+      ),
+    );
+  }
+}
+
+// ─── CHANGE #454 — read-only supplier chip (admin browsing as themselves) ────
+// Replaces Add-to-cart when cart.showCart is false. NEVER tappable: no
+// InkWell/GestureDetector/onTap/onPressed anywhere below — wrapped in
+// IgnorePointer as a second guarantee. Same green, height, width and corner
+// radius as the Add-to-cart button it replaces so the grid never reflows.
+class _CartModeChip extends StatelessWidget {
+  final Product product;
+  const _CartModeChip({required this.product});
+
+  @override
+  Widget build(BuildContext context) {
+    final label = product.supplierLabel;
+
+    // B4b — supplier_label null AND not buyable: keep the EXISTING grey
+    // "Unavailable" state, byte-for-byte identical to the cart path's.
+    if (label == null && !product.isBuyable) {
+      return SizedBox.expand(
+        key: const ValueKey('unavailable'),
+        child: FilledButton(
+          style: FilledButton.styleFrom(
+            backgroundColor: const Color(0xFFF3F4F6),
+            foregroundColor: const Color(0xFF9CA3AF),
+            disabledBackgroundColor: const Color(0xFFF3F4F6),
+            disabledForegroundColor: const Color(0xFF9CA3AF),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            textStyle: const TextStyle(fontWeight: FontWeight.w500, fontSize: 14),
+            elevation: 0,
+            splashFactory: NoSplash.splashFactory,
+            shadowColor: Colors.transparent,
+          ),
+          onPressed: null,
+          child: const Text('Unavailable'),
+        ),
+      );
+    }
+
+    // B4a — supplier_label present: print it verbatim, same green as
+    // Add-to-cart. B4c — buyable but the backfill hasn't reached this row
+    // yet: neutral grey "AV", never "AV • 0S".
+    final hasLabel = label != null;
+    return IgnorePointer(
+      key: ValueKey(hasLabel ? 'chip-labelled' : 'chip-pending'),
+      child: SizedBox.expand(
+        child: Container(
+          decoration: BoxDecoration(
+            color: hasLabel ? const Color(0xFF1B7A43) : const Color(0xFFF3F4F6),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          alignment: Alignment.center,
+          child: Text(
+            hasLabel ? label : 'AV',
+            style: TextStyle(
+              fontWeight: FontWeight.w600,
+              fontSize: 14,
+              color: hasLabel ? Colors.white : const Color(0xFF6B7280),
+            ),
+          ),
+        ),
       ),
     );
   }

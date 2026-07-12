@@ -58,6 +58,13 @@ class Product {
   /// Promotional scheme, e.g. "5+1" (buy 5 get 1 free). Empty when none.
   final String scheme;
 
+  /// CHANGE #454 — "AV • 10S" etc., ALREADY formatted server-side by
+  /// search_medicines_priority / get_storefront_feed. Print verbatim; never
+  /// rebuild it. Null while the supplier-count backfill hasn't reached this
+  /// row yet (buyable can still be true) or when not buyable.
+  final String? supplierLabel;
+  final int? supplierCount;
+
   const Product({
     required this.id,
     required this.name,
@@ -78,6 +85,8 @@ class Product {
     required this.discount,
     this.gstPercent = 12,
     this.scheme = '',
+    this.supplierLabel,
+    this.supplierCount,
   });
 
   /// Builds a [Product] from a `MEDICINE` row returned by Supabase.
@@ -130,6 +139,10 @@ class Product {
       requiresPrescription: isPrescription,
       discount: 0.0,
       scheme: (map['scheme'] as String?)?.trim() ?? '',
+      supplierLabel: (map['supplier_label'] as String?)?.trim().isNotEmpty == true
+          ? (map['supplier_label'] as String).trim()
+          : null,
+      supplierCount: (map['supplier_count'] as num?)?.toInt(),
     );
   }
 
@@ -153,6 +166,8 @@ class Product {
         'requiresPrescription': requiresPrescription,
         'discount': discount,
         'scheme': scheme,
+        'supplierLabel': supplierLabel,
+        'supplierCount': supplierCount,
       };
 
   factory Product.fromJson(Map<String, dynamic> map) {
@@ -179,6 +194,8 @@ class Product {
       requiresPrescription: (map['requiresPrescription'] as bool?) ?? false,
       discount: (map['discount'] as num?)?.toDouble() ?? 0.0,
       scheme: (map['scheme'] as String?) ?? '',
+      supplierLabel: map['supplierLabel'] as String?,
+      supplierCount: (map['supplierCount'] as num?)?.toInt(),
     );
   }
 

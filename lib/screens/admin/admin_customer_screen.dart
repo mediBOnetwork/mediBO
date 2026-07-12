@@ -20,6 +20,7 @@ import '../../utils/order_code.dart';
 import '../../utils/render_log.dart';
 import '../../utils/ist_date.dart'; // CHANGE #444
 import '../../widgets/date_scope_chip.dart'; // CHANGE #444
+import '../../widgets/route_map_panel.dart'; // CHANGE #453
 import '../bulk_upload_screen.dart';
 import '../../services/payment_claims_service.dart';
 import '../../view_as_state.dart';
@@ -9720,6 +9721,12 @@ class _RoutesTabState extends State<_RoutesTab> {
   String? _planError;
   Set<String> _expandedRouteIds = {};
 
+  // ── CHANGE #453: the map — overview (routeId null) or one route's detail ──
+  Map<String, dynamic>? _mapData;
+  String? _mapRouteId;
+  bool _mapLoading = false;
+  bool _mapExpanded = true; // default OPEN once a plan exists — B1
+
   // ── C5: past plans, collapsible, lazy-loaded ──────────────────────────────
   bool _pastPlansExpanded = false;
   List<Map<String, dynamic>>? _pastPlans;
@@ -9956,6 +9963,16 @@ class _RoutesTabState extends State<_RoutesTab> {
           ? ((expanded.first['stops'] as List?) ?? []).length
           : 0;
       RenderLog.write('c452_stops', firstExpandedStops);
+      // CHANGE #453 — keep the map in sync: a fresh build always opens on the
+      // overview; a toggle/rebalance refresh keeps whatever mode was showing,
+      // unless the route it was detailing got excluded (fall back to overview).
+      if (isNewBuild) {
+        _loadMap();
+      } else if (_mapRouteId != null && !validIds.contains(_mapRouteId)) {
+        _loadMap();
+      } else if (_mapData != null) {
+        _loadMap(routeId: _mapRouteId);
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() { _buildingPlan = false; _planError = e.toString(); });
@@ -9963,7 +9980,111 @@ class _RoutesTabState extends State<_RoutesTab> {
   }
 
   void _rebuild() {
-    setState(() { _plan = null; _planId = null; _planError = null; });
+    setState(() {
+      _plan = null;
+      _planId = null;
+      _planError = null;
+      _mapData = null;
+      _mapRouteId = null;
+    });
+  }
+
+  // ── CHANGE #453: the map — dumb, re-fetched on every plan/route change ───
+  Future<void> _loadMap({String? routeId}) async {
+    final planId = _planId;
+    if (planId == null) return;
+    setState(() => _mapLoading = true);
+    try {
+      final res = await Supabase.instance.client.rpc('route_plan_map', params: {
+        'p_plan_id': planId,
+        if (routeId != null) 'p_route_id': routeId,
+      });
+      final data = Map<String, dynamic>.from(res as Map);
+      if (!mounted) return;
+      if (data['empty'] == true) {
+        setState(() { _mapData = null; _mapRouteId = routeId; _mapLoading = false; });
+        return;
+      }
+      setState(() { _mapData = data; _mapRouteId = routeId; _mapLoading = false; });
+      final routes = ((data['routes'] as List?) ?? [])
+          .map((r) => Map<String, dynamic>.from(r as Map))
+          .toList();
+      final polylineCount = routes.where((r) => ((r['polyline'] as List?)?.length ?? 0) >= 2).length;
+      final markerCount = routes.fold<int>(0, (s, r) => s + ((r['markers'] as List?)?.length ?? 0));
+      RenderLog.write('c453_map_mode', data['mode']?.toString() ?? '');
+      RenderLog.write('c453_polylines', polylineCount);
+      RenderLog.write('c453_markers', markerCount);
+      RenderLog.write('c453_hub', data['hub'] != null ? 1 : 0);
+      RenderLog.write('c453_tiles', data['tile_url']?.toString() ?? '');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _mapLoading = false);
+    }
+  }
+
+  // B4 OVERVIEW: tapping an "R1" chip -> detail for that route + expand its card.
+  void _onSelectMapRoute(String routeId) {
+    setState(() => _expandedRouteIds = {routeId});
+    _loadMap(routeId: routeId);
+  }
+
+  void _onMapBackToOverview() => _loadMap();
+
+  // B4 DETAIL: tapping a numbered pin -> title/subtitle/score/eta/open +
+  // Call/Navigate/Check-in. Check-in reuses the EXISTING #446 sheet verbatim;
+  // marker uses `title` where the stop-card shape uses `name`, so pass a
+  // minimal adapted map — no check-in logic is rebuilt.
+  void _openMapStopSheet(Map<String, dynamic> marker) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (sheetCtx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(marker['title']?.toString() ?? '',
+                style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+            if (marker['subtitle'] != null) ...[
+              const SizedBox(height: 2),
+              Text(marker['subtitle'].toString(),
+                  style: const TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
+            ],
+            const SizedBox(height: 8),
+            Wrap(spacing: 10, runSpacing: 4, children: [
+              if (marker['score_label'] != null)
+                Text(marker['score_label'].toString(), style: const TextStyle(fontSize: 12.5, color: Color(0xFF374151))),
+              if (marker['eta_label'] != null)
+                Text(marker['eta_label'].toString(), style: const TextStyle(fontSize: 12.5, color: Color(0xFF374151))),
+              if (marker['open_label'] != null)
+                Text(marker['open_label'].toString(),
+                    style: TextStyle(
+                        fontSize: 12.5, fontWeight: FontWeight.w600,
+                        color: marker['open_ok'] == false ? const Color(0xFFDC2626) : const Color(0xFF065F46))),
+            ]),
+            const SizedBox(height: 14),
+            Wrap(spacing: 8, runSpacing: 8, children: [
+              if (marker['call_link'] != null)
+                _stopActionBtn(Icons.call, 'Call',
+                    () => launchUrl(Uri.parse(marker['call_link'].toString()))),
+              if (marker['nav_link'] != null)
+                _stopActionBtn(Icons.navigation_outlined, 'Navigate',
+                    () => launchUrl(Uri.parse(marker['nav_link'].toString()), mode: LaunchMode.externalApplication)),
+              _stopActionBtn(Icons.check_circle, 'Check in', () {
+                Navigator.of(sheetCtx).pop();
+                _openCheckIn(
+                  {'lead_id': marker['lead_id'], 'name': marker['title']},
+                  onRefresh: () {
+                    if (_planId != null) _loadPlan(_planId!);
+                  },
+                );
+              }, filled: true),
+            ]),
+          ]),
+        ),
+      ),
+    );
   }
 
   Future<void> _toggleRouteIncluded(String routeId, bool included) async {
@@ -10605,11 +10726,86 @@ class _RoutesTabState extends State<_RoutesTab> {
         ]),
       ),
       const SizedBox(height: 12),
+      _buildMapPanel(),
+      const SizedBox(height: 12),
       ...routes.map((r) => Padding(
             padding: const EdgeInsets.only(bottom: 10),
             child: _routeCard(r),
           )),
     ]);
+  }
+
+  // ── CHANGE #453: map panel — collapsible, [Map]/[List] toggle, additive to
+  // the list below (B5) which keeps working exactly as it did in #452. ─────
+  Widget _buildMapPanel() {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+      ),
+      child: Column(children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(children: [
+            const Icon(Icons.map_outlined, size: 16, color: Color(0xFF6B7280)),
+            const SizedBox(width: 6),
+            const Expanded(
+              child: Text('Map',
+                  style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+            ),
+            SizedBox(
+              width: 140,
+              child: Row(children: [
+                Expanded(child: _segBtn('Map', _mapExpanded, () => setState(() => _mapExpanded = true))),
+                const SizedBox(width: 6),
+                Expanded(child: _segBtn('List', !_mapExpanded, () => setState(() => _mapExpanded = false))),
+              ]),
+            ),
+          ]),
+        ),
+        if (_mapExpanded) ...[
+          const Divider(height: 1, color: Color(0xFFE5E7EB)),
+          Padding(
+            padding: const EdgeInsets.all(10),
+            child: _mapLoading && _mapData == null
+                ? SizedBox(
+                    height: widget.isDesktop ? 420 : 320,
+                    child: const Center(
+                        child: CircularProgressIndicator(color: Color(0xFF1B7A43), strokeWidth: 2)),
+                  )
+                : _mapData == null
+                    ? SizedBox(
+                        height: widget.isDesktop ? 420 : 320,
+                        child: const Center(
+                          child: Text('Nothing to map.', style: TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
+                        ),
+                      )
+                    : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        if (_mapData!['mode'] == 'route') ...[
+                          TextButton.icon(
+                            onPressed: _onMapBackToOverview,
+                            icon: const Icon(Icons.arrow_back, size: 16),
+                            label: const Text('All routes', style: TextStyle(fontSize: 12.5)),
+                            style: TextButton.styleFrom(
+                                foregroundColor: const Color(0xFF1B7A43),
+                                padding: EdgeInsets.zero,
+                                minimumSize: Size.zero,
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+                          ),
+                          const SizedBox(height: 6),
+                        ],
+                        RouteMapPanel(
+                          mapData: _mapData!,
+                          isDesktop: widget.isDesktop,
+                          onSelectRoute: _onSelectMapRoute,
+                          onTapStopMarker: _openMapStopSheet,
+                        ),
+                      ]),
+          ),
+        ],
+      ]),
+    );
   }
 
   Widget _routeCard(Map<String, dynamic> r) {

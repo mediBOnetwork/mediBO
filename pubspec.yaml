@@ -54,6 +54,8 @@ dependencies:
   zxing2: ^0.2.3
   printing: ^5.13.0
   pdf: ^3.11.0
+  flutter_map: ^7.0.2
+  latlong2: ^0.9.1
 
 dev_dependencies:
   flutter_test:

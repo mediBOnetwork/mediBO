@@ -2217,11 +2217,9 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     );
   }
 
-  // CHANGE #382 — qty pill for the Customer Orders item row. quantity is
-  // always present on _ItemLine (non-nullable), so this never guards null;
-  // no pack/unit field is available on _ItemLine for real orders today, so
-  // it renders the plain number (ticket 2e's documented fallback).
-  Widget _custOrderItemQtyPill(int qty) {
+  // CHANGE #442 — qty pill for the Customer Orders item row now takes the
+  // server-formatted qty_label ("3 Strips") instead of a bare number.
+  Widget _custOrderItemQtyPill(String label) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: BoxDecoration(
@@ -2229,7 +2227,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         borderRadius: BorderRadius.circular(20),
         border: Border.all(color: const Color(0xFFBFDBFE)),
       ),
-      child: Text('$qty',
+      child: Text(label,
           style: const TextStyle(
               fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF1E40AF))),
     );
@@ -2292,7 +2290,12 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       RenderLog.write('order_item_FAIL', 'accepted order has dash items — name mismatch?');
     }
 
-    return Container(
+    // CHANGE #442 — instrumentation counters for image/company/pack/qty_label
+    // coverage across this order's item cards, written once per card below.
+    var c442Total = 0, c442Image = 0, c442Company = 0, c442Pack = 0, c442Qty = 0;
+    String? c442Sample;
+
+    final content = Container(
       color: const Color(0xFFF9FAFB),
       padding: EdgeInsets.fromLTRB(lpad, 10, rpad, 14),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -2333,18 +2336,28 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
 
           // Null-guarded derived text — a missing value hides its line/token,
           // never renders "null"/"undefined"/"NaN"/"₹null".
-          // CHANGE #384 — image/company/composition/pack now come from a
-          // batched MEDICINE lookup keyed by item.productId (see
-          // _loadMedicineBriefs/_medDisplayFields); item.packSize (populated
-          // only for cart_items rows) still wins when present.
-          final med = _medDisplayFields(item.productId);
-          try {
-            RenderLog.write('c384_item_medicine',
-                'productId:${item.productId ?? "?"}:hasImage:${med['image'] != null}:hasCompany:${med['company'] != null}:hasPack:${(med['pack'] ?? '').isNotEmpty}');
-          } catch (_) {}
-          final packLine = (item.packSize?.trim().isNotEmpty == true)
-              ? item.packSize!.trim()
-              : (med['pack'] ?? '');
+          // CHANGE #442 — image/company/pack/qty_label now come straight off
+          // `s`, the get_order_item_inquiry_status row already matched by
+          // normalized product name above. That RPC now returns these fields
+          // pre-formatted server-side (image_url, company, pack_label,
+          // qty_label) — no client-side MEDICINE lookup, no string logic here.
+          // The old CHANGE #384 MEDICINE-table lookup (_medDisplayFields) is
+          // left in place for cart_items (_buildCartExpandedItems) where a
+          // real product_id column exists; real orders never populated it
+          // reliably (orders.items JSONB product_id is unreliable), which was
+          // the actual root cause of this bug.
+          String? nz(String? s) => (s != null && s.trim().isNotEmpty) ? s.trim() : null;
+          final imageUrl = nz(s?['image_url'] as String?);
+          final company = nz(s?['company'] as String?);
+          final packLine = nz(s?['pack_label'] as String?) ??
+              (item.packSize?.trim().isNotEmpty == true ? item.packSize!.trim() : null);
+          final qtyLabel = nz(s?['qty_label'] as String?) ?? '${item.qty}';
+          c442Total++;
+          if (imageUrl != null) c442Image++;
+          if (company != null) c442Company++;
+          if (packLine != null) c442Pack++;
+          if (nz(s?['qty_label'] as String?) != null) c442Qty++;
+          c442Sample ??= '${item.name}|$qtyLabel|${packLine ?? ''}|${company ?? ''}';
           final priceVal = (item.price != null && item.price! > 0)
               ? item.price
               : ((item.mrp != null && item.mrp! > 0) ? item.mrp : null);
@@ -2360,7 +2373,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
               border: Border.all(color: const Color(0xFFE5E7EB), width: 0.5),
             ),
             child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              _custOrderItemThumb(med['image'], isDesktop: isDesktop),
+              _custOrderItemThumb(imageUrl, isDesktop: isDesktop),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
@@ -2373,9 +2386,9 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                             fontSize: 15,
                             fontWeight: FontWeight.w600,
                             color: Color(0xFF111827))),
-                    if (med['company'] != null) ...[
+                    if (company != null) ...[
                       const SizedBox(height: 2),
-                      Text(med['company']!.toUpperCase(),
+                      Text(company,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
@@ -2384,15 +2397,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                               color: Color(0xFF9CA3AF),
                               letterSpacing: 0.8)),
                     ],
-                    if (med['composition'] != null) ...[
-                      const SizedBox(height: 2),
-                      Text(med['composition']!,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                              fontSize: 12, color: Color(0xFF6B7280), height: 1.3)),
-                    ],
-                    if (packLine.isNotEmpty) ...[
+                    if (packLine != null) ...[
                       const SizedBox(height: 2),
                       Text(packLine,
                           maxLines: 1,
@@ -2406,7 +2411,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                       runSpacing: 8,
                       crossAxisAlignment: WrapCrossAlignment.center,
                       children: [
-                        _custOrderItemQtyPill(item.qty),
+                        _custOrderItemQtyPill(qtyLabel),
                         if (priceText != null)
                           Text(priceText,
                               style: const TextStyle(
@@ -2428,6 +2433,15 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         // delete_lead_group in the grouped Leads section above.)
       ]),
     );
+    // CHANGE #442 — render-log proof that image/company/pack/qty_label
+    // resolved from the RPC row, not just compiled into the bundle.
+    RenderLog.write('c442_items_total', c442Total);
+    RenderLog.write('c442_with_image', c442Image);
+    RenderLog.write('c442_with_company', c442Company);
+    RenderLog.write('c442_with_pack', c442Pack);
+    RenderLog.write('c442_with_qtylabel', c442Qty);
+    if (c442Sample != null) RenderLog.write('c442_sample', c442Sample!);
+    return content;
   }
 
   Widget _buildCartExpandedItems(_CustRow row,

@@ -187,6 +187,11 @@
   <!-- Google Identity Services — ID-token flow for signInWithIdToken -->
   <script src="https://accounts.google.com/gsi/client" async defer></script>
 
+  <!-- CHANGE #463 — Google Maps JS API for the Route tab map. Browser key
+       "medibo-web-maps", restricted to medibo.in/*.pages.dev + Maps JS API
+       only. Safe to publish (see key's HTTP referrer restriction). -->
+  <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCKGmOhiHrpzaov_o800JY36hGnAWerdgg"></script>
+
   <!-- ═══════════════════════════════════════════════════════════════════════
        ADMIN ALERT AUDIO  (Web Audio API — no file required)
        Called from Flutter via dart:js:

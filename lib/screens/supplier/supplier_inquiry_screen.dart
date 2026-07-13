@@ -49,23 +49,28 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
 
   final Set<int> _answering = {};
   RealtimeChannel? _rt;
-  Timer? _poll;
+  Timer? _c458Debounce;
+  int _c458Events = 0;
+  int _c458Reloads = 0;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    try { RenderLog.write('c458_timers', 0); } catch (_) {}
     _fetch(source: 'init');
     // Realtime only for real (non-View-As) suppliers
     if (widget.viewAsSupplierId == null) _subscribeRealtime();
-    _startPoll();
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _rt?.unsubscribe();
-    _poll?.cancel();
+    if (_rt != null) {
+      try { Supabase.instance.client.removeChannel(_rt!); } catch (_) {}
+      _rt = null;
+    }
+    _c458Debounce?.cancel();
     super.dispose();
   }
 
@@ -73,32 +78,55 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _fetch(source: 'lifecycle_resume', silent: true);
+      // CHANGE #458: a backgrounded socket dies silently — re-subscribe.
+      if (widget.viewAsSupplierId == null) _subscribeRealtime();
     }
   }
 
-  void _startPoll() {
-    _poll?.cancel();
-    _poll = Timer.periodic(const Duration(seconds: 20), (_) {
-      _fetch(source: 'poll_20s', silent: true);
-    });
-  }
-
-  void _subscribeRealtime() {
-    _rt = Supabase.instance.client
-        .channel('sup_inq_rt_${DateTime.now().millisecondsSinceEpoch}')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.all,
-          schema: 'public',
-          table: 'inquiry',
-          callback: (_) => _fetch(source: 'realtime', silent: true),
-        )
-        .onPostgresChanges(
-          event: PostgresChangeEvent.all,
-          schema: 'public',
-          table: 'inquiry_forms',
-          callback: (_) => _fetch(source: 'realtime', silent: true),
-        )
-        .subscribe();
+  // CHANGE #458: broadcast-only realtime — no table replication, no polling.
+  // The topic string comes from the backend (inquiry_realtime_topic); the
+  // broadcast payload is data-free, so every event just triggers a re-fetch
+  // via _fetch(), coalesced with a 250ms debounce.
+  Future<void> _subscribeRealtime() async {
+    try {
+      final t = await Supabase.instance.client
+          .rpc('inquiry_realtime_topic', params: {'p_token': null}) as Map;
+      if (!mounted) return;
+      final topic = t['topic'] as String?;
+      final event = t['event'] as String? ?? 'inquiry_changed';
+      if (t['error'] != null || topic == null) {
+        try { RenderLog.write('c458_topic', 'error'); } catch (_) {}
+        return;
+      }
+      try { RenderLog.write('c458_topic', topic); } catch (_) {}
+      if (_rt != null) {
+        try { Supabase.instance.client.removeChannel(_rt!); } catch (_) {}
+        _rt = null;
+      }
+      _rt = Supabase.instance.client
+          .channel(topic)
+          .onBroadcast(
+            event: event,
+            callback: (payload) {
+              _c458Events++;
+              try { RenderLog.write('c458_events', _c458Events); } catch (_) {}
+              _c458Debounce?.cancel();
+              _c458Debounce = Timer(const Duration(milliseconds: 250), () {
+                if (!mounted) return;
+                _c458Reloads++;
+                try { RenderLog.write('c458_reloads', _c458Reloads); } catch (_) {}
+                _fetch(source: 'realtime', silent: true);
+              });
+            },
+          )
+          .subscribe((status, error) {
+            if (status == RealtimeSubscribeStatus.subscribed) {
+              try { RenderLog.write('c458_subscribed', 1); } catch (_) {}
+            }
+          });
+    } catch (e) {
+      try { RenderLog.write('c458_topic', 'exception'); } catch (_) {}
+    }
   }
 
   Future<void> _fetch({String source = 'manual', bool silent = false}) async {

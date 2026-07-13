@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../utils/render_log.dart';
@@ -24,17 +26,76 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
   Set<int> _prevUnlockedIds = {};
   bool _respondedExpanded = false;
 
+  RealtimeChannel? _rt;
+  Timer? _c458Debounce;
+  int _c458Events = 0;
+  int _c458Reloads = 0;
+
   @override
   void initState() {
     super.initState();
     RenderLog.write('inquiry_form_init', widget.token.substring(0, 8));
+    try { RenderLog.write('c458_timers', 0); } catch (_) {}
     _load();
+    _subscribeRealtime();
   }
 
-  Future<void> _load() async {
+  @override
+  void dispose() {
+    if (_rt != null) {
+      try { Supabase.instance.client.removeChannel(_rt!); } catch (_) {}
+      _rt = null;
+    }
+    _c458Debounce?.cancel();
+    super.dispose();
+  }
+
+  // CHANGE #458: broadcast-only realtime — no table replication, no polling.
+  // Anon-safe: the topic comes from the backend (inquiry_realtime_topic,
+  // token-scoped), the broadcast payload is data-free, and every event just
+  // triggers a re-fetch via get_inquiry_form(token), coalesced 250ms.
+  Future<void> _subscribeRealtime() async {
+    try {
+      final t = await Supabase.instance.client.rpc('inquiry_realtime_topic',
+          params: {'p_token': widget.token}) as Map;
+      if (!mounted) return;
+      final topic = t['topic'] as String?;
+      final event = t['event'] as String? ?? 'inquiry_changed';
+      if (t['error'] != null || topic == null) {
+        try { RenderLog.write('c458_topic', 'error'); } catch (_) {}
+        return;
+      }
+      try { RenderLog.write('c458_topic', topic); } catch (_) {}
+      _rt = Supabase.instance.client
+          .channel(topic)
+          .onBroadcast(
+            event: event,
+            callback: (payload) {
+              _c458Events++;
+              try { RenderLog.write('c458_events', _c458Events); } catch (_) {}
+              _c458Debounce?.cancel();
+              _c458Debounce = Timer(const Duration(milliseconds: 250), () {
+                if (!mounted) return;
+                _c458Reloads++;
+                try { RenderLog.write('c458_reloads', _c458Reloads); } catch (_) {}
+                _load(silent: true);
+              });
+            },
+          )
+          .subscribe((status, error) {
+            if (status == RealtimeSubscribeStatus.subscribed) {
+              try { RenderLog.write('c458_subscribed', 1); } catch (_) {}
+            }
+          });
+    } catch (e) {
+      try { RenderLog.write('c458_topic', 'exception'); } catch (_) {}
+    }
+  }
+
+  Future<void> _load({bool silent = false}) async {
     if (!mounted) return;
     setState(() {
-      _loading = true;
+      if (!silent) _loading = true;
       _error = null;
     });
     try {
@@ -45,11 +106,17 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
       final data = Map<String, dynamic>.from(result as Map);
 
       if (data['error'] != null) {
+        final errCode = data['error'] as String;
         setState(() {
-          _error = data['error'] as String;
+          _error = errCode;
           _loading = false;
         });
-        RenderLog.write('inquiry_form_error', data['error']);
+        RenderLog.write('inquiry_form_error', errCode);
+        if (errCode == 'expired' && _rt != null) {
+          // CHANGE #458 C3: expired link — stop listening, nothing left to sync.
+          try { Supabase.instance.client.removeChannel(_rt!); } catch (_) {}
+          _rt = null;
+        }
         return;
       }
 

@@ -380,6 +380,14 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   final Set<int> _settingAnswerFor = {}; // inquiry_ids currently being admin-set
   String? _expandedOrderId; // which supplier order row is expanded
 
+  // ── CHANGE #460: date picker — Today live, earlier days read-only archive ─
+  List<Map<String, dynamic>> _inquiryDates = [];
+  bool _inquiryDatesLoading = false;
+  Map<String, dynamic>? _inquiryDatesSelected; // entry from _inquiryDates, null = today
+  Map<String, dynamic>? _inquiryDayArchive; // inquiry_day() result for a past date
+  bool _inquiryDayLoading = false;
+  String? _expandedArchiveSupplier;
+
   // ── CHANGE #328: supplier order bill+payment panels ──────────────────────
   // bill panel open per order id
   final Map<String, bool> _orderBillOpen = {};
@@ -467,7 +475,9 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
 
   void _onOrderHoursChanged() {
     if (!mounted) return;
-    if (_filter == _SupFilter.inquiry) _fetchInquiryReadiness(silent: true);
+    // CHANGE #460 (3): inquiry_send_readiness() is Today-only data.
+    final onToday = _inquiryDatesSelected == null || _inquiryDatesSelected!['is_today'] == true;
+    if (_filter == _SupFilter.inquiry && onToday) _fetchInquiryReadiness(silent: true);
   }
 
   void _onScreenFocus() {
@@ -2027,6 +2037,10 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       }
       _readinessPollTimer?.cancel(); // CHANGE #456 C5
       _readinessPollTimer = null;
+      // CHANGE #460: always land back on Today (live) next time the tab opens.
+      _inquiryDatesSelected = null;
+      _inquiryDayArchive = null;
+      _expandedArchiveSupplier = null;
     }
     setState(() {
       _filter = f;
@@ -2038,13 +2052,17 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       _fetchInquiryOverview();
       _fetchUnassignedItems();
       _loadAutoMeta();
+      _fetchInquiryDates(); // CHANGE #460: date picker contents
       try { RenderLog.write('c458_timers', 0); } catch (_) {}
-      _subscribeInquiryRt(); // CHANGE #458: broadcast realtime, no poll
+      _subscribeInquiryRt(); // CHANGE #458: broadcast realtime, no poll (Today only)
       // CHANGE #456 C5 — leads/claims/orders change under the admin while this
       // tab is open; poll readiness faster than the general overview refresh.
       _readinessPollTimer?.cancel();
       _readinessPollTimer = Timer.periodic(const Duration(seconds: 10), (_) {
-        if (mounted && _filter == _SupFilter.inquiry) {
+        // CHANGE #460 (3): inquiry_send_readiness() is Today-only data —
+        // never call it while an earlier (read-only) date is selected.
+        final onToday = _inquiryDatesSelected == null || _inquiryDatesSelected!['is_today'] == true;
+        if (mounted && _filter == _SupFilter.inquiry && onToday) {
           _fetchInquiryReadiness(silent: true);
         }
       });
@@ -2139,6 +2157,65 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       }
     } catch (e) {
       if (mounted) setState(() => _unassignedLoading = false);
+    }
+  }
+
+  // ── CHANGE #460: date picker — Today live, earlier days read-only archive ──
+  Future<void> _fetchInquiryDates() async {
+    if (mounted) setState(() => _inquiryDatesLoading = true);
+    try {
+      final res = await Supabase.instance.client.rpc('inquiry_dates') as List;
+      final dates = res.map((r) => Map<String, dynamic>.from(r as Map)).toList();
+      if (!mounted) return;
+      setState(() {
+        _inquiryDates = dates;
+        _inquiryDatesLoading = false;
+        if (_inquiryDatesSelected == null && dates.isNotEmpty) {
+          _inquiryDatesSelected = dates.firstWhere(
+            (d) => d['is_today'] == true,
+            orElse: () => dates.first,
+          );
+        }
+      });
+    } catch (e) {
+      if (mounted) setState(() => _inquiryDatesLoading = false);
+    }
+  }
+
+  void _selectInquiryDate(Map<String, dynamic> entry) {
+    final isToday = entry['is_today'] == true;
+    setState(() {
+      _inquiryDatesSelected = entry;
+      _expandedArchiveSupplier = null;
+    });
+    if (isToday) {
+      _inquiryDayArchive = null;
+      // CHANGE #460 D5: back on Today — resume live realtime.
+      if (_inquiryRtChannel == null) _subscribeInquiryRt();
+    } else {
+      // CHANGE #460 D5: history does not change — no realtime on a past date.
+      _c458Debounce?.cancel();
+      if (_inquiryRtChannel != null) {
+        try { Supabase.instance.client.removeChannel(_inquiryRtChannel!); } catch (_) {}
+        _inquiryRtChannel = null;
+      }
+      final date = entry['date'] as String?;
+      if (date != null) _fetchInquiryDayArchive(date);
+    }
+  }
+
+  Future<void> _fetchInquiryDayArchive(String date) async {
+    if (mounted) setState(() { _inquiryDayLoading = true; _inquiryDayArchive = null; });
+    try {
+      final res = await Supabase.instance.client
+          .rpc('inquiry_day', params: {'p_date': date}) as Map;
+      if (!mounted) return;
+      setState(() {
+        _inquiryDayArchive = Map<String, dynamic>.from(res);
+        _inquiryDayLoading = false;
+      });
+    } catch (e) {
+      if (mounted) setState(() => _inquiryDayLoading = false);
     }
   }
 
@@ -2650,7 +2727,41 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
 
   Widget _buildInquiryView(bool isDesktop) {
     final pad = isDesktop ? 28.0 : 16.0;
+    final selected = _inquiryDatesSelected;
+    final isToday = selected == null || selected['is_today'] == true;
+
+    // CHANGE #460 instrumentation — every value below is either printed
+    // verbatim from the RPCs or a plain count of what actually got built.
+    try { RenderLog.write('c460_picker', 1); } catch (_) {}
+    try { RenderLog.write('c460_dates', _inquiryDates.length); } catch (_) {}
+    try { RenderLog.write('c460_selected', (selected?['label'] as String?) ?? ''); } catch (_) {}
+    try { RenderLog.write('c460_is_today', isToday); } catch (_) {}
+    if (isToday) {
+      final writes = (_inquiryReadiness != null ? 1 : 0) +
+          (_inquiryOverview.length * 2) + // Copy link + Send per supplier row
+          (_expandedInquirySupplier != null ? _inquiryItems.length * 3 : 0); // 3 answer buttons per item
+      try { RenderLog.write('c460_suppliers', _inquiryOverview.length); } catch (_) {}
+      try { RenderLog.write('c460_writes', writes); } catch (_) {}
+    } else {
+      final archiveSuppliers = (_inquiryDayArchive?['suppliers'] as List?) ?? const [];
+      try { RenderLog.write('c460_suppliers', archiveSuppliers.length); } catch (_) {}
+      try { RenderLog.write('c460_writes', 0); } catch (_) {} // D1: archive has zero write controls
+    }
+
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      _buildInquiryDatePicker(pad),
+      if (isToday)
+        ..._buildInquiryTodayContent(pad)
+      else
+        _buildInquiryArchiveView(pad),
+    ]);
+  }
+
+  // CHANGE #460 C1: Today is rendered exactly as before — unchanged RPCs
+  // (get_supplier_inquiry_overview / get_supplier_inquiry_items), unchanged
+  // widgets. Only extracted into a list so the picker can sit above it.
+  List<Widget> _buildInquiryTodayContent(double pad) {
+    return [
       _buildReadinessAndSlider(pad),
       if (_inquiryOverviewLoading && _inquiryOverview.isEmpty)
         const Padding(
@@ -2681,7 +2792,281 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         if (_inquiryOverview.isNotEmpty || _unassignedItems.isNotEmpty)
           _buildUnassignedSection(pad),
       ],
-    ]);
+    ];
+  }
+
+  // ── CHANGE #460: date picker pill ────────────────────────────────────────
+  // Visual style matches the existing DateScopeChip pill (lib/widgets/
+  // date_scope_chip.dart), reused for consistency. The tap target is a short
+  // list of the days that actually have an inquiry (from inquiry_dates()),
+  // NOT a full calendar grid — days with no inquiry are never selectable and
+  // never shown, so a Material calendar (which shows every day) is the wrong
+  // widget here even though it's what DateScopeChip itself opens elsewhere.
+  Widget _buildInquiryDatePicker(double pad) {
+    final selected = _inquiryDatesSelected;
+    final label = (selected?['label'] as String?) ?? '';
+    return Padding(
+      padding: EdgeInsets.fromLTRB(pad, 12, pad, 0),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: InkWell(
+          onTap: _inquiryDates.isEmpty ? null : _openInquiryDatePicker,
+          borderRadius: BorderRadius.circular(8),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              border: Border.all(color: const Color(0xFFE5E7EB)),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              const Icon(Icons.calendar_today_outlined, size: 13, color: Color(0xFF6B7280)),
+              const SizedBox(width: 5),
+              Text(label,
+                  style: const TextStyle(
+                      fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
+              const SizedBox(width: 3),
+              const Icon(Icons.arrow_drop_down, size: 16, color: Color(0xFF6B7280)),
+            ]),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _openInquiryDatePicker() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (ctx) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.only(top: 8, bottom: 8),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Container(
+                width: 36,
+                height: 4,
+                margin: const EdgeInsets.only(bottom: 8),
+                decoration: BoxDecoration(
+                    color: const Color(0xFFE5E7EB), borderRadius: BorderRadius.circular(2)),
+              ),
+              ..._inquiryDates.map((d) {
+                final label = d['label'] as String? ?? '';
+                final summary = d['summary'] as String? ?? '';
+                final noResponse = (d['no_response'] as num?)?.toInt() ?? 0;
+                final isSelected = _inquiryDatesSelected != null &&
+                    _inquiryDatesSelected!['date'] == d['date'];
+                return InkWell(
+                  onTap: () {
+                    Navigator.of(ctx).pop();
+                    _selectInquiryDate(d);
+                  },
+                  child: Container(
+                    color: isSelected ? const Color(0xFFF5F6F8) : Colors.transparent,
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                    child: Row(children: [
+                      Expanded(
+                        child: Text(label,
+                            style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                                color: const Color(0xFF111827))),
+                      ),
+                      const SizedBox(width: 12),
+                      Text(summary,
+                          style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w500,
+                              // B3: the ONLY styling decision — tint amber when the
+                              // day had no-reply items. The text itself is verbatim.
+                              color: noResponse > 0
+                                  ? const Color(0xFF92400E)
+                                  : const Color(0xFF6B7280))),
+                    ]),
+                  ),
+                );
+              }),
+            ]),
+          ),
+        );
+      },
+    );
+  }
+
+  // ── CHANGE #460: read-only archive for an earlier day ────────────────────
+  Color _c460ToneBg(String? tone) {
+    switch (tone) {
+      case 'ok': return const Color(0xFFD1FAE5);
+      case 'warn': return const Color(0xFFFEF3C7);
+      case 'bad': return const Color(0xFFFEE2E2);
+      default: return const Color(0xFFF3F4F6);
+    }
+  }
+
+  Color _c460ToneFg(String? tone) {
+    switch (tone) {
+      case 'ok': return const Color(0xFF065F46);
+      case 'warn': return const Color(0xFF92400E);
+      case 'bad': return const Color(0xFF991B1B);
+      default: return const Color(0xFF374151);
+    }
+  }
+
+  Widget _buildInquiryArchiveView(double pad) {
+    if (_inquiryDayLoading && _inquiryDayArchive == null) {
+      return const Padding(
+        padding: EdgeInsets.all(40),
+        child: Center(child: CircularProgressIndicator(color: Color(0xFF1B7A43), strokeWidth: 2)),
+      );
+    }
+    final day = _inquiryDayArchive;
+    if (day == null) {
+      return const Padding(
+        padding: EdgeInsets.all(40),
+        child: Center(
+            child: Text('Could not load this day.', style: TextStyle(color: Color(0xFF6B7280)))),
+      );
+    }
+    final dateLabel = day['date_label'] as String?;
+    final summary = day['summary'] as String?;
+    final noResponseLabel = day['no_response_label'] as String?;
+    final suppliers = (day['suppliers'] as List?)
+            ?.map((s) => Map<String, dynamic>.from(s as Map))
+            .toList() ??
+        const <Map<String, dynamic>>[];
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(pad, 12, pad, 24),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if (dateLabel != null)
+          Text(dateLabel,
+              style: const TextStyle(
+                  fontSize: 18, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+        if (summary != null) ...[
+          const SizedBox(height: 4),
+          Text(summary, style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+        ],
+        if (noResponseLabel != null) ...[
+          const SizedBox(height: 6),
+          Text(noResponseLabel,
+              style: const TextStyle(
+                  fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFFDC2626))),
+        ],
+        const SizedBox(height: 16),
+        if (suppliers.isEmpty)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 24),
+            child: Center(
+                child: Text('No inquiry recorded for this day.',
+                    style: TextStyle(color: Color(0xFF9CA3AF)))),
+          )
+        else
+          ...suppliers.map(_buildArchiveSupplierCard),
+      ]),
+    );
+  }
+
+  Widget _buildArchiveSupplierCard(Map<String, dynamic> sup) {
+    final supName = sup['supplier'] as String? ?? '';
+    final label = sup['label'] as String? ?? supName;
+    final statusLabel = sup['status_label'] as String?;
+    final statusTone = sup['status_tone'] as String?;
+    final products = (sup['products'] as List?)
+            ?.map((p) => Map<String, dynamic>.from(p as Map))
+            .toList() ??
+        const <Map<String, dynamic>>[];
+    final isExpanded = _expandedArchiveSupplier == supName;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 4, offset: const Offset(0, 1))],
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: () => setState(() => _expandedArchiveSupplier = isExpanded ? null : supName),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(14, 12, 10, 12),
+            child: Row(children: [
+              Expanded(
+                child: Text(label,
+                    style: const TextStyle(
+                        fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
+              ),
+              if (statusLabel != null)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                      color: _c460ToneBg(statusTone), borderRadius: BorderRadius.circular(20)),
+                  child: Text(statusLabel,
+                      style: TextStyle(
+                          fontSize: 11, fontWeight: FontWeight.w700, color: _c460ToneFg(statusTone))),
+                ),
+              const SizedBox(width: 6),
+              AnimatedRotation(
+                turns: isExpanded ? 0.5 : 0,
+                duration: const Duration(milliseconds: 200),
+                child: const Icon(Icons.expand_more_rounded, size: 18, color: Color(0xFF6B7280)),
+              ),
+            ]),
+          ),
+        ),
+        if (isExpanded) ...[
+          const Divider(height: 1, color: Color(0xFFE5E7EB)),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 8, 14, 12),
+            child: Column(children: products.map(_buildArchiveProductRow).toList()),
+          ),
+        ],
+      ]),
+    );
+  }
+
+  Widget _buildArchiveProductRow(Map<String, dynamic> p) {
+    final product = p['product'] as String? ?? '';
+    final qty = p['qty'];
+    final answer = p['answer'] as String?;
+    final answerTone = p['answer_tone'] as String?;
+    final orders = p['orders'] as String?;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFAFAFA),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Expanded(
+            child: Text(qty != null ? '$product   ×$qty' : product,
+                style: const TextStyle(
+                    fontSize: 13, fontWeight: FontWeight.w500, color: Color(0xFF111827))),
+          ),
+          if (answer != null) ...[
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                  color: _c460ToneBg(answerTone), borderRadius: BorderRadius.circular(20)),
+              child: Text(answer,
+                  style: TextStyle(
+                      fontSize: 10, fontWeight: FontWeight.w600, color: _c460ToneFg(answerTone))),
+            ),
+          ],
+        ]),
+        if (orders != null && orders.isNotEmpty) ...[
+          const SizedBox(height: 4),
+          Text(orders, style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
+        ],
+      ]),
+    );
   }
 
   Widget _buildUnassignedSection(double pad) {

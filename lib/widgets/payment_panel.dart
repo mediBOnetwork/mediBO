@@ -1,8 +1,11 @@
-// lib/widgets/cust_pay_panel.dart — CHANGE #460
-// Customer-facing mirror of the supplier payment panel (sup_pay_panel.dart).
-// Every string on screen comes straight from customer_order_payment_panel()/
-// cust_submit_payment(); nothing is formatted, computed, or decided here.
+// lib/widgets/payment_panel.dart — CHANGE #462
+// ONE payment panel, used by BOTH admin ("View Payment") and customer
+// ("Payment" tab). Everything on screen — labels, which buttons show, the
+// above/below layout — comes straight from order_payment_panel(); nothing is
+// formatted, computed, pluralised, or role-gated here. The server tells us
+// can_respond / can_add_cash / can_pay; we never derive those from a role.
 // ignore_for_file: use_build_context_synchronously
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:qr_flutter/qr_flutter.dart';
@@ -11,49 +14,131 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../utils/render_log.dart';
 import '../utils/safe_parse.dart';
 import '../utils/toast.dart';
+import 'cash_payment_sheet.dart';
 import 'fullscreen_image.dart';
 import 'sup_pay_panel.dart' show C330CopyRow;
 
-class CustPayPanel extends StatefulWidget {
+class PaymentPanel extends StatefulWidget {
   final String orderId;
-  const CustPayPanel({super.key, required this.orderId});
+  final VoidCallback? onChanged;
+  const PaymentPanel({super.key, required this.orderId, this.onChanged});
 
   @override
-  State<CustPayPanel> createState() => _CustPayPanelState();
+  State<PaymentPanel> createState() => _PaymentPanelState();
 }
 
-class _CustPayPanelState extends State<CustPayPanel> {
+class _PaymentPanelState extends State<PaymentPanel> with WidgetsBindingObserver {
   Map<String, dynamic>? _panel;
   bool _loading = true;
   String? _error;
   int _chip = 0;
+  RealtimeChannel? _rt;
+  RealtimeChannel? _rtAdmin;
+  Timer? _debounce;
+  int _events = 0;
+  int _reloads = 0;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _load();
+    _subscribeRealtime();
   }
 
-  Future<void> _load() async {
-    if (mounted) setState(() { _loading = true; _error = null; });
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _debounce?.cancel();
+    if (_rt != null) {
+      try { Supabase.instance.client.removeChannel(_rt!); } catch (_) {}
+    }
+    if (_rtAdmin != null) {
+      try { Supabase.instance.client.removeChannel(_rtAdmin!); } catch (_) {}
+    }
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // A backgrounded socket dies silently — re-subscribe on resume.
+    if (state == AppLifecycleState.resumed) {
+      _load(silent: true);
+      _subscribeRealtime();
+    }
+  }
+
+  // ── CHANGE #462: broadcast-only realtime (same pattern as #458) — no ────────
+  // table replication, no polling. The topic comes from the backend; the
+  // broadcast payload is data-free, so every event just re-fetches the panel,
+  // coalesced with a 250ms debounce.
+  Future<void> _subscribeRealtime() async {
     try {
-      final res = await Supabase.instance.client.rpc(
-        'customer_order_payment_panel',
-        params: {'p_order_id': widget.orderId},
-      );
+      final t = await Supabase.instance.client
+          .rpc('payment_realtime_topic', params: {'p_order_id': widget.orderId}) as Map;
+      if (!mounted) return;
+      final topic = t['topic'] as String?;
+      final event = t['event'] as String? ?? 'payment_changed';
+      final adminTopic = t['admin_topic'] as String?;
+      if (topic == null) {
+        try { RenderLog.write('c462_topic', 'error'); } catch (_) {}
+        return;
+      }
+      try { RenderLog.write('c462_topic', topic); } catch (_) {}
+      if (_rt != null) {
+        try { Supabase.instance.client.removeChannel(_rt!); } catch (_) {}
+        _rt = null;
+      }
+      _rt = Supabase.instance.client
+          .channel(topic)
+          .onBroadcast(event: event, callback: (_) => _onRealtimeEvent())
+          .subscribe((status, error) {
+            if (status == RealtimeSubscribeStatus.subscribed) {
+              try { RenderLog.write('c462_subscribed', 1); } catch (_) {}
+            }
+          });
+      if (adminTopic != null) {
+        if (_rtAdmin != null) {
+          try { Supabase.instance.client.removeChannel(_rtAdmin!); } catch (_) {}
+          _rtAdmin = null;
+        }
+        _rtAdmin = Supabase.instance.client
+            .channel(adminTopic)
+            .onBroadcast(event: event, callback: (_) => _onRealtimeEvent())
+            .subscribe();
+      }
+    } catch (e) {
+      try { RenderLog.write('c462_topic', 'exception'); } catch (_) {}
+    }
+  }
+
+  void _onRealtimeEvent() {
+    _events++;
+    try { RenderLog.write('c462_events', _events); } catch (_) {}
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 250), () {
+      if (!mounted) return;
+      _reloads++;
+      try { RenderLog.write('c462_reloads', _reloads); } catch (_) {}
+      _load(silent: true);
+    });
+  }
+
+  Future<void> _load({bool silent = false}) async {
+    if (!silent && mounted) setState(() { _loading = true; _error = null; });
+    try {
+      final res = await Supabase.instance.client
+          .rpc('order_payment_panel', params: {'p_order_id': widget.orderId});
       final panel = Map<String, dynamic>.from(res as Map);
       if (!mounted) return;
-      final totals = Map<String, dynamic>.from(panel['totals'] as Map? ?? {});
-      RenderLog.write('c459_chips', 3);
-      RenderLog.write('c459_total', totals['total_label']?.toString() ?? '');
-      RenderLog.write('c459_upi_launch', 0);
-      RenderLog.write('c459_can_respond', panel['can_respond'] == true);
-      final payments = (panel['payments'] as List?) ?? [];
-      RenderLog.write('c459_pay_cards', payments.length);
       setState(() { _panel = panel; _loading = false; });
+      widget.onChanged?.call();
     } catch (e) {
       if (!mounted) return;
-      setState(() { _error = 'Could not load payment details.'; _loading = false; });
+      setState(() {
+        _error = 'Could not load payment details.';
+        if (!silent) _loading = false;
+      });
     }
   }
 
@@ -74,18 +159,40 @@ class _CustPayPanelState extends State<CustPayPanel> {
     final panel = _panel;
     if (panel == null) return const SizedBox.shrink();
 
+    final viewer = panel['viewer']?.toString() ?? '';
+    final hasPayments = panel['has_payments'] == true;
+    final canRespond = panel['can_respond'] == true;
+    final canAddCash = panel['can_add_cash'] == true;
+    final canPay = panel['can_pay'] == true;
     final totals = Map<String, dynamic>.from(panel['totals'] as Map? ?? {});
     final info = Map<String, dynamic>.from(panel['info'] as Map? ?? {});
     final advance = Map<String, dynamic>.from(panel['advance'] as Map? ?? {});
     final remaining = Map<String, dynamic>.from(panel['remaining'] as Map? ?? {});
     final upi = Map<String, dynamic>.from(panel['upi'] as Map? ?? {});
-    final canRespond = panel['can_respond'] == true;
     final payments = ((panel['payments'] as List?) ?? [])
         .map((e) => Map<String, dynamic>.from(e as Map))
         .toList();
     final paymentsEmptyLabel = panel['payments_empty_label']?.toString() ?? '';
+    final unlinked = ((panel['unlinked'] as List?) ?? [])
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
     final advPayments = payments.where((p) => p['kind'] == 'advance').toList();
     final balPayments = payments.where((p) => p['kind'] == 'balance').toList();
+
+    final respondBtns = payments
+        .where((p) => canRespond && p['awaiting_response'] == true)
+        .length;
+    final payBtns = canPay ? 2 : 0; // Pay button + Upload button
+
+    RenderLog.write('c462_widgets', 1);
+    RenderLog.write('c462_viewer', viewer);
+    RenderLog.write('c462_has_payments', hasPayments.toString());
+    RenderLog.write('c462_cards', payments.length.toString());
+    RenderLog.write('c462_respond_btns', respondBtns.toString());
+    RenderLog.write('c462_pay_btns', payBtns.toString());
+    RenderLog.write('c462_unlinked', unlinked.length.toString());
+    RenderLog.write('c462_isadmin', '0');
+    RenderLog.write('c462_timers', '0');
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       // ── Headline strip ──────────────────────────────────────────────────
@@ -103,17 +210,50 @@ class _CustPayPanelState extends State<CustPayPanel> {
       SingleChildScrollView(
         scrollDirection: Axis.horizontal,
         child: Row(children: [
-          _CustPayChip(label: 'Payment Info', selected: _chip == 0, onTap: () => setState(() => _chip = 0)),
+          _PayPanelChip(label: 'Payment Info', selected: _chip == 0, onTap: () => setState(() => _chip = 0)),
           const SizedBox(width: 6),
-          _CustPayChip(label: 'Advance Payment', selected: _chip == 1, onTap: () => setState(() => _chip = 1)),
+          _PayPanelChip(label: 'Advance Payment', selected: _chip == 1, onTap: () => setState(() => _chip = 1)),
           const SizedBox(width: 6),
-          _CustPayChip(label: 'Remaining', selected: _chip == 2, onTap: () => setState(() => _chip = 2)),
+          _PayPanelChip(label: 'Remaining', selected: _chip == 2, onTap: () => setState(() => _chip = 2)),
         ]),
       ),
       const SizedBox(height: 12),
       if (_chip == 0) _buildInfoTab(info),
-      if (_chip == 1) _buildAdvTab(advance, upi, canRespond, advPayments, paymentsEmptyLabel),
-      if (_chip == 2) _buildRemTab(remaining, upi, canRespond, balPayments, paymentsEmptyLabel),
+      if (_chip == 1)
+        _buildKindTab(
+          statLabel: advance['basis_label']?.toString() ?? '',
+          statHeadline: advance['value']?.toString() ?? '',
+          statSub: '',
+          statFill: (safeParseInt(advance['pct'])).clamp(0, 100) / 100,
+          statBarColor: advance['done'] == true ? const Color(0xFF1B7A43) : const Color(0xFFD97706),
+          hasPayments: hasPayments,
+          kindPayments: advPayments,
+          emptyLabel: advance['empty_label']?.toString() ?? paymentsEmptyLabel,
+          canRespond: canRespond,
+          canAddCash: canAddCash,
+          canPay: canPay,
+          payDisabled: advance['done'] == true,
+          payLabel: advance['pay_label']?.toString() ?? '',
+          upi: upi,
+        ),
+      if (_chip == 2)
+        _buildKindTab(
+          statLabel: 'Remaining balance',
+          statHeadline: remaining['value']?.toString() ?? '',
+          statSub: remaining['sub']?.toString() ?? '',
+          statFill: (safeParseInt(remaining['pct'])).clamp(0, 100) / 100,
+          statBarColor: const Color(0xFF1B7A43),
+          hasPayments: hasPayments,
+          kindPayments: balPayments,
+          emptyLabel: remaining['empty_label']?.toString() ?? paymentsEmptyLabel,
+          canRespond: canRespond,
+          canAddCash: canAddCash,
+          canPay: canPay,
+          payDisabled: remaining['can_pay'] != true,
+          payLabel: remaining['pay_label']?.toString() ?? '',
+          upi: upi,
+        ),
+      if (canAddCash) ..._buildUnlinked(unlinked),
     ]);
   }
 
@@ -126,25 +266,24 @@ class _CustPayPanelState extends State<CustPayPanel> {
     ]);
   }
 
-  // ── Chip 1: Payment Info ────────────────────────────────────────────────
+  // ── Chip 1: Payment Info — three stat cards, no buttons, unconditional ─────
   Widget _buildInfoTab(Map<String, dynamic> info) {
-    RenderLog.write('c459_bars', 3);
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      _CustStatCard(
+      _PayStatCard(
         label: info['ordered_label']?.toString() ?? '',
         headline: info['ordered_value']?.toString() ?? '',
         sub: info['ordered_pct_label']?.toString() ?? '',
         fill: (safeParseInt(info['ordered_pct'])).clamp(0, 100) / 100,
         barColor: const Color(0xFF1B7A43),
       ),
-      _CustStatCard(
+      _PayStatCard(
         label: info['advance_label']?.toString() ?? '',
         headline: info['advance_value']?.toString() ?? '',
         sub: '',
         fill: (safeParseInt(info['advance_pct'])).clamp(0, 100) / 100,
         barColor: const Color(0xFF1B7A43),
       ),
-      _CustStatCard(
+      _PayStatCard(
         label: info['remaining_label']?.toString() ?? '',
         headline: info['remaining_value']?.toString() ?? '',
         sub: info['remaining_sub']?.toString() ?? '',
@@ -154,113 +293,122 @@ class _CustPayPanelState extends State<CustPayPanel> {
     ]);
   }
 
-  // ── Chip 2: Advance Payment ─────────────────────────────────────────────
-  Widget _buildAdvTab(
-    Map<String, dynamic> advance,
-    Map<String, dynamic> upi,
-    bool canRespond,
-    List<Map<String, dynamic>> advPayments,
-    String emptyLabelFallback,
-  ) {
-    final done = advance['done'] == true;
-    final payLabel = advance['pay_label']?.toString() ?? '';
-    final emptyLabel = advance['empty_label']?.toString() ?? emptyLabelFallback;
-
+  // ── Chips 2/3: Advance / Remaining — ⭐ THE LAYOUT RULE (PART C1) ───────────
+  // has_payments true  -> stat card, then payment cards (or per-kind empty
+  //                       label) ABOVE, buttons BELOW.
+  // has_payments false -> buttons ONLY. No stat card, no empty container.
+  Widget _buildKindTab({
+    required String statLabel,
+    required String statHeadline,
+    required String statSub,
+    required double statFill,
+    required Color statBarColor,
+    required bool hasPayments,
+    required List<Map<String, dynamic>> kindPayments,
+    required String emptyLabel,
+    required bool canRespond,
+    required bool canAddCash,
+    required bool canPay,
+    required bool payDisabled,
+    required String payLabel,
+    required Map<String, dynamic> upi,
+  }) {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      _CustStatCard(
-        label: advance['basis_label']?.toString() ?? '',
-        headline: advance['value']?.toString() ?? '',
-        sub: '',
-        fill: (safeParseInt(advance['pct'])).clamp(0, 100) / 100,
-        barColor: done ? const Color(0xFF1B7A43) : const Color(0xFFD97706),
-      ),
-      SizedBox(
-        width: double.infinity,
-        child: FilledButton(
-          onPressed: done ? null : () => _openPaySheet(upi, payLabel),
-          style: FilledButton.styleFrom(
-            backgroundColor: const Color(0xFF1B7A43),
-            minimumSize: const Size(double.infinity, 44),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      if (hasPayments) ...[
+        _PayStatCard(label: statLabel, headline: statHeadline, sub: statSub, fill: statFill, barColor: statBarColor),
+        if (kindPayments.isEmpty)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: Text(emptyLabel, style: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
+          )
+        else
+          ...kindPayments.map((p) => _PayCard(
+                payment: p, orderId: widget.orderId, canRespond: canRespond, onReload: _load,
+              )),
+      ],
+      if (canAddCash)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: () => showModalBottomSheet<void>(
+                context: context,
+                isScrollControlled: true,
+                backgroundColor: Colors.transparent,
+                builder: (_) => CashPaymentSheet(
+                  orderId: widget.orderId,
+                  onSuccess: () => _load(),
+                ),
+              ),
+              icon: const Icon(Icons.add, size: 16),
+              label: const Text('Add Cash Payment', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+              style: OutlinedButton.styleFrom(
+                side: const BorderSide(color: Color(0xFF1B7A43)),
+                foregroundColor: const Color(0xFF1B7A43),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                minimumSize: const Size(double.infinity, 44),
+              ),
+            ),
           ),
-          child: Text(payLabel, style: const TextStyle(color: Colors.white)),
         ),
-      ),
-      const SizedBox(height: 10),
-      _uploadButton(() => _openUploadSheet(advance['required'], advance['paid'])),
-      const SizedBox(height: 12),
-      const Text('Advance payments',
-          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF6B7280))),
-      const SizedBox(height: 6),
-      if (advPayments.isEmpty)
-        Text(emptyLabel, style: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)))
-      else
-        ...advPayments.map((p) => _CustPayCard(
-              payment: p, orderId: widget.orderId, canRespond: canRespond, onReload: _load,
-            )),
+      if (canPay) ...[
+        SizedBox(
+          width: double.infinity,
+          child: FilledButton(
+            onPressed: payDisabled ? null : () => _openPaySheet(upi, payLabel),
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFF1B7A43),
+              minimumSize: const Size(double.infinity, 44),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            child: Text(payLabel, style: const TextStyle(color: Colors.white)),
+          ),
+        ),
+        const SizedBox(height: 10),
+        OutlinedButton.icon(
+          onPressed: () => _openUploadSheet(),
+          icon: const Icon(Icons.upload_outlined, size: 16),
+          label: const Text('Upload payment screenshot',
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+          style: OutlinedButton.styleFrom(
+            side: const BorderSide(color: Color(0xFF1B7A43)),
+            foregroundColor: const Color(0xFF1B7A43),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            minimumSize: const Size(double.infinity, 40),
+          ),
+        ),
+      ],
     ]);
   }
 
-  // ── Chip 3: Remaining ───────────────────────────────────────────────────
-  Widget _buildRemTab(
-    Map<String, dynamic> remaining,
-    Map<String, dynamic> upi,
-    bool canRespond,
-    List<Map<String, dynamic>> balPayments,
-    String emptyLabelFallback,
-  ) {
-    final canPay = remaining['can_pay'] == true;
-    final payLabel = remaining['pay_label']?.toString() ?? '';
-    final emptyLabel = remaining['empty_label']?.toString() ?? emptyLabelFallback;
-
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      _CustStatCard(
-        label: 'Remaining balance',
-        headline: remaining['value']?.toString() ?? '',
-        sub: remaining['sub']?.toString() ?? '',
-        fill: (safeParseInt(remaining['pct'])).clamp(0, 100) / 100,
-        barColor: const Color(0xFF1B7A43),
-      ),
-      SizedBox(
-        width: double.infinity,
-        child: FilledButton(
-          onPressed: canPay ? () => _openPaySheet(upi, payLabel) : null,
-          style: FilledButton.styleFrom(
-            backgroundColor: const Color(0xFF1B7A43),
-            minimumSize: const Size(double.infinity, 44),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-          ),
-          child: Text(payLabel, style: const TextStyle(color: Colors.white)),
-        ),
-      ),
-      const SizedBox(height: 10),
-      _uploadButton(() => _openUploadSheet(null, null, dueOverride: remaining['due'])),
-      const SizedBox(height: 12),
-      const Text('Balance payments',
-          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF6B7280))),
+  // ── C6: unlinked payments — admin only, amber, below everything ───────────
+  List<Widget> _buildUnlinked(List<Map<String, dynamic>> unlinked) {
+    if (unlinked.isEmpty) return const [];
+    return [
       const SizedBox(height: 6),
-      if (balPayments.isEmpty)
-        Text(emptyLabel, style: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)))
-      else
-        ...balPayments.map((p) => _CustPayCard(
-              payment: p, orderId: widget.orderId, canRespond: canRespond, onReload: _load,
-            )),
-    ]);
-  }
-
-  Widget _uploadButton(VoidCallback onPressed) {
-    return OutlinedButton.icon(
-      onPressed: onPressed,
-      icon: const Icon(Icons.upload_outlined, size: 16),
-      label: const Text('Upload payment screenshot',
-          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-      style: OutlinedButton.styleFrom(
-        side: const BorderSide(color: Color(0xFF1B7A43)),
-        foregroundColor: const Color(0xFF1B7A43),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-        minimumSize: const Size(double.infinity, 40),
+      Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFEF3C7),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: const Color(0xFFF59E0B)),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: const [
+            Icon(Icons.warning_amber_rounded, size: 16, color: Color(0xFF92400E)),
+            SizedBox(width: 6),
+            Expanded(
+              child: Text('Unlinked payments from this customer',
+                  style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: Color(0xFF92400E))),
+            ),
+          ]),
+          const SizedBox(height: 8),
+          ...unlinked.map((u) => _UnlinkedRow(payment: u, orderId: widget.orderId, onLinked: _load)),
+        ]),
       ),
-    );
+    ];
   }
 
   // ── Pay sheet (QR only — no deep link) ──────────────────────────────────
@@ -273,7 +421,7 @@ class _CustPayPanelState extends State<CustPayPanel> {
       useSafeArea: true,
       backgroundColor: Colors.white,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
-      builder: (_) => _CustPaySheet(
+      builder: (_) => _PaySheet(
         qrPayload: qrPayload,
         vpa: upi['vpa']?.toString() ?? '',
         payeeName: upi['name']?.toString() ?? '',
@@ -284,24 +432,15 @@ class _CustPayPanelState extends State<CustPayPanel> {
   }
 
   // ── Upload sheet ─────────────────────────────────────────────────────────
-  Future<void> _openUploadSheet(dynamic required, dynamic paid, {dynamic dueOverride}) async {
-    num prefill = 0;
-    if (dueOverride != null) {
-      prefill = num.tryParse(dueOverride.toString()) ?? 0;
-    } else if (required != null && paid != null) {
-      final r = num.tryParse(required.toString()) ?? 0;
-      final p = num.tryParse(paid.toString()) ?? 0;
-      prefill = (r - p) < 0 ? 0 : (r - p);
-    }
+  Future<void> _openUploadSheet() async {
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
       backgroundColor: Colors.white,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
-      builder: (_) => _CustPaymentUploadSheet(
+      builder: (_) => _PaymentUploadSheet(
         orderId: widget.orderId,
-        prefillAmount: prefill,
         onSuccess: (message) {
           if (mounted) showToast(context, message);
           _load();
@@ -313,11 +452,11 @@ class _CustPayPanelState extends State<CustPayPanel> {
 
 // ── Chip ───────────────────────────────────────────────────────────────────
 
-class _CustPayChip extends StatelessWidget {
+class _PayPanelChip extends StatelessWidget {
   final String label;
   final bool selected;
   final VoidCallback onTap;
-  const _CustPayChip({required this.label, required this.selected, required this.onTap});
+  const _PayPanelChip({required this.label, required this.selected, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -342,13 +481,13 @@ class _CustPayChip extends StatelessWidget {
 
 // ── Stat card ────────────────────────────────────────────────────────────────
 
-class _CustStatCard extends StatelessWidget {
+class _PayStatCard extends StatelessWidget {
   final String label;
   final String headline;
   final String sub;
   final double fill;
   final Color barColor;
-  const _CustStatCard({
+  const _PayStatCard({
     required this.label,
     required this.headline,
     required this.sub,
@@ -391,13 +530,13 @@ class _CustStatCard extends StatelessWidget {
 
 // ── Pay sheet — QR + copy only, no deep link ──────────────────────────────
 
-class _CustPaySheet extends StatelessWidget {
+class _PaySheet extends StatelessWidget {
   final String qrPayload;
   final String vpa;
   final String payeeName;
   final String hint;
   final String payLabel;
-  const _CustPaySheet({
+  const _PaySheet({
     required this.qrPayload,
     required this.vpa,
     required this.payeeName,
@@ -421,7 +560,7 @@ class _CustPaySheet extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 20),
           child: Row(children: [
             Expanded(
-              child: Text('$payLabel — mediBO',
+              child: Text(payLabel,
                   style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
                   maxLines: 2, overflow: TextOverflow.ellipsis),
             ),
@@ -455,7 +594,6 @@ class _CustPaySheet extends StatelessWidget {
               ),
               const SizedBox(height: 20),
               C330CopyRow(label: 'UPI ID', value: vpa),
-              C330CopyRow(label: 'Amount', value: payLabel),
               if (payeeName.isNotEmpty) ...[
                 const SizedBox(height: 2),
                 Text(payeeName, style: const TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
@@ -477,19 +615,17 @@ class _CustPaySheet extends StatelessWidget {
 
 // ── Upload sheet — gallery first ──────────────────────────────────────────
 
-class _CustPaymentUploadSheet extends StatefulWidget {
+class _PaymentUploadSheet extends StatefulWidget {
   final String orderId;
-  final num prefillAmount;
   final void Function(String message) onSuccess;
-  const _CustPaymentUploadSheet({required this.orderId, required this.prefillAmount, required this.onSuccess});
+  const _PaymentUploadSheet({required this.orderId, required this.onSuccess});
 
   @override
-  State<_CustPaymentUploadSheet> createState() => _CustPaymentUploadSheetState();
+  State<_PaymentUploadSheet> createState() => _PaymentUploadSheetState();
 }
 
-class _CustPaymentUploadSheetState extends State<_CustPaymentUploadSheet> {
-  late final TextEditingController _amountCtrl =
-      TextEditingController(text: widget.prefillAmount > 0 ? widget.prefillAmount.toString() : '');
+class _PaymentUploadSheetState extends State<_PaymentUploadSheet> {
+  final TextEditingController _amountCtrl = TextEditingController();
   final TextEditingController _utrCtrl = TextEditingController();
   XFile? _picked;
   bool _submitting = false;
@@ -502,10 +638,10 @@ class _CustPaymentUploadSheetState extends State<_CustPaymentUploadSheet> {
     super.dispose();
   }
 
-  // C1 — gallery is the default, one-tap action: a payment screenshot is
+  // C5 — gallery is the default, one-tap action: a payment screenshot is
   // always already in the gallery (just captured in PhonePe/GPay).
   Future<void> _pickFromGallery() async {
-    RenderLog.write('c459_gallery', 1);
+    RenderLog.write('c462_gallery', 1);
     try {
       final img = await ImagePicker().pickImage(source: ImageSource.gallery, imageQuality: 90);
       if (img == null) return;
@@ -613,14 +749,16 @@ class _CustPaymentUploadSheetState extends State<_CustPaymentUploadSheet> {
   }
 }
 
-// ── Payment status card — customer sees everything except accept/reject ────
+// ── Payment card — identical for admin and customer. Received/Reject only ──
+// appear when the server says can_respond AND that specific payment is
+// awaiting_response — never derived from a role or from a status string.
 
-class _CustPayCard extends StatefulWidget {
+class _PayCard extends StatefulWidget {
   final Map<String, dynamic> payment;
   final String orderId;
   final bool canRespond;
   final VoidCallback onReload;
-  const _CustPayCard({
+  const _PayCard({
     required this.payment,
     required this.orderId,
     required this.canRespond,
@@ -628,10 +766,10 @@ class _CustPayCard extends StatefulWidget {
   });
 
   @override
-  State<_CustPayCard> createState() => _CustPayCardState();
+  State<_PayCard> createState() => _PayCardState();
 }
 
-class _CustPayCardState extends State<_CustPayCard> {
+class _PayCardState extends State<_PayCard> {
   String? _url;
   bool _loadingUrl = false;
   bool _acting = false;
@@ -667,10 +805,11 @@ class _CustPayCardState extends State<_CustPayCard> {
         _ => const Color(0xFFFEF3C7),
       };
 
-  Future<void> _accept() async {
+  // C3 — admin: Received ✓ on a claimed payment.
+  Future<void> _markReceived() async {
     setState(() => _acting = true);
     try {
-      await Supabase.instance.client.rpc('verify_and_accept_payment', params: {
+      await Supabase.instance.client.rpc('mark_payment_received', params: {
         'p_claim_id': widget.payment['id'],
         'p_order_id': widget.orderId,
       });
@@ -720,7 +859,7 @@ class _CustPayCardState extends State<_CustPayCard> {
     final methodLabel = p['method_label']?.toString() ?? '';
     final reason = p['reason']?.toString();
     final hasSnap = (p['screenshot'] as String? ?? '').isNotEmpty;
-    final showActions = widget.canRespond && p['status'] == 'claimed';
+    final showActions = widget.canRespond && p['awaiting_response'] == true;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
@@ -798,7 +937,7 @@ class _CustPayCardState extends State<_CustPayCard> {
             const SizedBox(width: 10),
             Expanded(
               child: ElevatedButton(
-                onPressed: _acting ? null : _accept,
+                onPressed: _acting ? null : _markReceived,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: const Color(0xFF1B7A43),
                   foregroundColor: Colors.white,
@@ -807,11 +946,72 @@ class _CustPayCardState extends State<_CustPayCard> {
                 ),
                 child: _acting
                     ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                    : const Text('Accept'),
+                    : const Text('Received ✓'),
               ),
             ),
           ]),
         ],
+      ]),
+    );
+  }
+}
+
+// ── C6: one unlinked-payment row — admin only ──────────────────────────────
+
+class _UnlinkedRow extends StatefulWidget {
+  final Map<String, dynamic> payment;
+  final String orderId;
+  final VoidCallback onLinked;
+  const _UnlinkedRow({required this.payment, required this.orderId, required this.onLinked});
+
+  @override
+  State<_UnlinkedRow> createState() => _UnlinkedRowState();
+}
+
+class _UnlinkedRowState extends State<_UnlinkedRow> {
+  bool _linking = false;
+
+  Future<void> _link() async {
+    setState(() => _linking = true);
+    try {
+      final res = await Supabase.instance.client.rpc('payment_claim_link', params: {
+        'p_claim_id': widget.payment['id'],
+        'p_order_id': widget.orderId,
+      });
+      final result = Map<String, dynamic>.from(res as Map);
+      final message = result['message']?.toString();
+      if (mounted && message != null) showToast(context, message, isError: result['ok'] != true);
+      widget.onLinked();
+    } catch (e) {
+      if (mounted) showToast(context, 'Could not link payment: $e', isError: true);
+    } finally {
+      if (mounted) setState(() => _linking = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final label = widget.payment['label']?.toString() ?? '';
+    final actionLabel = widget.payment['action_label']?.toString() ?? '';
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(children: [
+        Expanded(
+          child: Text(label, style: const TextStyle(fontSize: 12.5, color: Color(0xFF92400E))),
+        ),
+        const SizedBox(width: 8),
+        OutlinedButton(
+          onPressed: _linking ? null : _link,
+          style: OutlinedButton.styleFrom(
+            side: const BorderSide(color: Color(0xFFF59E0B)),
+            foregroundColor: const Color(0xFF92400E),
+            visualDensity: VisualDensity.compact,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          ),
+          child: _linking
+              ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF92400E)))
+              : Text(actionLabel, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+        ),
       ]),
     );
   }

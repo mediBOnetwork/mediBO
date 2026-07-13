@@ -320,8 +320,10 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   String? _expandedInquirySupplier;
   List<Map<String, dynamic>> _inquiryItems = [];
   bool _inquiryItemsLoading = false;
-  Timer? _inquiryPollTimer;
-  RealtimeChannel? _inquiryRtChannel; // CHANGE #309: live inquiry subscription
+  RealtimeChannel? _inquiryRtChannel; // CHANGE #458: broadcast-only realtime
+  Timer? _c458Debounce;
+  int _c458Events = 0;
+  int _c458Reloads = 0;
   final Set<int> _settingAnswerFor = {}; // inquiry_ids currently being admin-set
   String? _expandedOrderId; // which supplier order row is expanded
 
@@ -441,10 +443,12 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     _matchService.dispose();
     _orderHoursModel?.removeListener(_onOrderHoursChanged);
     _debounce?.cancel();
-    _inquiryPollTimer?.cancel();
     _readinessPollTimer?.cancel(); // CHANGE #456 C5
-    _inquiryRtChannel?.unsubscribe(); // CHANGE #309
-    _inquiryRtChannel = null;
+    _c458Debounce?.cancel();
+    if (_inquiryRtChannel != null) {
+      try { Supabase.instance.client.removeChannel(_inquiryRtChannel!); } catch (_) {}
+      _inquiryRtChannel = null;
+    }
     for (final ch in _channels) ch.unsubscribe();
     _channels.clear();
     _scrollCtrl.dispose();
@@ -1963,10 +1967,11 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   void _selectTab(_SupFilter f) {
     _closeSendPopover();
     if (_filter == _SupFilter.inquiry && f != _SupFilter.inquiry) {
-      _inquiryPollTimer?.cancel();
-      _inquiryPollTimer = null;
-      _inquiryRtChannel?.unsubscribe(); // CHANGE #309: stop listening when leaving tab
-      _inquiryRtChannel = null;
+      _c458Debounce?.cancel();
+      if (_inquiryRtChannel != null) {
+        try { Supabase.instance.client.removeChannel(_inquiryRtChannel!); } catch (_) {}
+        _inquiryRtChannel = null; // CHANGE #458: stop listening when leaving tab
+      }
       _readinessPollTimer?.cancel(); // CHANGE #456 C5
       _readinessPollTimer = null;
     }
@@ -1980,13 +1985,8 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       _fetchInquiryOverview();
       _fetchUnassignedItems();
       _loadAutoMeta();
-      _inquiryPollTimer?.cancel();
-      _inquiryPollTimer = Timer.periodic(const Duration(seconds: 30), (_) {
-        if (mounted && _filter == _SupFilter.inquiry) {
-          _fetchInquiryOverview(silent: true);
-          _fetchUnassignedItems(silent: true);
-        }
-      });
+      try { RenderLog.write('c458_timers', 0); } catch (_) {}
+      _subscribeInquiryRt(); // CHANGE #458: broadcast realtime, no poll
       // CHANGE #456 C5 — leads/claims/orders change under the admin while this
       // tab is open; poll readiness faster than the general overview refresh.
       _readinessPollTimer?.cancel();
@@ -1995,7 +1995,6 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           _fetchInquiryReadiness(silent: true);
         }
       });
-      _subscribeInquiryRt(); // CHANGE #309: live realtime on inquiry table
     } else if (f == _SupFilter.orders) {
       _loadOrderAutoMeta();
     }
@@ -2090,30 +2089,57 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     }
   }
 
-  // CHANGE #309: realtime subscription — inquiry table only, scoped to this tab
-  void _subscribeInquiryRt() {
+  // CHANGE #458: broadcast-only realtime — no table replication, no polling.
+  // The topic string comes from the backend (inquiry_realtime_topic); the
+  // broadcast payload is data-free, so every event just triggers a re-fetch
+  // via this screen's own RPCs, coalesced with a 250ms debounce.
+  Future<void> _subscribeInquiryRt() async {
     if (_inquiryRtChannel != null) return; // guard duplicate subscription
-    _inquiryRtChannel = Supabase.instance.client
-        .channel('admin_inquiry_rt_${DateTime.now().millisecondsSinceEpoch}')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.all,
-          schema: 'public',
-          table: 'inquiry',
-          callback: (payload) {
-            if (!mounted || _filter != _SupFilter.inquiry) return;
-            final eventName = payload.eventType.name.toLowerCase();
-            _fetchInquiryOverview(silent: true);
-            _fetchUnassignedItems(silent: true);
-            final newCount = _inquiryOverview.length + _unassignedItems.length;
-            try { RenderLog.write('c309_realtime_event', '$eventName:$newCount'); } catch (_) {}
-          },
-        )
-        .subscribe();
-    try { RenderLog.write('c309_realtime', 'subscribed'); } catch (_) {}
+    try {
+      final t = await Supabase.instance.client
+          .rpc('inquiry_realtime_topic', params: {'p_token': null}) as Map;
+      if (!mounted || _filter != _SupFilter.inquiry) return;
+      final topic = t['topic'] as String?;
+      final event = t['event'] as String? ?? 'inquiry_changed';
+      if (t['error'] != null || topic == null) {
+        try { RenderLog.write('c458_topic', 'error'); } catch (_) {}
+        return;
+      }
+      try { RenderLog.write('c458_topic', topic); } catch (_) {}
+      _inquiryRtChannel = Supabase.instance.client
+          .channel(topic)
+          .onBroadcast(
+            event: event,
+            callback: (payload) {
+              _c458Events++;
+              try { RenderLog.write('c458_events', _c458Events); } catch (_) {}
+              _c458Debounce?.cancel();
+              _c458Debounce = Timer(const Duration(milliseconds: 250), () {
+                if (!mounted || _filter != _SupFilter.inquiry) return;
+                _c458Reloads++;
+                try { RenderLog.write('c458_reloads', _c458Reloads); } catch (_) {}
+                _fetchInquiryOverview(silent: true);
+                _fetchUnassignedItems(silent: true);
+                if (_expandedInquirySupplier != null) {
+                  _fetchInquiryItems(_expandedInquirySupplier!, silent: true);
+                }
+              });
+            },
+          )
+          .subscribe((status, error) {
+            if (status == RealtimeSubscribeStatus.subscribed) {
+              try { RenderLog.write('c458_subscribed', 1); } catch (_) {}
+            }
+          });
+    } catch (e) {
+      try { RenderLog.write('c458_topic', 'exception'); } catch (_) {}
+    }
   }
 
-  Future<void> _fetchInquiryItems(String supplierName) async {
-    if (mounted) setState(() { _inquiryItemsLoading = true; _inquiryItems = []; });
+  Future<void> _fetchInquiryItems(String supplierName, {bool silent = false}) async {
+    if (mounted && !silent) {
+      setState(() { _inquiryItemsLoading = true; _inquiryItems = []; });
+    }
     try {
       final rows = await Supabase.instance.client
           .rpc('get_supplier_inquiry_items',
@@ -2128,7 +2154,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     } catch (e) {
       if (mounted) {
         setState(() => _inquiryItemsLoading = false);
-        showToast(context, 'Failed to load items: $e', isError: true);
+        if (!silent) showToast(context, 'Failed to load items: $e', isError: true);
       }
     }
   }

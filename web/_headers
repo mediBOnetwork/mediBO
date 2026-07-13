@@ -44,9 +44,16 @@
   Cache-Control: no-cache, no-store, must-revalidate
   Pragma: no-cache
 
-# ── Hashed bundle — immutable (URL is unique per deploy) ────────────────────
+# ── Hashed bundle — long-lived but NOT immutable (2026-07-13 outage) ────────
+# `immutable, max-age=31536000` meant a single wrong response (SPA-shell HTML,
+# served by some edge node during a deploy's propagation-race window) would be
+# stuck at that edge for a full year with no way to clear it except a manual
+# purge. The URL is still unique per deploy (fingerprinted), so this loses
+# almost nothing in practice — the file is never re-requested by the same
+# client after a new deploy changes the filename — but a bad response now
+# self-heals within a day instead of surviving a year.
 /main.*.dart.js
-  Cache-Control: public, max-age=31536000, immutable
+  Cache-Control: public, max-age=86400, must-revalidate
 
 # ── Static assets — fully immutable ─────────────────────────────────────────
 /assets/**

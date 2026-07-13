@@ -8,7 +8,6 @@ import 'dart:html' as html;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../utils/render_log.dart';
 
@@ -139,13 +138,6 @@ class _UpiPaySheetState extends State<_UpiPaySheet> {
     } finally {
       if (mounted) setState(() => _savingQr = false);
     }
-  }
-
-  Future<void> _openIntent() async {
-    RenderLog.write('c336_intent_fallback', 'vpa=${widget.vpa}');
-    try {
-      await launchUrl(_uri, mode: LaunchMode.externalApplication);
-    } catch (_) {}
   }
 
   Widget _copyRow(String label, String value, String logKey) {
@@ -294,18 +286,6 @@ class _UpiPaySheetState extends State<_UpiPaySheet> {
                             fontSize: 12, color: Color(0xFF6B7280)),
                       ),
                     ],
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextButton(
-                  onPressed: _openIntent,
-                  style: TextButton.styleFrom(
-                    foregroundColor: const Color(0xFF6B7280),
-                    minimumSize: const Size(double.infinity, 40),
-                  ),
-                  child: const Text(
-                    'Open UPI app directly (may be declined)',
-                    style: TextStyle(fontSize: 13),
                   ),
                 ),
               ],

@@ -169,7 +169,7 @@ class AdminSupplierScreen extends StatefulWidget {
   State<AdminSupplierScreen> createState() => _AdminSupplierScreenState();
 }
 
-// ── CHANGE #458: readiness check row — one line, right-aligned value, ────────
+// ── CHANGE #459: readiness check row — one line, right-aligned value, ────────
 // detail (if any) as an indented sub-line. Every string is server-verbatim:
 // `label`/`value`/`detail` are never rebuilt or re-pluralised here.
 
@@ -240,7 +240,7 @@ class _ReadinessCheckRow extends StatelessWidget {
 // ── CHANGE #456: inquiry lock switch — turning it ON blocks new orders for
 // everyone via set_inquiry_lock(true). Replaces the old #446 slide-to-send
 // action control (which triggered start_inquiry_for_suppliers directly).
-// CHANGE #458: `label`/`blockedLabel`/`backlogLabel`/`lockLabel` are all
+// CHANGE #459: `label`/`blockedLabel`/`backlogLabel`/`lockLabel` are all
 // printed verbatim from the RPC — nothing here is computed or pluralised.
 
 class _InquiryLockSwitch extends StatelessWidget {
@@ -365,7 +365,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   bool _lockToggling = false;
   Timer? _readinessPollTimer;
   OrderHoursModel? _orderHoursModel;
-  bool _readinessItemsExpanded = false; // CHANGE #458: tappable breakdown
+  bool _readinessItemsExpanded = false; // CHANGE #459: tappable breakdown
 
   // ── Inquiry tab state ────────────────────────────────────────────────────
   List<Map<String, dynamic>> _inquiryOverview = [];
@@ -2449,7 +2449,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
 
   // ── Inquiry tab: top-level view ───────────────────────────────────────────
 
-  // CHANGE #458: readiness checklist + inquiry lock switch — full redesign.
+  // CHANGE #459: readiness checklist + inquiry lock switch — full redesign.
   // ⚠ Every string rendered below (title/status/labels/checks/breakdown) is
   // printed verbatim from inquiry_send_readiness(). Nothing here counts,
   // pluralises, or decides which detail to show — that's all server-side.
@@ -2510,13 +2510,13 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     }).length;
 
     if (readiness != null) {
-      RenderLog.write('c458_status', statusLabel ?? '');
-      RenderLog.write('c458_tone', statusTone ?? '');
-      RenderLog.write('c458_progress', progressLabel ?? '');
-      RenderLog.write('c458_rows', checks.length.toString());
-      RenderLog.write('c458_details', detailCount.toString());
-      RenderLog.write('c458_can_send', sendAllowed.toString());
-      RenderLog.write('c458_summary_rows', '0');
+      RenderLog.write('c459_status', statusLabel ?? '');
+      RenderLog.write('c459_tone', statusTone ?? '');
+      RenderLog.write('c459_progress', progressLabel ?? '');
+      RenderLog.write('c459_rows', checks.length.toString());
+      RenderLog.write('c459_details', detailCount.toString());
+      RenderLog.write('c459_can_send', sendAllowed.toString());
+      RenderLog.write('c459_summary_rows', '0');
     }
 
     return Padding(

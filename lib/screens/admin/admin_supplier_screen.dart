@@ -169,60 +169,99 @@ class AdminSupplierScreen extends StatefulWidget {
   State<AdminSupplierScreen> createState() => _AdminSupplierScreenState();
 }
 
-// ── CHANGE #446: readiness check row ────────────────────────────────────────
+// ── CHANGE #458: readiness check row — one line, right-aligned value, ────────
+// detail (if any) as an indented sub-line. Every string is server-verbatim:
+// `label`/`value`/`detail` are never rebuilt or re-pluralised here.
 
 class _ReadinessCheckRow extends StatelessWidget {
   final Map<String, dynamic> check;
-  const _ReadinessCheckRow({required this.check});
+  final VoidCallback? onTap;
+  final bool expanded;
+  const _ReadinessCheckRow({required this.check, this.onTap, this.expanded = false});
 
   @override
   Widget build(BuildContext context) {
     final ok = check['ok'] == true;
     final label = check['label'] as String? ?? '';
+    final value = check['value'] as String? ?? '';
     final detail = check['detail'] as String?;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 3),
-      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Icon(ok ? Icons.check_circle : Icons.cancel,
-            size: 15, color: ok ? const Color(0xFF1B7A43) : const Color(0xFFDC2626)),
-        const SizedBox(width: 8),
-        Expanded(
-          child: RichText(
-            text: TextSpan(
-              style: const TextStyle(fontSize: 12.5, color: Color(0xFF111827)),
-              children: [
-                TextSpan(text: label, style: const TextStyle(fontWeight: FontWeight.w600)),
-                if (detail != null && detail.isNotEmpty)
-                  TextSpan(
-                    text: '  —  $detail',
-                    style: const TextStyle(color: Color(0xFF6B7280), fontWeight: FontWeight.w400),
-                  ),
-              ],
+    final hasDetail = detail != null && detail.isNotEmpty;
+    final tappable = onTap != null;
+
+    final row = Container(
+      decoration: BoxDecoration(
+        color: ok ? null : const Color(0xFFDC2626).withValues(alpha: 0.05),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        SizedBox(
+          height: 34,
+          child: Row(children: [
+            Icon(ok ? Icons.check_circle : Icons.cancel,
+                size: 15, color: ok ? const Color(0xFF1B7A43) : const Color(0xFFDC2626)),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      fontSize: 12.5, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
             ),
-          ),
+            const SizedBox(width: 8),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 130),
+              child: Text(value,
+                  textAlign: TextAlign.right,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
+            ),
+            if (tappable) ...[
+              const SizedBox(width: 4),
+              Icon(expanded ? Icons.expand_less : Icons.expand_more,
+                  size: 16, color: const Color(0xFF9CA3AF)),
+            ],
+          ]),
         ),
+        if (hasDetail)
+          Padding(
+            padding: const EdgeInsets.only(left: 23, bottom: 5),
+            child: Text(detail,
+                style: const TextStyle(fontSize: 11.5, color: Color(0xFFDC2626))),
+          ),
       ]),
     );
+
+    return tappable ? InkWell(onTap: onTap, borderRadius: BorderRadius.circular(6), child: row) : row;
   }
 }
 
 // ── CHANGE #456: inquiry lock switch — turning it ON blocks new orders for
 // everyone via set_inquiry_lock(true). Replaces the old #446 slide-to-send
 // action control (which triggered start_inquiry_for_suppliers directly).
+// CHANGE #458: `label`/`blockedLabel`/`backlogLabel`/`lockLabel` are all
+// printed verbatim from the RPC — nothing here is computed or pluralised.
 
 class _InquiryLockSwitch extends StatelessWidget {
+  final String label; // == readiness['slider_label']
   final bool enabled; // == readiness['can_send']
   final bool locked; // == readiness['locked']
   final bool toggling;
-  final String? disabledLabel;
+  final String? blockedLabel; // == readiness['blocked_label']
+  final String? backlogLabel; // == readiness['backlog_label']
+  final String? lockLabel; // == readiness['lock_label']
   final Future<void> Function(bool turnOn) onToggle;
 
   const _InquiryLockSwitch({
+    required this.label,
     required this.enabled,
     required this.locked,
     required this.toggling,
     required this.onToggle,
-    this.disabledLabel,
+    this.blockedLabel,
+    this.backlogLabel,
+    this.lockLabel,
   });
 
   @override
@@ -231,7 +270,7 @@ class _InquiryLockSwitch extends StatelessWidget {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Row(children: [
         Expanded(
-          child: Text(locked ? 'Inquiry running' : 'Start inquiry',
+          child: Text(label,
               style: const TextStyle(
                   fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
         ),
@@ -250,12 +289,25 @@ class _InquiryLockSwitch extends StatelessWidget {
             onChanged: canInteract ? (v) => onToggle(v) : null,
           ),
       ]),
-      if (disabledLabel != null)
+      if (!enabled && blockedLabel != null)
         Padding(
-          padding: const EdgeInsets.only(top: 2),
-          child: Text(disabledLabel!,
+          padding: const EdgeInsets.only(top: 4),
+          child: Text(blockedLabel!,
               style: const TextStyle(
                   fontSize: 12, color: Color(0xFFDC2626), fontWeight: FontWeight.w600)),
+        ),
+      if (backlogLabel != null)
+        Padding(
+          padding: const EdgeInsets.only(top: 4),
+          child: Text(backlogLabel!,
+              style: const TextStyle(
+                  fontSize: 12, color: Color(0xFF92400E), fontWeight: FontWeight.w600)),
+        ),
+      if (locked && lockLabel != null)
+        Padding(
+          padding: const EdgeInsets.only(top: 4),
+          child: Text(lockLabel!,
+              style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
         ),
     ]);
   }
@@ -313,6 +365,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   bool _lockToggling = false;
   Timer? _readinessPollTimer;
   OrderHoursModel? _orderHoursModel;
+  bool _readinessItemsExpanded = false; // CHANGE #458: tappable breakdown
 
   // ── Inquiry tab state ────────────────────────────────────────────────────
   List<Map<String, dynamic>> _inquiryOverview = [];
@@ -2396,7 +2449,37 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
 
   // ── Inquiry tab: top-level view ───────────────────────────────────────────
 
-  // CHANGE #456: readiness checklist + inquiry lock switch.
+  // CHANGE #458: readiness checklist + inquiry lock switch — full redesign.
+  // ⚠ Every string rendered below (title/status/labels/checks/breakdown) is
+  // printed verbatim from inquiry_send_readiness(). Nothing here counts,
+  // pluralises, or decides which detail to show — that's all server-side.
+  Color _readinessToneColor(String? tone) {
+    switch (tone) {
+      case 'ok': return const Color(0xFF1B7A43);
+      case 'blocked': return const Color(0xFFDC2626);
+      case 'running': return const Color(0xFFF59E0B);
+      default: return const Color(0xFF6B7280);
+    }
+  }
+
+  Color _readinessToneBg(String? tone) {
+    switch (tone) {
+      case 'ok': return const Color(0xFFD1FAE5);
+      case 'blocked': return const Color(0xFFFEE2E2);
+      case 'running': return const Color(0xFFFEF3C7);
+      default: return const Color(0xFFF3F4F6);
+    }
+  }
+
+  Color _readinessToneFg(String? tone) {
+    switch (tone) {
+      case 'ok': return const Color(0xFF065F46);
+      case 'blocked': return const Color(0xFF991B1B);
+      case 'running': return const Color(0xFF92400E);
+      default: return const Color(0xFF374151);
+    }
+  }
+
   Widget _buildReadinessAndSlider(double pad) {
     final readiness = _inquiryReadiness;
     final checks = (readiness?['checks'] as List?)
@@ -2406,48 +2489,39 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     final sendAllowed = readiness?['can_send'] as bool? ?? false;
     final locked = readiness?['locked'] as bool? ?? false;
     final lockLabel = readiness?['lock_label'] as String?;
+    final title = readiness?['title'] as String? ?? 'SEND-ALL READINESS';
     final dateLabel = readiness?['date_label'] as String?;
-    final items = readiness?['items'];
-    final suppliers = readiness?['suppliers'];
-    Map<String, dynamic>? firstFailing;
-    for (final c in checks) {
-      if (c['ok'] != true) { firstFailing = c; break; }
-    }
+    final statusLabel = readiness?['status_label'] as String?;
+    final statusTone = readiness?['status_tone'] as String?;
+    final progressLabel = readiness?['progress_label'] as String?;
+    final progress = (readiness?['progress'] as num?)?.toDouble();
+    final progressTotal = (readiness?['progress_total'] as num?)?.toDouble();
+    final sliderLabel = readiness?['slider_label'] as String? ?? '';
+    final blockedLabel = readiness?['blocked_label'] as String?;
+    final backlogLabel = readiness?['backlog_label'] as String?;
+    final breakdown = (readiness?['breakdown'] as List?)
+            ?.map((b) => Map<String, dynamic>.from(b as Map))
+            .toList() ??
+        const <Map<String, dynamic>>[];
+
+    final detailCount = checks.where((c) {
+      final d = c['detail'];
+      return d is String && d.isNotEmpty;
+    }).length;
 
     if (readiness != null) {
-      RenderLog.write('c456_checks', checks.length.toString());
-      RenderLog.write('c456_can_send', sendAllowed.toString());
-      RenderLog.write('c456_locked', locked.toString());
-      RenderLog.write('c456_first_fail', firstFailing?['label'] as String? ?? '');
-      RenderLog.write('c456_date', dateLabel ?? '');
-      RenderLog.write('c456_slider_wired', '1');
+      RenderLog.write('c458_status', statusLabel ?? '');
+      RenderLog.write('c458_tone', statusTone ?? '');
+      RenderLog.write('c458_progress', progressLabel ?? '');
+      RenderLog.write('c458_rows', checks.length.toString());
+      RenderLog.write('c458_details', detailCount.toString());
+      RenderLog.write('c458_can_send', sendAllowed.toString());
+      RenderLog.write('c458_summary_rows', '0');
     }
 
     return Padding(
       padding: EdgeInsets.fromLTRB(pad, 12, pad, 4),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        // C4 — while locked, a prominent banner above the readiness card. This
-        // one banner is warranted (live operational state); never elsewhere.
-        if (locked && lockLabel != null)
-          Container(
-            width: double.infinity,
-            margin: const EdgeInsets.only(bottom: 10),
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-            decoration: BoxDecoration(
-              color: const Color(0xFFFEF3C7),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: const Color(0xFFF59E0B)),
-            ),
-            child: Row(children: [
-              const Icon(Icons.lock_outline, size: 16, color: Color(0xFF92400E)),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(lockLabel,
-                    style: const TextStyle(
-                        fontSize: 12.5, fontWeight: FontWeight.w700, color: Color(0xFF92400E))),
-              ),
-            ]),
-          ),
         Container(
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
@@ -2457,16 +2531,17 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
             boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.03), blurRadius: 4)],
           ),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            // B1 — header: title left, date right.
             Row(children: [
-              const Text('SEND-ALL READINESS',
-                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700,
-                      letterSpacing: 0.6, color: Color(0xFF6B7280))),
-              if (dateLabel != null) ...[
-                const SizedBox(width: 6),
+              Expanded(
+                child: Text(title,
+                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700,
+                        letterSpacing: 0.6, color: Color(0xFF6B7280))),
+              ),
+              if (dateLabel != null)
                 Text(dateLabel,
                     style: const TextStyle(
                         fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF9CA3AF))),
-              ],
             ]),
             const SizedBox(height: 10),
             if (_readinessLoading && readiness == null)
@@ -2479,20 +2554,91 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
               const Text('Readiness unavailable — tap refresh to retry.',
                   style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)))
             else ...[
-              ...checks.map((c) => _ReadinessCheckRow(check: c)),
-              const SizedBox(height: 8),
-              if (items != null && suppliers != null)
-                Text('$items items → $suppliers suppliers',
-                    style: const TextStyle(
-                        fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
-              const SizedBox(height: 12),
+              // B2 — status row: tone chip left, progress label right.
+              Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+                if (statusLabel != null)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: _readinessToneBg(statusTone),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(statusLabel,
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700,
+                            color: _readinessToneFg(statusTone))),
+                  ),
+                const Spacer(),
+                if (progressLabel != null)
+                  Text(progressLabel,
+                      style: const TextStyle(fontSize: 11.5, color: Color(0xFF9CA3AF))),
+              ]),
+              if (progress != null && progressTotal != null && progressTotal > 0) ...[
+                const SizedBox(height: 6),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(2),
+                  child: LinearProgressIndicator(
+                    value: progress / progressTotal,
+                    minHeight: 2,
+                    backgroundColor: const Color(0xFFF3F4F6),
+                    color: _readinessToneColor(statusTone),
+                  ),
+                ),
+              ],
+              const SizedBox(height: 10),
+              const Divider(height: 1, color: Color(0xFFE5E7EB)),
+              const SizedBox(height: 6),
+              // B3 — check rows, iterated. The 'items' check expands B6 breakdown.
+              ...checks.map((c) {
+                final isItems = c['key'] == 'items';
+                return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  _ReadinessCheckRow(
+                    check: c,
+                    expanded: isItems ? _readinessItemsExpanded : false,
+                    onTap: isItems && breakdown.isNotEmpty
+                        ? () => setState(() => _readinessItemsExpanded = !_readinessItemsExpanded)
+                        : null,
+                  ),
+                  if (isItems && _readinessItemsExpanded && breakdown.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 23, right: 4, bottom: 6),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: breakdown.map((b) {
+                          final label = b['label'] as String? ?? '';
+                          final products = (b['products'] as List?)
+                                  ?.map((p) => p.toString())
+                                  .join(', ') ??
+                              '';
+                          return Padding(
+                            padding: const EdgeInsets.only(bottom: 6),
+                            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                              Text(label,
+                                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
+                                      color: Color(0xFF374151))),
+                              if (products.isNotEmpty)
+                                Text(products,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(fontSize: 11.5, color: Color(0xFF9CA3AF))),
+                            ]),
+                          );
+                        }).toList(),
+                      ),
+                    ),
+                ]);
+              }),
+              const SizedBox(height: 6),
+              const Divider(height: 1, color: Color(0xFFE5E7EB)),
+              const SizedBox(height: 10),
+              // B5 — footer: slider row + blocked/backlog/lock labels.
               _InquiryLockSwitch(
+                label: sliderLabel,
                 enabled: sendAllowed,
                 locked: locked,
                 toggling: _lockToggling,
-                disabledLabel: sendAllowed
-                    ? null
-                    : 'Blocked — ${firstFailing?['label'] as String? ?? 'readiness check failing'}',
+                blockedLabel: blockedLabel,
+                backlogLabel: backlogLabel,
+                lockLabel: lockLabel,
                 onToggle: _handleLockToggle,
               ),
             ],

@@ -1,3 +1,24 @@
 # CHANGE #239: SW file must return 404 — routing rule takes priority over CF Pages artifact cache
 /flutter_service_worker.js  /404  404
+
+# Fault 1 fix (2026-07-13 outage): asset-like paths must 404 for real when
+# missing/not-yet-propagated at an edge node — NEVER fall through to the SPA
+# shell as a 200 HTML response. These rules only fire when no literal static
+# asset matches (Cloudflare serves real uploaded files directly regardless of
+# _redirects), so an existing main.<hash>.dart.js is unaffected. A wrong 200
+# text/html response at a JS URL, once cached as `immutable` (see _headers),
+# would otherwise survive a full year with no way to clear it.
+/main.*.dart.js       /404  404
+/main.*.dart.js.map   /404  404
+/flutter_bootstrap.js /404  404
+/version.json         /404  404
+/assets/*             /404  404
+/canvaskit/*          /404  404
+/icons/*              /404  404
+/*.js                 /404  404
+/*.json               /404  404
+/*.png                /404  404
+/*.ico                /404  404
+/*.wasm               /404  404
+
 /*    /index.html   200

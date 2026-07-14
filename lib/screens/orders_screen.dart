@@ -10,7 +10,7 @@ import '../utils/download_bytes.dart';
 import '../utils/order_code.dart';
 import '../utils/render_log.dart';
 import '../widgets/animations.dart';
-import '../widgets/payment_panel.dart';
+import '../widgets/cust_pay_panel.dart';
 
 // ─── Data models ─────────────────────────────────────────────────────────────
 
@@ -369,7 +369,7 @@ class _OrderCardState extends State<_OrderCard> {
         if (_tab == 1)
           _BillTab(bill: bill, orderId: (header['order_id'] ?? widget.order.id).toString()),
         if (_tab == 2)
-          PaymentPanel(
+          CustPayPanel(
             key: ValueKey((header['order_id'] ?? widget.order.id).toString()),
             orderId: (header['order_id'] ?? widget.order.id).toString(),
           ),

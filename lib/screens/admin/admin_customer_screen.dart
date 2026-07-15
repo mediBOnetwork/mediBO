@@ -9749,8 +9749,9 @@ class _RoutesTabState extends State<_RoutesTab> {
   // ── C5: past plans, collapsible, lazy-loaded ──────────────────────────────
   bool _pastPlansExpanded = false;
   List<Map<String, dynamic>>? _pastPlans;
-  // ── CHANGE #483: poll while any plan is queued/building, stop once settled ─
-  Timer? _pastPlansRefreshTimer;
+  // ── CHANGE #486: realtime status (queued/building/ready) — replaces the
+  // old #483 4s poll. Patches the affected card in place, no full reload.
+  RealtimeChannel? _planRealtimeChannel;
 
   // ── D3: Today's Visits (admin, collapsible, lazy-loaded) — unchanged from #446
   bool _visitsExpanded = false;
@@ -9769,19 +9770,87 @@ class _RoutesTabState extends State<_RoutesTab> {
     (null, 'Today'), (0, 'Sunday'), (1, 'Monday'), (2, 'Tuesday'),
     (3, 'Wednesday'), (4, 'Thursday'), (5, 'Friday'), (6, 'Saturday'),
   ];
-  static const List<int> _kOptions = [5, 10, 15, 20, 25, 30, 40, 50, 75, 100];
+
+  // ── CHANGE #486: no more manual R picker — k is always auto-computed so
+  // every route stays under Google's 25-stop cap. Mirrors the backend's
+  // route_auto_k(): greatest(1, ceil(leads/25)).
+  int get _autoK {
+    final leads = (_leadCount?['leads'] as num?)?.toInt() ?? 0;
+    return leads > 0 ? max(1, (leads / 25).ceil()) : 1;
+  }
 
   @override
   void initState() {
     super.initState();
     _loadScreen();
+    _subscribePlanRealtime();
   }
 
   @override
   void dispose() {
     _countDebounce?.cancel();
-    _pastPlansRefreshTimer?.cancel();
+    _planRealtimeChannel?.unsubscribe();
+    _planRealtimeChannel = null;
     super.dispose();
+  }
+
+  // ── CHANGE #486: subscribe once for the widget's lifetime; INSERT/UPDATE
+  // events patch _pastPlans directly from the payload (no refetch, no
+  // flicker). Ignored while _pastPlans hasn't been loaded yet — the next
+  // expand fetches it fresh via route_plan_list() anyway.
+  void _subscribePlanRealtime() {
+    try {
+      _planRealtimeChannel = Supabase.instance.client
+          .channel('route_plans_changes')
+          .onPostgresChanges(
+            event: PostgresChangeEvent.update,
+            schema: 'public',
+            table: 'route_plans',
+            callback: _onPlanRealtimeChange,
+          )
+          .onPostgresChanges(
+            event: PostgresChangeEvent.insert,
+            schema: 'public',
+            table: 'route_plans',
+            callback: _onPlanRealtimeChange,
+          )
+          .subscribe();
+      RenderLog.write('c486_autocluster_realtime', 1);
+    } catch (_) {}
+  }
+
+  String _planWhenLabel(DateTime createdAt) {
+    final ist = createdAt.toUtc().add(const Duration(hours: 5, minutes: 30));
+    String p2(int n) => n.toString().padLeft(2, '0');
+    return '${p2(ist.day)}/${p2(ist.month)}/${p2(ist.year % 100)} ${p2(ist.hour)}:${p2(ist.minute)}';
+  }
+
+  void _onPlanRealtimeChange(PostgresChangePayload payload) {
+    if (_pastPlans == null || !mounted) return;
+    final row = payload.newRecord;
+    final planId = row['id']?.toString();
+    if (planId == null) return;
+    if (payload.eventType == PostgresChangeEvent.update) {
+      final idx = _pastPlans!.indexWhere((p) => p['plan_id'].toString() == planId);
+      if (idx == -1) return;
+      setState(() => _pastPlans![idx] = {..._pastPlans![idx], 'status': row['status']});
+    } else if (payload.eventType == PostgresChangeEvent.insert) {
+      if (_pastPlans!.any((p) => p['plan_id'].toString() == planId)) return;
+      final city = row['city']?.toString() ?? '';
+      final k = (row['k'] as num?)?.toInt() ?? 0;
+      final totalLeads = (row['total_leads'] as num?)?.toInt() ?? 0;
+      final classes = ((row['classes'] as List?) ?? []).join(', ');
+      final createdAt = DateTime.tryParse(row['created_at']?.toString() ?? '');
+      final item = <String, dynamic>{
+        'plan_id': planId,
+        'city': city,
+        'title': '$city · ${k}R · $totalLeads leads',
+        'types': classes,
+        'when_label': createdAt != null ? _planWhenLabel(createdAt) : '',
+        'status': row['status']?.toString() ?? 'queued',
+      };
+      setState(() => _pastPlans = [item, ..._pastPlans!]);
+    }
   }
 
   Future<void> _loadScreen() async {
@@ -9854,87 +9923,6 @@ class _RoutesTabState extends State<_RoutesTab> {
       if (!mounted) return;
       setState(() => _countLoading = false);
     }
-  }
-
-  // ── B3: the K picker ───────────────────────────────────────────────────────
-  void _openKPicker() {
-    final leads = (_leadCount?['leads'] as num?)?.toInt() ?? 0;
-    final suggestedK = (_leadCount?['suggested_k'] as num?)?.toInt();
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (sheetCtx) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('How many routes?',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-              const SizedBox(height: 4),
-              Text(_leadCount?['label']?.toString() ?? '',
-                  style: const TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
-              const SizedBox(height: 14),
-              ..._kOptions.map((k) {
-                // B3 — the ONE permitted division: leads ÷ K is a pure stop
-                // count, not money or geometry. Everything else on this row
-                // (the 8-hour framing) is static copy triggered by that count.
-                final stopsPerRoute = leads > 0 ? (leads / k).round() : 0;
-                final isRecommended = suggestedK != null && k == suggestedK;
-                final isHeavy = stopsPerRoute > 60;
-                return InkWell(
-                  onTap: () {
-                    Navigator.of(sheetCtx).pop();
-                    _buildPlan(k);
-                  },
-                  borderRadius: BorderRadius.circular(10),
-                  child: Container(
-                    margin: const EdgeInsets.only(bottom: 8),
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                    decoration: BoxDecoration(
-                      color: isRecommended ? const Color(0xFFD1FAE5) : const Color(0xFFF9FAFB),
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(
-                          color: isRecommended ? const Color(0xFF16A34A) : const Color(0xFFE5E7EB)),
-                    ),
-                    child: Row(children: [
-                      SizedBox(
-                        width: 48,
-                        child: Text('${k}R',
-                            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800)),
-                      ),
-                      Expanded(
-                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                          Text(
-                            '~$stopsPerRoute stops each${isRecommended ? '  ·  Recommended' : ''}',
-                            style: TextStyle(
-                              fontSize: 13, fontWeight: FontWeight.w700,
-                              color: isHeavy
-                                  ? const Color(0xFFDC2626)
-                                  : isRecommended
-                                      ? const Color(0xFF065F46)
-                                      : const Color(0xFF374151),
-                            ),
-                          ),
-                          if (isHeavy)
-                            const Text("That's a 20+ hour day. Pick more routes.",
-                                style: TextStyle(fontSize: 11.5, color: Color(0xFFDC2626))),
-                        ]),
-                      ),
-                    ]),
-                  ),
-                );
-              }),
-            ],
-          ),
-        ),
-      ),
-    );
   }
 
   Future<void> _buildPlan(int k) async {
@@ -10095,6 +10083,9 @@ class _RoutesTabState extends State<_RoutesTab> {
   // 'Optimize with Google' button handler — loops the plan's routes, skips
   // any route over Google's 25-stop cap, gently rate-limited (200ms/call) to
   // stay under Google's per-minute quota.
+  // CHANGE #486 (3C): also skips any route with google_optimized already
+  // true — each route is sent to Google exactly once, ever, so re-tapping
+  // this button doesn't re-call Google for routes already done.
   Future<void> _optimizeAllRoutesWithGoogle() async {
     final plan = _plan;
     final planId = _planId;
@@ -10113,7 +10104,8 @@ class _RoutesTabState extends State<_RoutesTab> {
       final r = routes[i];
       final routeId = r['route_id']?.toString();
       final nStops = (r['n_stops'] as num?)?.toInt() ?? 0;
-      if (routeId != null && nStops > 0 && nStops <= 25) {
+      final alreadyOptimized = r['google_optimized'] == true;
+      if (routeId != null && !alreadyOptimized && nStops > 0 && nStops <= 25) {
         try {
           final mapRes = await Supabase.instance.client
               .rpc('route_map', params: {'p_route_id': routeId});
@@ -10128,10 +10120,10 @@ class _RoutesTabState extends State<_RoutesTab> {
         } catch (_) {
           // one route failing must never stop the loop
         }
+        await Future.delayed(const Duration(milliseconds: 200));
       }
       if (!mounted) return;
       setState(() => _googleOptimizeProgress = 'Optimizing ${i + 1}/${routes.length}...');
-      await Future.delayed(const Duration(milliseconds: 200));
     }
 
     if (!mounted) return;
@@ -10296,35 +10288,7 @@ class _RoutesTabState extends State<_RoutesTab> {
         final list = ((res as List?) ?? []).map((p) => Map<String, dynamic>.from(p as Map)).toList();
         if (!mounted) return;
         setState(() => _pastPlans = list);
-        _maybeStartPastPlansRefresh();
       } catch (_) {}
-    }
-  }
-
-  // ── CHANGE #483: auto-refresh "Past plans" while any card is queued/building
-  bool _pastPlansHavePending() =>
-      (_pastPlans ?? []).any((p) => p['status'] == 'queued' || p['status'] == 'building');
-
-  void _maybeStartPastPlansRefresh() {
-    if (!_pastPlansHavePending()) {
-      _pastPlansRefreshTimer?.cancel();
-      _pastPlansRefreshTimer = null;
-      return;
-    }
-    if (_pastPlansRefreshTimer != null) return; // already polling
-    RenderLog.write('c483_plan_autorefresh', 1);
-    _pastPlansRefreshTimer = Timer.periodic(const Duration(seconds: 4), (_) => _refreshPastPlans());
-  }
-
-  Future<void> _refreshPastPlans() async {
-    try {
-      final res = await Supabase.instance.client.rpc('route_plan_list', params: {'p_limit': 10});
-      final list = ((res as List?) ?? []).map((p) => Map<String, dynamic>.from(p as Map)).toList();
-      if (!mounted) return;
-      if (list.isNotEmpty) setState(() => _pastPlans = list); // keep existing list on an empty/null fetch
-      _maybeStartPastPlansRefresh(); // cancels itself once everything has settled
-    } catch (_) {
-      // transient fetch failure — leave the existing list + timer alone, retried next tick
     }
   }
 
@@ -10692,6 +10656,15 @@ class _RoutesTabState extends State<_RoutesTab> {
                 if (_leadCount?['hours_note'] != null)
                   Text(_leadCount!['hours_note'].toString(),
                       style: const TextStyle(fontSize: 11.5, color: Color(0xFF9CA3AF))),
+                // CHANGE #486: no more R picker — every route is auto-sized to
+                // stay under Google's 25-stop cap, shown read-only here.
+                if ((_leadCount?['leads'] as num?)?.toInt() != null && (_leadCount!['leads'] as num).toInt() > 0) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    '${_leadCount!['leads']} leads → $_autoK routes (~25 stops each)',
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF1B7A43)),
+                  ),
+                ],
               ]),
             ),
         ]),
@@ -10701,7 +10674,7 @@ class _RoutesTabState extends State<_RoutesTab> {
           child: ElevatedButton.icon(
             onPressed: (_leadCount == null || (_leadCount!['leads'] as num? ?? 0) == 0)
                 ? null
-                : _openKPicker,
+                : () => _buildPlan(_autoK),
             style: ElevatedButton.styleFrom(
               backgroundColor: const Color(0xFF1B7A43),
               foregroundColor: Colors.white,

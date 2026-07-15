@@ -9743,6 +9743,8 @@ class _RoutesTabState extends State<_RoutesTab> {
   // ── C5: past plans, collapsible, lazy-loaded ──────────────────────────────
   bool _pastPlansExpanded = false;
   List<Map<String, dynamic>>? _pastPlans;
+  // ── CHANGE #483: poll while any plan is queued/building, stop once settled ─
+  Timer? _pastPlansRefreshTimer;
 
   // ── D3: Today's Visits (admin, collapsible, lazy-loaded) — unchanged from #446
   bool _visitsExpanded = false;
@@ -9772,6 +9774,7 @@ class _RoutesTabState extends State<_RoutesTab> {
   @override
   void dispose() {
     _countDebounce?.cancel();
+    _pastPlansRefreshTimer?.cancel();
     super.dispose();
   }
 
@@ -10183,7 +10186,35 @@ class _RoutesTabState extends State<_RoutesTab> {
         final list = ((res as List?) ?? []).map((p) => Map<String, dynamic>.from(p as Map)).toList();
         if (!mounted) return;
         setState(() => _pastPlans = list);
+        _maybeStartPastPlansRefresh();
       } catch (_) {}
+    }
+  }
+
+  // ── CHANGE #483: auto-refresh "Past plans" while any card is queued/building
+  bool _pastPlansHavePending() =>
+      (_pastPlans ?? []).any((p) => p['status'] == 'queued' || p['status'] == 'building');
+
+  void _maybeStartPastPlansRefresh() {
+    if (!_pastPlansHavePending()) {
+      _pastPlansRefreshTimer?.cancel();
+      _pastPlansRefreshTimer = null;
+      return;
+    }
+    if (_pastPlansRefreshTimer != null) return; // already polling
+    RenderLog.write('c483_plan_autorefresh', 1);
+    _pastPlansRefreshTimer = Timer.periodic(const Duration(seconds: 4), (_) => _refreshPastPlans());
+  }
+
+  Future<void> _refreshPastPlans() async {
+    try {
+      final res = await Supabase.instance.client.rpc('route_plan_list', params: {'p_limit': 10});
+      final list = ((res as List?) ?? []).map((p) => Map<String, dynamic>.from(p as Map)).toList();
+      if (!mounted) return;
+      if (list.isNotEmpty) setState(() => _pastPlans = list); // keep existing list on an empty/null fetch
+      _maybeStartPastPlansRefresh(); // cancels itself once everything has settled
+    } catch (_) {
+      // transient fetch failure — leave the existing list + timer alone, retried next tick
     }
   }
 

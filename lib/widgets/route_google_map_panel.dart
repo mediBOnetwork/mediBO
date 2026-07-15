@@ -164,6 +164,21 @@ class _RouteGoogleMapPanelState extends State<RouteGoogleMapPanel> {
     }
   }
 
+  // CHANGE #485: route_plan_routes.road_polyline, set by route_apply_google()
+  // after a Google Routes optimization. Same encoding as OSRM's, so the
+  // existing _decodePolyline handles it. Null/empty/malformed -> null, and
+  // the caller falls back to OSRM or the straight-line path — never throws.
+  List<LatLng>? _googlePolylinePoints(Map<String, dynamic> data) {
+    final encoded = data['road_polyline']?.toString();
+    if (encoded == null || encoded.isEmpty) return null;
+    try {
+      final points = _decodePolyline(encoded);
+      return points.length >= 2 ? points : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   List<LatLng> _pathPoints(Map<String, dynamic> data) {
     final path = ((data['path'] as List?) ?? [])
         .map((p) => Map<String, dynamic>.from(p as Map))
@@ -181,6 +196,9 @@ class _RouteGoogleMapPanelState extends State<RouteGoogleMapPanel> {
   Future<void> _fetchRoadIfNeeded() async {
     final routeId = widget.mapData['route_id']?.toString();
     if (routeId == null) return;
+    // CHANGE #485: a Google-optimized route already carries a server-side
+    // road polyline (see _googlePolylinePoints) — no need to also hit OSRM.
+    if ((widget.mapData['road_polyline']?.toString() ?? '').isNotEmpty) return;
     if (_roadPolylineCache.containsKey(routeId)) return; // already cached
     if (_roadFetchInFlightForRouteId == routeId) return; // already fetching
     final stops = _pathPoints(widget.mapData);
@@ -324,11 +342,19 @@ class _RouteGoogleMapPanelState extends State<RouteGoogleMapPanel> {
     }
 
     final straightPoints = _pathPoints(data);
-    // CHANGE #484: prefer the OSRM road-following path when it's cached for
-    // THIS route; otherwise fall straight back to the hub->stops->hub line.
+    // CHANGE #485: prefer the server-side Google-optimized road polyline when
+    // present (authoritative — matches the stop order route_apply_google()
+    // saved). CHANGE #484: otherwise fall back to the OSRM road-following
+    // path if it's cached for THIS route. Otherwise, the straight hub->stops
+    // ->hub line.
+    final googlePoints = _googlePolylinePoints(data);
     final roadPoints = _roadPolylineCache[data['route_id']?.toString()];
-    final usingRoadPolyline = roadPoints != null && roadPoints.length >= 2;
-    final polylinePoints = usingRoadPolyline ? roadPoints : straightPoints;
+    final usingGooglePolyline = googlePoints != null;
+    final usingOsrmPolyline = !usingGooglePolyline && roadPoints != null && roadPoints.length >= 2;
+    final usingRoadPolyline = usingGooglePolyline || usingOsrmPolyline;
+    final polylinePoints = usingGooglePolyline
+        ? googlePoints
+        : (usingOsrmPolyline ? roadPoints : straightPoints);
 
     RenderLog.write('c463_map', 1);
     RenderLog.write('c463_markers', stops.length.toString());
@@ -338,8 +364,11 @@ class _RouteGoogleMapPanelState extends State<RouteGoogleMapPanel> {
     RenderLog.write('c473_route_map_one_finger_fixed', 1);
     RenderLog.write('c478_map_scroll_locked', 1);
     RenderLog.write('c478_physics_lock_wired', 1);
-    if (usingRoadPolyline) {
+    if (usingOsrmPolyline) {
       RenderLog.write('c484_osrm_road_polyline', polylinePoints.length.toString());
+    }
+    if (usingGooglePolyline) {
+      RenderLog.write('c485_google_road_polyline', polylinePoints.length.toString());
     }
 
     final centerLat = (center?['lat'] as num?)?.toDouble();

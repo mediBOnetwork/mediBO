@@ -9740,6 +9740,12 @@ class _RoutesTabState extends State<_RoutesTab> {
   final Map<String, Map<String, dynamic>?> _routeMapData = {};
   final Map<String, bool> _routeMapLoading = {};
 
+  // ── CHANGE #485: 'Optimize with Google' — one google-route call per route
+  // (<=25 stops), applied via route_apply_google(). Never blocks/crashes the
+  // map: any failure per-route just leaves that route as it was.
+  bool _googleOptimizing = false;
+  String? _googleOptimizeProgress;
+
   // ── C5: past plans, collapsible, lazy-loaded ──────────────────────────────
   bool _pastPlansExpanded = false;
   List<Map<String, dynamic>>? _pastPlans;
@@ -10028,6 +10034,110 @@ class _RoutesTabState extends State<_RoutesTab> {
       if (!mounted) return;
       setState(() => _routeMapLoading[routeId] = false);
     }
+  }
+
+  // ── CHANGE #485: is this plan medical_store/pharmacy only? The Optimize
+  // button is gated on this (D3) — derived straight from the server header,
+  // never duplicated as separate Dart state.
+  bool get _planIsPharmacyOnly {
+    final types = (_plan?['header'] as Map?)?['types_label']?.toString() ?? '';
+    final classes = types.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
+    return classes.length == 1 && classes.first == 'medical_store';
+  }
+
+  // Calls the google-route edge function for ONE route, then persists the
+  // result via route_apply_google(). Boot-safe: any failure (network, quota,
+  // malformed response) just returns, leaving the route exactly as it was —
+  // never crashes, never partially applies.
+  Future<void> _optimizeRouteWithGoogle(
+    String routeId,
+    Map<String, dynamic> hub,
+    List<Map<String, dynamic>> orderedStops,
+  ) async {
+    try {
+      final hubLat = (hub['lat'] as num?)?.toDouble();
+      final hubLng = (hub['lng'] as num?)?.toDouble();
+      if (hubLat == null || hubLng == null) return;
+      if (orderedStops.isEmpty || orderedStops.length > 25) return;
+
+      final stopsPayload = <Map<String, dynamic>>[];
+      for (final s in orderedStops) {
+        final leadId = s['lead_id'];
+        final lat = (s['lat'] as num?)?.toDouble();
+        final lng = (s['lng'] as num?)?.toDouble();
+        if (leadId == null || lat == null || lng == null) return;
+        stopsPayload.add({'lead_id': leadId, 'lat': lat, 'lng': lng});
+      }
+
+      final res = await Supabase.instance.client.functions.invoke('google-route', body: {
+        'hub': {'lat': hubLat, 'lng': hubLng},
+        'return_to_hub': true,
+        'stops': stopsPayload,
+      });
+      final data = res.data;
+      if (data is! Map || data['error'] != null) return;
+      final optimisedIds = (data['optimised_lead_ids'] as List?)
+          ?.map((e) => (e as num).toInt())
+          .toList();
+      if (optimisedIds == null || optimisedIds.isEmpty) return;
+      final polyline = data['encoded_polyline']?.toString();
+
+      await Supabase.instance.client.rpc('route_apply_google', params: {
+        'p_route_id': routeId,
+        'p_optimised_lead_ids': optimisedIds,
+        'p_polyline': polyline,
+      });
+    } catch (_) {
+      // Google/network failure -> keep whatever route already exists.
+    }
+  }
+
+  // 'Optimize with Google' button handler — loops the plan's routes, skips
+  // any route over Google's 25-stop cap, gently rate-limited (200ms/call) to
+  // stay under Google's per-minute quota.
+  Future<void> _optimizeAllRoutesWithGoogle() async {
+    final plan = _plan;
+    final planId = _planId;
+    if (plan == null || planId == null || _googleOptimizing) return;
+    final routes = ((plan['routes'] as List?) ?? [])
+        .map((r) => Map<String, dynamic>.from(r as Map))
+        .toList();
+    if (routes.isEmpty) return;
+
+    setState(() {
+      _googleOptimizing = true;
+      _googleOptimizeProgress = 'Optimizing 0/${routes.length}...';
+    });
+
+    for (var i = 0; i < routes.length; i++) {
+      final r = routes[i];
+      final routeId = r['route_id']?.toString();
+      final nStops = (r['n_stops'] as num?)?.toInt() ?? 0;
+      if (routeId != null && nStops > 0 && nStops <= 25) {
+        try {
+          final mapRes = await Supabase.instance.client
+              .rpc('route_map', params: {'p_route_id': routeId});
+          final mapData = Map<String, dynamic>.from(mapRes as Map);
+          final hub = mapData['hub'] as Map?;
+          final stops = ((mapData['stops'] as List?) ?? [])
+              .map((s) => Map<String, dynamic>.from(s as Map))
+              .toList();
+          if (hub != null && stops.isNotEmpty && stops.length <= 25) {
+            await _optimizeRouteWithGoogle(routeId, Map<String, dynamic>.from(hub), stops);
+          }
+        } catch (_) {
+          // one route failing must never stop the loop
+        }
+      }
+      if (!mounted) return;
+      setState(() => _googleOptimizeProgress = 'Optimizing ${i + 1}/${routes.length}...');
+      await Future.delayed(const Duration(milliseconds: 200));
+    }
+
+    if (!mounted) return;
+    setState(() { _googleOptimizing = false; _googleOptimizeProgress = null; });
+    RenderLog.write('c485_google_routes_optimize', 1);
+    await _loadPlan(planId); // re-fetch; picks up Google's order + road_polyline
   }
 
   // B4 DETAIL: tapping a numbered pin -> title/subtitle/leg/cum/open + phone/
@@ -10680,6 +10790,7 @@ class _RoutesTabState extends State<_RoutesTab> {
         .toList();
     final warning = summary['warning']?.toString();
     RenderLog.write('c452_rebalance_wired', 1); // Rebalance button is built below
+    RenderLog.write('c485_google_optimize_wired', 1); // Optimize-with-Google button is built below
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Container(
@@ -10757,6 +10868,27 @@ class _RoutesTabState extends State<_RoutesTab> {
               icon: const Icon(Icons.refresh, size: 15),
               label: const Text('Rebuild', style: TextStyle(fontSize: 12.5)),
             ),
+            // CHANGE #485: pharmacy-only for now (D3); Google failure never
+            // crashes — it just leaves each route as it was.
+            if (_planIsPharmacyOnly)
+              OutlinedButton.icon(
+                onPressed: _googleOptimizing ? null : _optimizeAllRoutesWithGoogle,
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFF1E3A8A),
+                  side: const BorderSide(color: Color(0xFF1E3A8A)),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+                icon: _googleOptimizing
+                    ? const SizedBox(
+                        width: 14, height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF1E3A8A)),
+                      )
+                    : const Icon(Icons.route, size: 15),
+                label: Text(
+                  _googleOptimizing ? (_googleOptimizeProgress ?? 'Optimizing...') : 'Optimize with Google',
+                  style: const TextStyle(fontSize: 12.5),
+                ),
+              ),
           ]),
         ]),
       ),

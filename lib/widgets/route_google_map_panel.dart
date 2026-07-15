@@ -5,6 +5,8 @@
 // (that's `tone`, already decided server-side).
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart' show Factory;
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 
@@ -180,6 +182,7 @@ class _RouteGoogleMapPanelState extends State<RouteGoogleMapPanel> {
     RenderLog.write('c463_markers', stops.length.toString());
     RenderLog.write('c463_hub', hub != null ? 1 : 0);
     RenderLog.write('c463_polyline', polylinePoints.length.toString());
+    RenderLog.write('c472_route_map_eager_gestures', 1);
 
     final centerLat = (center?['lat'] as num?)?.toDouble();
     final centerLng = (center?['lng'] as num?)?.toDouble();
@@ -210,6 +213,13 @@ class _RouteGoogleMapPanelState extends State<RouteGoogleMapPanel> {
           myLocationButtonEnabled: false,
           mapToolbarEnabled: false,
           zoomControlsEnabled: true,
+          zoomGesturesEnabled: true,
+          scrollGesturesEnabled: true,
+          // C472: claim the pan gesture eagerly so ONE finger drags the map
+          // instead of the page, and the "use two fingers" overlay never shows.
+          gestureRecognizers: <Factory<OneSequenceGestureRecognizer>>{
+            Factory<EagerGestureRecognizer>(() => EagerGestureRecognizer()),
+          }.toSet(),
         ),
       ),
     );

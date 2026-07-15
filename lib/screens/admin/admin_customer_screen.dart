@@ -10359,8 +10359,16 @@ class _RoutesTabState extends State<_RoutesTab> {
     );
     if (go != true) return;
     try {
-      await Supabase.instance.client.rpc('delete_route_plan', params: {'p_plan': planId});
+      final res = await Supabase.instance.client
+          .rpc('delete_route_plan', params: {'p_plan': planId});
       if (!mounted) return;
+      final map = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+      if (map['deleted'] != true) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("Couldn't delete, try again")));
+        return;
+      }
+      RenderLog.write('c488c_delete_wired', planId);
       // Remove it locally right away for snappy UX — the realtime DELETE
       // handler above will also fire and no-op harmlessly on a second pass.
       setState(() {

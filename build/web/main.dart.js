@@ -208897,6 +208897,7 @@ A.d("c463_hub",a3?1:0)
 A.d("c463_polyline",B.h.k(e.length))
 A.d("c472_route_map_eager_gestures",1)
 A.d("c473_route_map_one_finger_fixed",1)
+A.d("c478_map_scroll_locked",1)
 a3=p==null
 d=A.ak(a3?a0:J.e(p,"lat"))
 if(d==null)d=a0

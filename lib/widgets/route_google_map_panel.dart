@@ -184,6 +184,7 @@ class _RouteGoogleMapPanelState extends State<RouteGoogleMapPanel> {
     RenderLog.write('c463_polyline', polylinePoints.length.toString());
     RenderLog.write('c472_route_map_eager_gestures', 1);
     RenderLog.write('c473_route_map_one_finger_fixed', 1);
+    RenderLog.write('c478_map_scroll_locked', 1);
 
     final centerLat = (center?['lat'] as num?)?.toDouble();
     final centerLng = (center?['lng'] as num?)?.toDouble();

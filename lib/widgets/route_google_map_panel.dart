@@ -12,6 +12,15 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 import '../utils/render_log.dart';
 
+// CHANGE #478 (fix v2): the ancestor page SingleChildScrollView (owned by
+// admin_customer_screen.dart, several widget layers above this file) needs to
+// switch to NeverScrollableScrollPhysics for as long as a finger is down on
+// the map, then switch back. NotificationListener<ScrollNotification> cannot
+// do this — it only observes a scroll AFTER it has already happened. This
+// widget flips the lock on pointer down/up; admin_customer_screen.dart reads
+// it to choose the outer scroll view's physics.
+final ValueNotifier<bool> routeMapTouchLock = ValueNotifier<bool>(false);
+
 class RouteGoogleMapPanel extends StatefulWidget {
   final Map<String, dynamic> mapData; // route_map() response
   final bool isDesktop;
@@ -185,6 +194,7 @@ class _RouteGoogleMapPanelState extends State<RouteGoogleMapPanel> {
     RenderLog.write('c472_route_map_eager_gestures', 1);
     RenderLog.write('c473_route_map_one_finger_fixed', 1);
     RenderLog.write('c478_map_scroll_locked', 1);
+    RenderLog.write('c478_physics_lock_wired', 1);
 
     final centerLat = (center?['lat'] as num?)?.toDouble();
     final centerLng = (center?['lng'] as num?)?.toDouble();
@@ -195,53 +205,61 @@ class _RouteGoogleMapPanelState extends State<RouteGoogleMapPanel> {
     return ClipRRect(
       borderRadius: BorderRadius.circular(12),
       child: Listener(
-        // C473: absorb wheel/trackpad pointer signals over the map box so a
-        // stray scroll never reaches the page's SingleChildScrollView.
+        // C478 v2: NotificationListener<ScrollNotification> (tried previously)
+        // only observes a scroll AFTER the ancestor SingleChildScrollView has
+        // already moved — it can't prevent it. The real fix is upstream: flip
+        // routeMapTouchLock the instant a finger touches the map, which
+        // admin_customer_screen.dart's outer scroll view reads to switch to
+        // NeverScrollableScrollPhysics for the duration of the touch. Even if
+        // the page's drag recognizer still wins the gesture arena for this
+        // pointer, NeverScrollableScrollPhysics rejects the resulting scroll
+        // offset deltas, so the page stays visually still either way.
+        onPointerDown: (_) => routeMapTouchLock.value = true,
+        onPointerUp: (_) => routeMapTouchLock.value = false,
+        onPointerCancel: (_) => routeMapTouchLock.value = false,
+        // Absorb wheel/trackpad pointer signals over the map box too.
         onPointerSignal: (_) {},
-        child: NotificationListener<ScrollNotification>(
-          onNotification: (_) => true,
-          child: SizedBox(
-            height: widget.isDesktop ? 420 : 320,
-            child: GoogleMap(
-              initialCameraPosition: CameraPosition(target: initialTarget, zoom: 13),
-              markers: markers,
-              polylines: {
-                if (polylinePoints.length >= 2)
-                  Polyline(
-                    polylineId: const PolylineId('route'),
-                    points: polylinePoints,
-                    color: const Color(0xFF1B7A43),
-                    width: 4,
-                  ),
-              },
-              onMapCreated: (c) {
-                _controller = c;
-                _fitBounds();
-              },
-              myLocationButtonEnabled: false,
-              mapToolbarEnabled: false,
-              zoomControlsEnabled: true,
-              zoomGesturesEnabled: true,
-              scrollGesturesEnabled: true,
-              rotateGesturesEnabled: false,
-              tiltGesturesEnabled: false,
-              // C473: google_maps_flutter_web ignores gestureRecognizers
-              // entirely — the map is a real embedded DOM element (Google
-              // Maps JS SDK), not a canvas platform view, so Flutter's
-              // gesture arena never sees its touches. The actual fix for the
-              // "two fingers" overlay + page-steals-scroll behaviour is the
-              // JS SDK's own gestureHandling option: 'cooperative' (the
-              // default when embedded in a scrollable page) explicitly lets
-              // one-finger touches pass through to scroll the page and shows
-              // the overlay; 'greedy' makes the map consume all touch/scroll
-              // gestures instead, which is what removes both symptoms.
-              webGestureHandling: WebGestureHandling.greedy,
-              // Kept for parity if this ever ships to Android/iOS, where
-              // gestureRecognizers IS read and Eager wins the gesture arena.
-              gestureRecognizers: <Factory<OneSequenceGestureRecognizer>>{
-                Factory<EagerGestureRecognizer>(() => EagerGestureRecognizer()),
-              }.toSet(),
-            ),
+        child: SizedBox(
+          height: widget.isDesktop ? 420 : 320,
+          child: GoogleMap(
+            initialCameraPosition: CameraPosition(target: initialTarget, zoom: 13),
+            markers: markers,
+            polylines: {
+              if (polylinePoints.length >= 2)
+                Polyline(
+                  polylineId: const PolylineId('route'),
+                  points: polylinePoints,
+                  color: const Color(0xFF1B7A43),
+                  width: 4,
+                ),
+            },
+            onMapCreated: (c) {
+              _controller = c;
+              _fitBounds();
+            },
+            myLocationButtonEnabled: false,
+            mapToolbarEnabled: false,
+            zoomControlsEnabled: true,
+            zoomGesturesEnabled: true,
+            scrollGesturesEnabled: true,
+            rotateGesturesEnabled: false,
+            tiltGesturesEnabled: false,
+            // C473: google_maps_flutter_web ignores gestureRecognizers
+            // entirely — the map is a real embedded DOM element (Google
+            // Maps JS SDK), not a canvas platform view, so Flutter's
+            // gesture arena never sees its touches. The actual fix for the
+            // "two fingers" overlay + page-steals-scroll behaviour is the
+            // JS SDK's own gestureHandling option: 'cooperative' (the
+            // default when embedded in a scrollable page) explicitly lets
+            // one-finger touches pass through to scroll the page and shows
+            // the overlay; 'greedy' makes the map consume all touch/scroll
+            // gestures instead, which is what removes both symptoms.
+            webGestureHandling: WebGestureHandling.greedy,
+            // Kept for parity if this ever ships to Android/iOS, where
+            // gestureRecognizers IS read and Eager wins the gesture arena.
+            gestureRecognizers: <Factory<OneSequenceGestureRecognizer>>{
+              Factory<EagerGestureRecognizer>(() => EagerGestureRecognizer()),
+            }.toSet(),
           ),
         ),
       ),

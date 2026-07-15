@@ -1391,10 +1391,22 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         );
       }
 
+      RenderLog.write('c478_page_physics_dynamic', 1);
       return PrimaryScrollController(
         controller: _scrollCtrl,
-        child: SingleChildScrollView(
-          primary: true,
+        // CHANGE #478 (fix v2): freeze this page's own scroll for as long as
+        // a finger is down on the route map (routeMapTouchLock, flipped by
+        // route_google_map_panel.dart), so dragging the map never also
+        // scrolls this page. See route_google_map_panel.dart for why.
+        child: ValueListenableBuilder<bool>(
+          valueListenable: routeMapTouchLock,
+          builder: (ctx2, mapTouched, child) => SingleChildScrollView(
+            primary: true,
+            physics: mapTouched
+                ? const NeverScrollableScrollPhysics()
+                : const AlwaysScrollableScrollPhysics(),
+            child: child,
+          ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [

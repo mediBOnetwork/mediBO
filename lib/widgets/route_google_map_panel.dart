@@ -3,14 +3,116 @@
 // only draws what the server sends — no ETA maths, no km rounding, no
 // building of Google Maps URLs, no deriving marker colour from open/closed
 // (that's `tone`, already decided server-side).
+import 'dart:async';
+import 'dart:convert';
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart' show Factory;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:http/http.dart' as http;
 
 import '../utils/render_log.dart';
+
+// CHANGE #484: fetch the actual road-following path from the self-hosted
+// OSRM server so the route line curves along streets instead of jumping
+// straight between stops. NEVER allowed to block or crash the map — any
+// error/timeout returns null and the caller falls back to the existing
+// straight-line polyline built from `path`.
+const String _osrmBaseUrl = 'http://35.234.212.254:5000/route/v1/driving/';
+const int _osrmMaxWaypointsPerRequest = 100;
+
+/// Fetches the road-following geometry through [stops] (already in visit
+/// order, e.g. hub -> stop1 -> ... -> stopN -> hub) from OSRM. Chunks into
+/// groups of ~100 waypoints (OSRM's practical cap) when a route has more
+/// stops than that, overlapping chunk boundaries by one point so the
+/// concatenated path has no gap. Returns null on ANY failure (timeout,
+/// non-200, malformed body, network error, VM off) so the caller can fall
+/// back to straight lines — this must never throw.
+Future<List<LatLng>?> fetchRoadPolyline(List<LatLng> stops) async {
+  if (stops.length < 2) return null;
+
+  final chunks = <List<LatLng>>[];
+  if (stops.length <= _osrmMaxWaypointsPerRequest) {
+    chunks.add(stops);
+  } else {
+    var start = 0;
+    while (start < stops.length - 1) {
+      final end = (start + _osrmMaxWaypointsPerRequest - 1)
+          .clamp(0, stops.length - 1);
+      chunks.add(stops.sublist(start, end + 1));
+      if (end >= stops.length - 1) break;
+      start = end; // overlap: last point of this chunk = first of next
+    }
+  }
+
+  final result = <LatLng>[];
+  for (final chunk in chunks) {
+    final points = await _fetchOsrmChunk(chunk);
+    if (points == null) return null; // any chunk failing fails the whole path
+    if (result.isNotEmpty && points.isNotEmpty) {
+      result.addAll(points.skip(1)); // drop duplicate boundary point
+    } else {
+      result.addAll(points);
+    }
+  }
+  return result.length >= 2 ? result : null;
+}
+
+Future<List<LatLng>?> _fetchOsrmChunk(List<LatLng> points) async {
+  if (points.length < 2) return null;
+  try {
+    final coords = points.map((p) => '${p.longitude},${p.latitude}').join(';');
+    final url = Uri.parse('$_osrmBaseUrl$coords?overview=full&geometries=polyline');
+    final resp = await http.get(url).timeout(const Duration(seconds: 6));
+    if (resp.statusCode != 200) return null;
+    final body = jsonDecode(resp.body);
+    if (body is! Map) return null;
+    final routes = body['routes'];
+    if (routes is! List || routes.isEmpty) return null;
+    final first = routes[0];
+    if (first is! Map) return null;
+    final geometry = first['geometry'];
+    if (geometry is! String || geometry.isEmpty) return null;
+    return _decodePolyline(geometry);
+  } catch (_) {
+    return null;
+  }
+}
+
+/// Standard Google-encoded-polyline decoder (the format OSRM emits with
+/// geometries=polyline, precision 1e5).
+List<LatLng> _decodePolyline(String encoded) {
+  final points = <LatLng>[];
+  var index = 0;
+  final len = encoded.length;
+  var lat = 0;
+  var lng = 0;
+  while (index < len) {
+    var shift = 0;
+    var result = 0;
+    int b;
+    do {
+      b = encoded.codeUnitAt(index++) - 63;
+      result |= (b & 0x1f) << shift;
+      shift += 5;
+    } while (b >= 0x20);
+    lat += (result & 1) != 0 ? ~(result >> 1) : (result >> 1);
+
+    shift = 0;
+    result = 0;
+    do {
+      b = encoded.codeUnitAt(index++) - 63;
+      result |= (b & 0x1f) << shift;
+      shift += 5;
+    } while (b >= 0x20);
+    lng += (result & 1) != 0 ? ~(result >> 1) : (result >> 1);
+
+    points.add(LatLng(lat / 1e5, lng / 1e5));
+  }
+  return points;
+}
 
 // CHANGE #478 (fix v2): the ancestor page SingleChildScrollView (owned by
 // admin_customer_screen.dart, several widget layers above this file) needs to
@@ -40,10 +142,17 @@ class _RouteGoogleMapPanelState extends State<RouteGoogleMapPanel> {
   GoogleMapController? _controller;
   final Map<String, BitmapDescriptor> _iconCache = {};
 
+  // CHANGE #484: road-following polyline fetched from OSRM, cached per
+  // route_id so switching Map/List tabs doesn't refetch. Null (or a
+  // mismatched route id) means "still on the straight-line fallback".
+  final Map<String, List<LatLng>> _roadPolylineCache = {};
+  String? _roadFetchInFlightForRouteId;
+
   @override
   void initState() {
     super.initState();
     _prepareIcons();
+    _fetchRoadIfNeeded();
   }
 
   @override
@@ -51,6 +160,45 @@ class _RouteGoogleMapPanelState extends State<RouteGoogleMapPanel> {
     super.didUpdateWidget(old);
     if (old.mapData['route_id'] != widget.mapData['route_id']) {
       _prepareIcons();
+      _fetchRoadIfNeeded();
+    }
+  }
+
+  List<LatLng> _pathPoints(Map<String, dynamic> data) {
+    final path = ((data['path'] as List?) ?? [])
+        .map((p) => Map<String, dynamic>.from(p as Map))
+        .toList();
+    return path
+        .map((p) {
+          final lat = (p['lat'] as num?)?.toDouble();
+          final lng = (p['lng'] as num?)?.toDouble();
+          return (lat != null && lng != null) ? LatLng(lat, lng) : null;
+        })
+        .whereType<LatLng>()
+        .toList();
+  }
+
+  Future<void> _fetchRoadIfNeeded() async {
+    final routeId = widget.mapData['route_id']?.toString();
+    if (routeId == null) return;
+    if (_roadPolylineCache.containsKey(routeId)) return; // already cached
+    if (_roadFetchInFlightForRouteId == routeId) return; // already fetching
+    final stops = _pathPoints(widget.mapData);
+    if (stops.length < 2) return;
+
+    _roadFetchInFlightForRouteId = routeId;
+    List<LatLng>? result;
+    try {
+      result = await fetchRoadPolyline(stops);
+    } catch (_) {
+      result = null; // belt-and-braces: fetchRoadPolyline already swallows errors
+    }
+    if (_roadFetchInFlightForRouteId == routeId) {
+      _roadFetchInFlightForRouteId = null;
+    }
+    if (!mounted) return;
+    if (result != null && result.length >= 2) {
+      setState(() => _roadPolylineCache[routeId] = result!);
     }
   }
 
@@ -141,9 +289,6 @@ class _RouteGoogleMapPanelState extends State<RouteGoogleMapPanel> {
     final stops = ((data['stops'] as List?) ?? [])
         .map((s) => Map<String, dynamic>.from(s as Map))
         .toList();
-    final path = ((data['path'] as List?) ?? [])
-        .map((p) => Map<String, dynamic>.from(p as Map))
-        .toList();
     final center = data['center'] as Map?;
 
     final markers = <Marker>{};
@@ -178,14 +323,12 @@ class _RouteGoogleMapPanelState extends State<RouteGoogleMapPanel> {
       ));
     }
 
-    final polylinePoints = path
-        .map((p) {
-          final lat = (p['lat'] as num?)?.toDouble();
-          final lng = (p['lng'] as num?)?.toDouble();
-          return (lat != null && lng != null) ? LatLng(lat, lng) : null;
-        })
-        .whereType<LatLng>()
-        .toList();
+    final straightPoints = _pathPoints(data);
+    // CHANGE #484: prefer the OSRM road-following path when it's cached for
+    // THIS route; otherwise fall straight back to the hub->stops->hub line.
+    final roadPoints = _roadPolylineCache[data['route_id']?.toString()];
+    final usingRoadPolyline = roadPoints != null && roadPoints.length >= 2;
+    final polylinePoints = usingRoadPolyline ? roadPoints : straightPoints;
 
     RenderLog.write('c463_map', 1);
     RenderLog.write('c463_markers', stops.length.toString());
@@ -195,6 +338,9 @@ class _RouteGoogleMapPanelState extends State<RouteGoogleMapPanel> {
     RenderLog.write('c473_route_map_one_finger_fixed', 1);
     RenderLog.write('c478_map_scroll_locked', 1);
     RenderLog.write('c478_physics_lock_wired', 1);
+    if (usingRoadPolyline) {
+      RenderLog.write('c484_osrm_road_polyline', polylinePoints.length.toString());
+    }
 
     final centerLat = (center?['lat'] as num?)?.toDouble();
     final centerLng = (center?['lng'] as num?)?.toDouble();
@@ -230,7 +376,10 @@ class _RouteGoogleMapPanelState extends State<RouteGoogleMapPanel> {
                   polylineId: const PolylineId('route'),
                   points: polylinePoints,
                   color: const Color(0xFF1B7A43),
-                  width: 4,
+                  width: usingRoadPolyline ? 5 : 4,
+                  startCap: Cap.roundCap,
+                  endCap: Cap.roundCap,
+                  jointType: JointType.round,
                 ),
             },
             onMapCreated: (c) {

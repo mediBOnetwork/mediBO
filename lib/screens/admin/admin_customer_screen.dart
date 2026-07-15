@@ -9814,6 +9814,13 @@ class _RoutesTabState extends State<_RoutesTab> {
             table: 'route_plans',
             callback: _onPlanRealtimeChange,
           )
+          .onPostgresChanges(
+            // CHANGE #488: a plan deleted on one device disappears live here too.
+            event: PostgresChangeEvent.delete,
+            schema: 'public',
+            table: 'route_plans',
+            callback: _onPlanRealtimeChange,
+          )
           .subscribe();
       RenderLog.write('c486_autocluster_realtime', 1);
     } catch (_) {}
@@ -9827,6 +9834,14 @@ class _RoutesTabState extends State<_RoutesTab> {
 
   void _onPlanRealtimeChange(PostgresChangePayload payload) {
     if (_pastPlans == null || !mounted) return;
+    // CHANGE #488: DELETE payloads carry the row in oldRecord, not newRecord.
+    if (payload.eventType == PostgresChangeEvent.delete) {
+      final deletedId = payload.oldRecord['id']?.toString();
+      if (deletedId == null) return;
+      setState(() => _pastPlans =
+          _pastPlans!.where((p) => p['plan_id'].toString() != deletedId).toList());
+      return;
+    }
     final row = payload.newRecord;
     final planId = row['id']?.toString();
     if (planId == null) return;
@@ -10298,7 +10313,110 @@ class _RoutesTabState extends State<_RoutesTab> {
         final list = ((res as List?) ?? []).map((p) => Map<String, dynamic>.from(p as Map)).toList();
         if (!mounted) return;
         setState(() => _pastPlans = list);
+        _fetchOptStatusFor(list);
       } catch (_) {}
+    }
+  }
+
+  // ── CHANGE #488: per-plan optimization badge — plan_google_status() isn't
+  // returned by route_plan_list(), so fetch it per-plan once the list loads.
+  // Best-effort: a failed lookup just leaves that card without a badge.
+  Future<void> _fetchOptStatusFor(List<Map<String, dynamic>> plans) async {
+    for (final p in plans) {
+      final planId = p['plan_id']?.toString();
+      if (planId == null) continue;
+      try {
+        final res = await Supabase.instance.client
+            .rpc('plan_google_status', params: {'p_plan': planId});
+        final status = Map<String, dynamic>.from(res as Map);
+        if (!mounted) return;
+        final idx = (_pastPlans ?? []).indexWhere((x) => x['plan_id'].toString() == planId);
+        if (idx == -1) continue;
+        setState(() => _pastPlans![idx] = {..._pastPlans![idx], 'opt_status': status});
+      } catch (_) {
+        // no badge for this card — never blocks the rest of the list
+      }
+    }
+  }
+
+  // ── CHANGE #488: delete a past plan — always confirm first, since this is
+  // permanent (cascades to its routes + stops server-side).
+  Future<void> _deletePlan(String planId, String title) async {
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (dCtx) => AlertDialog(
+        title: const Text('Delete this plan?'),
+        content: Text('$title\n\nThis removes all its routes and stops permanently.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dCtx, false), child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: const Color(0xFFDC2626)),
+            onPressed: () => Navigator.pop(dCtx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (go != true) return;
+    try {
+      await Supabase.instance.client.rpc('delete_route_plan', params: {'p_plan': planId});
+      if (!mounted) return;
+      // Remove it locally right away for snappy UX — the realtime DELETE
+      // handler above will also fire and no-op harmlessly on a second pass.
+      setState(() {
+        _pastPlans = (_pastPlans ?? []).where((p) => p['plan_id'].toString() != planId).toList();
+        if (_planId == planId) {
+          _plan = null;
+          _planId = null;
+          _routeMapData.clear();
+          _routeMapLoading.clear();
+          _routeMapMode.clear();
+        }
+      });
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Couldn't delete, try again")));
+    }
+  }
+
+  // ── CHANGE #488 (2D): bulk cleanup, nice-to-have — always confirm first.
+  Future<void> _clearOldPlans() async {
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (dCtx) => AlertDialog(
+        title: const Text('Clear old plans?'),
+        content: const Text('Delete all plans older than 7 days? This cannot be undone.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dCtx, false), child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: const Color(0xFFDC2626)),
+            onPressed: () => Navigator.pop(dCtx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (go != true) return;
+    try {
+      final res = await Supabase.instance.client
+          .rpc('delete_old_route_plans', params: {'p_days': 7});
+      final data = Map<String, dynamic>.from(res as Map);
+      if (!mounted) return;
+      final deleted = (data['deleted_plans'] as num?)?.toInt() ?? 0;
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Deleted $deleted old plan(s).')));
+      // Realtime DELETE events land per-row already; refetch too so the
+      // count is right even if a realtime event is missed.
+      final list = await Supabase.instance.client.rpc('route_plan_list', params: {'p_limit': 10});
+      if (!mounted) return;
+      final freshList = ((list as List?) ?? []).map((p) => Map<String, dynamic>.from(p as Map)).toList();
+      setState(() => _pastPlans = freshList);
+      _fetchOptStatusFor(freshList);
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Couldn't clear old plans, try again")));
     }
   }
 
@@ -10724,6 +10842,19 @@ class _RoutesTabState extends State<_RoutesTab> {
                     style: TextStyle(
                         fontSize: 13.5, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
               ),
+              // CHANGE #488 (2D): bulk cleanup, subtle — only worth showing
+              // once there's actually a list to clean up.
+              if (_pastPlansExpanded && (_pastPlans?.isNotEmpty ?? false))
+                TextButton(
+                  onPressed: _clearOldPlans,
+                  style: TextButton.styleFrom(
+                    foregroundColor: const Color(0xFF9CA3AF),
+                    padding: const EdgeInsets.symmetric(horizontal: 6),
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  child: const Text('Clear old plans', style: TextStyle(fontSize: 11.5)),
+                ),
               Icon(_pastPlansExpanded ? Icons.expand_less : Icons.expand_more,
                   size: 20, color: const Color(0xFF6B7280)),
             ]),
@@ -10742,21 +10873,43 @@ class _RoutesTabState extends State<_RoutesTab> {
               child: Text('No past plans.', style: TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
             )
           else
-            ..._pastPlans!.map((p) => InkWell(
-                  onTap: () => _loadPlan(p['plan_id'].toString(), isNewBuild: true),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Text(p['title']?.toString() ?? '',
-                          style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
-                      Text(
-                          [p['types'], p['when_label'], p['status']]
-                              .where((v) => v != null && v.toString().isNotEmpty)
-                              .join(' · '),
-                          style: const TextStyle(fontSize: 11.5, color: Color(0xFF6B7280))),
-                    ]),
-                  ),
-                )),
+            ..._pastPlans!.map((p) {
+              final planId = p['plan_id'].toString();
+              final optStatus = p['opt_status'] as Map?;
+              final total = (optStatus?['total_routes'] as num?)?.toInt() ?? 0;
+              final optimized = (optStatus?['optimized_routes'] as num?)?.toInt() ?? 0;
+              return InkWell(
+                onTap: () => _loadPlan(planId, isNewBuild: true),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Expanded(
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Wrap(spacing: 6, runSpacing: 4, crossAxisAlignment: WrapCrossAlignment.center, children: [
+                          Text(p['title']?.toString() ?? '',
+                              style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
+                          if (optStatus != null) _optStatusBadge(total: total, optimized: optimized),
+                        ]),
+                        const SizedBox(height: 2),
+                        Text(
+                            [p['types'], p['when_label'], p['status']]
+                                .where((v) => v != null && v.toString().isNotEmpty)
+                                .join(' · '),
+                            style: const TextStyle(fontSize: 11.5, color: Color(0xFF6B7280))),
+                      ]),
+                    ),
+                    // CHANGE #488 (2A): delete, always confirm before it fires.
+                    IconButton(
+                      onPressed: () => _deletePlan(planId, p['title']?.toString() ?? 'this plan'),
+                      icon: const Icon(Icons.delete_outline, size: 18, color: Color(0xFF9CA3AF)),
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                      tooltip: 'Delete plan',
+                    ),
+                  ]),
+                ),
+              );
+            }),
         ],
       ]),
     );
@@ -10772,8 +10925,13 @@ class _RoutesTabState extends State<_RoutesTab> {
         .map((r) => Map<String, dynamic>.from(r as Map))
         .toList();
     final warning = summary['warning']?.toString();
+    // CHANGE #488: badge + button label both derive from the already-loaded
+    // routes list — no extra round trip for the currently-open plan.
+    final totalRoutes = routes.length;
+    final optimizedRoutes = routes.where((r) => r['google_optimized'] == true).length;
     RenderLog.write('c452_rebalance_wired', 1); // Rebalance button is built below
     RenderLog.write('c485_google_optimize_wired', 1); // Optimize-with-Google button is built below
+    RenderLog.write('c488_badges_and_delete', 1); // optimization badges + plan delete are wired
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Container(
@@ -10785,8 +10943,11 @@ class _RoutesTabState extends State<_RoutesTab> {
           border: Border.all(color: const Color(0xFFE5E7EB)),
         ),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(header['title']?.toString() ?? '',
-              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+          Wrap(spacing: 8, runSpacing: 4, crossAxisAlignment: WrapCrossAlignment.center, children: [
+            Text(header['title']?.toString() ?? '',
+                style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+            _optStatusBadge(total: totalRoutes, optimized: optimizedRoutes),
+          ]),
           const SizedBox(height: 4),
           Wrap(spacing: 8, runSpacing: 4, children: [
             if (header['types_label'] != null)
@@ -10868,7 +11029,9 @@ class _RoutesTabState extends State<_RoutesTab> {
                       )
                     : const Icon(Icons.route, size: 15),
                 label: Text(
-                  _googleOptimizing ? (_googleOptimizeProgress ?? 'Optimizing...') : 'Optimize with Google',
+                  _googleOptimizing
+                      ? (_googleOptimizeProgress ?? 'Optimizing...')
+                      : _optimizeButtonLabel(total: totalRoutes, optimized: optimizedRoutes),
                   style: const TextStyle(fontSize: 12.5),
                 ),
               ),
@@ -10926,9 +11089,25 @@ class _RoutesTabState extends State<_RoutesTab> {
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Row(children: [
                     Expanded(
-                      child: Text(r['title']?.toString() ?? '',
-                          style: const TextStyle(
-                              fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+                      child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+                        Flexible(
+                          child: Text(r['title']?.toString() ?? '',
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                  fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+                        ),
+                        // CHANGE #488 (1B): route-level Google-optimized badge.
+                        if (r['google_optimized'] == true) ...[
+                          const SizedBox(width: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                            decoration: BoxDecoration(
+                                color: const Color(0xFFD1FAE5), borderRadius: BorderRadius.circular(4)),
+                            child: const Text('✓G',
+                                style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.w800, color: Color(0xFF065F46))),
+                          ),
+                        ],
+                      ]),
                     ),
                     if (assigned)
                       _infoChip(worker ?? 'Assigned', const Color(0xFFEFF6FF), const Color(0xFF1E40AF))
@@ -11036,6 +11215,18 @@ class _RoutesTabState extends State<_RoutesTab> {
         Text(closedLabel,
             style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: Color(0xFFDC2626))),
       ],
+      // CHANGE #488 (1B): route-map header status line.
+      const SizedBox(height: 2),
+      Text(
+        data['google_optimized'] == true
+            ? '✓ Google optimized'
+            : 'Tap Optimize with Google for road route',
+        style: TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w600,
+          color: data['google_optimized'] == true ? const Color(0xFF065F46) : const Color(0xFF9CA3AF),
+        ),
+      ),
       const SizedBox(height: 8),
       RouteGoogleMapPanel(
         mapData: data,
@@ -11512,6 +11703,27 @@ class _RoutesTabState extends State<_RoutesTab> {
       decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(20)),
       child: Text(label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: fg)),
     );
+  }
+
+  // ── CHANGE #488: Google-optimization status pill — shared by the plan
+  // header and each Past Plans card. total==0 means "nothing to badge yet".
+  Widget _optStatusBadge({required int total, required int optimized}) {
+    if (total == 0) return const SizedBox.shrink();
+    if (optimized == total) {
+      return _infoChip('✓ Google optimized', const Color(0xFFD1FAE5), const Color(0xFF065F46));
+    }
+    if (optimized > 0) {
+      return _infoChip('⚡ $optimized/$total optimized', const Color(0xFFFEF3C7), const Color(0xFF92400E));
+    }
+    return _infoChip('Not optimized', const Color(0xFFF3F4F6), const Color(0xFF6B7280));
+  }
+
+  // ── CHANGE #488 (1C): Optimize button label adapts to progress. Re-optimize
+  // is always allowed even when fully done — the button never disables here.
+  String _optimizeButtonLabel({required int total, required int optimized}) {
+    if (total > 0 && optimized == total) return '✓ Optimized';
+    if (optimized > 0) return 'Optimize remaining (${total - optimized} left)';
+    return 'Optimize with Google';
   }
 
   Widget _stopActionBtn(IconData icon, String label, VoidCallback onTap, {bool filled = false}) {

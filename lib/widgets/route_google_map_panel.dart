@@ -10,6 +10,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart' show Factory;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_polyline_points/flutter_polyline_points.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:http/http.dart' as http;
 
@@ -75,43 +76,21 @@ Future<List<LatLng>?> _fetchOsrmChunk(List<LatLng> points) async {
     if (first is! Map) return null;
     final geometry = first['geometry'];
     if (geometry is! String || geometry.isEmpty) return null;
-    return _decodePolyline(geometry);
+    return _decodeEncodedPolyline(geometry);
   } catch (_) {
     return null;
   }
 }
 
-/// Standard Google-encoded-polyline decoder (the format OSRM emits with
-/// geometries=polyline, precision 1e5).
-List<LatLng> _decodePolyline(String encoded) {
-  final points = <LatLng>[];
-  var index = 0;
-  final len = encoded.length;
-  var lat = 0;
-  var lng = 0;
-  while (index < len) {
-    var shift = 0;
-    var result = 0;
-    int b;
-    do {
-      b = encoded.codeUnitAt(index++) - 63;
-      result |= (b & 0x1f) << shift;
-      shift += 5;
-    } while (b >= 0x20);
-    lat += (result & 1) != 0 ? ~(result >> 1) : (result >> 1);
-
-    shift = 0;
-    result = 0;
-    do {
-      b = encoded.codeUnitAt(index++) - 63;
-      result |= (b & 0x1f) << shift;
-      shift += 5;
-    } while (b >= 0x20);
-    lng += (result & 1) != 0 ? ~(result >> 1) : (result >> 1);
-
-    points.add(LatLng(lat / 1e5, lng / 1e5));
-  }
-  return points;
+// CHANGE #487: decode via the flutter_polyline_points package instead of a
+// hand-rolled decoder — same standard Encoded Polyline Algorithm Format (used
+// by both OSRM's geometries=polyline and Google Routes API's
+// ENCODED_POLYLINE), but battle-tested instead of reimplemented here.
+List<LatLng> _decodeEncodedPolyline(String encoded) {
+  return PolylinePoints()
+      .decodePolyline(encoded)
+      .map((p) => LatLng(p.latitude, p.longitude))
+      .toList();
 }
 
 // CHANGE #478 (fix v2): the ancestor page SingleChildScrollView (owned by
@@ -166,13 +145,13 @@ class _RouteGoogleMapPanelState extends State<RouteGoogleMapPanel> {
 
   // CHANGE #485: route_plan_routes.road_polyline, set by route_apply_google()
   // after a Google Routes optimization. Same encoding as OSRM's, so the
-  // existing _decodePolyline handles it. Null/empty/malformed -> null, and
-  // the caller falls back to OSRM or the straight-line path — never throws.
+  // shared _decodeEncodedPolyline handles it. Null/empty/malformed -> null,
+  // and the caller falls back to OSRM or the straight-line path — never throws.
   List<LatLng>? _googlePolylinePoints(Map<String, dynamic> data) {
     final encoded = data['road_polyline']?.toString();
     if (encoded == null || encoded.isEmpty) return null;
     try {
-      final points = _decodePolyline(encoded);
+      final points = _decodeEncodedPolyline(encoded);
       return points.length >= 2 ? points : null;
     } catch (_) {
       return null;
@@ -369,6 +348,9 @@ class _RouteGoogleMapPanelState extends State<RouteGoogleMapPanel> {
     }
     if (usingGooglePolyline) {
       RenderLog.write('c485_google_road_polyline', polylinePoints.length.toString());
+      // CHANGE #487: confirms the decoded road_polyline actually reaches the
+      // GoogleMap's `polylines:` set below, not just that it was decoded.
+      RenderLog.write('c487_road_polyline_drawn', polylinePoints.length.toString());
     }
 
     final centerLat = (center?['lat'] as num?)?.toDouble();

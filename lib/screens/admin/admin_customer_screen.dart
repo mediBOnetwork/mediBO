@@ -10127,7 +10127,17 @@ class _RoutesTabState extends State<_RoutesTab> {
     }
 
     if (!mounted) return;
-    setState(() { _googleOptimizing = false; _googleOptimizeProgress = null; });
+    setState(() {
+      _googleOptimizing = false;
+      _googleOptimizeProgress = null;
+      // CHANGE #487: any route's cached map (fetched before this run, then
+      // collapsed) may now be stale — its road_polyline was null at fetch
+      // time. Clearing here forces the NEXT expand of any route to re-fetch
+      // route_map(), instead of the expand handler's containsKey() check
+      // silently reusing pre-optimization data forever.
+      _routeMapData.clear();
+      _routeMapLoading.clear();
+    });
     RenderLog.write('c485_google_routes_optimize', 1);
     await _loadPlan(planId); // re-fetch; picks up Google's order + road_polyline
   }

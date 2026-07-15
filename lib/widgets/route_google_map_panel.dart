@@ -183,6 +183,7 @@ class _RouteGoogleMapPanelState extends State<RouteGoogleMapPanel> {
     RenderLog.write('c463_hub', hub != null ? 1 : 0);
     RenderLog.write('c463_polyline', polylinePoints.length.toString());
     RenderLog.write('c472_route_map_eager_gestures', 1);
+    RenderLog.write('c473_route_map_one_finger_fixed', 1);
 
     final centerLat = (center?['lat'] as num?)?.toDouble();
     final centerLng = (center?['lng'] as num?)?.toDouble();
@@ -192,34 +193,55 @@ class _RouteGoogleMapPanelState extends State<RouteGoogleMapPanel> {
 
     return ClipRRect(
       borderRadius: BorderRadius.circular(12),
-      child: SizedBox(
-        height: widget.isDesktop ? 420 : 320,
-        child: GoogleMap(
-          initialCameraPosition: CameraPosition(target: initialTarget, zoom: 13),
-          markers: markers,
-          polylines: {
-            if (polylinePoints.length >= 2)
-              Polyline(
-                polylineId: const PolylineId('route'),
-                points: polylinePoints,
-                color: const Color(0xFF1B7A43),
-                width: 4,
-              ),
-          },
-          onMapCreated: (c) {
-            _controller = c;
-            _fitBounds();
-          },
-          myLocationButtonEnabled: false,
-          mapToolbarEnabled: false,
-          zoomControlsEnabled: true,
-          zoomGesturesEnabled: true,
-          scrollGesturesEnabled: true,
-          // C472: claim the pan gesture eagerly so ONE finger drags the map
-          // instead of the page, and the "use two fingers" overlay never shows.
-          gestureRecognizers: <Factory<OneSequenceGestureRecognizer>>{
-            Factory<EagerGestureRecognizer>(() => EagerGestureRecognizer()),
-          }.toSet(),
+      child: Listener(
+        // C473: absorb wheel/trackpad pointer signals over the map box so a
+        // stray scroll never reaches the page's SingleChildScrollView.
+        onPointerSignal: (_) {},
+        child: NotificationListener<ScrollNotification>(
+          onNotification: (_) => true,
+          child: SizedBox(
+            height: widget.isDesktop ? 420 : 320,
+            child: GoogleMap(
+              initialCameraPosition: CameraPosition(target: initialTarget, zoom: 13),
+              markers: markers,
+              polylines: {
+                if (polylinePoints.length >= 2)
+                  Polyline(
+                    polylineId: const PolylineId('route'),
+                    points: polylinePoints,
+                    color: const Color(0xFF1B7A43),
+                    width: 4,
+                  ),
+              },
+              onMapCreated: (c) {
+                _controller = c;
+                _fitBounds();
+              },
+              myLocationButtonEnabled: false,
+              mapToolbarEnabled: false,
+              zoomControlsEnabled: true,
+              zoomGesturesEnabled: true,
+              scrollGesturesEnabled: true,
+              rotateGesturesEnabled: false,
+              tiltGesturesEnabled: false,
+              // C473: google_maps_flutter_web ignores gestureRecognizers
+              // entirely — the map is a real embedded DOM element (Google
+              // Maps JS SDK), not a canvas platform view, so Flutter's
+              // gesture arena never sees its touches. The actual fix for the
+              // "two fingers" overlay + page-steals-scroll behaviour is the
+              // JS SDK's own gestureHandling option: 'cooperative' (the
+              // default when embedded in a scrollable page) explicitly lets
+              // one-finger touches pass through to scroll the page and shows
+              // the overlay; 'greedy' makes the map consume all touch/scroll
+              // gestures instead, which is what removes both symptoms.
+              webGestureHandling: WebGestureHandling.greedy,
+              // Kept for parity if this ever ships to Android/iOS, where
+              // gestureRecognizers IS read and Eager wins the gesture arena.
+              gestureRecognizers: <Factory<OneSequenceGestureRecognizer>>{
+                Factory<EagerGestureRecognizer>(() => EagerGestureRecognizer()),
+              }.toSet(),
+            ),
+          ),
         ),
       ),
     );

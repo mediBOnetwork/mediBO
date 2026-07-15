@@ -10039,15 +10039,6 @@ class _RoutesTabState extends State<_RoutesTab> {
     }
   }
 
-  // ── CHANGE #485: is this plan medical_store/pharmacy only? The Optimize
-  // button is gated on this (D3) — derived straight from the server header,
-  // never duplicated as separate Dart state.
-  bool get _planIsPharmacyOnly {
-    final types = (_plan?['header'] as Map?)?['types_label']?.toString() ?? '';
-    final classes = types.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
-    return classes.length == 1 && classes.first == 'medical_store';
-  }
-
   // Calls the google-route edge function for ONE route, then persists the
   // result via route_apply_google(). Boot-safe: any failure (network, quota,
   // malformed response) just returns, leaving the route exactly as it was —
@@ -10109,6 +10100,28 @@ class _RoutesTabState extends State<_RoutesTab> {
         .map((r) => Map<String, dynamic>.from(r as Map))
         .toList();
     if (routes.isEmpty) return;
+
+    // CHANGE #489: large plans fire one google-route call per un-optimized
+    // route (~1-3 min for 90 routes) — confirm before kicking that off.
+    final toOptimize = routes.where((r) => r['google_optimized'] != true).length;
+    if (toOptimize > 50) {
+      final go = await showDialog<bool>(
+        context: context,
+        builder: (dCtx) => AlertDialog(
+          title: const Text('Optimize routes?'),
+          content: Text('Optimize $toOptimize routes? ~$toOptimize lookups, this may take a few minutes.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(dCtx, false), child: const Text('Cancel')),
+            FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1E3A8A)),
+              onPressed: () => Navigator.pop(dCtx, true),
+              child: const Text('Optimize'),
+            ),
+          ],
+        ),
+      );
+      if (go != true) return;
+    }
 
     setState(() {
       _googleOptimizing = true;
@@ -10940,6 +10953,7 @@ class _RoutesTabState extends State<_RoutesTab> {
     RenderLog.write('c452_rebalance_wired', 1); // Rebalance button is built below
     RenderLog.write('c485_google_optimize_wired', 1); // Optimize-with-Google button is built below
     RenderLog.write('c488_badges_and_delete', 1); // optimization badges + plan delete are wired
+    RenderLog.write('c489_optimize_left', totalRoutes - optimizedRoutes); // any plan size/class mix
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Container(
@@ -11020,9 +11034,9 @@ class _RoutesTabState extends State<_RoutesTab> {
               icon: const Icon(Icons.refresh, size: 15),
               label: const Text('Rebuild', style: TextStyle(fontSize: 12.5)),
             ),
-            // CHANGE #485: pharmacy-only for now (D3); Google failure never
-            // crashes — it just leaves each route as it was.
-            if (_planIsPharmacyOnly)
+            // CHANGE #489: shown for any plan size/class mix — Google
+            // failure never crashes, it just leaves each route as it was.
+            if (totalRoutes > 0)
               OutlinedButton.icon(
                 onPressed: _googleOptimizing ? null : _optimizeAllRoutesWithGoogle,
                 style: OutlinedButton.styleFrom(

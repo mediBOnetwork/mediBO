@@ -5,6 +5,7 @@
 // (that's `tone`, already decided server-side).
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart' show Factory;
@@ -93,6 +94,64 @@ List<LatLng> _decodeEncodedPolyline(String encoded) {
       .toList();
 }
 
+// CHANGE #490: one sample point (+ bearing) along a travel-ordered polyline,
+// used to place a direction arrowhead.
+class _ArrowPoint {
+  final LatLng pos;
+  final double bearingDegrees;
+  const _ArrowPoint(this.pos, this.bearingDegrees);
+}
+
+double _distanceMeters(LatLng a, LatLng b) {
+  const earthRadius = 6371000.0;
+  final dLat = (b.latitude - a.latitude) * math.pi / 180;
+  final dLng = (b.longitude - a.longitude) * math.pi / 180;
+  final lat1 = a.latitude * math.pi / 180;
+  final lat2 = b.latitude * math.pi / 180;
+  final h = math.sin(dLat / 2) * math.sin(dLat / 2) +
+      math.cos(lat1) * math.cos(lat2) * math.sin(dLng / 2) * math.sin(dLng / 2);
+  return 2 * earthRadius * math.atan2(math.sqrt(h), math.sqrt(1 - h));
+}
+
+// Initial bearing from [a] to [b], degrees clockwise from north (matches
+// google_maps_flutter's Marker.rotation convention).
+double _bearingDegrees(LatLng a, LatLng b) {
+  final lat1 = a.latitude * math.pi / 180;
+  final lat2 = b.latitude * math.pi / 180;
+  final dLng = (b.longitude - a.longitude) * math.pi / 180;
+  final y = math.sin(dLng) * math.cos(lat2);
+  final x = math.cos(lat1) * math.sin(lat2) - math.sin(lat1) * math.cos(lat2) * math.cos(dLng);
+  final bearing = math.atan2(y, x) * 180 / math.pi;
+  return (bearing + 360) % 360;
+}
+
+// Walks [pts] (already in travel order) and drops one arrow every ~150m,
+// interpolating the exact position along each segment so spacing stays even
+// regardless of how dense the source polyline's vertices are.
+List<_ArrowPoint> _computeArrowPoints(List<LatLng> pts, {double intervalMeters = 150}) {
+  final arrows = <_ArrowPoint>[];
+  if (pts.length < 2) return arrows;
+  var carry = intervalMeters / 2; // half-interval head start so arrows aren't bunched at the hub
+  for (var i = 0; i < pts.length - 1; i++) {
+    final a = pts[i];
+    final b = pts[i + 1];
+    final segDist = _distanceMeters(a, b);
+    if (segDist <= 0) continue;
+    final bearing = _bearingDegrees(a, b);
+    var d = carry;
+    while (d < segDist) {
+      final t = d / segDist;
+      arrows.add(_ArrowPoint(
+        LatLng(a.latitude + (b.latitude - a.latitude) * t, a.longitude + (b.longitude - a.longitude) * t),
+        bearing,
+      ));
+      d += intervalMeters;
+    }
+    carry = d - segDist;
+  }
+  return arrows;
+}
+
 // CHANGE #478 (fix v2): the ancestor page SingleChildScrollView (owned by
 // admin_customer_screen.dart, several widget layers above this file) needs to
 // switch to NeverScrollableScrollPhysics for as long as a finger is down on
@@ -120,6 +179,9 @@ class RouteGoogleMapPanel extends StatefulWidget {
 class _RouteGoogleMapPanelState extends State<RouteGoogleMapPanel> {
   GoogleMapController? _controller;
   final Map<String, BitmapDescriptor> _iconCache = {};
+  // CHANGE #490: single reusable arrowhead bitmap — direction comes from each
+  // marker's `rotation`, so one icon serves every arrow along the line.
+  BitmapDescriptor? _arrowIcon;
 
   // CHANGE #484: road-following polyline fetched from OSRM, cached per
   // route_id so switching Map/List tabs doesn't refetch. Null (or a
@@ -221,40 +283,131 @@ class _RouteGoogleMapPanelState extends State<RouteGoogleMapPanel> {
     for (final entry in wanted.entries) {
       if (_iconCache.containsKey(entry.key)) continue;
       final (label, color) = entry.value;
-      _iconCache[entry.key] = await _numberedMarkerIcon(label, color);
+      // CHANGE #490: hub keeps its original circle icon untouched; only stop
+      // markers switch to the smaller teardrop pin.
+      final isHub = entry.key.startsWith('hub|');
+      _iconCache[entry.key] = await _numberedMarkerIcon(label, color, teardrop: !isHub);
     }
+    _arrowIcon ??= await _buildArrowIcon();
     if (mounted) setState(() {});
   }
 
-  Future<BitmapDescriptor> _numberedMarkerIcon(String label, Color bg) async {
-    const size = 84.0;
+  Future<BitmapDescriptor> _numberedMarkerIcon(String label, Color bg, {bool teardrop = false}) async {
+    if (!teardrop) {
+      // Unchanged — still used for the hub "H" pin.
+      const size = 84.0;
+      final recorder = ui.PictureRecorder();
+      final canvas = Canvas(recorder, Rect.fromLTWH(0, 0, size, size));
+      final center = const Offset(size / 2, size / 2);
+      canvas.drawCircle(center, size / 2 - 4, Paint()..color = bg);
+      canvas.drawCircle(
+        center, size / 2 - 4,
+        Paint()
+          ..color = Colors.white
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 4,
+      );
+      final tp = TextPainter(
+        text: TextSpan(
+          text: label,
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: label.length > 2 ? 24 : 30,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      tp.paint(canvas, Offset(center.dx - tp.width / 2, center.dy - tp.height / 2));
+      final picture = recorder.endRecording();
+      final image = await picture.toImage(size.toInt(), size.toInt());
+      final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+      return BitmapDescriptor.bytes(bytes!.buffer.asUint8List(), width: 40, height: 40);
+    }
+
+    // CHANGE #490: small teardrop pin — head ~32dp, full height ~46dp (down
+    // from the old 40dp circle), tip anchored at the stop coordinate so
+    // `anchor: Offset(0.5, 1.0)` lands exactly on it. Supersampled 3x for
+    // crisp text at this size.
+    const double w = 32.0;
+    const double h = 46.0;
+    const double scale = 3.0;
+    const double headR = w / 2;
+    const double cx = w / 2;
+    const double cy = headR;
     final recorder = ui.PictureRecorder();
-    final canvas = Canvas(recorder, Rect.fromLTWH(0, 0, size, size));
-    final center = const Offset(size / 2, size / 2);
-    canvas.drawCircle(center, size / 2 - 4, Paint()..color = bg);
-    canvas.drawCircle(
-      center, size / 2 - 4,
+    final canvas = Canvas(recorder, Rect.fromLTWH(0, 0, w * scale, h * scale));
+    canvas.scale(scale);
+
+    const drawnR = headR - 1.5; // matches the circle actually drawn below
+    final theta = 50 * math.pi / 180;
+    final baseLeft = Offset(cx - drawnR * math.sin(theta), cy + drawnR * math.cos(theta));
+    final baseRight = Offset(cx + drawnR * math.sin(theta), cy + drawnR * math.cos(theta));
+    const tip = Offset(cx, h - 1);
+    final headPath = Path()..addOval(Rect.fromCircle(center: const Offset(cx, cy), radius: drawnR));
+    final tipPath = Path()
+      ..moveTo(baseLeft.dx, baseLeft.dy)
+      ..lineTo(tip.dx, tip.dy)
+      ..lineTo(baseRight.dx, baseRight.dy)
+      ..close();
+    final pinPath = Path.combine(PathOperation.union, headPath, tipPath);
+
+    canvas.drawPath(pinPath, Paint()..color = bg);
+    canvas.drawPath(
+      pinPath,
       Paint()
         ..color = Colors.white
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 4,
+        ..strokeWidth = 1.5,
     );
+
     final tp = TextPainter(
       text: TextSpan(
         text: label,
         style: TextStyle(
           color: Colors.white,
-          fontSize: label.length > 2 ? 24 : 30,
-          fontWeight: FontWeight.w700,
+          fontSize: label.length > 1 ? 12.0 : 14.0,
+          fontWeight: FontWeight.w800,
+          shadows: const [Shadow(color: Colors.black45, blurRadius: 1.5, offset: Offset(0, 0.5))],
         ),
       ),
       textDirection: TextDirection.ltr,
     )..layout();
-    tp.paint(canvas, Offset(center.dx - tp.width / 2, center.dy - tp.height / 2));
+    tp.paint(canvas, Offset(cx - tp.width / 2, cy - tp.height / 2));
+
     final picture = recorder.endRecording();
-    final image = await picture.toImage(size.toInt(), size.toInt());
+    final image = await picture.toImage((w * scale).round(), (h * scale).round());
     final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-    return BitmapDescriptor.bytes(bytes!.buffer.asUint8List(), width: 40, height: 40);
+    return BitmapDescriptor.bytes(bytes!.buffer.asUint8List(), width: w, height: h);
+  }
+
+  // CHANGE #490: single small flat arrowhead (points north/up); each marker
+  // rotates it to its segment's travel bearing via `rotation`.
+  Future<BitmapDescriptor> _buildArrowIcon() async {
+    const double w = 12.0;
+    const double h = 12.0;
+    const double scale = 4.0;
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder, Rect.fromLTWH(0, 0, w * scale, h * scale));
+    canvas.scale(scale);
+    final path = Path()
+      ..moveTo(w / 2, 0)
+      ..lineTo(w * 0.85, h * 0.85)
+      ..lineTo(w / 2, h * 0.6)
+      ..lineTo(w * 0.15, h * 0.85)
+      ..close();
+    canvas.drawPath(
+      path,
+      Paint()
+        ..color = Colors.black.withValues(alpha: 0.35)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.4,
+    );
+    canvas.drawPath(path, Paint()..color = Colors.white);
+    final picture = recorder.endRecording();
+    final image = await picture.toImage((w * scale).round(), (h * scale).round());
+    final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+    return BitmapDescriptor.bytes(bytes!.buffer.asUint8List(), width: w, height: h);
   }
 
   BitmapDescriptor? _iconFor({required bool isHub, required String label, required bool bad}) {
@@ -310,12 +463,16 @@ class _RouteGoogleMapPanelState extends State<RouteGoogleMapPanel> {
       if (lat == null || lng == null) continue;
       final label = s['marker_label']?.toString() ?? s['seq']?.toString() ?? '?';
       final bad = s['tone'] == 'bad';
+      final seq = (s['seq'] as num?)?.toInt() ?? 0;
       markers.add(Marker(
         markerId: MarkerId('stop_${s['seq']}'),
         position: LatLng(lat, lng),
         icon: _iconFor(isHub: false, label: label, bad: bad) ??
             BitmapDescriptor.defaultMarkerWithHue(bad ? BitmapDescriptor.hueRed : BitmapDescriptor.hueGreen),
-        anchor: const Offset(0.5, 0.5),
+        // CHANGE #490: teardrop pin — tip (not center) sits on the stop coord.
+        anchor: const Offset(0.5, 1.0),
+        // Earlier stops stay on top when pins overlap.
+        zIndexInt: 1000 - seq,
         onTap: () => widget.onTapStop(s),
       ));
     }
@@ -352,6 +509,29 @@ class _RouteGoogleMapPanelState extends State<RouteGoogleMapPanel> {
       // GoogleMap's `polylines:` set below, not just that it was decoded.
       RenderLog.write('c487_road_polyline_drawn', polylinePoints.length.toString());
     }
+
+    // CHANGE #490: direction arrowheads every ~150m along whichever polyline
+    // is actually drawn — travel order is already hub->stops->hub, so no
+    // backend change is needed, just sampling + bearing per segment.
+    final arrowIcon = _arrowIcon;
+    final arrowPoints = polylinePoints.length >= 2 ? _computeArrowPoints(polylinePoints) : const <_ArrowPoint>[];
+    if (arrowIcon != null) {
+      for (var i = 0; i < arrowPoints.length; i++) {
+        final ap = arrowPoints[i];
+        markers.add(Marker(
+          markerId: MarkerId('arrow_$i'),
+          position: ap.pos,
+          icon: arrowIcon,
+          anchor: const Offset(0.5, 0.5),
+          rotation: ap.bearingDegrees,
+          flat: true,
+          consumeTapEvents: false,
+          zIndexInt: 1, // below stop pins (100s-1000s) and the hub (10)
+        ));
+      }
+    }
+    RenderLog.write('c490_pins_teardrop', 1);
+    RenderLog.write('c490_arrow_count', arrowPoints.length.toString());
 
     final centerLat = (center?['lat'] as num?)?.toDouble();
     final centerLng = (center?['lng'] as num?)?.toDouble();

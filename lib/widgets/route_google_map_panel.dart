@@ -94,64 +94,6 @@ List<LatLng> _decodeEncodedPolyline(String encoded) {
       .toList();
 }
 
-// CHANGE #490: one sample point (+ bearing) along a travel-ordered polyline,
-// used to place a direction arrowhead.
-class _ArrowPoint {
-  final LatLng pos;
-  final double bearingDegrees;
-  const _ArrowPoint(this.pos, this.bearingDegrees);
-}
-
-double _distanceMeters(LatLng a, LatLng b) {
-  const earthRadius = 6371000.0;
-  final dLat = (b.latitude - a.latitude) * math.pi / 180;
-  final dLng = (b.longitude - a.longitude) * math.pi / 180;
-  final lat1 = a.latitude * math.pi / 180;
-  final lat2 = b.latitude * math.pi / 180;
-  final h = math.sin(dLat / 2) * math.sin(dLat / 2) +
-      math.cos(lat1) * math.cos(lat2) * math.sin(dLng / 2) * math.sin(dLng / 2);
-  return 2 * earthRadius * math.atan2(math.sqrt(h), math.sqrt(1 - h));
-}
-
-// Initial bearing from [a] to [b], degrees clockwise from north (matches
-// google_maps_flutter's Marker.rotation convention).
-double _bearingDegrees(LatLng a, LatLng b) {
-  final lat1 = a.latitude * math.pi / 180;
-  final lat2 = b.latitude * math.pi / 180;
-  final dLng = (b.longitude - a.longitude) * math.pi / 180;
-  final y = math.sin(dLng) * math.cos(lat2);
-  final x = math.cos(lat1) * math.sin(lat2) - math.sin(lat1) * math.cos(lat2) * math.cos(dLng);
-  final bearing = math.atan2(y, x) * 180 / math.pi;
-  return (bearing + 360) % 360;
-}
-
-// Walks [pts] (already in travel order) and drops one arrow every ~150m,
-// interpolating the exact position along each segment so spacing stays even
-// regardless of how dense the source polyline's vertices are.
-List<_ArrowPoint> _computeArrowPoints(List<LatLng> pts, {double intervalMeters = 150}) {
-  final arrows = <_ArrowPoint>[];
-  if (pts.length < 2) return arrows;
-  var carry = intervalMeters / 2; // half-interval head start so arrows aren't bunched at the hub
-  for (var i = 0; i < pts.length - 1; i++) {
-    final a = pts[i];
-    final b = pts[i + 1];
-    final segDist = _distanceMeters(a, b);
-    if (segDist <= 0) continue;
-    final bearing = _bearingDegrees(a, b);
-    var d = carry;
-    while (d < segDist) {
-      final t = d / segDist;
-      arrows.add(_ArrowPoint(
-        LatLng(a.latitude + (b.latitude - a.latitude) * t, a.longitude + (b.longitude - a.longitude) * t),
-        bearing,
-      ));
-      d += intervalMeters;
-    }
-    carry = d - segDist;
-  }
-  return arrows;
-}
-
 // CHANGE #478 (fix v2): the ancestor page SingleChildScrollView (owned by
 // admin_customer_screen.dart, several widget layers above this file) needs to
 // switch to NeverScrollableScrollPhysics for as long as a finger is down on
@@ -179,9 +121,6 @@ class RouteGoogleMapPanel extends StatefulWidget {
 class _RouteGoogleMapPanelState extends State<RouteGoogleMapPanel> {
   GoogleMapController? _controller;
   final Map<String, BitmapDescriptor> _iconCache = {};
-  // CHANGE #490: single reusable arrowhead bitmap — direction comes from each
-  // marker's `rotation`, so one icon serves every arrow along the line.
-  BitmapDescriptor? _arrowIcon;
 
   // CHANGE #484: road-following polyline fetched from OSRM, cached per
   // route_id so switching Map/List tabs doesn't refetch. Null (or a
@@ -288,7 +227,6 @@ class _RouteGoogleMapPanelState extends State<RouteGoogleMapPanel> {
       final isHub = entry.key.startsWith('hub|');
       _iconCache[entry.key] = await _numberedMarkerIcon(label, color, teardrop: !isHub);
     }
-    _arrowIcon ??= await _buildArrowIcon();
     if (mounted) setState(() {});
   }
 
@@ -375,35 +313,6 @@ class _RouteGoogleMapPanelState extends State<RouteGoogleMapPanel> {
     )..layout();
     tp.paint(canvas, Offset(cx - tp.width / 2, cy - tp.height / 2));
 
-    final picture = recorder.endRecording();
-    final image = await picture.toImage((w * scale).round(), (h * scale).round());
-    final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-    return BitmapDescriptor.bytes(bytes!.buffer.asUint8List(), width: w, height: h);
-  }
-
-  // CHANGE #490: single small flat arrowhead (points north/up); each marker
-  // rotates it to its segment's travel bearing via `rotation`.
-  Future<BitmapDescriptor> _buildArrowIcon() async {
-    const double w = 12.0;
-    const double h = 12.0;
-    const double scale = 4.0;
-    final recorder = ui.PictureRecorder();
-    final canvas = Canvas(recorder, Rect.fromLTWH(0, 0, w * scale, h * scale));
-    canvas.scale(scale);
-    final path = Path()
-      ..moveTo(w / 2, 0)
-      ..lineTo(w * 0.85, h * 0.85)
-      ..lineTo(w / 2, h * 0.6)
-      ..lineTo(w * 0.15, h * 0.85)
-      ..close();
-    canvas.drawPath(
-      path,
-      Paint()
-        ..color = Colors.black.withValues(alpha: 0.35)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.4,
-    );
-    canvas.drawPath(path, Paint()..color = Colors.white);
     final picture = recorder.endRecording();
     final image = await picture.toImage((w * scale).round(), (h * scale).round());
     final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
@@ -510,28 +419,11 @@ class _RouteGoogleMapPanelState extends State<RouteGoogleMapPanel> {
       RenderLog.write('c487_road_polyline_drawn', polylinePoints.length.toString());
     }
 
-    // CHANGE #490: direction arrowheads every ~150m along whichever polyline
-    // is actually drawn — travel order is already hub->stops->hub, so no
-    // backend change is needed, just sampling + bearing per segment.
-    final arrowIcon = _arrowIcon;
-    final arrowPoints = polylinePoints.length >= 2 ? _computeArrowPoints(polylinePoints) : const <_ArrowPoint>[];
-    if (arrowIcon != null) {
-      for (var i = 0; i < arrowPoints.length; i++) {
-        final ap = arrowPoints[i];
-        markers.add(Marker(
-          markerId: MarkerId('arrow_$i'),
-          position: ap.pos,
-          icon: arrowIcon,
-          anchor: const Offset(0.5, 0.5),
-          rotation: ap.bearingDegrees,
-          flat: true,
-          consumeTapEvents: false,
-          zIndexInt: 1, // below stop pins (100s-1000s) and the hub (10)
-        ));
-      }
-    }
+    // CHANGE #492: direction arrows (added #490) removed — they rendered as
+    // a dense chevron band that made the route harder to read. Back to a
+    // single plain polyline; pins are untouched.
     RenderLog.write('c490_pins_teardrop', 1);
-    RenderLog.write('c490_arrow_count', arrowPoints.length.toString());
+    RenderLog.write('c492_arrows_removed', 1);
 
     final centerLat = (center?['lat'] as num?)?.toDouble();
     final centerLng = (center?['lng'] as num?)?.toDouble();
@@ -568,6 +460,7 @@ class _RouteGoogleMapPanelState extends State<RouteGoogleMapPanel> {
                   points: polylinePoints,
                   color: const Color(0xFF1B7A43),
                   width: usingRoadPolyline ? 5 : 4,
+                  geodesic: true,
                   startCap: Cap.roundCap,
                   endCap: Cap.roundCap,
                   jointType: JointType.round,

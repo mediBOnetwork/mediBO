@@ -9750,6 +9750,10 @@ class _RoutesTabState extends State<_RoutesTab> {
   // routeId so multiple route cards can be mid-optimize independently.
   final Map<String, bool> _routeOptimizingFromLocation = {};
 
+  // ── CHANGE #494: 'Optimize by warehouse' — the sibling per-route button
+  // that re-anchors to the hub, same keying pattern as the location one.
+  final Map<String, bool> _routeOptimizingByWarehouse = {};
+
   // ── C5: past plans, collapsible, lazy-loaded ──────────────────────────────
   bool _pastPlansExpanded = false;
   List<Map<String, dynamic>>? _pastPlans;
@@ -10203,6 +10207,47 @@ class _RoutesTabState extends State<_RoutesTab> {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
     } finally {
       if (mounted) setState(() => _routeOptimizingFromLocation[routeId] = false);
+    }
+  }
+
+  // ── CHANGE #494: 'Optimize by warehouse' — re-anchors this one route back
+  // to the hub, undoing a previous "by location" optimize. Reuses
+  // _optimizeRouteWithGoogle() verbatim — the exact same google-route
+  // (no origin) + route_apply_google() pair the combined "optimize all"
+  // button already makes per route — just for a single routeId, with its
+  // own spinner + map/plan refresh around it.
+  Future<void> _optimizeRouteByWarehouse(String routeId) async {
+    if (_routeOptimizingByWarehouse[routeId] == true) return;
+    setState(() => _routeOptimizingByWarehouse[routeId] = true);
+    try {
+      var mapData = _routeMapData[routeId];
+      if (mapData == null) {
+        final res = await Supabase.instance.client
+            .rpc('route_map', params: {'p_route_id': routeId});
+        mapData = Map<String, dynamic>.from(res as Map);
+      }
+      final hub = mapData['hub'] as Map?;
+      final stops = ((mapData['stops'] as List?) ?? [])
+          .map((s) => Map<String, dynamic>.from(s as Map))
+          .toList();
+      if (hub == null || stops.isEmpty || stops.length > 25) {
+        throw Exception('Route has no hub/stops to optimize.');
+      }
+
+      await _optimizeRouteWithGoogle(routeId, Map<String, dynamic>.from(hub), stops);
+
+      final planId = _planId;
+      if (planId != null) {
+        await _loadPlan(planId);
+      } else {
+        await _loadRouteMap(routeId);
+      }
+      RenderLog.write('c494_optimize_by_warehouse', 1);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
+    } finally {
+      if (mounted) setState(() => _routeOptimizingByWarehouse[routeId] = false);
     }
   }
 
@@ -11299,45 +11344,22 @@ class _RoutesTabState extends State<_RoutesTab> {
   // Default = MAP. The existing stop LIST (B builderStopRow) stays, unchanged.
   Widget _buildRouteDetail(String routeId, List<Map<String, dynamic>> stops) {
     final isMap = _routeMapMode[routeId] ?? true; // default MAP
-    final optimizingFromLocation = _routeOptimizingFromLocation[routeId] == true;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Wrap(
-        spacing: 8, runSpacing: 8,
-        crossAxisAlignment: WrapCrossAlignment.center,
-        children: [
-          SizedBox(
-            width: 140,
-            child: Row(children: [
-              Expanded(child: _segBtn('Map', isMap, () => setState(() => _routeMapMode[routeId] = true))),
-              const SizedBox(width: 6),
-              Expanded(child: _segBtn('List', !isMap, () => setState(() => _routeMapMode[routeId] = false))),
-            ]),
-          ),
-          // ── CHANGE #493: per-route re-optimize from the driver's live GPS.
-          // The combined "optimize all" button (plan header, above) always
-          // starts every route at the hub; this starts just THIS route at
-          // wherever the driver already is, so starting route N+1 right
-          // after finishing route N doesn't backtrack to route N+1's
-          // hub-nearest stop.
-          OutlinedButton.icon(
-            onPressed: optimizingFromLocation ? null : () => _optimizeRouteFromMyLocation(routeId),
-            icon: optimizingFromLocation
-                ? const SizedBox(
-                    width: 12, height: 12,
-                    child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF1B7A43)))
-                : const Icon(Icons.my_location, size: 14),
-            label: const Text('Optimize from my location', style: TextStyle(fontSize: 11)),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: const Color(0xFF1B7A43),
-              side: const BorderSide(color: Color(0xFF1B7A43)),
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              minimumSize: Size.zero,
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-            ),
-          ),
-        ],
+      SizedBox(
+        width: 140,
+        child: Row(children: [
+          Expanded(child: _segBtn('Map', isMap, () => setState(() => _routeMapMode[routeId] = true))),
+          const SizedBox(width: 6),
+          Expanded(child: _segBtn('List', !isMap, () => setState(() => _routeMapMode[routeId] = false))),
+        ]),
       ),
+      // ── CHANGE #494: both per-route optimize buttons are Map-only — they
+      // re-anchor the polyline/order, which only means anything while the
+      // map is showing. Hidden entirely in List mode.
+      if (isMap) ...[
+        const SizedBox(height: 10),
+        _buildRouteOptimizeButtons(routeId),
+      ],
       const SizedBox(height: 10),
       if (isMap)
         _buildRouteMapView(routeId)
@@ -11346,6 +11368,68 @@ class _RoutesTabState extends State<_RoutesTab> {
               padding: const EdgeInsets.only(bottom: 8),
               child: _builderStopRow(s),
             )).toList()),
+    ]);
+  }
+
+  // ── CHANGE #494: two equal-size, ~46dp-tall optimize buttons, side by
+  // side. "By location" is #493's flow unchanged (origin = driver GPS). "By
+  // warehouse" is the same two calls the combined "optimize all" button
+  // makes per route (google-route with NO origin -> route_apply_google) —
+  // re-anchors this one route back to the hub, undoing a previous "by
+  // location" optimize.
+  Widget _buildRouteOptimizeButtons(String routeId) {
+    final byLocation = _routeOptimizingFromLocation[routeId] == true;
+    final byWarehouse = _routeOptimizingByWarehouse[routeId] == true;
+    final busy = byLocation || byWarehouse;
+
+    Widget button({required String label, required IconData icon, required bool loading, required VoidCallback onTap}) {
+      return Expanded(
+        child: OutlinedButton(
+          onPressed: busy ? null : onTap,
+          style: OutlinedButton.styleFrom(
+            foregroundColor: const Color(0xFF1B7A43),
+            side: const BorderSide(color: Color(0xFF1B7A43)),
+            minimumSize: const Size.fromHeight(46),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          ),
+          child: loading
+              ? const SizedBox(
+                  width: 16, height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF1B7A43)))
+              : Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(icon, size: 15),
+                    const SizedBox(width: 6),
+                    Flexible(
+                      child: Text(label,
+                          textAlign: TextAlign.center,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600)),
+                    ),
+                  ],
+                ),
+        ),
+      );
+    }
+
+    return Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      button(
+        label: 'Optimize by location',
+        icon: Icons.my_location,
+        loading: byLocation,
+        onTap: () => _optimizeRouteFromMyLocation(routeId),
+      ),
+      const SizedBox(width: 8),
+      button(
+        label: 'Optimize by warehouse',
+        icon: Icons.warehouse,
+        loading: byWarehouse,
+        onTap: () => _optimizeRouteByWarehouse(routeId),
+      ),
     ]);
   }
 

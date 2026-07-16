@@ -11416,21 +11416,31 @@ class _RoutesTabState extends State<_RoutesTab> {
       );
     }
 
-    return Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      button(
-        label: 'Optimize by location',
-        icon: Icons.my_location,
-        loading: byLocation,
-        onTap: () => _optimizeRouteFromMyLocation(routeId),
-      ),
-      const SizedBox(width: 8),
-      button(
-        label: 'Optimize by warehouse',
-        icon: Icons.warehouse,
-        loading: byWarehouse,
-        onTap: () => _optimizeRouteByWarehouse(routeId),
-      ),
-    ]);
+    // CHANGE #495 fix: this Row sits in a plain Column with no fixed height,
+    // so it receives an UNBOUNDED height constraint. CrossAxisAlignment
+    // .stretch under an unbounded constraint throws ("BoxConstraints forces
+    // an infinite height"), which aborted layout of every sibling after it
+    // (map, stop-range buttons) too -> the whole Map view went blank.
+    // IntrinsicHeight resolves the Row's own height from its children FIRST
+    // (a real, finite number), so stretch then has something valid to fill —
+    // still gets equal-height buttons even if one label wraps to 2 lines.
+    return IntrinsicHeight(
+      child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        button(
+          label: 'Optimize by location',
+          icon: Icons.my_location,
+          loading: byLocation,
+          onTap: () => _optimizeRouteFromMyLocation(routeId),
+        ),
+        const SizedBox(width: 8),
+        button(
+          label: 'Optimize by warehouse',
+          icon: Icons.warehouse,
+          loading: byWarehouse,
+          onTap: () => _optimizeRouteByWarehouse(routeId),
+        ),
+      ]),
+    );
   }
 
   Widget _buildRouteMapView(String routeId) {

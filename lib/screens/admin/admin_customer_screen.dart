@@ -9746,6 +9746,10 @@ class _RoutesTabState extends State<_RoutesTab> {
   bool _googleOptimizing = false;
   String? _googleOptimizeProgress;
 
+  // ── CHANGE #493: 'Optimize from my location' — per-route, keyed by
+  // routeId so multiple route cards can be mid-optimize independently.
+  final Map<String, bool> _routeOptimizingFromLocation = {};
+
   // ── C5: past plans, collapsible, lazy-loaded ──────────────────────────────
   bool _pastPlansExpanded = false;
   List<Map<String, dynamic>>? _pastPlans;
@@ -10083,6 +10087,122 @@ class _RoutesTabState extends State<_RoutesTab> {
       });
     } catch (_) {
       // Google/network failure -> keep whatever route already exists.
+    }
+  }
+
+  // ── CHANGE #493: 'Optimize from my location' — same google-route call as
+  // #485 but with the driver's live GPS as origin (instead of the hub), so
+  // the nearest stop becomes #1. Backend already supports this: google-route
+  // takes an optional 'origin', and route_apply_google_from() persists it
+  // exactly like route_apply_google() (seq + polyline), just also stamping
+  // the origin lat/lng. Unlike _optimizeRouteWithGoogle (silent, batch-safe),
+  // this is a single user-initiated tap, so failures surface via SnackBar.
+  Future<void> _optimizeRouteFromMyLocation(String routeId) async {
+    if (_routeOptimizingFromLocation[routeId] == true) return;
+    setState(() => _routeOptimizingFromLocation[routeId] = true);
+    try {
+      // a. Live GPS — same dart:html geolocation pattern as CashPaymentSheet /
+      // the warehouse GPS capture / the rep check-in card (C445).
+      double gpsLat, gpsLng;
+      try {
+        final completer = Completer<html.Geoposition>();
+        html.window.navigator.geolocation
+            .getCurrentPosition(enableHighAccuracy: true, timeout: const Duration(seconds: 20))
+            .then((pos) { if (!completer.isCompleted) completer.complete(pos); })
+            .catchError((e) { if (!completer.isCompleted) completer.completeError(e); });
+        final pos = await completer.future.timeout(
+          const Duration(seconds: 25),
+          onTimeout: () => throw TimeoutException('Location timed out'),
+        );
+        final lat = pos.coords?.latitude?.toDouble();
+        final lng = pos.coords?.longitude?.toDouble();
+        if (lat == null || lng == null) throw Exception('No coordinates returned');
+        gpsLat = lat;
+        gpsLng = lng;
+      } catch (e) {
+        if (!mounted) return;
+        final msg = e.toString().toLowerCase();
+        final denied = msg.contains('denied') || msg.contains('permission');
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(
+            denied
+                ? 'Location permission needed to optimize from your position'
+                : "Couldn't get a GPS fix. Move outdoors and retry.")));
+        return;
+      }
+
+      // b. This route's stops + hub — reuse the already-loaded route_map()
+      // data (the expanded card fetched it to draw the map); refetch if
+      // somehow missing.
+      var mapData = _routeMapData[routeId];
+      if (mapData == null) {
+        final res = await Supabase.instance.client
+            .rpc('route_map', params: {'p_route_id': routeId});
+        mapData = Map<String, dynamic>.from(res as Map);
+      }
+      final hub = mapData['hub'] as Map?;
+      final stops = ((mapData['stops'] as List?) ?? [])
+          .map((s) => Map<String, dynamic>.from(s as Map))
+          .toList();
+      final hubLat = (hub?['lat'] as num?)?.toDouble();
+      final hubLng = (hub?['lng'] as num?)?.toDouble();
+      if (hubLat == null || hubLng == null || stops.isEmpty || stops.length > 25) {
+        throw Exception('Route has no hub/stops to optimize.');
+      }
+      final stopsPayload = <Map<String, dynamic>>[];
+      for (final s in stops) {
+        final leadId = s['lead_id'];
+        final sLat = (s['lat'] as num?)?.toDouble();
+        final sLng = (s['lng'] as num?)?.toDouble();
+        if (leadId == null || sLat == null || sLng == null) {
+          throw Exception('Route has a stop missing coordinates.');
+        }
+        stopsPayload.add({'lead_id': leadId, 'lat': sLat, 'lng': sLng});
+      }
+
+      // c. google-route with hub + origin(GPS) + this route's stops.
+      final res = await Supabase.instance.client.functions.invoke('google-route', body: {
+        'hub': {'lat': hubLat, 'lng': hubLng},
+        'origin': {'lat': gpsLat, 'lng': gpsLng},
+        'stops': stopsPayload,
+      });
+      final data = res.data;
+      if (data is! Map || data['error'] != null) {
+        throw Exception(
+            data is Map ? (data['error']?.toString() ?? 'google-route failed') : 'google-route failed');
+      }
+      final optimisedIds = (data['optimised_lead_ids'] as List?)
+          ?.map((e) => (e as num).toInt())
+          .toList();
+      if (optimisedIds == null || optimisedIds.isEmpty) {
+        throw Exception('Google returned no route.');
+      }
+      final polyline = data['encoded_polyline']?.toString();
+
+      // d. persist via route_apply_google_from() — keeps the '✓ Google
+      // optimized' badge, just re-anchored to the driver instead of the hub.
+      await Supabase.instance.client.rpc('route_apply_google_from', params: {
+        'p_route_id': routeId,
+        'p_optimised_lead_ids': optimisedIds,
+        'p_polyline': polyline,
+        'p_origin_lat': gpsLat,
+        'p_origin_lng': gpsLng,
+      });
+
+      // e. re-fetch route_map() + the plan so the new order/polyline show.
+      // _loadPlan() unconditionally re-fetches every still-expanded route's
+      // map (see CHANGE #463 note above), so this route's map is rebuilt too.
+      final planId = _planId;
+      if (planId != null) {
+        await _loadPlan(planId);
+      } else {
+        await _loadRouteMap(routeId);
+      }
+      RenderLog.write('c493_optimize_from_location', 1);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
+    } finally {
+      if (mounted) setState(() => _routeOptimizingFromLocation[routeId] = false);
     }
   }
 
@@ -11179,14 +11299,44 @@ class _RoutesTabState extends State<_RoutesTab> {
   // Default = MAP. The existing stop LIST (B builderStopRow) stays, unchanged.
   Widget _buildRouteDetail(String routeId, List<Map<String, dynamic>> stops) {
     final isMap = _routeMapMode[routeId] ?? true; // default MAP
+    final optimizingFromLocation = _routeOptimizingFromLocation[routeId] == true;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      SizedBox(
-        width: 140,
-        child: Row(children: [
-          Expanded(child: _segBtn('Map', isMap, () => setState(() => _routeMapMode[routeId] = true))),
-          const SizedBox(width: 6),
-          Expanded(child: _segBtn('List', !isMap, () => setState(() => _routeMapMode[routeId] = false))),
-        ]),
+      Wrap(
+        spacing: 8, runSpacing: 8,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          SizedBox(
+            width: 140,
+            child: Row(children: [
+              Expanded(child: _segBtn('Map', isMap, () => setState(() => _routeMapMode[routeId] = true))),
+              const SizedBox(width: 6),
+              Expanded(child: _segBtn('List', !isMap, () => setState(() => _routeMapMode[routeId] = false))),
+            ]),
+          ),
+          // ── CHANGE #493: per-route re-optimize from the driver's live GPS.
+          // The combined "optimize all" button (plan header, above) always
+          // starts every route at the hub; this starts just THIS route at
+          // wherever the driver already is, so starting route N+1 right
+          // after finishing route N doesn't backtrack to route N+1's
+          // hub-nearest stop.
+          OutlinedButton.icon(
+            onPressed: optimizingFromLocation ? null : () => _optimizeRouteFromMyLocation(routeId),
+            icon: optimizingFromLocation
+                ? const SizedBox(
+                    width: 12, height: 12,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF1B7A43)))
+                : const Icon(Icons.my_location, size: 14),
+            label: const Text('Optimize from my location', style: TextStyle(fontSize: 11)),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: const Color(0xFF1B7A43),
+              side: const BorderSide(color: Color(0xFF1B7A43)),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+            ),
+          ),
+        ],
       ),
       const SizedBox(height: 10),
       if (isMap)

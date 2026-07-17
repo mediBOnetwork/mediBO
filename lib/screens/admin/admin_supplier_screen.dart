@@ -333,9 +333,18 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   bool _loading = true;
   _SupFilter _filter = _SupFilter.suppliers;
   _SupSortMode _sortMode = _SupSortMode.spnDesc;
-  // CHANGE #426: client-side search filter for the Suppliers list.
+  // Server-side search over the Suppliers list via admin_list_suppliers RPC
+  // (matches company names, not just supplier name/code/city).
   String _supplierQuery = '';
   final TextEditingController _supplierSearchCtl = TextEditingController();
+  Timer? _supplierSearchDebounce;
+  // Ordered ids returned by the last RPC response; resolved against the live
+  // _suppliers list so results stay fresh across realtime reloads.
+  List<String> _supplierSearchOrder = [];
+  List<_SupRow> get _supplierSearchResults {
+    final byId = {for (final s in _suppliers) s.id: s};
+    return _supplierSearchOrder.map((id) => byId[id]).whereType<_SupRow>().toList();
+  }
   bool _hasPendingChanges = false;
   bool _refreshLoading = false;
   // Supplier detail expand — only one supplier open at a time.
@@ -508,6 +517,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     _debounce?.cancel();
     _readinessPollTimer?.cancel(); // CHANGE #456 C5
     _c458Debounce?.cancel();
+    _supplierSearchDebounce?.cancel();
     if (_inquiryRtChannel != null) {
       try { Supabase.instance.client.removeChannel(_inquiryRtChannel!); } catch (_) {}
       _inquiryRtChannel = null;
@@ -600,15 +610,36 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     }
   }
 
-  // CHANGE #426: client-side search over the already-loaded (and already-
-  // sorted) _suppliers list — name / code / city / phone, substring match.
-  bool _supplierMatches(_SupRow s, String q) {
-    if (q.isEmpty) return true;
-    final hay = [s.supplierName, s.supplierCode, s.city, s.phone]
-        .where((e) => e.isNotEmpty)
-        .map((e) => e.toLowerCase())
-        .join(' ');
-    return hay.contains(q);
+  // Debounced trigger for the admin_list_suppliers RPC — fires ~300ms after
+  // the user stops typing so company-name search (not just name/code/city)
+  // works instead of the old in-memory filter.
+  void _onSupplierSearchChanged(String v) {
+    final q = v.trim();
+    setState(() => _supplierQuery = q);
+    _supplierSearchDebounce?.cancel();
+    if (q.isEmpty) {
+      setState(() => _supplierSearchOrder = []);
+      return;
+    }
+    _supplierSearchDebounce = Timer(
+      const Duration(milliseconds: 300),
+      () => _runSupplierSearch(q),
+    );
+  }
+
+  Future<void> _runSupplierSearch(String query) async {
+    try {
+      final rows = await Supabase.instance.client
+          .rpc('admin_list_suppliers', params: {'p_search': query}) as List;
+      if (!mounted || query != _supplierQuery) return; // stale response guard
+      setState(() {
+        _supplierSearchOrder =
+            rows.map((r) => (r as Map)['id'] as String).toList();
+      });
+      RenderLog.write('c_admin_list_suppliers_search', '${_supplierSearchOrder.length}');
+    } catch (_) {
+      // Silently ignore search errors — keep the prior results visible.
+    }
   }
 
   Future<void> _refreshSuppliers({bool isSave = false}) async {
@@ -4048,27 +4079,27 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     final pad = isDesktop ? 28.0 : 16.0;
     RenderLog.write('c426_supplier_search', 'box=on');
     final visibleSuppliers =
-        _suppliers.where((s) => _supplierMatches(s, _supplierQuery)).toList();
+        _supplierQuery.isEmpty ? _suppliers : _supplierSearchResults;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       const SizedBox(height: 10),
       Padding(
         padding: EdgeInsets.fromLTRB(pad, 0, pad, 8),
         child: TextField(
           controller: _supplierSearchCtl,
-          onChanged: (v) => setState(() => _supplierQuery = v.trim().toLowerCase()),
+          onChanged: _onSupplierSearchChanged,
           textInputAction: TextInputAction.search,
           style: const TextStyle(fontSize: 13),
           decoration: InputDecoration(
-            hintText: 'Search suppliers by name, code, city, phone',
+            hintText: 'Search suppliers by name, company, code, city, phone',
             prefixIcon: const Icon(Icons.search, size: 18),
             suffixIcon: _supplierQuery.isEmpty
                 ? null
                 : IconButton(
                     icon: const Icon(Icons.clear, size: 18),
-                    onPressed: () => setState(() {
+                    onPressed: () {
                       _supplierSearchCtl.clear();
-                      _supplierQuery = '';
-                    }),
+                      _onSupplierSearchChanged('');
+                    },
                   ),
             isDense: true,
             contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),

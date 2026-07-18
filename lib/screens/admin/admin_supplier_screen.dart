@@ -399,6 +399,11 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   Timer? _c458Debounce;
   int _c458Events = 0;
   int _c458Reloads = 0;
+  // CHANGE #509: direct postgres_changes on inquiry + inquiry_forms, additive
+  // to the #458 broadcast channel above (belt-and-suspenders — the broadcast
+  // topic depends on every write path remembering to publish it; this doesn't).
+  final List<RealtimeChannel> _inqDbChannels = [];
+  Timer? _c509Debounce;
   final Set<int> _settingAnswerFor = {}; // inquiry_ids currently being admin-set
   String? _expandedOrderId; // which supplier order row is expanded
 
@@ -526,6 +531,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       try { Supabase.instance.client.removeChannel(_inquiryRtChannel!); } catch (_) {}
       _inquiryRtChannel = null;
     }
+    _unsubscribeInquiryDbChanges(); // CHANGE #509
     for (final ch in _channels) ch.unsubscribe();
     _channels.clear();
     _scrollCtrl.dispose();
@@ -2129,6 +2135,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         try { Supabase.instance.client.removeChannel(_inquiryRtChannel!); } catch (_) {}
         _inquiryRtChannel = null; // CHANGE #458: stop listening when leaving tab
       }
+      _unsubscribeInquiryDbChanges(); // CHANGE #509
       _readinessPollTimer?.cancel(); // CHANGE #456 C5
       _readinessPollTimer = null;
     }
@@ -2144,6 +2151,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       _loadAutoMeta();
       try { RenderLog.write('c458_timers', 0); } catch (_) {}
       _subscribeInquiryRt(); // CHANGE #458: broadcast realtime, no poll (Today only)
+      _subscribeInquiryDbChanges(); // CHANGE #509: direct table realtime, no poll
       // CHANGE #456 C5 — leads/claims/orders change under the admin while this
       // tab is open; poll readiness faster than the general overview refresh.
       _readinessPollTimer?.cancel();
@@ -2175,15 +2183,23 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           if (aC != bC) return bC.compareTo(aC);
           return (a['supplier_name'] as String? ?? '').compareTo(b['supplier_name'] as String? ?? '');
         });
-        setState(() {
-          _inquiryOverview = overview;
-          _inquiryOverviewLoading = false;
-          // Collapse expanded supplier if they've cleared from the loop
-          if (_expandedInquirySupplier != null &&
-              !overview.any((ov) => ov['supplier_name'] == _expandedInquirySupplier)) {
-            _expandedInquirySupplier = null;
-          }
-        });
+        // CHANGE #509: skip the rebuild entirely when a refetch (poll/realtime)
+        // returns byte-identical data — avoids visible flicker on every silent
+        // background refresh when nothing actually changed.
+        final dataChanged = jsonEncode(overview) != jsonEncode(_inquiryOverview);
+        if (dataChanged) {
+          setState(() {
+            _inquiryOverview = overview;
+            _inquiryOverviewLoading = false;
+            // Collapse expanded supplier if they've cleared from the loop
+            if (_expandedInquirySupplier != null &&
+                !overview.any((ov) => ov['supplier_name'] == _expandedInquirySupplier)) {
+              _expandedInquirySupplier = null;
+            }
+          });
+        } else if (_inquiryOverviewLoading) {
+          setState(() => _inquiryOverviewLoading = false);
+        }
         RenderLog.write('inquiry_overview_rows', _inquiryOverview.length);
         // CHANGE #309 — live-accurate load log
         final draftCount = _inquiryOverview
@@ -2248,12 +2264,18 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
               .toList() ??
           const <Map<String, dynamic>>[];
       if (mounted) {
-        setState(() {
-          _noSupplierItems = noSupplier;
-          _allOosItems = allOos;
-          _unassignedLoading = false;
-        });
-        RenderLog.write('inquiry_unassigned', _noSupplierItems.length + _allOosItems.length);
+        // CHANGE #509: same no-op-rebuild guard as overview — skip setState
+        // if a silent refetch returned identical bucket contents.
+        final dataChanged = jsonEncode(noSupplier) != jsonEncode(_noSupplierItems) ||
+            jsonEncode(allOos) != jsonEncode(_allOosItems);
+        if (dataChanged || _unassignedLoading) {
+          setState(() {
+            _noSupplierItems = noSupplier;
+            _allOosItems = allOos;
+            _unassignedLoading = false;
+          });
+        }
+        RenderLog.write('inquiry_unassigned', noSupplier.length + allOos.length);
       }
     } catch (e) {
       if (mounted) setState(() => _unassignedLoading = false);
@@ -2305,6 +2327,56 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     } catch (e) {
       try { RenderLog.write('c458_topic', 'exception'); } catch (_) {}
     }
+  }
+
+  // CHANGE #509: direct postgres_changes on `inquiry` + `inquiry_forms` (now
+  // in the supabase_realtime publication) — same per-table channel style as
+  // _subscribeRealtime() above. Additive to the #458 broadcast channel: this
+  // fires off the raw table replication stream instead of a hand-rolled
+  // broadcast topic, so it doesn't depend on every write path remembering to
+  // publish one.
+  void _subscribeInquiryDbChanges() {
+    if (_inqDbChannels.isNotEmpty) return; // guard duplicate subscription
+    final client = Supabase.instance.client;
+    final ts = DateTime.now().millisecondsSinceEpoch;
+    for (final table in ['inquiry', 'inquiry_forms']) {
+      final ch = client
+          .channel('admin_inq_${table}_$ts')
+          .onPostgresChanges(
+            event: PostgresChangeEvent.all,
+            schema: 'public',
+            table: table,
+            callback: (_) => _debouncedInquiryDbRefetch(),
+          )
+          .subscribe((status, [_]) {
+            if (status == RealtimeSubscribeStatus.subscribed) {
+              try { RenderLog.write('c509_inq_realtime_subscribed', table); } catch (_) {}
+            }
+          });
+      _inqDbChannels.add(ch);
+    }
+  }
+
+  void _debouncedInquiryDbRefetch() {
+    _c509Debounce?.cancel();
+    _c509Debounce = Timer(const Duration(milliseconds: 400), () {
+      if (!mounted || _filter != _SupFilter.inquiry) return;
+      try { RenderLog.write('c509_inq_realtime_refetch', DateTime.now().millisecondsSinceEpoch); } catch (_) {}
+      _fetchInquiryOverview(silent: true);
+      _fetchUnassignedItems(silent: true);
+      if (_expandedInquirySupplier != null) {
+        _fetchInquiryItems(_expandedInquirySupplier!, silent: true);
+      }
+    });
+  }
+
+  void _unsubscribeInquiryDbChanges() {
+    _c509Debounce?.cancel();
+    _c509Debounce = null;
+    for (final ch in _inqDbChannels) {
+      try { Supabase.instance.client.removeChannel(ch); } catch (_) {}
+    }
+    _inqDbChannels.clear();
   }
 
   Future<void> _fetchInquiryItems(String supplierName, {bool silent = false}) async {

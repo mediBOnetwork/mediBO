@@ -245,7 +245,11 @@ class _ReadinessCheckRow extends StatelessWidget {
 
 class _InquiryLockSwitch extends StatelessWidget {
   final String label; // == readiness['slider_label']
-  final bool enabled; // == readiness['slider_enabled']
+  // CHANGE #468: NOT readiness['slider_enabled'] verbatim — that field bakes
+  // in `NOT locked`, which would disable the switch while running and make
+  // it impossible to turn OFF. Caller passes `locked || readiness['can_send']`
+  // so turning OFF is always allowed and only turning ON is gated.
+  final bool enabled;
   final bool locked; // == readiness['locked']
   final bool toggling;
   final String? blockedLabel; // == readiness['blocked_label'] — a real gate failed (red)
@@ -2718,15 +2722,17 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     final progress = (readiness?['progress'] as num?)?.toDouble();
     final progressTotal = (readiness?['progress_total'] as num?)?.toDouble();
     final sliderLabel = readiness?['slider_label'] as String? ?? '';
-    // CHANGE #505: the toggle's enabled state is driven by slider_enabled
-    // (false when nothing_to_ask, locked, or a gate fails) — NOT can_send,
-    // which folds in nothing_to_ask too but isn't what gates the switch itself.
-    final sliderEnabled = readiness?['slider_enabled'] as bool? ?? false;
-    // blocked_label is non-null only for a real gate failure (red); nothing_to_ask_label
-    // is non-null only when all gates pass but there's nothing to ask (neutral grey).
-    // The backend guarantees these are mutually exclusive.
-    final blockedLabel = readiness?['blocked_label'] as String?;
-    final nothingToAskLabel = readiness?['nothing_to_ask_label'] as String?;
+    // CHANGE #468: readiness['slider_enabled'] bakes in `NOT locked`, which
+    // would disable the switch while running and block turning it OFF. Turning
+    // OFF must always be allowed; only turning ON is gated on readiness. Use
+    // can_send (all 5 gates pass AND there's something to ask) directly instead.
+    final canSend = readiness?['can_send'] as bool? ?? false;
+    final sliderEnabled = locked || canSend;
+    // blocked_label / nothing_to_ask_label explain why turning ON is blocked —
+    // they're meaningless (and must not be shown) once the inquiry is already
+    // running, since the switch is only ever gated on the way to ON.
+    final blockedLabel = locked ? null : readiness?['blocked_label'] as String?;
+    final nothingToAskLabel = locked ? null : readiness?['nothing_to_ask_label'] as String?;
     final backlogLabel = readiness?['backlog_label'] as String?;
     final breakdown = (readiness?['breakdown'] as List?)
             ?.map((b) => Map<String, dynamic>.from(b as Map))
@@ -2750,6 +2756,9 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       // CHANGE #505: confirm the checklist is exactly the 5 gating checks
       // (order_hours, leads, payments, orders, allocation) — no Items row.
       try { RenderLog.write('c505_checks_count', '${checks.length}'); } catch (_) {}
+      // CHANGE #468: prove the toggle is enabled while running regardless of
+      // readiness — sliderEnabled must be true whenever `locked` is true.
+      try { RenderLog.write('c468_inquiry_toggle_off_always', (!locked || sliderEnabled).toString()); } catch (_) {}
     }
     try { RenderLog.write('c503_readiness_collapsed_default', 'true'); } catch (_) {}
 

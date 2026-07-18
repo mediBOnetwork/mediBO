@@ -251,6 +251,7 @@ class _InquiryLockSwitch extends StatelessWidget {
   final String? blockedLabel; // == readiness['blocked_label']
   final String? backlogLabel; // == readiness['backlog_label']
   final String? lockLabel; // == readiness['lock_label']
+  final bool neutralBlock; // CHANGE #503 D: == readiness['nothing_to_ask']
   final Future<void> Function(bool turnOn) onToggle;
 
   const _InquiryLockSwitch({
@@ -262,6 +263,7 @@ class _InquiryLockSwitch extends StatelessWidget {
     this.blockedLabel,
     this.backlogLabel,
     this.lockLabel,
+    this.neutralBlock = false,
   });
 
   @override
@@ -293,8 +295,13 @@ class _InquiryLockSwitch extends StatelessWidget {
         Padding(
           padding: const EdgeInsets.only(top: 4),
           child: Text(blockedLabel!,
-              style: const TextStyle(
-                  fontSize: 12, color: Color(0xFFDC2626), fontWeight: FontWeight.w600)),
+              style: TextStyle(
+                  fontSize: 12,
+                  // CHANGE #503 D: "nothing to ask" is a neutral state, not a
+                  // blocking error — don't paint it the same red as a genuine
+                  // blocker (order hours closed, leads pending, etc).
+                  color: neutralBlock ? const Color(0xFF6B7280) : const Color(0xFFDC2626),
+                  fontWeight: FontWeight.w600)),
         ),
       if (backlogLabel != null)
         Padding(
@@ -375,6 +382,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   Timer? _readinessPollTimer;
   OrderHoursModel? _orderHoursModel;
   bool _readinessItemsExpanded = false; // CHANGE #459: tappable breakdown
+  bool _readinessExpanded = false; // CHANGE #503: collapsed by default every load
 
   // ── Inquiry tab state ────────────────────────────────────────────────────
   List<Map<String, dynamic>> _inquiryOverview = [];
@@ -2548,6 +2556,11 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
             ?.map((b) => Map<String, dynamic>.from(b as Map))
             .toList() ??
         const <Map<String, dynamic>>[];
+    // CHANGE #503 D: backend-driven — true once inquiry_send_readiness stops
+    // counting the Items check as blocking and there's nothing to ask. Absent
+    // on an RPC that hasn't shipped this yet, so this defaults safely to false
+    // (existing 'blocked' tone behavior is unchanged until the backend adds it).
+    final nothingToAsk = readiness?['nothing_to_ask'] as bool? ?? false;
 
     final detailCount = checks.where((c) {
       final d = c['detail'];
@@ -2563,6 +2576,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       RenderLog.write('c459_can_send', sendAllowed.toString());
       RenderLog.write('c459_summary_rows', '0');
     }
+    try { RenderLog.write('c503_readiness_collapsed_default', 'true'); } catch (_) {}
 
     return Padding(
       padding: EdgeInsets.fromLTRB(pad, 12, pad, 4),
@@ -2576,32 +2590,18 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
             boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.03), blurRadius: 4)],
           ),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            // B1 — header: title left, date right.
-            Row(children: [
-              Expanded(
-                child: Text(title,
-                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700,
-                        letterSpacing: 0.6, color: Color(0xFF6B7280))),
-              ),
-              if (dateLabel != null)
-                Text(dateLabel,
-                    style: const TextStyle(
-                        fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF9CA3AF))),
-            ]),
-            const SizedBox(height: 10),
-            if (_readinessLoading && readiness == null)
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 8),
-                child: SizedBox(width: 18, height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF1B7A43))),
-              )
-            else if (readiness == null)
-              const Text('Readiness unavailable — tap refresh to retry.',
-                  style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)))
-            else ...[
-              // B2 — status row: tone chip left, progress label right.
-              Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-                if (statusLabel != null)
+            // CHANGE #503 C: collapsed-by-default header — title, status pill,
+            // date. The whole row is tappable; no chevron icon needed.
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => setState(() => _readinessExpanded = !_readinessExpanded),
+              child: Row(children: [
+                Expanded(
+                  child: Text(title,
+                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700,
+                          letterSpacing: 0.6, color: Color(0xFF6B7280))),
+                ),
+                if (statusLabel != null) ...[
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                     decoration: BoxDecoration(
@@ -2612,81 +2612,118 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                         style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700,
                             color: _readinessToneFg(statusTone))),
                   ),
-                const Spacer(),
-                if (progressLabel != null)
-                  Text(progressLabel,
-                      style: const TextStyle(fontSize: 11.5, color: Color(0xFF9CA3AF))),
+                  const SizedBox(width: 8),
+                ],
+                if (dateLabel != null)
+                  Text(dateLabel,
+                      style: const TextStyle(
+                          fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF9CA3AF))),
               ]),
-              if (progress != null && progressTotal != null && progressTotal > 0) ...[
-                const SizedBox(height: 6),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(2),
-                  child: LinearProgressIndicator(
-                    value: progress / progressTotal,
-                    minHeight: 2,
-                    backgroundColor: const Color(0xFFF3F4F6),
-                    color: _readinessToneColor(statusTone),
-                  ),
-                ),
-              ],
-              const SizedBox(height: 10),
-              const Divider(height: 1, color: Color(0xFFE5E7EB)),
-              const SizedBox(height: 6),
-              // B3 — check rows, iterated. The 'items' check expands B6 breakdown.
-              ...checks.map((c) {
-                final isItems = c['key'] == 'items';
-                return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  _ReadinessCheckRow(
-                    check: c,
-                    expanded: isItems ? _readinessItemsExpanded : false,
-                    onTap: isItems && breakdown.isNotEmpty
-                        ? () => setState(() => _readinessItemsExpanded = !_readinessItemsExpanded)
-                        : null,
-                  ),
-                  if (isItems && _readinessItemsExpanded && breakdown.isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.only(left: 23, right: 4, bottom: 6),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: breakdown.map((b) {
-                          final label = b['label'] as String? ?? '';
-                          final products = (b['products'] as List?)
-                                  ?.map((p) => p.toString())
-                                  .join(', ') ??
-                              '';
-                          return Padding(
-                            padding: const EdgeInsets.only(bottom: 6),
-                            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                              Text(label,
-                                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
-                                      color: Color(0xFF374151))),
-                              if (products.isNotEmpty)
-                                Text(products,
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(fontSize: 11.5, color: Color(0xFF9CA3AF))),
-                            ]),
-                          );
-                        }).toList(),
-                      ),
+            ),
+            // Expanding/collapsing is purely visual — no re-fetch — so it can
+            // animate instantly on whatever's already cached in `readiness`.
+            AnimatedSize(
+              duration: const Duration(milliseconds: 220),
+              curve: Curves.easeInOut,
+              alignment: Alignment.topCenter,
+              child: !_readinessExpanded
+                  ? const SizedBox(width: double.infinity)
+                  : Padding(
+                      padding: const EdgeInsets.only(top: 10),
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        if (_readinessLoading && readiness == null)
+                          const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 8),
+                            child: SizedBox(width: 18, height: 18,
+                                child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF1B7A43))),
+                          )
+                        else if (readiness == null)
+                          const Text('Readiness unavailable.',
+                              style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)))
+                        else ...[
+                          if (progressLabel != null) ...[
+                            Align(
+                              alignment: Alignment.centerRight,
+                              child: Text(progressLabel,
+                                  style: const TextStyle(fontSize: 11.5, color: Color(0xFF9CA3AF))),
+                            ),
+                            const SizedBox(height: 4),
+                          ],
+                          if (progress != null && progressTotal != null && progressTotal > 0) ...[
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(2),
+                              child: LinearProgressIndicator(
+                                value: progress / progressTotal,
+                                minHeight: 2,
+                                backgroundColor: const Color(0xFFF3F4F6),
+                                color: _readinessToneColor(statusTone),
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                          ],
+                          const Divider(height: 1, color: Color(0xFFE5E7EB)),
+                          const SizedBox(height: 6),
+                          // CHANGE #503 D: renders whatever 'checks' the RPC
+                          // returns — never hardcoded. Once the backend stops
+                          // including the Items check in this list, it stops
+                          // appearing here with no frontend change needed.
+                          ...checks.map((c) {
+                            final isItems = c['key'] == 'items';
+                            return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                              _ReadinessCheckRow(
+                                check: c,
+                                expanded: isItems ? _readinessItemsExpanded : false,
+                                onTap: isItems && breakdown.isNotEmpty
+                                    ? () => setState(() => _readinessItemsExpanded = !_readinessItemsExpanded)
+                                    : null,
+                              ),
+                              if (isItems && _readinessItemsExpanded && breakdown.isNotEmpty)
+                                Padding(
+                                  padding: const EdgeInsets.only(left: 23, right: 4, bottom: 6),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: breakdown.map((b) {
+                                      final label = b['label'] as String? ?? '';
+                                      final products = (b['products'] as List?)
+                                              ?.map((p) => p.toString())
+                                              .join(', ') ??
+                                          '';
+                                      return Padding(
+                                        padding: const EdgeInsets.only(bottom: 6),
+                                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                          Text(label,
+                                              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
+                                                  color: Color(0xFF374151))),
+                                          if (products.isNotEmpty)
+                                            Text(products,
+                                                maxLines: 2,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: const TextStyle(fontSize: 11.5, color: Color(0xFF9CA3AF))),
+                                        ]),
+                                      );
+                                    }).toList(),
+                                  ),
+                                ),
+                            ]);
+                          }),
+                          const SizedBox(height: 6),
+                          const Divider(height: 1, color: Color(0xFFE5E7EB)),
+                          const SizedBox(height: 10),
+                          _InquiryLockSwitch(
+                            label: sliderLabel,
+                            enabled: sendAllowed,
+                            locked: locked,
+                            toggling: _lockToggling,
+                            blockedLabel: blockedLabel,
+                            backlogLabel: backlogLabel,
+                            lockLabel: lockLabel,
+                            neutralBlock: nothingToAsk,
+                            onToggle: _handleLockToggle,
+                          ),
+                        ],
+                      ]),
                     ),
-                ]);
-              }),
-              const SizedBox(height: 6),
-              const Divider(height: 1, color: Color(0xFFE5E7EB)),
-              const SizedBox(height: 10),
-              // B5 — footer: slider row + blocked/backlog/lock labels.
-              _InquiryLockSwitch(
-                label: sliderLabel,
-                enabled: sendAllowed,
-                locked: locked,
-                toggling: _lockToggling,
-                blockedLabel: blockedLabel,
-                backlogLabel: backlogLabel,
-                lockLabel: lockLabel,
-                onToggle: _handleLockToggle,
-              ),
-            ],
+            ),
           ]),
         ),
       ]),
@@ -2714,29 +2751,11 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       }
     }
 
+    // CHANGE #503 B: the manual Refresh action is removed — the tab already
+    // stays in sync via the realtime broadcast subscription (_subscribeInquiryRt).
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      _buildInquiryRefreshRow(pad),
       ..._buildInquiryTodayContent(pad),
     ]);
-  }
-
-  Widget _buildInquiryRefreshRow(double pad) {
-    return Padding(
-      padding: EdgeInsets.fromLTRB(pad, 12, pad, 0),
-      child: Align(
-        alignment: Alignment.centerLeft,
-        child: TextButton.icon(
-          onPressed: () {
-            _fetchInquiryOverview();
-            _fetchUnassignedItems();
-          },
-          icon: const Icon(Icons.refresh, size: 16, color: Color(0xFF6B7280)),
-          label: const Text('Refresh',
-              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF6B7280))),
-          style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 4)),
-        ),
-      ),
-    );
   }
 
   List<Widget> _buildInquiryTodayContent(double pad) {
@@ -2785,6 +2804,10 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     RenderLog.write('inquiry_two_dropdowns_rendered', 'true');
     RenderLog.write('dd_no_supplier_count_${listNoSupplier.length}', 'true');
     RenderLog.write('dd_all_oos_count_${listAllOOS.length}', 'true');
+    // CHANGE #503 A: get_unassigned_inquiry_items() has no date filter and the
+    // inquiry table carries no usable "today" column, so these counts are NOT
+    // yet today-scoped — blocked on a backend inquiry_buckets_today() RPC.
+    try { RenderLog.write('c503_buckets_today', '${listNoSupplier.length}_${listAllOOS.length}'); } catch (_) {}
 
     return Padding(
       padding: EdgeInsets.fromLTRB(pad, 4, pad, 24),

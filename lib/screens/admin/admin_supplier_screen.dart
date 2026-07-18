@@ -395,6 +395,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   Map<String, dynamic>? _inquiryDatesSelected; // entry from _inquiryDates, null = today
   Map<String, dynamic>? _inquiryDayArchive; // inquiry_day() result for a past date
   bool _inquiryDayLoading = false;
+  String? _inquiryDayError; // CHANGE #500: set only on a genuine fetch/parse failure
   String? _expandedArchiveSupplier;
 
   // ── CHANGE #328: supplier order bill+payment panels ──────────────────────
@@ -2232,9 +2233,12 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     setState(() {
       _inquiryDatesSelected = entry;
       _expandedArchiveSupplier = null;
+      // CHANGE #500 B4: clear any stale error/data from a previous date so a
+      // past failure never sticks around after switching dates.
+      _inquiryDayArchive = null;
+      _inquiryDayError = null;
     });
     if (isToday) {
-      _inquiryDayArchive = null;
       // CHANGE #460 D5: back on Today — resume live realtime.
       if (_inquiryRtChannel == null) _subscribeInquiryRt();
     } else {
@@ -2250,17 +2254,39 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   }
 
   Future<void> _fetchInquiryDayArchive(String date) async {
-    if (mounted) setState(() { _inquiryDayLoading = true; _inquiryDayArchive = null; });
+    if (mounted) {
+      setState(() {
+        _inquiryDayLoading = true;
+        _inquiryDayArchive = null;
+        _inquiryDayError = null;
+      });
+    }
     try {
       final res = await Supabase.instance.client
-          .rpc('inquiry_day', params: {'p_date': date}) as Map;
+          .rpc('inquiry_day', params: {'p_date': date});
+      if (res is! Map) {
+        throw Exception('inquiry_day($date) returned ${res.runtimeType}, expected an object');
+      }
+      final map = Map<String, dynamic>.from(res);
       if (!mounted) return;
       setState(() {
-        _inquiryDayArchive = Map<String, dynamic>.from(res);
+        _inquiryDayArchive = map;
         _inquiryDayLoading = false;
       });
-    } catch (e) {
-      if (mounted) setState(() => _inquiryDayLoading = false);
+    } catch (e, st) {
+      // CHANGE #500 A3: concise diagnostic — which date failed and why, without
+      // dumping the full raw payload (that inspection was done ahead of ship).
+      try {
+        RenderLog.write('c500_inqday_parse_error', '$date:${e.runtimeType}:$e');
+      } catch (_) {}
+      // ignore: avoid_print
+      print('CHANGE #500 inquiry_day($date) failed: $e\n$st');
+      if (mounted) {
+        setState(() {
+          _inquiryDayLoading = false;
+          _inquiryDayError = e.toString();
+        });
+      }
     }
   }
 
@@ -2787,10 +2813,23 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           (_expandedInquirySupplier != null ? _inquiryItems.length * 3 : 0); // 3 answer buttons per item
       try { RenderLog.write('c460_suppliers', _inquiryOverview.length); } catch (_) {}
       try { RenderLog.write('c460_writes', writes); } catch (_) {}
+      // CHANGE #500: only log once the overview has actually settled, so the
+      // row count reflects what's really on screen (not mid-spinner 0).
+      if (!_inquiryOverviewLoading) {
+        try { RenderLog.write('c500_inqday_loaded', 'today'); } catch (_) {}
+        try { RenderLog.write('c500_inqday_rows', '${_inquiryOverview.length}'); } catch (_) {}
+      }
     } else {
       final archiveSuppliers = (_inquiryDayArchive?['suppliers'] as List?) ?? const [];
       try { RenderLog.write('c460_suppliers', archiveSuppliers.length); } catch (_) {}
       try { RenderLog.write('c460_writes', 0); } catch (_) {} // D1: archive has zero write controls
+      // CHANGE #500: only log once the archive fetch has settled successfully
+      // (skip while loading and skip on a genuine error — that's covered by
+      // c500_inqday_parse_error instead).
+      if (!_inquiryDayLoading && _inquiryDayArchive != null) {
+        try { RenderLog.write('c500_inqday_loaded', 'past'); } catch (_) {}
+        try { RenderLog.write('c500_inqday_rows', '${archiveSuppliers.length}'); } catch (_) {}
+      }
     }
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -2965,19 +3004,39 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         child: Center(child: CircularProgressIndicator(color: Color(0xFF1B7A43), strokeWidth: 2)),
       );
     }
+    // CHANGE #500 B4: a genuine fetch failure is distinct from "no data yet" —
+    // show a real error with a Retry affordance instead of a dead-end message.
+    final error = _inquiryDayError;
+    if (error != null) {
+      final selectedDate = _inquiryDatesSelected?['date'] as String?;
+      return Padding(
+        padding: const EdgeInsets.all(40),
+        child: Center(
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            const Text('Could not load this day.', style: TextStyle(color: Color(0xFF6B7280))),
+            const SizedBox(height: 12),
+            OutlinedButton(
+              onPressed: selectedDate == null ? null : () => _fetchInquiryDayArchive(selectedDate),
+              child: const Text('Retry'),
+            ),
+          ]),
+        ),
+      );
+    }
     final day = _inquiryDayArchive;
     if (day == null) {
+      // Not loading, no error, no data yet (e.g. between date selection and fetch start).
       return const Padding(
         padding: EdgeInsets.all(40),
-        child: Center(
-            child: Text('Could not load this day.', style: TextStyle(color: Color(0xFF6B7280)))),
+        child: Center(child: CircularProgressIndicator(color: Color(0xFF1B7A43), strokeWidth: 2)),
       );
     }
     final dateLabel = day['date_label'] as String?;
     final summary = day['summary'] as String?;
     final noResponseLabel = day['no_response_label'] as String?;
     final suppliers = (day['suppliers'] as List?)
-            ?.map((s) => Map<String, dynamic>.from(s as Map))
+            ?.whereType<Map>()
+            .map((s) => Map<String, dynamic>.from(s))
             .toList() ??
         const <Map<String, dynamic>>[];
 
@@ -3018,7 +3077,8 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     final statusLabel = sup['status_label'] as String?;
     final statusTone = sup['status_tone'] as String?;
     final products = (sup['products'] as List?)
-            ?.map((p) => Map<String, dynamic>.from(p as Map))
+            ?.whereType<Map>()
+            .map((p) => Map<String, dynamic>.from(p))
             .toList() ??
         const <Map<String, dynamic>>[];
     final isExpanded = _expandedArchiveSupplier == supName;
@@ -3077,7 +3137,15 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     final qty = p['qty'];
     final answer = p['answer'] as String?;
     final answerTone = p['answer_tone'] as String?;
-    final orders = p['orders'] as String?;
+    // CHANGE #500 B1: 'orders' may come back as a plain code string or (in a
+    // future backend revision) a list of order codes under either key — never
+    // hard-cast, coerce whatever shape shows up into a display string.
+    final ordersRaw = p['orders'] ?? p['order_codes'];
+    final orders = ordersRaw is String
+        ? ordersRaw
+        : ordersRaw is List
+            ? ordersRaw.map((e) => e.toString()).join(', ')
+            : null;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 6),

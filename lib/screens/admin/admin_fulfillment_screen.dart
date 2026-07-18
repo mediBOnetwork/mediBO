@@ -16868,6 +16868,16 @@ class _DisputeContactPopoverBodyState extends State<_DisputeContactPopoverBody>
           const SnackBar(content: Text('No valid phone number for this contact')));
       return;
     }
+    final on = await Supabase.instance.client.rpc('notif_is_enabled',
+        params: {'p_audience': 'supplier', 'p_action_key': 'supplier_dispute'});
+    if (on == false) {
+      RenderLog.write('c498_supplier_send_blocked', 'supplier_dispute:${widget.supplierName}');
+      widget.onClose();
+      final messenger = ScaffoldMessenger.maybeOf(context);
+      messenger?.showSnackBar(
+          const SnackBar(content: Text('Supplier dispute notifications are turned off')));
+      return;
+    }
     final msg = Uri.encodeComponent(
         'Hi, please review and respond to the dispute form: ${widget.link}');
     // Record last-used contact

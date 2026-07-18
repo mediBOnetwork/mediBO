@@ -1819,6 +1819,13 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
 
   // Per-supplier Send: ALWAYS stamps fresh timer, then opens WhatsApp directly.
   Future<void> _sendPerSupplierDirect(String supName, BuildContext btnCtx) async {
+    final on = await Supabase.instance.client.rpc('notif_is_enabled',
+        params: {'p_audience': 'supplier', 'p_action_key': 'supplier_inquiry_sent'});
+    if (on == false) {
+      RenderLog.write('c498_supplier_send_blocked', 'supplier_inquiry_sent:$supName');
+      if (mounted) showToast(context, 'Supplier inquiry notifications are turned off', isError: true);
+      return;
+    }
     if (mounted) setState(() => _inquiryLoading = true);
     try {
       final slug = supName.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '_');
@@ -1860,6 +1867,13 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
 
   // Meta path: send all via edge function (only when toggle ON)
   Future<void> _sendAllMeta() async {
+    final on = await Supabase.instance.client.rpc('notif_is_enabled',
+        params: {'p_audience': 'supplier', 'p_action_key': 'supplier_inquiry_sent'});
+    if (on == false) {
+      RenderLog.write('c498_supplier_send_blocked', 'supplier_inquiry_sent:send_all');
+      if (mounted) showToast(context, 'Supplier inquiry notifications are turned off', isError: true);
+      return;
+    }
     if (mounted) setState(() => _inquiryLoading = true);
     try {
       // Build supplier/phone/link list from current overview
@@ -4576,6 +4590,13 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   Future<void> _sendOrderWhatsApp(_OrderRow row, BuildContext btnCtx) async {
     final supName = row.supplierName;
     if (supName == null) return;
+    final on = await Supabase.instance.client.rpc('notif_is_enabled',
+        params: {'p_audience': 'supplier', 'p_action_key': 'supplier_order_sent'});
+    if (on == false) {
+      RenderLog.write('c498_supplier_send_blocked', 'supplier_order_sent:$supName');
+      if (mounted) showToast(context, 'Supplier order notifications are turned off', isError: true);
+      return;
+    }
     try {
       final rows = await Supabase.instance.client
           .rpc('get_supplier_order_send_payload', params: {

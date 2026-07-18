@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
 import 'package:pharma_b2b/widgets/order_hours_card.dart';
+import 'package:pharma_b2b/widgets/notifications_card.dart';
 
 class AdminDashboardScreen extends StatefulWidget {
   const AdminDashboardScreen({super.key});
@@ -172,6 +173,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   const OrderHoursCard(),
+                  const NotificationsCard(),
                   _sectionLabel('Action Required'),
                   _buildActionRequired(),
                   const SizedBox(height: 28),

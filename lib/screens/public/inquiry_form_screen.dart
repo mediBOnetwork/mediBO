@@ -20,6 +20,10 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
   String? _error;
   String? _supplierName;
   List<Map<String, dynamic>> _items = [];
+  // CHANGE #464: read-only receipt of what this supplier already answered
+  // this cycle — separate from _items (which still mixes locked+pending).
+  bool _submitted = false;
+  List<Map<String, dynamic>> _submittedItems = [];
   final Map<int, String> _selections = {};
   bool _submitting = false;
   bool _newItemsAdded = false;
@@ -133,9 +137,15 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
       final newlyAppeared =
           hadItems && unlockedIds.any((id) => !_prevUnlockedIds.contains(id));
 
+      final submittedItems = (data['submitted_items'] as List? ?? [])
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+
       setState(() {
         _supplierName = data['supplier_name'] as String?;
         _items = items;
+        _submitted = data['submitted'] == true;
+        _submittedItems = submittedItems;
         _newItemsAdded = newlyAppeared;
         final nowLocked = items
             .where((i) => i['locked'] == true)
@@ -351,6 +361,152 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
     );
   }
 
+  // CHANGE #464: read-only receipt — success banner + one card per already-
+  // submitted item. No buttons, not tappable; purely a summary of what this
+  // supplier already answered this cycle.
+  Widget _buildReceiptSection() {
+    try { RenderLog.write('c464_inquiry_receipt', _submittedItems.length); } catch (_) {}
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: const Color(0xFFD1FAE5),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Icon(Icons.check_circle,
+                  color: Color(0xFF065F46), size: 22),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Response submitted ✓',
+                      style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFF065F46)),
+                    ),
+                    const SizedBox(height: 2),
+                    const Text(
+                      "You've already answered. Here's what you submitted.",
+                      style: TextStyle(
+                          fontSize: 12, color: Color(0xFF065F46)),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        ..._submittedItems.map(_buildReceiptCard),
+        const SizedBox(height: 16),
+      ],
+    );
+  }
+
+  Widget _buildReceiptCard(Map<String, dynamic> item) {
+    final name = item['product_name'] as String? ?? '';
+    final company = item['company'] as String?;
+    final imageUrl = item['image_url'] as String?;
+    final answer = item['answer'] as String? ?? '';
+
+    Color badgeBg;
+    Color badgeFg;
+    String badgeLabel;
+    switch (answer) {
+      case 'Available':
+        badgeBg = const Color(0xFFD1FAE5);
+        badgeFg = const Color(0xFF065F46);
+        badgeLabel = 'Available';
+      case 'Out of Stock':
+        badgeBg = const Color(0xFFFEE2E2);
+        badgeFg = const Color(0xFF991B1B);
+        badgeLabel = 'Out of Stock';
+      default:
+        badgeBg = const Color(0xFFF3F4F6);
+        badgeFg = const Color(0xFF6B7280);
+        badgeLabel = "Don't stock";
+    }
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: const Color(0xFFF3F4F6),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0xFFE5E7EB), width: 0.5),
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: imageUrl != null && imageUrl.isNotEmpty
+                ? Image.network(imageUrl,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => const Icon(
+                        Icons.medication_outlined,
+                        size: 20,
+                        color: Color(0xFFD1D5DB)))
+                : const Icon(Icons.medication_outlined,
+                    size: 20, color: Color(0xFFD1D5DB)),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  name,
+                  style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF111827)),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                if (company != null && company.trim().isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    company,
+                    style: const TextStyle(
+                        fontSize: 12, color: Color(0xFF6B7280)),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            decoration: BoxDecoration(
+                color: badgeBg, borderRadius: BorderRadius.circular(20)),
+            child: Text(
+              badgeLabel,
+              style: TextStyle(
+                  fontSize: 12, fontWeight: FontWeight.w500, color: badgeFg),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildForm() {
     final locked = _items.where((i) => i['locked'] == true).toList();
     final unanswered = _items.where((i) => i['locked'] == false).toList();
@@ -408,6 +564,12 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
             ]),
           ),
           const SizedBox(height: 20),
+
+          // ── Receipt (CHANGE #464): read-only summary of what was already
+          // submitted this cycle. Purely additive — does not replace the
+          // existing "Already Responded" accordion below, which reflects a
+          // different, longer-lived source (the inquiry table's PS/AS slots).
+          if (_submitted && _submittedItems.isNotEmpty) _buildReceiptSection(),
 
           // ── New items banner ─────────────────────────────────────────────
           if (_newItemsAdded) ...[
